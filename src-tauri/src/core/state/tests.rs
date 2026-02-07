@@ -9210,3 +9210,243 @@ fn test_move_station_invalid_index() {
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("Invalid station index"));
 }
+
+// ============================================================================
+// Delete section cascade tests
+// ============================================================================
+
+#[test]
+fn test_delete_section_cascades_merges() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Create two sections
+    let sec_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None, date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    }).section_id.unwrap();
+
+    let sec_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None, date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    }).section_id.unwrap();
+
+    // Merge them
+    let merge_result = state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a, 1),
+        station_b: StationRef::new(sec_b, 0),
+    });
+    assert!(merge_result.success);
+    assert_eq!(state.get_project_state().unwrap().station_merges.len(), 1);
+
+    // Delete section A — should cascade-remove the merge
+    let delete_result = state.execute(Command::DeleteSection { section_id: sec_a });
+    assert!(delete_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.station_merges.len(), 0, "merge should be cascaded on delete");
+}
+
+#[test]
+fn test_delete_section_cascades_closures_and_offsets() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sec_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None, date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+    }).section_id.unwrap();
+
+    let sec_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None, date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    }).section_id.unwrap();
+
+    // Set a zero datum on section A
+    let datum_result = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(sec_a, 0),
+        coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+    });
+    assert!(datum_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.zero_datums.len(), 1);
+    // set_zero_datum creates section offsets for connected sections
+    assert!(!project.section_offsets.is_empty(), "set_zero_datum should create section offsets");
+
+    // Delete section A — should cascade-remove the zero datum and section offsets
+    let delete_result = state.execute(Command::DeleteSection { section_id: sec_a });
+    assert!(delete_result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.sections[0].id, sec_b);
+    assert_eq!(project.zero_datums.len(), 0, "zero datum should be cascaded");
+    assert!(!project.section_offsets.contains_key(&sec_a), "section A offset should be cascaded");
+}
+
+#[test]
+fn test_delete_section_undo_restores_merges_and_datums() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sec_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None, date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    }).section_id.unwrap();
+
+    let sec_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None, date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    }).section_id.unwrap();
+
+    // Merge + set datum
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a, 1),
+        station_b: StationRef::new(sec_b, 0),
+    });
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(sec_a, 0),
+        coordinates: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+    });
+
+    // Delete section A
+    state.execute(Command::DeleteSection { section_id: sec_a });
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.station_merges.len(), 0);
+    assert_eq!(project.zero_datums.len(), 0);
+
+    // Undo delete — should restore section A, merge, and datum
+    let undo = state.undo();
+    assert!(undo.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 2, "undo should restore deleted section");
+    assert_eq!(project.station_merges.len(), 1, "undo should restore merge");
+    assert_eq!(project.zero_datums.len(), 1, "undo should restore zero datum");
+}
+
+#[test]
+fn test_unmerge_removes_only_specific_merge() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sec_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None, date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    }).section_id.unwrap();
+
+    let sec_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None, date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    }).section_id.unwrap();
+
+    let sec_c = state.execute(Command::CreateSection {
+        name: Some("C".to_string()),
+        surveyor: None, date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    }).section_id.unwrap();
+
+    // Merge A↔B and B↔C
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a, 1),
+        station_b: StationRef::new(sec_b, 0),
+    });
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_b, 1),
+        station_b: StationRef::new(sec_c, 0),
+    });
+
+    assert_eq!(state.get_project_state().unwrap().station_merges.len(), 2);
+
+    // Unmerge at station A:1 (which is part of the A↔B merge)
+    let result = state.execute(Command::UnmergeStations {
+        station_ref: StationRef::new(sec_a, 1),
+    });
+    assert!(result.success);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.station_merges.len(), 1, "only A↔B should be removed");
+    assert_eq!(project.station_merges[0].station_a.section_id, sec_b);
+    assert_eq!(project.station_merges[0].station_b.section_id, sec_c);
+}
+
+#[test]
+fn test_unmerge_undo_restores_merge() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let sec_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None, date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    }).section_id.unwrap();
+
+    let sec_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None, date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    }).section_id.unwrap();
+
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(sec_a, 1),
+        station_b: StationRef::new(sec_b, 0),
+    });
+
+    // Unmerge, then undo
+    state.execute(Command::UnmergeStations {
+        station_ref: StationRef::new(sec_a, 1),
+    });
+    assert_eq!(state.get_project_state().unwrap().station_merges.len(), 0);
+
+    let undo = state.undo();
+    assert!(undo.success);
+    assert_eq!(state.get_project_state().unwrap().station_merges.len(), 1, "undo should restore unmerged pair");
+}

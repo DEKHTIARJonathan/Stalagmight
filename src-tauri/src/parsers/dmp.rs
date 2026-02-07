@@ -1190,4 +1190,232 @@ mod tests {
         // All tests completed without panicking - that's the key requirement
         println!("All invalid date tests completed without panicking");
     }
+
+    // ========================================================================
+    // Additional robustness tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_dmp_wrong_extension() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"3;68;89;101").unwrap();
+        let path = file.path().with_extension("txt");
+        std::fs::copy(file.path(), &path).unwrap();
+
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a DMP file"));
+    }
+
+    #[test]
+    fn test_parse_dmp_non_integer_content() {
+        let content = "3;68;89;hello;24;6;15;10;30";
+        let (_file, path) = create_dmp_file(content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err(), "non-integer content should fail");
+    }
+
+    #[test]
+    fn test_parse_dmp_single_byte() {
+        let content = "3"; // Just a version byte, nothing else
+        let (_file, path) = create_dmp_file(content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err(), "single byte should fail (no sections)");
+    }
+
+    #[test]
+    fn test_parse_dmp_only_semicolons() {
+        let content = ";;;;;;;";
+        let (_file, path) = create_dmp_file(content);
+        let result = parse_dmp(&path);
+        std::fs::remove_file(&path).ok();
+        assert!(result.is_err(), "only semicolons = empty data");
+    }
+
+    #[test]
+    fn test_int_buffer_has_remaining() {
+        let buffer = IntBuffer::new(vec![1, 2, 3]);
+        assert!(buffer.has_remaining(3));
+        assert!(!buffer.has_remaining(4));
+        assert!(buffer.has_remaining(0));
+    }
+
+    #[test]
+    fn test_int_buffer_read_n_beyond_end() {
+        let mut buffer = IntBuffer::new(vec![1, 2]);
+        assert!(buffer.read_n(3).is_err());
+    }
+
+    #[test]
+    fn test_split_into_sections_empty_data() {
+        let sections = split_into_sections(&[], 2);
+        assert!(sections.is_empty());
+    }
+
+    #[test]
+    fn test_split_into_sections_data_shorter_than_pattern() {
+        let sections = split_into_sections(&[2, 0, 0], 2);
+        assert!(sections.is_empty(), "data shorter than pattern = no sections");
+    }
+
+    #[test]
+    fn test_split_into_sections_unsupported_version() {
+        let sections = split_into_sections(&[1, 0, 0, 0, 0], 99);
+        assert!(sections.is_empty(), "unsupported version = no patterns");
+    }
+
+    #[test]
+    fn test_dmp_direction_to_survey_direction() {
+        let d_in = DmpDirection::In;
+        let d_out = DmpDirection::Out;
+        assert_eq!(d_in.to_survey_direction(), crate::models::SurveyDirection::In);
+        assert_eq!(d_out.to_survey_direction(), crate::models::SurveyDirection::Out);
+    }
+
+    #[test]
+    fn test_dmp_shot_to_shot_data() {
+        let dmp_shot = DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 90.0,
+            heading_out: 270.0,
+            length: 10.0,
+            depth_in: 2.0,
+            depth_out: 3.0,
+            pitch_in: 5.0,
+            pitch_out: -5.0,
+            left: 1.5,
+            right: 2.0,
+            up: 3.0,
+            down: 0.5,
+            temperature: 18.0,
+            hour: 14,
+            minute: 30,
+            second: 0,
+            marker_index: 7,
+            comment: Some("test".to_string()),
+        };
+
+        let shot_data = dmp_shot.to_shot_data();
+        assert_eq!(shot_data.azimuth_in, 90.0);
+        assert_eq!(shot_data.azimuth_out, 270.0);
+        assert_eq!(shot_data.length, 10.0);
+        assert_eq!(shot_data.depth_in, 2.0);
+        assert_eq!(shot_data.depth_out, 3.0);
+        assert_eq!(shot_data.pitch_in, Some(5.0));
+        assert_eq!(shot_data.pitch_out, Some(-5.0));
+        assert_eq!(shot_data.left, Some(1.5));
+        assert_eq!(shot_data.right, Some(2.0));
+        assert_eq!(shot_data.up, Some(3.0));
+        assert_eq!(shot_data.down, Some(0.5));
+        assert_eq!(shot_data.temperature, Some(18.0));
+        assert_eq!(shot_data.marker_index, Some(7));
+        assert_eq!(shot_data.comment.as_deref(), Some("test"));
+        assert!(!shot_data.is_virtual);
+    }
+
+    #[test]
+    fn test_dmp_section_to_section_data_filters_non_standard_shots() {
+        let section = DmpSection {
+            version: 4,
+            name: "TST".to_string(),
+            direction: DmpDirection::Out,
+            date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
+            shots: vec![
+                DmpShot {
+                    shot_type: DmpShotType::CsA,
+                    heading_in: 0.0, heading_out: 0.0, length: 1.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+                DmpShot {
+                    shot_type: DmpShotType::Standard,
+                    heading_in: 90.0, heading_out: 270.0, length: 5.0,
+                    depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 1.0, right: 1.0, up: 2.0, down: 0.5,
+                    temperature: 18.0, hour: 10, minute: 30, second: 0,
+                    marker_index: 1, comment: None,
+                },
+                DmpShot {
+                    shot_type: DmpShotType::EndOfSurvey,
+                    heading_in: 0.0, heading_out: 0.0, length: 0.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+            ],
+        };
+
+        let section_data = section.to_section_data("#ff0000".to_string());
+        // Only Standard shots should be included
+        assert_eq!(section_data.shots.len(), 1, "only Standard shots should be included");
+        assert_eq!(section_data.shots[0].length, 5.0);
+        assert_eq!(section_data.name.as_deref(), Some("TST"));
+        assert_eq!(section_data.direction, Some(crate::models::SurveyDirection::Out));
+    }
+
+    #[test]
+    fn test_end_of_section_patterns_all_versions() {
+        // V2 has one pattern of 16 bytes
+        let v2 = end_of_section_patterns(2);
+        assert_eq!(v2.len(), 1);
+        assert_eq!(v2[0].len(), 16);
+
+        // V3 has one pattern of 21 bytes
+        let v3 = end_of_section_patterns(3);
+        assert_eq!(v3.len(), 1);
+        assert_eq!(v3[0].len(), 21);
+
+        // V4 has one pattern of 29 bytes
+        let v4 = end_of_section_patterns(4);
+        assert_eq!(v4.len(), 1);
+        assert_eq!(v4[0].len(), 29);
+
+        // V5 has two patterns of 35 bytes
+        let v5 = end_of_section_patterns(5);
+        assert_eq!(v5.len(), 2);
+        assert_eq!(v5[0].len(), 35);
+        assert_eq!(v5[1].len(), 35);
+
+        // Invalid version has no patterns
+        let invalid = end_of_section_patterns(99);
+        assert!(invalid.is_empty());
+    }
+
+    #[test]
+    fn test_section_data_filters_non_standard_shots_via_to_section_data() {
+        // A DmpSection with only EOS/CsA shots should produce empty shot list in SectionData
+        let section = DmpSection {
+            version: 3,
+            name: "TST".to_string(),
+            direction: DmpDirection::In,
+            date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
+            shots: vec![
+                DmpShot {
+                    shot_type: DmpShotType::EndOfSurvey,
+                    heading_in: 0.0, heading_out: 0.0, length: 0.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+                DmpShot {
+                    shot_type: DmpShotType::CsA,
+                    heading_in: 0.0, heading_out: 0.0, length: 1.0,
+                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                    temperature: 0.0, hour: 0, minute: 0, second: 0,
+                    marker_index: 0, comment: None,
+                },
+            ],
+        };
+
+        let section_data = section.to_section_data("#ff0000".to_string());
+        assert!(section_data.shots.is_empty(), "only non-Standard shots → empty shot list");
+    }
 }

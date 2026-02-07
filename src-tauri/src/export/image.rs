@@ -1853,4 +1853,157 @@ mod tests {
             std::fs::remove_file(&path).ok();
         }
     }
+
+    // === Pathological input tests ===
+
+    #[test]
+    fn test_svg_unicode_section_names() {
+        let mut project = Project::new("Unicode".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Grotte de l'Ours <>&\"".to_string()),
+            color: "#4ecdc4".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 270.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let mut options = ExportImageOptions::default();
+        options.include_section_names = true;
+
+        let svg = generate_svg_string(&project, &options).unwrap();
+        // XML special chars should be escaped
+        assert!(svg.contains("&amp;"), "& should be escaped in SVG: {svg}");
+        assert!(svg.contains("&lt;"), "< should be escaped in SVG");
+        assert!(!svg.contains("<>&\""), "raw special chars should not appear");
+    }
+
+    #[test]
+    fn test_svg_depth_mode_single_depth_no_gradient_crash() {
+        // All shots at same depth — depth range is 0
+        let mut project = Project::new("FlatDepth".to_string(), None);
+        project.add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 180.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 270.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let options = ExportImageOptions {
+            color_mode: ColorMode::Depth,
+            depth_preset: DepthPreset::Thermal,
+            include_legend: true,
+            ..Default::default()
+        };
+        let svg = generate_svg_string(&project, &options).unwrap();
+        assert!(svg.contains("(Flat)"), "zero depth range should show flat indicator");
+        assert!(!svg.contains("NaN"), "should not have NaN");
+        assert!(!svg.contains("inf"), "should not have infinity");
+    }
+
+    #[test]
+    fn test_svg_export_with_very_long_comment() {
+        let mut project = Project::new("LongComment".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Test".to_string()),
+            color: "#4ecdc4".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                comment: Some("A".repeat(10000)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let options = ExportImageOptions {
+            include_labels: true,
+            ..Default::default()
+        };
+        // Should not panic or produce invalid SVG
+        let result = generate_svg_string(&project, &options);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_svg_many_sections_doesnt_panic() {
+        let mut project = Project::new("ManySections".to_string(), None);
+        for i in 0..50 {
+            project.add_section(SectionData {
+                name: Some(format!("Sec{i}")),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    azimuth_in: f64::from(i * 7 % 360),
+                    azimuth_out: f64::from((i * 7 + 180) % 360),
+                    length: 5.0,
+                    depth_in: 0.0,
+                    depth_out: 1.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+        assert!(svg.contains("<svg"));
+        // Should have rendered all 50 sections
+        let section_count = svg.matches("class=\"shot\"").count()
+            + svg.matches("stroke-dasharray").count(); // virtual shots
+        assert!(section_count >= 50, "should have at least 50 shot lines, got {section_count}");
+    }
+
+    #[test]
+    fn test_empty_project_svg_export_produces_valid_svg_file() {
+        let project = Project::new("Empty".to_string(), None);
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("svg");
+
+        let result = export_svg(&project, &path, &ExportImageOptions::default());
+        assert!(result.is_ok(), "empty project SVG file export should succeed");
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.starts_with("<?xml") || contents.starts_with("<svg"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_empty_project_png_export() {
+        let project = Project::new("Empty".to_string(), None);
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+
+        let options = ExportImageOptions {
+            format: ImageFormat::Png,
+            dpi: 72,
+            ..Default::default()
+        };
+        let result = export_png(&project, &path, &options);
+        assert!(result.is_ok(), "empty project PNG export should succeed: {:?}", result.err());
+        assert!(path.exists());
+        std::fs::remove_file(&path).ok();
+    }
 }
