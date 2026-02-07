@@ -42,6 +42,10 @@ pnpm test:ui
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+### Playwright Tests Require a Headless Environment
+
+Only run `pnpm test:ui` when a display server is available or in a headless environment (e.g. `xvfb-run`). Do **not** run Playwright tests in a bare terminal without a display — they will fail.
+
 ### Dev Server
 
 Always use `./scripts/dev.sh` to restart the dev server (handles process cleanup).

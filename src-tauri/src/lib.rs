@@ -16,7 +16,7 @@ use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use image::{DynamicImage, ImageFormat, GenericImageView};
+use image::{ImageFormat, GenericImageView};
 use image::imageops::FilterType;
 use tauri::{Emitter, Manager};
 
@@ -99,12 +99,6 @@ const ALLOWED_CONTENT_TYPES: &[&str] = &["image/jpeg", "image/jpg", "image/png"]
 
 /// Default content type when upstream doesn't provide one or it's invalid
 const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
-/// Minimum byte size considered a plausible imagery tile before overzoom fallback.
-const MIN_SUSPECT_TILE_BYTES: usize = 2048;
-/// Max size for running pixel-level heuristics (avoid heavy decode on large tiles).
-const MAX_DETAIL_ANALYSIS_BYTES: usize = 256_000;
-/// Only run image-content heuristics at or above this zoom (avoid extra work at low zoom).
-const OVERZOOM_HEURISTIC_MIN_ZOOM: u32 = 17;
 
 /// Maximum retry attempts for transient network errors (total attempts = 1 + TILE_FETCH_MAX_RETRIES).
 const TILE_FETCH_MAX_RETRIES: u32 = 2;
@@ -184,11 +178,6 @@ fn fetch_tile_from_network(
                     .unwrap_or(DEFAULT_CONTENT_TYPE);
 
                 let content_type = sanitize_content_type(raw_content_type);
-                let etag = response
-                    .headers()
-                    .get("etag")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|v| v.to_string());
 
                 let body = response
                     .into_body()
@@ -207,7 +196,6 @@ fn fetch_tile_from_network(
                 return Ok(FetchedTile {
                     data: body,
                     content_type,
-                    etag,
                 });
             }
             Err(e) => {
@@ -363,7 +351,7 @@ fn check_tile_availability(
                 y = y,
                 x = x,
                 error = %e,
-                "Failed to fetch tilemap, falling back to heuristics"
+                "Failed to fetch tilemap, availability unknown"
             );
             None
         }
@@ -380,19 +368,6 @@ fn sanitize_content_type(raw: &str) -> String {
     } else {
         DEFAULT_CONTENT_TYPE.to_string()
     }
-}
-
-/// Attempt to detect common image formats from leading bytes.
-fn detect_image_format(data: &[u8]) -> Option<ImageFormat> {
-    if data.len() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
-        return Some(ImageFormat::Jpeg);
-    }
-    if data.len() >= 8
-        && data[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
-    {
-        return Some(ImageFormat::Png);
-    }
-    None
 }
 
 fn normalize_content_type(content_type: &str) -> &str {
@@ -414,86 +389,6 @@ fn output_content_type_for_format(format: ImageFormat) -> &'static str {
         ImageFormat::Png => "image/png",
         _ => "image/jpeg",
     }
-}
-
-fn is_low_detail_tile(img: &DynamicImage) -> bool {
-    let gray = img.to_luma8();
-    let (w, h) = gray.dimensions();
-    let min_dim = w.min(h).max(1);
-    let step = (min_dim / 32).max(1);
-    let mut counts = [0u32; 256];
-    let mut total = 0u32;
-
-    let mut y = 0;
-    while y < h {
-        let mut x = 0;
-        while x < w {
-            let v = gray.get_pixel(x, y)[0] as usize;
-            counts[v] += 1;
-            total += 1;
-            x += step;
-        }
-        y += step;
-    }
-
-    if total == 0 {
-        return true;
-    }
-
-    let mut max_count = 0u32;
-    let mut dominant_bins = 0u32;
-    for count in counts {
-        if count > max_count {
-            max_count = count;
-        }
-        if (count as f32 / total as f32) > 0.02 {
-            dominant_bins += 1;
-        }
-    }
-
-    let dominance = max_count as f32 / total as f32;
-    dominance > 0.9 || dominant_bins <= 4
-}
-
-fn is_likely_no_data_tile(
-    provider: &tile_providers::TileProvider,
-    z: u32,
-    _content_type: &str,
-    data: &[u8],
-) -> bool {
-    if data.is_empty() {
-        return true;
-    }
-
-    let expected_content_type = normalize_content_type(&provider.content_type_hint);
-    let format = detect_image_format(data);
-
-    if let Some(fmt) = format {
-        if expected_content_type == "image/jpeg" && fmt == ImageFormat::Png {
-            return true;
-        }
-        if expected_content_type == "image/png" && fmt == ImageFormat::Jpeg {
-            return true;
-        }
-    }
-
-    if z >= OVERZOOM_HEURISTIC_MIN_ZOOM && data.len() < MIN_SUSPECT_TILE_BYTES && format.is_some() {
-        return true;
-    }
-
-    if z >= OVERZOOM_HEURISTIC_MIN_ZOOM
-        && format.is_some()
-        && data.len() <= MAX_DETAIL_ANALYSIS_BYTES
-    {
-        if let Ok(img) = image::load_from_memory(data) {
-            if is_low_detail_tile(&img) {
-                return true;
-            }
-        }
-    }
-
-    // Be conservative: treat unknown formats as valid to avoid false positives.
-    false
 }
 
 /// Parses tile coordinates from a URI.
@@ -575,11 +470,10 @@ struct TileFetchResult {
 struct FetchedTile {
     data: Vec<u8>,
     content_type: String,
-    etag: Option<String>,
 }
 
 enum TileFetchOutcome {
-    Tile { tile: TileFetchResult, is_no_data: bool },
+    Tile { tile: TileFetchResult },
     Missing { error: String },
 }
 
@@ -602,7 +496,7 @@ fn cache_put_best_effort(
 }
 
 fn fetch_tile_candidate<F>(
-    provider_info: &tile_providers::TileProvider,
+    _provider_info: &tile_providers::TileProvider,
     provider: &str,
     z: u32,
     y: u32,
@@ -613,8 +507,6 @@ fn fetch_tile_candidate<F>(
 where
     F: Fn(&str, u32, u32, u32) -> Result<FetchedTile, String>,
 {
-    let mut fallback_no_data: Option<TileFetchResult> = None;
-
     // Fresh cache first
     let cached_tile = {
         if let Ok(mut cache_guard) = tile_cache.lock() {
@@ -629,75 +521,22 @@ where
     };
 
     if let Some(entry) = cached_tile {
-        let result = TileFetchResult {
-            data: entry.data,
-            content_type: entry.content_type,
+        tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
+        return TileFetchOutcome::Tile {
+            tile: TileFetchResult {
+                data: entry.data,
+                content_type: entry.content_type,
+            },
         };
-        let is_no_data = is_likely_no_data_tile(provider_info, z, &result.content_type, &result.data);
-        if !is_no_data {
-            tracing::debug!(provider = %provider, z = z, y = y, x = x, "Cache hit (fresh)");
-            return TileFetchOutcome::Tile { tile: result, is_no_data: false };
-        }
-        fallback_no_data = Some(result);
     }
 
-    // Cache miss or cached "no data" tile - fetch from network
+    // Cache miss - fetch from network
     match fetch_fn(provider, z, y, x) {
         Ok(fetched) => {
-            let FetchedTile { data, content_type, etag } = fetched;
-            let is_no_data = is_likely_no_data_tile(provider_info, z, &content_type, &data);
-            if !is_no_data {
-                cache_put_best_effort(tile_cache, provider, z, y, x, &data, &content_type);
-                return TileFetchOutcome::Tile {
-                    tile: TileFetchResult { data, content_type },
-                    is_no_data: false,
-                };
-            }
-
-            if let Some(tag) = etag.as_deref() {
-                tracing::info!(
-                    provider = %provider,
-                    z = z,
-                    y = y,
-                    x = x,
-                    bytes = data.len(),
-                    etag = %tag,
-                    purpose = "detect placeholder tiles",
-                    "Tile flagged as no-data; captured ETag"
-                );
-            }
-
-            // If network returned "no data", check for a stale cached tile that might be usable.
-            let stale_tile = {
-                if let Ok(cache_guard) = tile_cache.lock() {
-                    if let Some(cache) = cache_guard.as_ref() {
-                        cache.get_stale(provider, z, y, x)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            };
-
-            if let Some(entry) = stale_tile {
-                let result = TileFetchResult {
-                    data: entry.data,
-                    content_type: entry.content_type,
-                };
-                let stale_no_data =
-                    is_likely_no_data_tile(provider_info, z, &result.content_type, &result.data);
-                if !stale_no_data {
-                    return TileFetchOutcome::Tile {
-                        tile: result,
-                        is_no_data: false,
-                    };
-                }
-            }
-
+            let FetchedTile { data, content_type } = fetched;
+            cache_put_best_effort(tile_cache, provider, z, y, x, &data, &content_type);
             TileFetchOutcome::Tile {
                 tile: TileFetchResult { data, content_type },
-                is_no_data: true,
             }
         }
         Err(e) => {
@@ -717,12 +556,6 @@ where
             };
 
             if let Some(entry) = stale_tile {
-                let result = TileFetchResult {
-                    data: entry.data,
-                    content_type: entry.content_type,
-                };
-                let is_no_data =
-                    is_likely_no_data_tile(provider_info, z, &result.content_type, &result.data);
                 tracing::info!(
                     provider = %provider,
                     z = z,
@@ -731,11 +564,12 @@ where
                     purpose = "keep map usable offline",
                     "Serving stale cached tile as offline fallback"
                 );
-                return TileFetchOutcome::Tile { tile: result, is_no_data };
-            }
-
-            if let Some(fallback) = fallback_no_data {
-                return TileFetchOutcome::Tile { tile: fallback, is_no_data: true };
+                return TileFetchOutcome::Tile {
+                    tile: TileFetchResult {
+                        data: entry.data,
+                        content_type: entry.content_type,
+                    },
+                };
             }
 
             TileFetchOutcome::Missing {
@@ -843,8 +677,10 @@ where
     let mut current_z = z;
     let mut current_x = x;
     let mut current_y = y;
-    let mut fallback_no_data: Option<TileFetchResult> = None;
-    let mut last_error: Option<String> = None;
+    // Tracks the last error from `fetch_tile_candidate` (always set before loop exits
+    // via `break`, since `Tile` outcomes return immediately).
+    #[allow(unused_assignments)]
+    let mut last_error = None;
 
     // Check tilemap for tile availability before entering the fetch loop.
     // If tilemap says tile is unavailable, skip directly to parent.
@@ -893,46 +729,40 @@ where
             tile_cache,
             fetch_fn,
         ) {
-            TileFetchOutcome::Tile { tile, is_no_data } => {
-                if !is_no_data {
-                    if current_z == z {
-                        return Ok(tile);
-                    }
-
-                    let derived = derive_tile_from_parent(
-                        provider_info,
-                        current_z,
-                        current_x,
-                        current_y,
-                        z,
-                        x,
-                        y,
-                        &tile,
-                    )?;
-                    cache_put_best_effort(
-                        tile_cache,
-                        provider,
-                        z,
-                        y,
-                        x,
-                        &derived.data,
-                        &derived.content_type,
-                    );
-                    tracing::info!(
-                        provider = %provider,
-                        z = z,
-                        y = y,
-                        x = x,
-                        fallback_z = current_z,
-                        purpose = "use best available tile resolution",
-                        "Serving overzoomed parent tile"
-                    );
-                    return Ok(derived);
+            TileFetchOutcome::Tile { tile } => {
+                if current_z == z {
+                    return Ok(tile);
                 }
 
-                if fallback_no_data.is_none() {
-                    fallback_no_data = Some(tile);
-                }
+                let derived = derive_tile_from_parent(
+                    provider_info,
+                    current_z,
+                    current_x,
+                    current_y,
+                    z,
+                    x,
+                    y,
+                    &tile,
+                )?;
+                cache_put_best_effort(
+                    tile_cache,
+                    provider,
+                    z,
+                    y,
+                    x,
+                    &derived.data,
+                    &derived.content_type,
+                );
+                tracing::info!(
+                    provider = %provider,
+                    z = z,
+                    y = y,
+                    x = x,
+                    fallback_z = current_z,
+                    purpose = "use best available tile resolution",
+                    "Serving overzoomed parent tile"
+                );
+                return Ok(derived);
             }
             TileFetchOutcome::Missing { error } => {
                 last_error = Some(error);
@@ -945,10 +775,6 @@ where
         current_z -= 1;
         current_x /= 2;
         current_y /= 2;
-    }
-
-    if let Some(fallback) = fallback_no_data {
-        return Ok(fallback);
     }
 
     Err(last_error.unwrap_or_else(|| "Tile not available".to_string()))
@@ -1836,7 +1662,6 @@ mod tests {
             Ok(FetchedTile {
                 data: b"fetched_tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
-                etag: None,
             })
         };
 
@@ -1863,14 +1688,10 @@ mod tests {
             tc.insert("esri", 15, 0, 128, data);
         }
 
-        // Mock fetch - return valid JPEG-like data (enough bytes to pass size check)
         let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
-            // Use enough bytes to avoid MIN_SUSPECT_TILE_BYTES check
-            let data = vec![0u8; 4096];
             Ok(FetchedTile {
-                data,
+                data: b"fetched_tile".to_vec(),
                 content_type: "image/jpeg".to_string(),
-                etag: None,
             })
         };
 
@@ -1883,7 +1704,7 @@ mod tests {
             guard.as_mut().unwrap().get("esri", 15, 100, 200)
         };
         assert!(cached.is_some(), "Tile should be cached after successful fetch");
-        assert_eq!(cached.unwrap().data.len(), 4096);
+        assert_eq!(&cached.unwrap().data, b"fetched_tile");
     }
 
     #[test]
@@ -1896,7 +1717,6 @@ mod tests {
             Ok(FetchedTile {
                 data: b"tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
-                etag: None,
             })
         };
 
@@ -2035,7 +1855,6 @@ mod tests {
             Ok(FetchedTile {
                 data: b"tile_data".to_vec(),
                 content_type: "image/jpeg".to_string(),
-                etag: None,
             })
         };
         let response = handle_tile_request_with_fetcher("esri", 1, 2, 3, &cache, &tilemap_cache, mock_fetch);
@@ -2202,40 +2021,6 @@ mod tests {
         assert_eq!(snap.total_latency_ms, 50);
     }
 
-    // === detect_image_format tests ===
-
-    #[test]
-    fn test_detect_image_format_jpeg() {
-        let jpeg_header = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
-        assert_eq!(detect_image_format(&jpeg_header), Some(ImageFormat::Jpeg));
-    }
-
-    #[test]
-    fn test_detect_image_format_png() {
-        let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00];
-        assert_eq!(detect_image_format(&png_header), Some(ImageFormat::Png));
-    }
-
-    #[test]
-    fn test_detect_image_format_empty_data() {
-        assert_eq!(detect_image_format(&[]), None);
-    }
-
-    #[test]
-    fn test_detect_image_format_too_short_for_jpeg() {
-        assert_eq!(detect_image_format(&[0xFF, 0xD8]), None);
-    }
-
-    #[test]
-    fn test_detect_image_format_too_short_for_png() {
-        assert_eq!(detect_image_format(&[0x89, 0x50, 0x4E]), None);
-    }
-
-    #[test]
-    fn test_detect_image_format_unknown_format() {
-        assert_eq!(detect_image_format(&[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]), None);
-    }
-
     // === normalize_content_type tests ===
 
     #[test]
@@ -2289,44 +2074,6 @@ mod tests {
     #[test]
     fn test_output_content_type_for_format_jpeg() {
         assert_eq!(output_content_type_for_format(ImageFormat::Jpeg), "image/jpeg");
-    }
-
-    // === is_low_detail_tile tests ===
-
-    #[test]
-    fn test_is_low_detail_solid_color_tile() {
-        // Create a 64x64 solid gray image
-        let img = DynamicImage::ImageLuma8(image::GrayImage::from_pixel(64, 64, image::Luma([128])));
-        assert!(is_low_detail_tile(&img), "Solid color tile should be low detail");
-    }
-
-    #[test]
-    fn test_is_low_detail_varied_tile() {
-        // Create a 256x256 gradient image where each column has a distinct value.
-        // Step=8, so 32 sampled x values, each producing a unique bin with equal frequency.
-        // dominant_bins=32 (>4) and max dominance=3.1% (<90%), so NOT low detail.
-        let mut gray = image::GrayImage::new(256, 256);
-        for y in 0..256 {
-            for x in 0..256 {
-                gray.put_pixel(x, y, image::Luma([x as u8]));
-            }
-        }
-        let img = DynamicImage::ImageLuma8(gray);
-        assert!(!is_low_detail_tile(&img), "Varied gradient should not be low detail");
-    }
-
-    #[test]
-    fn test_is_low_detail_nearly_solid_tile() {
-        // Create tile with 95% one color and 5% another → dominance > 0.9
-        let mut gray = image::GrayImage::from_pixel(100, 100, image::Luma([50]));
-        // Change 5% of pixels
-        for y in 0..5 {
-            for x in 0..100 {
-                gray.put_pixel(x, y, image::Luma([200]));
-            }
-        }
-        let img = DynamicImage::ImageLuma8(gray);
-        assert!(is_low_detail_tile(&img), "95% single-color tile should be low detail");
     }
 
     // === is_retryable_error tests ===
