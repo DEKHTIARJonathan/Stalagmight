@@ -964,10 +964,23 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile) -> Result<Vec<ImportSectionC
 
     // Build a mapping from Ariane shot ID → (section_index, station_index)
     // to resolve topology connections between sections.
+    //
+    // Station index = the station at the END of a shot. In Stalagmight,
+    // station 0 is the section start, shot 0 goes from station 0 → 1, etc.
+    // So shot at index `i` ends at station `i + 1`.
+    //
+    // We must also account for CLOSURE shots being filtered out of the
+    // import data, so we count only non-CLOSURE shots to get the correct index.
     let mut id_to_import_loc: HashMap<i64, (u32, u32)> = HashMap::new();
     for (si, section) in tml.sections.iter().enumerate() {
-        for (shot_idx, shot) in section.shots.iter().enumerate() {
-            id_to_import_loc.insert(shot.id, (si as u32, shot_idx as u32));
+        let mut import_shot_idx: u32 = 0;
+        for shot in &section.shots {
+            if shot.shot_type == TmlShotType::Closure {
+                continue; // CLOSURE shots are excluded from import
+            }
+            // This shot ends at station (import_shot_idx + 1)
+            id_to_import_loc.insert(shot.id, (si as u32, import_shot_idx + 1));
+            import_shot_idx += 1;
         }
     }
 
@@ -1731,7 +1744,20 @@ mod tests {
         assert_eq!(configs[0].section_index, 0);
 
         // Second section → FromImporting (linked via topology)
-        assert!(matches!(configs[1].placement, ImportPlacement::FromImporting { .. }));
+        // Section B's first shot (ID=3) has FromID=2, which is the 2nd shot in Section A.
+        // Shot ID=2 is at import shot index 1, so it ends at station 2.
+        match &configs[1].placement {
+            ImportPlacement::FromImporting {
+                import_station,
+                target_section_index,
+                target_station_index,
+            } => {
+                assert_eq!(*import_station, 0, "import_station should be 0 (first station)");
+                assert_eq!(*target_section_index, 0, "should link to section 0");
+                assert_eq!(*target_station_index, 2, "should link to station 2 (end of shot ID=2)");
+            }
+            other => panic!("Expected FromImporting, got {:?}", other),
+        }
     }
 
     // -------------------------------------------------------------------
