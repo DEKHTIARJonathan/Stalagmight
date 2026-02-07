@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
+import { useShallow } from 'zustand/react/shallow';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, EyeIcon } from '../common/icons';
@@ -64,7 +65,23 @@ export default function DisplayMenu() {
     gridSpacing,
     toggleDisplay,
     setGridSpacing,
-  } = useUIStore();
+  } = useUIStore(useShallow((s) => ({
+    showStations: s.showStations,
+    showShots: s.showShots,
+    showSectionNames: s.showSectionNames,
+    showStationLabels: s.showStationLabels,
+    showShotData: s.showShotData,
+    showVirtualShots: s.showVirtualShots,
+    showZeroDatum: s.showZeroDatum,
+    showGrid: s.showGrid,
+    showScaleBar: s.showScaleBar,
+    showSatellite: s.showSatellite,
+    showDepthGradient: s.showDepthGradient,
+    showDevStats: s.showDevStats,
+    gridSpacing: s.gridSpacing,
+    toggleDisplay: s.toggleDisplay,
+    setGridSpacing: s.setGridSpacing,
+  })));
 
   const toggleValues: Record<DisplayToggleKey, boolean> = {
     showStations,

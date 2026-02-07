@@ -199,7 +199,12 @@ export default class SurveyLayer {
   private prevSelectedSectionShotIds: Set<number> = new Set();
   private prevSelectedSectionStationIds: Set<number> = new Set();
 
-  // Cached section feature IDs to avoid re-scanning querySourceFeatures on every updateVisualState()
+  // Pre-built section→featureId lookup maps, populated once in update() from feature data.
+  // Eliminates O(N) querySourceFeatures calls during hover (the main perf bottleneck).
+  private sectionShotFeatureIds: Map<number, Set<number>> = new Map();
+  private sectionStationFeatureIds: Map<number, Set<number>> = new Map();
+
+  // Cached section feature IDs to avoid re-scanning on every updateVisualState()
   // Key is comma-joined section IDs (handles both single-section and multi-section/segment hover)
   private cachedHoveredSectionKey: string = '';
   private cachedHoveredSectionShotIds: Set<number> = new Set();
@@ -1141,17 +1146,13 @@ export default class SurveyLayer {
     return sectionId! * FEATURE_ID_STRIDE + index!;
   }
 
-  // Collect all feature IDs belonging to a section from a given source
+  // Collect all feature IDs belonging to a section from a given source.
+  // Uses pre-built lookup maps (O(1)) instead of querySourceFeatures (O(N)).
   private getSectionFeatureIds(source: string, sectionIdStr: string): Set<number> {
-    const features = this.map.querySourceFeatures(source);
     const sectionIdNum = Number(sectionIdStr);
-    const ids = new Set<number>();
-    for (const f of features) {
-      if (f.properties?.sectionId === sectionIdNum && f.properties?.featureId != null) {
-        ids.add(f.properties.featureId as number);
-      }
-    }
-    return ids;
+    const isShots = source.endsWith('-shots');
+    const map = isShots ? this.sectionShotFeatureIds : this.sectionStationFeatureIds;
+    return map.get(sectionIdNum) ?? new Set();
   }
 
   // Get the effective section IDs for hover highlighting.
@@ -1410,6 +1411,7 @@ export default class SurveyLayer {
       }
       this.prevSelectedSectionStationIds = newSelectedStationIds;
     }
+
   }
 
   // Update hitbox layer sizes from config
@@ -2897,6 +2899,29 @@ export default class SurveyLayer {
       this.themeColors,
       this.cachedPrecision
     );
+
+    // Build section→featureId lookup maps for O(1) hover highlighting
+    // (replaces per-hover querySourceFeatures which was the main perf bottleneck)
+    this.sectionShotFeatureIds = new Map();
+    for (const f of shotFeatures) {
+      const sid = f.properties?.sectionId as number | undefined;
+      const fid = f.properties?.featureId as number | undefined;
+      if (sid !== undefined && fid !== undefined) {
+        let set = this.sectionShotFeatureIds.get(sid);
+        if (!set) { set = new Set(); this.sectionShotFeatureIds.set(sid, set); }
+        set.add(fid);
+      }
+    }
+    this.sectionStationFeatureIds = new Map();
+    for (const f of stationFeatures) {
+      const sid = f.properties?.sectionId as number | undefined;
+      const fid = f.properties?.featureId as number | undefined;
+      if (sid !== undefined && fid !== undefined) {
+        let set = this.sectionStationFeatureIds.get(sid);
+        if (!set) { set = new Set(); this.sectionStationFeatureIds.set(sid, set); }
+        set.add(fid);
+      }
+    }
 
     // Update sources
     const shotsSource = this.map.getSource(this.sourceId + '-shots');

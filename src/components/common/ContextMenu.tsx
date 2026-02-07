@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
@@ -13,7 +14,14 @@ interface ContextMenuItem {
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection } = useUIStore();
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection } = useUIStore(useShallow((s) => ({
+    closeDialog: s.closeDialog,
+    dialogData: s.dialogData,
+    openDialog: s.openDialog,
+    setActiveTool: s.setActiveTool,
+    setMergeStationA: s.setMergeStationA,
+    triggerZoomToSection: s.triggerZoomToSection,
+  })));
   const { project, setShotVirtual } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);

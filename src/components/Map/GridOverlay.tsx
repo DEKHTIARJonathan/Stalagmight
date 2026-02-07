@@ -19,7 +19,8 @@ export const GRID_SPACING_OPTIONS = [1, 5, 10, 25, 50, 100] as const;
  */
 export default function GridOverlay({ map }: GridOverlayProps) {
   const layerAdded = useRef(false);
-  const { showGrid, gridSpacing } = useUIStore();
+  const showGrid = useUIStore((s) => s.showGrid);
+  const gridSpacing = useUIStore((s) => s.gridSpacing);
   const { stations, config } = useProjectStore();
 
   const gridColor = config?.display.grid_color ?? getThemeColor('--cc-grid-default');

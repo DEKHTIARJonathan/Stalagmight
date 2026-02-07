@@ -134,7 +134,9 @@ export default function Toolbar({
   canRedo,
 }: ToolbarProps) {
   const { t } = useTranslation();
-  const { activeTool, setActiveTool, openDialog } = useUIStore();
+  const activeTool = useUIStore((s) => s.activeTool);
+  const setActiveTool = useUIStore((s) => s.setActiveTool);
+  const openDialog = useUIStore((s) => s.openDialog);
 
   return (
     <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">

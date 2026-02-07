@@ -1,7 +1,8 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
+import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
@@ -14,7 +15,17 @@ interface SectionsPanelProps {
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore();
+  const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore(
+    useShallow((s) => ({
+      selection: s.selection,
+      setSelection: s.setSelection,
+      clearSelection: s.clearSelection,
+      hoveredSectionId: s.hoveredSectionId,
+      setHoveredSectionId: s.setHoveredSectionId,
+      openDialog: s.openDialog,
+      triggerZoomToSection: s.triggerZoomToSection,
+    }))
+  );
 
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
@@ -36,16 +47,16 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     };
   }, []);
 
-  const handleSectionClick = (section: Section, e?: React.MouseEvent) => {
+  const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
     if (e && e.button !== 0) return;
     setSelection({
       type: 'section',
       sectionId: section.id,
     });
-  };
+  }, [setSelection]);
 
-  const handleKeyDown = (e: React.KeyboardEvent, currentIndex: number) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent, currentIndex: number) => {
     // Only handle keyboard events when the list item itself is focused,
     // not when focus is on nested controls (like the delete button)
     if (e.target !== e.currentTarget) return;
@@ -101,7 +112,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         clearSelection();
         break;
     }
-  };
+  }, [sections, handleSectionClick, clearSelection]);
 
   const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
     // CRITICAL: Only clear when focus leaves the listbox ENTIRELY
@@ -114,24 +125,24 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     }
   };
 
-  const handleSectionMouseEnter = (sectionId: SectionId) => {
+  const handleSectionMouseEnter = useCallback((sectionId: SectionId) => {
     lastHoveredIdRef.current = sectionId;
     setHoveredSectionId(sectionId);
-  };
+  }, [setHoveredSectionId]);
 
-  const handleSectionMouseLeave = () => {
+  const handleSectionMouseLeave = useCallback(() => {
     // Always clear hover on mouse leave - the mouse is no longer over the element
     // Keyboard focus is handled separately via the onFocus handler
     lastHoveredIdRef.current = null;
     setHoveredSectionId(null);
-  };
+  }, [setHoveredSectionId]);
 
-  const handleDeleteMouseDown = (e: React.MouseEvent) => {
+  const handleDeleteMouseDown = useCallback((e: React.MouseEvent) => {
     // Stop propagation to prevent row selection
     e.stopPropagation();
-  };
+  }, []);
 
-  const handleSectionDoubleClick = (section: Section, e: React.MouseEvent) => {
+  const handleSectionDoubleClick = useCallback((section: Section, e: React.MouseEvent) => {
     // Only handle left mouse button
     if (e.button !== 0) return;
     // Don't trigger if double-clicking nested controls (like delete button)
@@ -140,34 +151,39 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     handleSectionClick(section, e);
     // Trigger zoom to section
     triggerZoomToSection(section.id);
-  };
+  }, [handleSectionClick, triggerZoomToSection]);
 
-  const handleDeleteDoubleClick = (e: React.MouseEvent) => {
+  const handleDeleteDoubleClick = useCallback((e: React.MouseEvent) => {
     // Stop propagation to prevent row zoom
     e.stopPropagation();
-  };
+  }, []);
+
+  const handleSectionFocus = useCallback((sectionId: SectionId, index: number) => {
+    setFocusedIndex(index);
+    lastHoveredIdRef.current = sectionId;
+    setHoveredSectionId(sectionId);
+  }, [setHoveredSectionId]);
 
   const handleAddSection = () => {
     openDialog('import');
   };
 
-  const handleDeleteSection = (sectionId: number, e: React.MouseEvent) => {
+  const handleDeleteSection = useCallback((sectionId: number, e: React.MouseEvent) => {
     e.stopPropagation();
     openDialog('confirm-delete', {
       type: 'section',
       sectionId,
-      message: t('sections.confirmDelete'),
     });
-  };
+  }, [openDialog]);
 
-  const handleSectionContextMenu = (e: React.MouseEvent, sectionId: number) => {
+  const handleSectionContextMenu = useCallback((e: React.MouseEvent, sectionId: number) => {
     e.preventDefault();
     e.stopPropagation();
     openDialog('context-menu', {
       target: { type: 'section', sectionId },
       position: { x: e.clientX, y: e.clientY },
     });
-  };
+  }, [openDialog]);
 
   return (
     <div className="h-full flex flex-col bg-panel" data-testid="sections-panel">
@@ -206,72 +222,29 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
             className="py-1"
             onBlur={handleContainerBlur}
           >
-            {sections.map((section, index) => {
-              const isSelected =
-                selection?.type === 'section' &&
-                selection.sectionId === section.id;
-              const stats = calculateSectionStats(section);
-
-              return (
-                <li
-                  key={section.id}
-                  ref={(el) => { optionRefs.current[index] = el; }}
-                  role="option"
-                  aria-selected={isSelected}
-                  tabIndex={focusedIndex === index ? 0 : (focusedIndex === -1 && index === 0 ? 0 : -1)}
-                  data-testid={`section-row-${section.id}`}
-                  title={t('sections.actions.zoom')}
-                  className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
-                    isSelected
-                      ? 'bg-accent-20 ring-2 ring-accent ring-inset'
-                      : (hoveredSectionId === section.id ? 'bg-accent-10' : 'hover:bg-accent-10')
-                  }`}
-                  onMouseDown={(e) => handleSectionClick(section, e)}
-                  onDoubleClick={(e) => handleSectionDoubleClick(section, e)}
-                  onContextMenu={(e) => handleSectionContextMenu(e, section.id)}
-                  onMouseEnter={() => handleSectionMouseEnter(section.id)}
-                  onMouseLeave={handleSectionMouseLeave}
-                  onFocus={() => {
-                    setFocusedIndex(index);
-                    lastHoveredIdRef.current = section.id;
-                    setHoveredSectionId(section.id);
-                  }}
-                  onKeyDown={(e) => handleKeyDown(e, index)}
-                >
-                  <div
-                    className="flex items-center gap-2"
-                    data-testid={`section-item-${section.id}`}
-                  >
-                    <span
-                      className="w-3 h-3 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: section.color }}
-                    />
-                    <span className="flex-1 truncate">
-                      {section.name ?? t('sections.defaultName', { id: section.id })}
-                    </span>
-                    <IconButton
-                      onClick={(e) => handleDeleteSection(section.id, e)}
-                      onMouseDown={handleDeleteMouseDown}
-                      onDoubleClick={handleDeleteDoubleClick}
-                      icon={<CloseIcon size={12} />}
-                      size="sm"
-                      variant="ghost"
-                      tooltip={t('sections.actions.delete')}
-                      aria-label={t('sections.actions.delete')}
-                      className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-error"
-                      tabIndex={-1}
-                      data-testid={`section-delete-${section.id}`}
-                    />
-                  </div>
-                  <div className="text-xs text-text-secondary mt-1 ml-5">
-                    {t('sections.stats', {
-                      shots: formatNumber(stats.shotCount),
-                      length: `${formatFixed(stats.length, undefined, precision.length)}${t('common.units.meters')}`,
-                    })}
-                  </div>
-                </li>
-              );
-            })}
+            {sections.map((section, index) => (
+              <SectionRow
+                key={section.id}
+                section={section}
+                index={index}
+                isSelected={selection?.type === 'section' && selection.sectionId === section.id}
+                isHovered={hoveredSectionId === section.id}
+                isFocused={focusedIndex === index}
+                isDefaultFocus={focusedIndex === -1 && index === 0}
+                precision={precision.length}
+                onMouseDown={handleSectionClick}
+                onDoubleClick={handleSectionDoubleClick}
+                onContextMenu={handleSectionContextMenu}
+                onMouseEnter={handleSectionMouseEnter}
+                onMouseLeave={handleSectionMouseLeave}
+                onFocus={handleSectionFocus}
+                onKeyDown={handleKeyDown}
+                onDelete={handleDeleteSection}
+                onDeleteMouseDown={handleDeleteMouseDown}
+                onDeleteDoubleClick={handleDeleteDoubleClick}
+                optionRefs={optionRefs}
+              />
+            ))}
           </ul>
         )}
       </div>
@@ -296,3 +269,107 @@ function calculateSectionStats(section: Section) {
     virtualCount,
   };
 }
+
+interface SectionRowProps {
+  section: Section;
+  index: number;
+  isSelected: boolean;
+  isHovered: boolean;
+  isFocused: boolean;
+  isDefaultFocus: boolean;
+  precision: number;
+  onMouseDown: (section: Section, e?: React.MouseEvent) => void;
+  onDoubleClick: (section: Section, e: React.MouseEvent) => void;
+  onContextMenu: (e: React.MouseEvent, sectionId: number) => void;
+  onMouseEnter: (sectionId: SectionId) => void;
+  onMouseLeave: () => void;
+  onFocus: (sectionId: SectionId, index: number) => void;
+  onKeyDown: (e: React.KeyboardEvent, index: number) => void;
+  onDelete: (sectionId: number, e: React.MouseEvent) => void;
+  onDeleteMouseDown: (e: React.MouseEvent) => void;
+  onDeleteDoubleClick: (e: React.MouseEvent) => void;
+  optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
+}
+
+const SectionRow = memo(function SectionRow({
+  section,
+  index,
+  isSelected,
+  isHovered,
+  isFocused,
+  isDefaultFocus,
+  precision,
+  onMouseDown,
+  onDoubleClick,
+  onContextMenu,
+  onMouseEnter,
+  onMouseLeave,
+  onFocus,
+  onKeyDown,
+  onDelete,
+  onDeleteMouseDown,
+  onDeleteDoubleClick,
+  optionRefs,
+}: SectionRowProps) {
+  const { t } = useTranslation();
+  const stats = calculateSectionStats(section);
+
+  const refCallback = useCallback((el: HTMLLIElement | null) => {
+    optionRefs.current[index] = el;
+  }, [optionRefs, index]);
+
+  return (
+    <li
+      ref={refCallback}
+      role="option"
+      aria-selected={isSelected}
+      tabIndex={isFocused ? 0 : (isDefaultFocus ? 0 : -1)}
+      data-testid={`section-row-${section.id}`}
+      title={t('sections.actions.zoom')}
+      className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
+        isSelected
+          ? 'bg-accent-20 ring-2 ring-accent ring-inset'
+          : (isHovered ? 'bg-accent-10' : 'hover:bg-accent-10')
+      }`}
+      onMouseDown={(e) => onMouseDown(section, e)}
+      onDoubleClick={(e) => onDoubleClick(section, e)}
+      onContextMenu={(e) => onContextMenu(e, section.id)}
+      onMouseEnter={() => onMouseEnter(section.id)}
+      onMouseLeave={onMouseLeave}
+      onFocus={() => onFocus(section.id, index)}
+      onKeyDown={(e) => onKeyDown(e, index)}
+    >
+      <div
+        className="flex items-center gap-2"
+        data-testid={`section-item-${section.id}`}
+      >
+        <span
+          className="w-3 h-3 rounded-full flex-shrink-0"
+          style={{ backgroundColor: section.color }}
+        />
+        <span className="flex-1 truncate">
+          {section.name ?? t('sections.defaultName', { id: section.id })}
+        </span>
+        <IconButton
+          onClick={(e) => onDelete(section.id, e)}
+          onMouseDown={onDeleteMouseDown}
+          onDoubleClick={onDeleteDoubleClick}
+          icon={<CloseIcon size={12} />}
+          size="sm"
+          variant="ghost"
+          tooltip={t('sections.actions.delete')}
+          aria-label={t('sections.actions.delete')}
+          className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-error"
+          tabIndex={-1}
+          data-testid={`section-delete-${section.id}`}
+        />
+      </div>
+      <div className="text-xs text-text-secondary mt-1 ml-5">
+        {t('sections.stats', {
+          shots: formatNumber(stats.shotCount),
+          length: `${formatFixed(stats.length, undefined, precision)}${t('common.units.meters')}`,
+        })}
+      </div>
+    </li>
+  );
+});

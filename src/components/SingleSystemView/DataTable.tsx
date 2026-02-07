@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotUpdates } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
 import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon, LockIcon } from '../common/icons';
@@ -40,7 +41,19 @@ export default function DataTable({ sections }: DataTableProps) {
     announceSelection,
     setHoveredSectionId,
     openDialog,
-  } = useUIStore();
+  } = useUIStore(useShallow((s) => ({
+    selection: s.selection,
+    setSelection: s.setSelection,
+    setHoveredShot: s.setHoveredShot,
+    hoveredShot: s.hoveredShot,
+    triggerPanToShot: s.triggerPanToShot,
+    dataTableOpen: s.dataTableOpen,
+    toggleDataTable: s.toggleDataTable,
+    dataTableHeight: s.dataTableHeight,
+    announceSelection: s.announceSelection,
+    setHoveredSectionId: s.setHoveredSectionId,
+    openDialog: s.openDialog,
+  })));
 
   // Create a map of shot warnings for quick lookup
   const shotWarningsMap = useMemo(() => {
