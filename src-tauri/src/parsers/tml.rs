@@ -1024,21 +1024,32 @@ fn convert_shots_to_shot_data(shots: &[TmlShot]) -> Vec<ShotData> {
         return Vec::new();
     }
 
+    // Filter out CLOSURE shots — they are loop-closure markers with zero length,
+    // not real survey measurements. Their topology is captured in TmlClosure.
+    let real_shots: Vec<&TmlShot> = shots
+        .iter()
+        .filter(|s| s.shot_type != TmlShotType::Closure)
+        .collect();
+
+    if real_shots.is_empty() {
+        return Vec::new();
+    }
+
     // The first shot's "incoming" depth reference
-    let base_depth = if shots[0].depth_in != -1.0 {
-        shots[0].depth_in
+    let base_depth = if real_shots[0].depth_in != -1.0 {
+        real_shots[0].depth_in
     } else {
         0.0
     };
 
-    let mut result = Vec::with_capacity(shots.len());
+    let mut result = Vec::with_capacity(real_shots.len());
 
-    for (i, shot) in shots.iter().enumerate() {
+    for (i, shot) in real_shots.iter().enumerate() {
         // depth_in for this shot
         let raw_depth_in = if shot.depth_in != -1.0 {
             shot.depth_in
         } else if i > 0 {
-            shots[i - 1].depth
+            real_shots[i - 1].depth
         } else {
             0.0
         };
