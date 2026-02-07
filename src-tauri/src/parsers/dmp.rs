@@ -383,7 +383,7 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     let minute = u32::from(buffer.read()?);
 
     // Validate date components
-    if !(2016..2100).contains(&year) {
+    if !(2000..2100).contains(&year) {
         bail!("Invalid year: {year}");
     }
     if !(1..=12).contains(&month) {
