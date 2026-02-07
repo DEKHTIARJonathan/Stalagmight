@@ -1011,9 +1011,13 @@ fn convert_shots_to_shot_data(shots: &[TmlShot]) -> Vec<ShotData> {
         // LRUD: pass through, using None for zero values
         let lrud_opt = |v: f64| if v.abs() < f64::EPSILON { None } else { Some(v) };
 
+        // Ariane stores azimuths as arbitrary angles (can be negative or >360).
+        // Normalize to 0..360 range for Stalagmight's data model.
+        let az = shot.azimuth.rem_euclid(360.0);
+
         result.push(ShotData {
-            azimuth_in: shot.azimuth,
-            azimuth_out: shot.azimuth, // No backsight in Ariane
+            azimuth_in: az,
+            azimuth_out: az, // No backsight in Ariane
             length: shot.length,
             depth_in,
             depth_out,
@@ -1782,5 +1786,58 @@ mod tests {
         assert!((shot_data[0].right.unwrap_or(0.0) - 2.5).abs() < f64::EPSILON);
         assert!(shot_data[0].up.is_none());
         assert!((shot_data[0].down.unwrap_or(0.0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_azimuth_normalization() {
+        // Ariane stores azimuths as arbitrary angles (negative, >360).
+        // convert_shots_to_shot_data must normalize to 0..360.
+        let make_shot = |az: f64| TmlShot {
+            id: 1,
+            from_id: 0,
+            shot_type: TmlShotType::Real,
+            azimuth: az,
+            length: 10.0,
+            depth: 0.0,
+            depth_in: -1.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_string(),
+            excluded: false,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: "Test".to_string(),
+        };
+
+        // Negative azimuth → normalized
+        let data = convert_shots_to_shot_data(&[make_shot(-124.0)]);
+        assert!((data[0].azimuth_in - 236.0).abs() < 1e-6); // -124 + 360 = 236
+
+        // Very negative → normalized
+        let data = convert_shots_to_shot_data(&[make_shot(-690.0)]);
+        assert!((data[0].azimuth_in - 30.0).abs() < 1e-6); // -690 + 720 = 30
+
+        // >360 → normalized
+        let data = convert_shots_to_shot_data(&[make_shot(450.0)]);
+        assert!((data[0].azimuth_in - 90.0).abs() < 1e-6); // 450 - 360 = 90
+
+        // Already valid → unchanged
+        let data = convert_shots_to_shot_data(&[make_shot(102.0)]);
+        assert!((data[0].azimuth_in - 102.0).abs() < 1e-6);
+
+        // Zero → unchanged
+        let data = convert_shots_to_shot_data(&[make_shot(0.0)]);
+        assert!(data[0].azimuth_in.abs() < 1e-6);
+
+        // azimuth_out should match azimuth_in
+        let data = convert_shots_to_shot_data(&[make_shot(-124.0)]);
+        assert!((data[0].azimuth_out - data[0].azimuth_in).abs() < f64::EPSILON);
     }
 }
