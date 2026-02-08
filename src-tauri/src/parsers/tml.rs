@@ -1050,17 +1050,6 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
         }
     }
 
-    // Also track which section contains a shot whose from_id == X
-    // (i.e., which section "starts from" shot X)
-    let mut start_from_id: HashMap<i64, u32> = HashMap::new();
-    for (si, section) in tml.sections.iter().enumerate() {
-        if let Some(first_shot) = section.shots.first() {
-            if first_shot.from_id >= 0 {
-                start_from_id.insert(first_shot.from_id, si as u32);
-            }
-        }
-    }
-
     let mut configs: Vec<ImportSectionConfig> = Vec::new();
 
     for (si, section) in tml.sections.iter().enumerate() {
@@ -1074,10 +1063,30 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
             continue;
         }
 
-        // Determine placement
+        // When excluded shots are filtered, the effective first shot may differ
+        // from section.start_ariane_id (which is the raw first shot's from_id).
+        // Find the from_id of the first non-excluded, non-CLOSURE shot as a
+        // fallback for placement when start_ariane_id is itself excluded.
+        let effective_start_id = if include_excluded {
+            None
+        } else {
+            let eff = section
+                .shots
+                .iter()
+                .find(|s| s.shot_type != TmlShotType::Closure && !s.excluded)
+                .map(|s| s.from_id);
+            // Only use as fallback if different from start_ariane_id
+            eff.filter(|&id| id != section.start_ariane_id)
+        };
+
+        // Determine placement: try start_ariane_id first (preserves original
+        // topology), then effective_start_id as fallback when the original
+        // from_id was excluded and can't be resolved.
         let placement = determine_placement(
             section,
             section_index,
+            section.start_ariane_id,
+            effective_start_id,
             &id_to_import_loc,
             tml.geo_coding.as_ref(),
         );
@@ -1095,7 +1104,100 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
         });
     }
 
+    // Topologically sort configs so that any section referenced by a
+    // FromImporting placement is created before its dependent. This handles
+    // forward references that arise when excluded-shot filtering changes
+    // which section a given section attaches to.
+    topological_sort_configs(&mut configs);
+
     Ok(configs)
+}
+
+/// Topologically sort import configs so that FromImporting targets come first.
+///
+/// Uses Kahn's algorithm. Configs with no FromImporting dependency (Origin,
+/// ZeroDatum, etc.) come first, then configs whose targets have already been
+/// placed, and so on. Cycles (which shouldn't happen in valid survey data)
+/// are broken by appending remaining configs in their original order.
+fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
+    if configs.len() <= 1 {
+        return;
+    }
+
+    // Build index mapping: section_index → position in configs vec
+    let pos_of: HashMap<u32, usize> = configs
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.section_index, i))
+        .collect();
+
+    // Build dependency: for each config, which config position must come first?
+    // dep[i] = Some(j) means configs[i] depends on configs[j].
+    let dep: Vec<Option<usize>> = configs
+        .iter()
+        .map(|c| {
+            if let ImportPlacement::FromImporting { target_section_index, .. } = &c.placement {
+                pos_of.get(target_section_index).copied()
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Check if already in valid order (common case — skip reallocation)
+    let already_sorted = dep.iter().enumerate().all(|(i, d)| match d {
+        Some(j) => *j < i,
+        None => true,
+    });
+    if already_sorted {
+        return;
+    }
+
+    // Kahn's algorithm
+    let n = configs.len();
+    let mut in_degree = vec![0u32; n];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, d) in dep.iter().enumerate() {
+        if let Some(j) = d {
+            in_degree[i] += 1;
+            dependents[*j].push(i);
+        }
+    }
+
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for (i, &deg) in in_degree.iter().enumerate() {
+        if deg == 0 {
+            queue.push_back(i);
+        }
+    }
+
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    while let Some(i) = queue.pop_front() {
+        order.push(i);
+        for &dep_i in &dependents[i] {
+            in_degree[dep_i] -= 1;
+            if in_degree[dep_i] == 0 {
+                queue.push_back(dep_i);
+            }
+        }
+    }
+
+    // Append any remaining (cycle — shouldn't happen, but be safe)
+    if order.len() < n {
+        for i in 0..n {
+            if !order.contains(&i) {
+                order.push(i);
+            }
+        }
+    }
+
+    // Reorder configs
+    let mut old_configs: Vec<Option<ImportSectionConfig>> =
+        std::mem::take(configs).into_iter().map(Some).collect();
+    *configs = order
+        .into_iter()
+        .filter_map(|i| old_configs[i].take())
+        .collect();
 }
 
 /// Convert TML shots to `ShotData` for import.
@@ -1167,9 +1269,16 @@ fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_exclu
 }
 
 /// Determine placement for a section based on topology and GPS data.
+///
+/// `start_ariane_id` is the raw first shot's `from_id` (original topology).
+/// `effective_start_id` is an optional fallback — the `from_id` of the first
+/// non-excluded shot, used when excluded leading shots make `start_ariane_id`
+/// unresolvable. We try both, preferring the original.
 fn determine_placement(
     section: &TmlSection,
     section_index: u32,
+    start_ariane_id: i64,
+    effective_start_id: Option<i64>,
     id_to_import_loc: &HashMap<i64, (u32, u32)>,
     _geo_coding: Option<&TmlGeoCoding>,
 ) -> ImportPlacement {
@@ -1193,11 +1302,19 @@ fn determine_placement(
         return ImportPlacement::Origin;
     }
 
-    // Check if this section's first shot connects to a shot in an earlier section
-    let first_shot_from_id = section.start_ariane_id;
-    if first_shot_from_id >= 0 {
-        if let Some(&(target_section, target_station)) = id_to_import_loc.get(&first_shot_from_id) {
-            if target_section < section_index {
+    // Try to connect to an already-imported section. First try the original
+    // start_ariane_id, then fall back to effective_start_id (from the first
+    // non-excluded shot) if the original was excluded and can't be resolved.
+    let candidates = std::iter::once(Some(start_ariane_id))
+        .chain(std::iter::once(effective_start_id))
+        .flatten()
+        .filter(|&id| id >= 0);
+
+    for from_id in candidates {
+        if let Some(&(target_section, target_station)) = id_to_import_loc.get(&from_id) {
+            // Allow forward references — configs will be topologically sorted
+            // afterward so that the target section is created first.
+            if target_section != section_index {
                 return ImportPlacement::FromImporting {
                     import_station: 0, // First station of this section
                     target_section_index: target_section,
@@ -2319,6 +2436,118 @@ mod tests {
         // With excluded included, both sections present
         let configs = convert_tml_to_import_configs(&tml, true).unwrap();
         assert_eq!(configs.len(), 2);
+    }
+
+    #[test]
+    fn test_excluded_leading_shots_placement() {
+        // Real-world scenario modeled after Ariane data:
+        //   Section A (index 0): shots 1,2 — main line
+        //   Section C (index 1): shot 10 (from_id=2) — virtual jump chain
+        //   Section B (index 2): excluded shot 5 (from_id=3, where 3 is excluded),
+        //     then non-excluded shot 6 (from_id=10 → section C's last shot)
+        //
+        // start_ariane_id for B = 3 (excluded shot, not in id_to_import_loc).
+        // Placement must fall back to effective_start_id = shot 6's from_id = 10
+        // (in section C), and topological sort must reorder C before B even though
+        // C has a higher raw index than expected.
+        let make_shot = |id: i64, from_id: i64, excluded: bool| TmlShot {
+            id,
+            from_id,
+            shot_type: TmlShotType::Real,
+            azimuth: 90.0,
+            length: 10.0,
+            depth: 0.0,
+            depth_in: -1.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_string(),
+            excluded,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: "S".to_string(),
+        };
+
+        let tml = TmlFile {
+            cave_name: "Test".to_string(),
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: false,
+            first_start_absolute_elevation: 0.0,
+            geo_coding: None,
+            sections: vec![
+                // Section A (index 0): shots 1,2
+                TmlSection {
+                    name: "A".to_string(),
+                    shots: vec![make_shot(1, -1, false), make_shot(2, 1, false)],
+                    surveyor: None,
+                    date: None,
+                    color: "#ff0000".to_string(),
+                    is_branch_split: false,
+                    start_ariane_id: -1,
+                    end_ariane_id: 2,
+                    start_depth: 0.0,
+                },
+                // Section B (index 1): excluded shot 5 (from_id=3, excluded),
+                // then non-excluded shot 6 (from_id=10 → section C)
+                TmlSection {
+                    name: "B".to_string(),
+                    shots: vec![
+                        make_shot(5, 3, true),   // excluded, from_id=3 is also excluded
+                        make_shot(6, 10, false),  // kept, from_id=10 is in section C
+                    ],
+                    surveyor: None,
+                    date: None,
+                    color: "#0000ff".to_string(),
+                    is_branch_split: false,
+                    start_ariane_id: 3, // raw first shot's from_id (excluded, not in map)
+                    end_ariane_id: 6,
+                    start_depth: 0.0,
+                },
+                // Section C (index 2): shot 10 (from_id=2) — comes after B in raw order
+                TmlSection {
+                    name: "C".to_string(),
+                    shots: vec![make_shot(10, 2, false)],
+                    surveyor: None,
+                    date: None,
+                    color: "#00ff00".to_string(),
+                    is_branch_split: false,
+                    start_ariane_id: 2,
+                    end_ariane_id: 10,
+                    start_depth: 0.0,
+                },
+            ],
+            closures: Vec::new(),
+        };
+
+        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
+        assert_eq!(configs.len(), 3);
+
+        // After topological sort: C must come before B because B depends on C.
+        // Expected order: A, C, B
+        assert_eq!(configs[0].name.as_deref(), Some("A"));
+        assert_eq!(configs[1].name.as_deref(), Some("C"));
+        assert_eq!(configs[2].name.as_deref(), Some("B"));
+
+        // Section B should attach to section C's shot 10
+        let b_config = &configs[2];
+        match &b_config.placement {
+            ImportPlacement::FromImporting {
+                import_station,
+                target_section_index,
+                target_station_index,
+            } => {
+                assert_eq!(*import_station, 0);
+                assert_eq!(*target_section_index, 2, "should reference section C (raw index 2)");
+                assert_eq!(*target_station_index, 1, "should attach to station 1 (shot 10)");
+            }
+            other => panic!("Expected FromImporting, got {:?}", other),
+        }
     }
 
     #[test]
