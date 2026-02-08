@@ -140,6 +140,8 @@ export function buildSurveyFeatures(
   }
 
   let globalShotIndex = 0;
+  // Track stations that have at least one non-virtual shot (key: "sectionId:stationIndex")
+  const stationsWithNonVirtualShot = new Set<string>();
 
   for (const section of sections) {
     const sectionStations = (stationsBySection.get(section.id) ?? [])
@@ -152,6 +154,10 @@ export function buildSurveyFeatures(
       const toStation = sectionStations[i + 1];
 
       if (fromStation && toStation && shot) {
+        if (!shot.is_virtual) {
+          stationsWithNonVirtualShot.add(`${section.id}:${fromStation.station_ref.station_index}`);
+          stationsWithNonVirtualShot.add(`${section.id}:${toStation.station_ref.station_index}`);
+        }
         const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
         const depthColor = showDepthGradient
           ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
@@ -250,6 +256,9 @@ export function buildSurveyFeatures(
         depth: station.coordinates.z,
         color,
         strokeColor: featureStrokeColor,
+        allShotsVirtual: !stationsWithNonVirtualShot.has(
+          `${station.station_ref.section_id}:${station.station_ref.station_index}`
+        ),
       },
     });
   }

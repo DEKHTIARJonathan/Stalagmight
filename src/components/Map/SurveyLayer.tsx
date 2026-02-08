@@ -1736,14 +1736,21 @@ export default class SurveyLayer {
   }
 
   // Control virtual shots visibility via filter (while keeping regular shots visible)
+  // Also hides stations that only connect to virtual shots
   setShowVirtualShots(visible: boolean): void {
     if (!this.map) return;
     if (visible) {
-      // Show all shots (clear filter)
+      // Show all shots and stations (clear filters)
       this.map.setFilter(this.shotsLayerId, null);
+      this.map.setFilter(this.stationsLayerId, null);
+      this.map.setFilter(this.stationsHitboxLayerId, null);
     } else {
-      // Hide virtual shots only
+      // Hide virtual shots
       this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
+      // Hide stations that only connect to virtual shots
+      const stationFilter: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
+      this.map.setFilter(this.stationsLayerId, stationFilter);
+      this.map.setFilter(this.stationsHitboxLayerId, stationFilter);
     }
   }
 
