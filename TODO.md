@@ -76,7 +76,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Export Dialog & Preview | ✅ | PNG, SVG, PDF, CSV, JSON |
 | File Hash Tracking | ✅ | |
 | Ariane .tml Import | ✅ | TML/TMLU parser, section linearization, excluded shot filtering |
-| Ariane .tml Export | ❌ | |
+| Ariane .tml Export | ✅ | TML (ZIP) and TMLU (plain XML) export |
 | GPX Import | ❌ | Waypoints and tracks |
 | Manual Data Input | ❌ | Full spreadsheet-style entry without device import |
 | Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
