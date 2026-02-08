@@ -391,7 +391,7 @@ do_build() {
 
     # Build Tauri binary (debug mode, no bundle)
     info "Building Tauri binary (debug mode)..."
-    VITE_E2E=1 pnpm tauri build --debug --no-bundle
+    env VITE_E2E=1 ${E2E_COVERAGE:+VITE_COVERAGE=1} pnpm tauri build --debug --no-bundle
 
     # Create marker file with hash of dist/index.html to track what assets were built into binary
     md5sum "$DIST_PATH/index.html" 2>/dev/null | cut -d' ' -f1 > "$E2E_BUILD_MARKER"
