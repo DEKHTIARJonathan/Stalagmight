@@ -1020,7 +1020,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
 
 /// Convert a parsed TML file into `ImportSectionConfig` values ready for
 /// `execute_import_sections`.
-pub fn convert_tml_to_import_configs(tml: &TmlFile) -> Result<Vec<ImportSectionConfig>> {
+pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> Result<Vec<ImportSectionConfig>> {
     if tml.sections.is_empty() {
         return Ok(Vec::new());
     }
@@ -1040,6 +1040,9 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile) -> Result<Vec<ImportSectionC
         for shot in &section.shots {
             if shot.shot_type == TmlShotType::Closure {
                 continue; // CLOSURE shots are excluded from import
+            }
+            if !include_excluded && shot.excluded {
+                continue; // Excluded shots are filtered out by default
             }
             // This shot ends at station (import_shot_idx + 1)
             id_to_import_loc.insert(shot.id, (si as u32, import_shot_idx + 1));
@@ -1064,7 +1067,12 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile) -> Result<Vec<ImportSectionC
         let section_index = si as u32;
 
         // Convert shots to ShotData, using start_depth for correct rebasing
-        let shot_data = convert_shots_to_shot_data(&section.shots, section.start_depth);
+        let shot_data = convert_shots_to_shot_data(&section.shots, section.start_depth, include_excluded);
+
+        // Skip sections that end up with zero shots after filtering
+        if shot_data.is_empty() {
+            continue;
+        }
 
         // Determine placement
         let placement = determine_placement(
@@ -1096,16 +1104,18 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile) -> Result<Vec<ImportSectionC
 /// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
 /// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
 /// Depths are stored as absolute values — no rebasing is applied.
-fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64) -> Vec<ShotData> {
+fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_excluded: bool) -> Vec<ShotData> {
     if shots.is_empty() {
         return Vec::new();
     }
 
     // Filter out CLOSURE shots — they are loop-closure markers with zero length,
     // not real survey measurements. Their topology is captured in TmlClosure.
+    // Also filter out excluded shots unless explicitly included.
     let real_shots: Vec<&TmlShot> = shots
         .iter()
         .filter(|s| s.shot_type != TmlShotType::Closure)
+        .filter(|s| include_excluded || !s.excluded)
         .collect();
 
     if real_shots.is_empty() {
@@ -1517,7 +1527,7 @@ mod tests {
             closures,
         };
 
-        let configs = convert_tml_to_import_configs(&tml).unwrap_or_else(|_| Vec::new());
+        let configs = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| Vec::new());
         assert_eq!(configs.len(), 1);
         match &configs[0].placement {
             ImportPlacement::ZeroDatum {
@@ -1627,7 +1637,7 @@ mod tests {
             (Vec::new(), FileMetadata::default())
         });
         let (sections, _) = build_sections(raw_shots);
-        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0);
+        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0, false);
 
         // Shot 1: depth_in=0 (from START, base=0), depth_out=5
         assert!((shot_data[0].depth_in - 0.0).abs() < f64::EPSILON);
@@ -1664,7 +1674,7 @@ mod tests {
             (Vec::new(), FileMetadata::default())
         });
         let (sections, _) = build_sections(raw_shots);
-        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0);
+        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0, false);
 
         // DPI=2.0 used as absolute depth_in; depth_out = 5.0 (absolute, no rebasing)
         assert!((shot_data[0].depth_in - 2.0).abs() < f64::EPSILON);
@@ -1973,7 +1983,7 @@ mod tests {
             closures,
         };
 
-        let configs = convert_tml_to_import_configs(&tml).unwrap_or_else(|_| Vec::new());
+        let configs = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| Vec::new());
         assert_eq!(configs.len(), 2);
 
         // First section → Origin (no GPS)
@@ -2063,7 +2073,7 @@ mod tests {
             section: "Test".to_string(),
         }];
 
-        let shot_data = convert_shots_to_shot_data(&shots, 0.0);
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
         assert!(shot_data[0].is_virtual);
     }
 
@@ -2093,7 +2103,7 @@ mod tests {
             section: "Test".to_string(),
         }];
 
-        let shot_data = convert_shots_to_shot_data(&shots, 0.0);
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
         assert!(shot_data[0].left.is_none());
         assert!((shot_data[0].right.unwrap_or(0.0) - 2.5).abs() < f64::EPSILON);
         assert!(shot_data[0].up.is_none());
@@ -2129,28 +2139,186 @@ mod tests {
         };
 
         // Negative azimuth → normalized
-        let data = convert_shots_to_shot_data(&[make_shot(-124.0)], 0.0);
+        let data = convert_shots_to_shot_data(&[make_shot(-124.0)], 0.0, false);
         assert!((data[0].azimuth_in - 236.0).abs() < 1e-6); // -124 + 360 = 236
 
         // Very negative → normalized
-        let data = convert_shots_to_shot_data(&[make_shot(-690.0)], 0.0);
+        let data = convert_shots_to_shot_data(&[make_shot(-690.0)], 0.0, false);
         assert!((data[0].azimuth_in - 30.0).abs() < 1e-6); // -690 + 720 = 30
 
         // >360 → normalized
-        let data = convert_shots_to_shot_data(&[make_shot(450.0)], 0.0);
+        let data = convert_shots_to_shot_data(&[make_shot(450.0)], 0.0, false);
         assert!((data[0].azimuth_in - 90.0).abs() < 1e-6); // 450 - 360 = 90
 
         // Already valid → unchanged
-        let data = convert_shots_to_shot_data(&[make_shot(102.0)], 0.0);
+        let data = convert_shots_to_shot_data(&[make_shot(102.0)], 0.0, false);
         assert!((data[0].azimuth_in - 102.0).abs() < 1e-6);
 
         // Zero → unchanged
-        let data = convert_shots_to_shot_data(&[make_shot(0.0)], 0.0);
+        let data = convert_shots_to_shot_data(&[make_shot(0.0)], 0.0, false);
         assert!(data[0].azimuth_in.abs() < 1e-6);
 
         // azimuth_out should match azimuth_in
-        let data = convert_shots_to_shot_data(&[make_shot(-124.0)], 0.0);
+        let data = convert_shots_to_shot_data(&[make_shot(-124.0)], 0.0, false);
         assert!((data[0].azimuth_out - data[0].azimuth_in).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_excluded_shots_filtered_by_default() {
+        let shots = vec![
+            TmlShot {
+                id: 1,
+                from_id: 0,
+                shot_type: TmlShotType::Real,
+                azimuth: 90.0,
+                length: 10.0,
+                depth: 5.0,
+                depth_in: -1.0,
+                inclination: 0.0,
+                left: 1.0,
+                right: 1.0,
+                up: 1.0,
+                down: 1.0,
+                comment: None,
+                explorer: None,
+                date: None,
+                color: "#000000".to_string(),
+                excluded: false,
+                latitude: 0.0,
+                longitude: 0.0,
+                closure_to_id: -1,
+                section: "Test".to_string(),
+            },
+            TmlShot {
+                id: 2,
+                from_id: 1,
+                shot_type: TmlShotType::Real,
+                azimuth: 180.0,
+                length: 8.0,
+                depth: 10.0,
+                depth_in: -1.0,
+                inclination: 0.0,
+                left: 1.0,
+                right: 1.0,
+                up: 1.0,
+                down: 1.0,
+                comment: None,
+                explorer: None,
+                date: None,
+                color: "#000000".to_string(),
+                excluded: true, // This shot is excluded
+                latitude: 0.0,
+                longitude: 0.0,
+                closure_to_id: -1,
+                section: "Test".to_string(),
+            },
+            TmlShot {
+                id: 3,
+                from_id: 2,
+                shot_type: TmlShotType::Real,
+                azimuth: 270.0,
+                length: 5.0,
+                depth: 15.0,
+                depth_in: -1.0,
+                inclination: 0.0,
+                left: 1.0,
+                right: 1.0,
+                up: 1.0,
+                down: 1.0,
+                comment: None,
+                explorer: None,
+                date: None,
+                color: "#000000".to_string(),
+                excluded: false,
+                latitude: 0.0,
+                longitude: 0.0,
+                closure_to_id: -1,
+                section: "Test".to_string(),
+            },
+        ];
+
+        // Default: excluded shots filtered out
+        let data = convert_shots_to_shot_data(&shots, 0.0, false);
+        assert_eq!(data.len(), 2);
+        assert!((data[0].azimuth_in - 90.0).abs() < f64::EPSILON);
+        assert!((data[1].azimuth_in - 270.0).abs() < f64::EPSILON);
+
+        // include_excluded=true: all shots kept
+        let data = convert_shots_to_shot_data(&shots, 0.0, true);
+        assert_eq!(data.len(), 3);
+        assert!((data[0].azimuth_in - 90.0).abs() < f64::EPSILON);
+        assert!((data[1].azimuth_in - 180.0).abs() < f64::EPSILON);
+        assert!((data[2].azimuth_in - 270.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_all_excluded_section_dropped_from_configs() {
+        // Section where every shot is excluded → should be dropped entirely
+        let make_shot = |id, from_id, excluded| TmlShot {
+            id,
+            from_id,
+            shot_type: TmlShotType::Real,
+            azimuth: 90.0,
+            length: 10.0,
+            depth: 0.0,
+            depth_in: -1.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_string(),
+            excluded,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: "S".to_string(),
+        };
+
+        let tml = TmlFile {
+            cave_name: "Test".to_string(),
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: false,
+            first_start_absolute_elevation: 0.0,
+            geo_coding: None,
+            sections: vec![
+                TmlSection {
+                    name: "Good".to_string(),
+                    shots: vec![make_shot(1, 0, false)],
+                    surveyor: None,
+                    date: None,
+                    color: "#ff0000".to_string(),
+                    is_branch_split: false,
+                    start_ariane_id: 0,
+                    end_ariane_id: 1,
+                    start_depth: 0.0,
+                },
+                TmlSection {
+                    name: "AllExcluded".to_string(),
+                    shots: vec![make_shot(2, 1, true), make_shot(3, 2, true)],
+                    surveyor: None,
+                    date: None,
+                    color: "#00ff00".to_string(),
+                    is_branch_split: false,
+                    start_ariane_id: 1,
+                    end_ariane_id: 3,
+                    start_depth: 0.0,
+                },
+            ],
+            closures: Vec::new(),
+        };
+
+        // With excluded filtered out, section "AllExcluded" has 0 shots → dropped
+        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name.as_deref(), Some("Good"));
+
+        // With excluded included, both sections present
+        let configs = convert_tml_to_import_configs(&tml, true).unwrap();
+        assert_eq!(configs.len(), 2);
     }
 
     #[test]
@@ -2243,7 +2411,7 @@ mod tests {
             closures,
         };
 
-        let configs = convert_tml_to_import_configs(&tml).unwrap();
+        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
         assert_eq!(configs.len(), 2, "Should have 2 sections");
 
         // Section A: 4 shots → 5 stations (0, 1, 2, 3, 4)
