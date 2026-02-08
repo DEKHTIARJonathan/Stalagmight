@@ -52,20 +52,25 @@ export function generateSystemColor(filePath: string): string {
 
 /**
  * Extract unique station positions from shots.
- * Returns [lng, lat] coordinates for each unique station.
+ * Returns [lng, lat, allShotsVirtual] for each unique station.
+ * allShotsVirtual is true when the station only connects to virtual shots.
  */
-function extractStations(shots: GeometryShot[]): [number, number][] {
-  const stationSet = new Map<string, [number, number]>();
+function extractStations(shots: GeometryShot[]): [number, number, boolean][] {
+  const stationCoords = new Map<string, [number, number]>();
+  const stationsWithNonVirtualShot = new Set<string>();
 
   for (const shot of shots) {
+    let fromKey: string | undefined;
+    let toKey: string | undefined;
+
     if (shot.from.length >= 2) {
       const fromX = shot.from[0];
       const fromY = shot.from[1];
       if (fromX === undefined || fromY === undefined) continue;
       const from: [number, number] = [fromX, fromY];
-      const fromKey = `${from[0].toFixed(8)},${from[1].toFixed(8)}`;
-      if (!stationSet.has(fromKey)) {
-        stationSet.set(fromKey, from);
+      fromKey = `${from[0].toFixed(8)},${from[1].toFixed(8)}`;
+      if (!stationCoords.has(fromKey)) {
+        stationCoords.set(fromKey, from);
       }
     }
     if (shot.to.length >= 2) {
@@ -73,14 +78,23 @@ function extractStations(shots: GeometryShot[]): [number, number][] {
       const toY = shot.to[1];
       if (toX === undefined || toY === undefined) continue;
       const to: [number, number] = [toX, toY];
-      const toKey = `${to[0].toFixed(8)},${to[1].toFixed(8)}`;
-      if (!stationSet.has(toKey)) {
-        stationSet.set(toKey, to);
+      toKey = `${to[0].toFixed(8)},${to[1].toFixed(8)}`;
+      if (!stationCoords.has(toKey)) {
+        stationCoords.set(toKey, to);
       }
+    }
+
+    if (!shot.is_virtual) {
+      if (fromKey) stationsWithNonVirtualShot.add(fromKey);
+      if (toKey) stationsWithNonVirtualShot.add(toKey);
     }
   }
 
-  return Array.from(stationSet.values());
+  return Array.from(stationCoords.entries()).map(([key, coords]) => [
+    coords[0],
+    coords[1],
+    !stationsWithNonVirtualShot.has(key),
+  ]);
 }
 
 /**
@@ -484,7 +498,7 @@ export default class GlobalSurveyLayer {
 
       // Extract and build station features
       const stations = extractStations(system.geometry.shots);
-      for (const [lng, lat] of stations) {
+      for (const [lng, lat, allShotsVirtual] of stations) {
         features.push({
           type: 'Feature',
           geometry: {
@@ -497,6 +511,7 @@ export default class GlobalSurveyLayer {
             name: system.metadata.name,
             totalLength: system.metadata.total_length,
             stationCount: system.metadata.station_count,
+            allShotsVirtual,
           },
         });
       }
@@ -588,24 +603,38 @@ export default class GlobalSurveyLayer {
   /**
    * Set filter to hide virtual shots (or show all).
    * Applies to both visual and hitbox layers to prevent hidden shots from being clickable.
+   * Also hides stations that only connect to virtual shots.
    */
   setShowVirtualShots(visible: boolean): void {
     // Base filter for shot features
     const shotTypeFilter: maplibregl.ExpressionSpecification = ['==', ['get', 'featureType'], 'shot'];
 
     // Combined filter: show shots AND (optionally) exclude virtual
-    const filter: maplibregl.FilterSpecification = visible
+    const shotFilter: maplibregl.FilterSpecification = visible
       ? shotTypeFilter
       : ['all', shotTypeFilter, ['!=', ['get', 'isVirtual'], true]];
 
     // Apply filter to visual layer
     if (this.map.getLayer(this.shotsLayerId)) {
-      this.map.setFilter(this.shotsLayerId, filter);
+      this.map.setFilter(this.shotsLayerId, shotFilter);
     }
 
     // Also apply to hitbox layer to prevent hidden shots from being clickable
     if (this.map.getLayer(this.shotsHitboxLayerId)) {
-      this.map.setFilter(this.shotsHitboxLayerId, filter);
+      this.map.setFilter(this.shotsHitboxLayerId, shotFilter);
+    }
+
+    // Station filter: hide virtual-only stations when virtual shots are hidden
+    const stationTypeFilter: maplibregl.ExpressionSpecification = ['==', ['get', 'featureType'], 'station'];
+    const stationFilter: maplibregl.FilterSpecification = visible
+      ? stationTypeFilter
+      : ['all', stationTypeFilter, ['!=', ['get', 'allShotsVirtual'], true]];
+
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setFilter(this.stationsLayerId, stationFilter);
+    }
+    if (this.map.getLayer(this.stationsHitboxLayerId)) {
+      this.map.setFilter(this.stationsHitboxLayerId, stationFilter);
     }
   }
 
