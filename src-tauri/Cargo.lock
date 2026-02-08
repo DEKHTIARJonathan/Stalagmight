@@ -4004,6 +4004,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "directories",
+ "flate2",
  "http",
  "image",
  "libc",

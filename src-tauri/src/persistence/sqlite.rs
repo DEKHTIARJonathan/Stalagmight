@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 use crate::models::{
@@ -11,7 +15,29 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
+
+fn compress_json(json: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    // write_all and finish are infallible on Vec<u8>
+    encoder
+        .write_all(json.as_bytes())
+        .and_then(|()| encoder.finish())
+        .unwrap_or_else(|_| json.as_bytes().to_vec())
+}
+
+fn decompress_json(data: &[u8]) -> Result<String> {
+    // Gzip magic bytes: 0x1f 0x8b
+    if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+        let mut decoder = GzDecoder::new(data);
+        let mut s = String::new();
+        decoder.read_to_string(&mut s)?;
+        Ok(s)
+    } else {
+        // Backward compat: old TEXT entries (or CAST-ed BLOB) are plain UTF-8
+        Ok(String::from_utf8_lossy(data).into_owned())
+    }
+}
 
 /// Database operations for projects
 pub struct Database {
@@ -324,6 +350,69 @@ impl Database {
         }
 
         tracing::debug!("Schema migration complete");
+        Ok(())
+    }
+
+    /// Migrate undo/redo tables from TEXT to BLOB columns (schema v2→v3).
+    /// Existing TEXT data is CAST to BLOB; on read, `decompress_json` detects
+    /// whether content is gzip-compressed or plain UTF-8, so old entries remain
+    /// readable without re-encoding.
+    fn migrate_undo_redo_to_blob(&self) -> Result<()> {
+        tracing::info!("Migrating undo/redo tables to BLOB columns (v2→v3)");
+
+        self.conn.execute("PRAGMA foreign_keys = OFF;", [])?;
+        let tx = self.conn.unchecked_transaction()?;
+
+        for table in &["undo_stack", "redo_stack"] {
+            let has_table: bool = tx
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    params![table],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            if !has_table {
+                continue;
+            }
+
+            // Check if command_json is already BLOB (idempotency)
+            let col_type: String = tx
+                .query_row(
+                    &format!(
+                        "SELECT type FROM pragma_table_info('{table}') WHERE name='command_json'"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
+
+            if col_type.eq_ignore_ascii_case("BLOB") {
+                tracing::debug!("{table} already has BLOB columns, skipping");
+                continue;
+            }
+
+            let new_table = format!("{table}_new");
+            tx.execute_batch(&format!(
+                r"
+                CREATE TABLE {new_table} (
+                    id INTEGER PRIMARY KEY,
+                    sequence INTEGER NOT NULL,
+                    command_json BLOB NOT NULL,
+                    undo_data_json BLOB NOT NULL,
+                    executed_at TEXT NOT NULL
+                );
+                INSERT INTO {new_table} SELECT id, sequence, CAST(command_json AS BLOB), CAST(undo_data_json AS BLOB), executed_at FROM {table};
+                DROP TABLE {table};
+                ALTER TABLE {new_table} RENAME TO {table};
+                "
+            ))?;
+            tracing::info!("Migrated {table} to BLOB columns");
+        }
+
+        tx.commit()?;
+        self.enable_foreign_keys()?;
         Ok(())
     }
 
@@ -739,6 +828,9 @@ impl Database {
             if current < 2 {
                 self.rebuild_tables_with_foreign_keys()?;
             }
+            if current < 3 {
+                self.migrate_undo_redo_to_blob()?;
+            }
             self.set_user_version(SCHEMA_VERSION)?;
             // Keep project-level schema_version in sync with PRAGMA user_version.
             let _ = self.conn.execute(
@@ -882,20 +974,20 @@ impl Database {
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
-            -- Undo/redo stack
+            -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)
             CREATE TABLE IF NOT EXISTS undo_stack (
                 id INTEGER PRIMARY KEY,
                 sequence INTEGER NOT NULL,
-                command_json TEXT NOT NULL,
-                undo_data_json TEXT NOT NULL,
+                command_json BLOB NOT NULL,
+                undo_data_json BLOB NOT NULL,
                 executed_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS redo_stack (
                 id INTEGER PRIMARY KEY,
                 sequence INTEGER NOT NULL,
-                command_json TEXT NOT NULL,
-                undo_data_json TEXT NOT NULL,
+                command_json BLOB NOT NULL,
+                undo_data_json BLOB NOT NULL,
                 executed_at TEXT NOT NULL
             );
 
@@ -1472,9 +1564,11 @@ impl Database {
         command_json: &str,
         undo_data_json: &str,
     ) -> Result<()> {
+        let cmd_compressed = compress_json(command_json);
+        let undo_compressed = compress_json(undo_data_json);
         self.conn.execute(
             "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
-            params![sequence, command_json, undo_data_json, Utc::now().to_rfc3339()],
+            params![sequence, cmd_compressed, undo_compressed, Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }
@@ -1485,12 +1579,19 @@ impl Database {
             .conn
             .prepare("SELECT sequence, command_json, undo_data_json FROM undo_stack ORDER BY sequence")?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
         })?;
 
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(row?);
+            let (seq, cmd_bytes, undo_bytes) = row?;
+            let command_json = decompress_json(&cmd_bytes)?;
+            let undo_data_json = decompress_json(&undo_bytes)?;
+            entries.push((seq, command_json, undo_data_json));
         }
         Ok(entries)
     }
@@ -1501,12 +1602,20 @@ impl Database {
             .conn
             .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM undo_stack ORDER BY sequence")?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
         })?;
 
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(row?);
+            let (seq, cmd_bytes, undo_bytes, ts) = row?;
+            let command_json = decompress_json(&cmd_bytes)?;
+            let undo_data_json = decompress_json(&undo_bytes)?;
+            entries.push((seq, command_json, undo_data_json, ts));
         }
         Ok(entries)
     }
@@ -1527,9 +1636,11 @@ impl Database {
 
         // Save new entries
         for (seq, (command_json, undo_data_json)) in entries.iter().enumerate() {
+            let cmd_compressed = compress_json(command_json);
+            let undo_compressed = compress_json(undo_data_json);
             self.conn.execute(
                 "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
-                params![seq as i64, command_json, undo_data_json, Utc::now().to_rfc3339()],
+                params![seq as i64, cmd_compressed, undo_compressed, Utc::now().to_rfc3339()],
             )?;
         }
 
@@ -1546,9 +1657,11 @@ impl Database {
         for (seq, (command_json, undo_data_json, timestamp_str)) in entries.iter().enumerate() {
             // Use provided timestamp or fall back to current time
             let executed_at = timestamp_str.clone().unwrap_or_else(|| Utc::now().to_rfc3339());
+            let cmd_compressed = compress_json(command_json);
+            let undo_compressed = compress_json(undo_data_json);
             self.conn.execute(
                 "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
-                params![seq as i64, command_json, undo_data_json, executed_at],
+                params![seq as i64, cmd_compressed, undo_compressed, executed_at],
             )?;
         }
 
@@ -1562,12 +1675,20 @@ impl Database {
             .conn
             .prepare("SELECT sequence, command_json, undo_data_json, executed_at FROM redo_stack ORDER BY sequence")?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
         })?;
 
         let mut entries = Vec::new();
         for row in rows {
-            entries.push(row?);
+            let (seq, cmd_bytes, undo_bytes, ts) = row?;
+            let command_json = decompress_json(&cmd_bytes)?;
+            let undo_data_json = decompress_json(&undo_bytes)?;
+            entries.push((seq, command_json, undo_data_json, ts));
         }
         Ok(entries)
     }
@@ -1578,9 +1699,11 @@ impl Database {
 
         for (seq, (command_json, undo_data_json, timestamp_str)) in entries.iter().enumerate() {
             let executed_at = timestamp_str.clone().unwrap_or_else(|| Utc::now().to_rfc3339());
+            let cmd_compressed = compress_json(command_json);
+            let undo_compressed = compress_json(undo_data_json);
             self.conn.execute(
                 "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) VALUES (?1, ?2, ?3, ?4)",
-                params![seq as i64, command_json, undo_data_json, executed_at],
+                params![seq as i64, cmd_compressed, undo_compressed, executed_at],
             )?;
         }
 
