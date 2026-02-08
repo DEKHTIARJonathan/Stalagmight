@@ -236,6 +236,7 @@ interface ProjectStore {
   importSections: (sections: ImportSectionConfig[], fileHash?: string | null) => Promise<CommandResult>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
+  exportTml: (path: string) => Promise<void>;
   exportImage: (path: string, options: ExportImageOptions) => Promise<void>;
 }
 
@@ -1216,6 +1217,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   exportJson: async (path: string) => {
     await invokeIpc('export_json', { path }, {
       purpose: 'export project as JSON',
+      fields: { path },
+    });
+  },
+
+  exportTml: async (path: string) => {
+    await invokeIpc('export_tml', { path }, {
+      purpose: 'export project as Ariane TML',
       fields: { path },
     });
   },

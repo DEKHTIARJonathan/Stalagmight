@@ -101,6 +101,54 @@ pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), St
     }
 }
 
+/// Export project data to Ariane TML/TMLU
+#[tauri::command]
+pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<(), String> {
+    export_tml_impl(state.inner(), path)
+}
+
+pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| {
+            tracing::warn!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "tml",
+                "Export requested with no project open"
+            );
+            "No project open".to_string()
+        })?;
+
+    tracing::info!(
+        path = ?path,
+        purpose = "export project for sharing",
+        format = "tml",
+        "Exporting project to TML"
+    );
+    match crate::export::export_tml(&project, &path) {
+        Ok(()) => {
+            tracing::info!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "tml",
+                "TML export completed"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "export project for sharing",
+                format = "tml",
+                reason = %e,
+                "TML export failed"
+            );
+            Err(e.to_string())
+        }
+    }
+}
+
 /// Export map image with progress events via shared loading-progress infrastructure.
 ///
 /// This command runs heavy export work (SVG generation, PNG rasterization, PDF conversion)

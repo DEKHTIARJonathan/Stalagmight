@@ -1021,6 +1021,7 @@ pub fn run() {
             commands::import::execute_tml_import,
             commands::export::export_csv,
             commands::export::export_json,
+            commands::export::export_tml,
             commands::export::export_image,
             commands::export::get_depth_preset_colors,
             // Config
