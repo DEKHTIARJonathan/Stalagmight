@@ -1096,6 +1096,92 @@ impl Project {
         self.zero_datums.iter().any(|zd| merged.contains(&zd.station_ref.section_id))
     }
 
+    /// Get all stations colocated with the given station (via merges and aligned closures).
+    ///
+    /// Returns a vec including the station itself plus all merge/closure partners,
+    /// transitively connected.
+    fn get_colocated_stations(&self, station_ref: StationRef) -> Vec<StationRef> {
+        let mut group = vec![station_ref];
+        let mut visited = HashSet::new();
+        visited.insert(station_ref);
+        let mut queue = VecDeque::new();
+        queue.push_back(station_ref);
+
+        while let Some(current) = queue.pop_front() {
+            // Check merges
+            for merge in &self.station_merges {
+                let partner = if merge.station_a == current {
+                    Some(merge.station_b)
+                } else if merge.station_b == current {
+                    Some(merge.station_a)
+                } else {
+                    None
+                };
+                if let Some(p) = partner {
+                    if visited.insert(p) {
+                        group.push(p);
+                        queue.push_back(p);
+                    }
+                }
+            }
+            // Check aligned closures
+            for closure in &self.loop_closures {
+                if !closure.is_aligned {
+                    continue;
+                }
+                let partner = if closure.station_a == current {
+                    Some(closure.station_b)
+                } else if closure.station_b == current {
+                    Some(closure.station_a)
+                } else {
+                    None
+                };
+                if let Some(p) = partner {
+                    if visited.insert(p) {
+                        group.push(p);
+                        queue.push_back(p);
+                    }
+                }
+            }
+        }
+
+        group
+    }
+
+    /// Compute a station's absolute depth from the average of surrounding shot depths.
+    ///
+    /// For a station and its colocated group (merge + aligned closure partners),
+    /// collects depth measurements from:
+    /// - **Incoming shot** (shot at index `station_index - 1`): use `depth_out`
+    /// - **Outgoing shot** (shot at index `station_index`): use `depth_in`
+    ///
+    /// Returns the average of all collected measurements, or 0.0 if none exist.
+    fn compute_station_depth(&self, colocated: &[StationRef]) -> f64 {
+        let mut depths: Vec<f64> = Vec::new();
+
+        for &sr in colocated {
+            if let Some(section) = self.sections.iter().find(|s| s.id == sr.section_id) {
+                let idx = sr.station_index as usize;
+
+                // Incoming shot: shot at index station_index - 1 → use depth_out
+                if idx > 0 && idx - 1 < section.shots.len() {
+                    depths.push(section.shots[idx - 1].depth_out);
+                }
+
+                // Outgoing shot: shot at index station_index → use depth_in
+                if idx < section.shots.len() {
+                    depths.push(section.shots[idx].depth_in);
+                }
+            }
+        }
+
+        if depths.is_empty() {
+            0.0
+        } else {
+            depths.iter().sum::<f64>() / depths.len() as f64
+        }
+    }
+
     /// Compute raw station coordinates for a single station (without global zero datum offset)
     pub(crate) fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
         let section = self.sections.iter().find(|s| s.id == station_ref.section_id)?;
@@ -1104,7 +1190,7 @@ impl Project {
         let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
         let mut coords = Coordinates::new(offset_x, offset_y, 0.0);
 
-        // Walk through shots to reach the station
+        // Walk through shots to reach the station (X, Y only)
         for i in 0..station_ref.station_index as usize {
             if i >= section.shots.len() {
                 return None;
@@ -1114,11 +1200,13 @@ impl Project {
             let horizontal = shot.horizontal_length();
             let dx = horizontal * azimuth_rad.sin();
             let dy = horizontal * azimuth_rad.cos();
-            let dz = shot.depth_out - shot.depth_in;
             coords.x += dx;
             coords.y += dy;
-            coords.z += dz;
         }
+
+        // Z = absolute depth from averaged surrounding shots
+        let colocated = self.get_colocated_stations(station_ref);
+        coords.z = self.compute_station_depth(&colocated);
 
         // Apply station offset if exists (individual station move)
         if let Some(&(ox, oy, oz)) = self.station_offsets.get(&station_ref) {
@@ -3753,18 +3841,31 @@ impl Project {
             .map(|s| s.shots.len() as u32 + 1)
             .sum();
 
+        // Pre-compute absolute station depths using colocated groups.
+        // Each station's Z is the average of surrounding shot depths across
+        // all merge/closure partners — no cumulative dz walk needed.
+        let colocated_groups = self.build_colocated_groups();
+        let mut station_depths: HashMap<StationRef, f64> = HashMap::new();
+        for group in colocated_groups.values() {
+            let depth = self.compute_station_depth(group);
+            for &sr in group {
+                station_depths.insert(sr, depth);
+            }
+        }
+
         let mut stations: Vec<Station> = Vec::new();
         let mut station_count = 0u32;
 
         for section in &self.sections {
             // Get section offset (from merges)
             let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
-            let mut current_coords = Coordinates::new(offset_x, offset_y, 0.0);
+            let mut current_xy = (offset_x, offset_y);
 
             // First station of section
             let first_station_ref = StationRef::new(section.id, 0);
-            // Apply station offset if exists (copy, don't mutate current_coords)
-            let mut station_coords = current_coords;
+            let z = station_depths.get(&first_station_ref).copied().unwrap_or(0.0);
+            let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
+            // Apply station offset if exists
             if let Some(&(ox, oy, oz)) = self.station_offsets.get(&first_station_ref) {
                 station_coords = Coordinates::new(
                     station_coords.x + ox,
@@ -3780,25 +3881,21 @@ impl Project {
                 cb(station_count, total_stations);
             }
 
-            // Compute subsequent stations from shots
+            // Compute subsequent stations from shots (X, Y walk; Z from pre-computed depths)
             for (i, shot) in section.shots.iter().enumerate() {
                 let azimuth_rad = shot.average_azimuth().to_radians();
                 let horizontal_length = shot.horizontal_length();
 
-                // Compute new position
+                // Compute new X, Y position
                 let dx = horizontal_length * azimuth_rad.sin();
                 let dy = horizontal_length * azimuth_rad.cos();
-                let dz = shot.depth_out - shot.depth_in;
-
-                current_coords = Coordinates::new(
-                    current_coords.x + dx,
-                    current_coords.y + dy,
-                    current_coords.z + dz,
-                );
+                current_xy.0 += dx;
+                current_xy.1 += dy;
 
                 let station_ref = StationRef::new(section.id, (i + 1) as u32);
+                let z = station_depths.get(&station_ref).copied().unwrap_or(0.0);
+                let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
                 // Apply station offset if exists
-                let mut station_coords = current_coords;
                 if let Some(&(ox, oy, oz)) = self.station_offsets.get(&station_ref) {
                     station_coords = Coordinates::new(
                         station_coords.x + ox,
