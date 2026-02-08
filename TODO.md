@@ -10,7 +10,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
-| Import/Export | 13 | 19 | 68% |
+| Import/Export | 14 | 19 | 74% |
 | UI & Polish | 14 | 17 | 82% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
@@ -18,7 +18,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **53** | **64** | **83%** |
+| **Total** | **54** | **64** | **84%** |
 
 ---
 
@@ -58,7 +58,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ## 🚧 v1.0 Remaining Tasks
 
-### Import/Export (13/19 done)
+### Import/Export (14/19 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -75,14 +75,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Error Blocking Logic | ✅ | |
 | Export Dialog & Preview | ✅ | PNG, SVG, PDF, CSV, JSON |
 | File Hash Tracking | ✅ | |
-| Ariane .ari Import | ❌ | |
-| Ariane .ari Export | ❌ | |
+| Ariane .tml Import | ✅ | TML/TMLU parser, section linearization, excluded shot filtering |
+| Ariane .tml Export | ❌ | |
 | GPX Import | ❌ | Waypoints and tracks |
 | Manual Data Input | ❌ | Full spreadsheet-style entry without device import |
 | Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
 | Import Dialog/Shot Placement Refactoring | ❌ | Improve shot placement UX in import workflow |
 
-**Subtotals**: ✅ 13 done, ❌ 6 not started
+**Subtotals**: ✅ 14 done, ❌ 5 not started
 
 ### UI & Polish (12/17 done)
 
@@ -184,7 +184,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
-| Import/Export | 19 | 13 | 0 | 6 |
+| Import/Export | 19 | 14 | 0 | 5 |
 | UI & Polish | 17 | 14 | 0 | 3 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
@@ -192,16 +192,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **53** | **0** | **11** |
+| **Total** | **64** | **54** | **0** | **10** |
 
-**Overall Progress**: 53 done = ~83% complete
+**Overall Progress**: 54 done = ~84% complete
 
 ---
 
 ## 🔮 Deferred to v2.0+
 
 ### Loop Closure (v2.0)
-- [ ] Least squares adjustment for complex loops
+- [x] Least squares adjustment for complex loops
 
 ### Loop Closure (v3.0+)
 - [ ] Proportional distribution (distribute errors proportional to shot lengths)
