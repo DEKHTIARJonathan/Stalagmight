@@ -1104,6 +1104,10 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
         });
     }
 
+    // When excluded-shot filtering drops entire branches, simplify names
+    // like "xxx (branch 1)" back to "xxx" if only one branch survives.
+    simplify_lone_branch_names(&mut configs);
+
     // Topologically sort configs so that any section referenced by a
     // FromImporting placement is created before its dependent. This handles
     // forward references that arise when excluded-shot filtering changes
@@ -1111,6 +1115,41 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
     topological_sort_configs(&mut configs);
 
     Ok(configs)
+}
+
+/// Simplify branch-suffixed names when only one branch of a group survives.
+///
+/// During linearization, sections that branch get names like "Foo (branch 1)",
+/// "Foo (branch 2)". When excluded-shot filtering drops all shots from some
+/// branches, those empty sections are removed. If only one branch remains for
+/// a given base name, strip the suffix so it's just "Foo".
+fn simplify_lone_branch_names(configs: &mut [ImportSectionConfig]) {
+    // Count how many configs share each base name (name without " (branch N)")
+    let re_suffix = " (branch ";
+    let mut base_counts: HashMap<String, u32> = HashMap::new();
+    for c in configs.iter() {
+        let name = c.name.as_deref().unwrap_or("");
+        let base = if let Some(pos) = name.rfind(re_suffix) {
+            &name[..pos]
+        } else {
+            name
+        };
+        *base_counts.entry(base.to_string()).or_insert(0) += 1;
+    }
+
+    // Rename lone survivors
+    for c in configs.iter_mut() {
+        let name = match c.name.as_deref() {
+            Some(n) => n,
+            None => continue,
+        };
+        if let Some(pos) = name.rfind(re_suffix) {
+            let base = &name[..pos];
+            if base_counts.get(base).copied() == Some(1) {
+                c.name = Some(base.to_string());
+            }
+        }
+    }
 }
 
 /// Topologically sort import configs so that FromImporting targets come first.
@@ -2436,6 +2475,79 @@ mod tests {
         // With excluded included, both sections present
         let configs = convert_tml_to_import_configs(&tml, true).unwrap();
         assert_eq!(configs.len(), 2);
+    }
+
+    #[test]
+    fn test_lone_branch_name_simplified() {
+        // Two branches of "Gallery": branch 2 is all-excluded → dropped.
+        // Branch 1 should lose the "(branch 1)" suffix.
+        let make_shot = |id, from_id, excluded| TmlShot {
+            id,
+            from_id,
+            shot_type: TmlShotType::Real,
+            azimuth: 90.0,
+            length: 10.0,
+            depth: 0.0,
+            depth_in: -1.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "#000000".to_string(),
+            excluded,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: "S".to_string(),
+        };
+
+        let tml = TmlFile {
+            cave_name: "Test".to_string(),
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: false,
+            first_start_absolute_elevation: 0.0,
+            geo_coding: None,
+            sections: vec![
+                TmlSection {
+                    name: "Gallery (branch 1)".to_string(),
+                    shots: vec![make_shot(1, 0, false), make_shot(2, 1, false)],
+                    surveyor: None,
+                    date: None,
+                    color: "#ff0000".to_string(),
+                    is_branch_split: true,
+                    start_ariane_id: 0,
+                    end_ariane_id: 2,
+                    start_depth: 0.0,
+                },
+                TmlSection {
+                    name: "Gallery (branch 2)".to_string(),
+                    shots: vec![make_shot(3, 0, true), make_shot(4, 3, true)],
+                    surveyor: None,
+                    date: None,
+                    color: "#00ff00".to_string(),
+                    is_branch_split: true,
+                    start_ariane_id: 0,
+                    end_ariane_id: 4,
+                    start_depth: 0.0,
+                },
+            ],
+            closures: Vec::new(),
+        };
+
+        // Excluded filtered: branch 2 dropped, branch 1 renamed to "Gallery"
+        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name.as_deref(), Some("Gallery"));
+
+        // Both included: both branches keep their suffixes
+        let configs = convert_tml_to_import_configs(&tml, true).unwrap();
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].name.as_deref(), Some("Gallery (branch 1)"));
+        assert_eq!(configs[1].name.as_deref(), Some("Gallery (branch 2)"));
     }
 
     #[test]
