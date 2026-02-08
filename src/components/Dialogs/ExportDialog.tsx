@@ -23,10 +23,10 @@ const EXPORT_PHASE_LABELS: Record<string, string> = {
 
 export default function ExportDialog() {
   const { closeDialog } = useUIStore();
-  const { exportCsv, exportJson, exportImage } = useProjectStore();
+  const { exportCsv, exportJson, exportTml, exportImage } = useProjectStore();
 
   const [exportType, setExportType] = useState<'data' | 'image'>('data');
-  const [dataFormat, setDataFormat] = useState<'csv' | 'json'>('csv');
+  const [dataFormat, setDataFormat] = useState<'csv' | 'json' | 'tml'>('csv');
   const [imageFormat, setImageFormat] = useState<ImageFormat>('png');
   const [previewTheme, setPreviewTheme] = useState<ExportTheme>('dark');
   const config = useProjectStore(state => state.config);
@@ -115,20 +115,41 @@ export default function ExportDialog() {
   const handleExport = async () => {
     try {
       if (exportType === 'data') {
-        const extension = dataFormat;
-        const selected = await save({
-          filters: exportSaveFilters(dataFormat.toUpperCase(), extension),
-        });
+        const isTml = dataFormat === 'tml';
+        const filters = isTml
+          ? [
+              { name: 'TML (ZIP)', extensions: ['tml'] },
+              { name: 'TMLU (XML)', extensions: ['tmlu'] },
+            ]
+          : exportSaveFilters(dataFormat.toUpperCase(), dataFormat);
+        const selected = await save({ filters });
 
         if (selected) {
-          const finalPath = ensureExtension(selected, extension);
-          // Disable button during data export (no progress events for CSV/JSON)
+          // For TML, preserve the extension the OS dialog appended.
+          // If the path already has .tmlu or .tml, keep it as-is;
+          // otherwise default to .tml.
+          let finalPath: string;
+          if (isTml) {
+            const lower = selected.toLowerCase();
+            if (lower.endsWith('.tmlu')) {
+              finalPath = selected;
+            } else if (lower.endsWith('.tml')) {
+              finalPath = selected;
+            } else {
+              finalPath = ensureExtension(selected, 'tml');
+            }
+          } else {
+            finalPath = ensureExtension(selected, dataFormat);
+          }
+          // Disable button during data export (no progress events for CSV/JSON/TML)
           setIsExporting(true);
           try {
             if (dataFormat === 'csv') {
               await exportCsv(finalPath);
-            } else {
+            } else if (dataFormat === 'json') {
               await exportJson(finalPath);
+            } else {
+              await exportTml(finalPath);
             }
           } finally {
             if (isMountedRef.current) {
@@ -243,10 +264,11 @@ export default function ExportDialog() {
               <label className="block text-sm text-text-secondary mb-2">Format</label>
               <Select
                 value={dataFormat}
-                onChange={(v) => setDataFormat(v as 'csv' | 'json')}
+                onChange={(v) => setDataFormat(v as 'csv' | 'json' | 'tml')}
                 options={[
                   { value: 'csv', label: 'CSV' },
                   { value: 'json', label: 'JSON' },
+                  { value: 'tml', label: 'TML (Ariane)' },
                 ]}
                 data-testid="data-format-select"
               />
