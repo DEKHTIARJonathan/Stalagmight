@@ -352,10 +352,11 @@ impl AppState {
     pub fn execute_import_sections(
         &self,
         sections: Vec<crate::models::ImportSectionConfig>,
+        closures: Vec<crate::models::ImportClosure>,
         file_hash: Option<String>,
     ) -> CommandResult {
         use std::collections::HashMap;
-        use crate::models::{ImportPlacement, StationRef};
+        use crate::models::{ClosureStrategy, ImportPlacement, StationRef};
 
         // Serialize command execution to prevent concurrent interleaving
         let Ok(_cmd_guard) = self.command_lock.lock() else {
@@ -540,6 +541,61 @@ impl AppState {
                         station_a: import_ref,
                         station_b: *snapped_to_station,
                     });
+                }
+            }
+        }
+
+        // Create loop closures from TML CLOSURE shots (non-fatal)
+        for closure in &closures {
+            let Some(&from_section_id) = created_ids.get(&closure.from_section_index) else {
+                tracing::warn!(
+                    from_section_index = closure.from_section_index,
+                    purpose = "import loop closures",
+                    "Closure source section not found in created sections, skipping"
+                );
+                continue;
+            };
+            let Some(&to_section_id) = created_ids.get(&closure.to_section_index) else {
+                tracing::warn!(
+                    to_section_index = closure.to_section_index,
+                    purpose = "import loop closures",
+                    "Closure target section not found in created sections, skipping"
+                );
+                continue;
+            };
+            let station_a = StationRef::new(from_section_id, closure.from_station_index);
+            let station_b = StationRef::new(to_section_id, closure.to_station_index);
+
+            // Create directly on the locked project to avoid double-locking
+            let result = {
+                let mut proj_guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                if let Some(project) = proj_guard.as_mut() {
+                    project.create_loop_closure(station_a, station_b, ClosureStrategy::Batch)
+                } else {
+                    Err("No project open".to_string())
+                }
+            };
+            match result {
+                Ok(lc) => {
+                    tracing::info!(
+                        closure_id = lc.id,
+                        ?station_a,
+                        ?station_b,
+                        purpose = "import loop closures",
+                        "Created loop closure from TML import"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        ?station_a,
+                        ?station_b,
+                        error = %e,
+                        purpose = "import loop closures",
+                        "Failed to create loop closure from TML import, skipping"
+                    );
                 }
             }
         }

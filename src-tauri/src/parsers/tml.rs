@@ -16,7 +16,7 @@ use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{ImportPlacement, ImportSectionConfig, ShotData};
+use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData};
 
 // ============================================================================
 // IPC-visible types
@@ -1020,9 +1020,9 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
 
 /// Convert a parsed TML file into `ImportSectionConfig` values ready for
 /// `execute_import_sections`.
-pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> Result<Vec<ImportSectionConfig>> {
+pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>)> {
     if tml.sections.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
     // Build a mapping from Ariane shot ID → (section_index, station_index)
@@ -1114,7 +1114,30 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
     // which section a given section attaches to.
     topological_sort_configs(&mut configs);
 
-    Ok(configs)
+    // Extract loop closures by resolving CLOSURE shots through id_to_import_loc.
+    // CLOSURE shots have from_id (the station the closure originates from) and
+    // closure_to_id (the target station). Both must resolve to import-space
+    // coordinates; closures where either endpoint was filtered out are skipped.
+    let mut import_closures = Vec::new();
+    for section in &tml.sections {
+        for shot in &section.shots {
+            if shot.shot_type != TmlShotType::Closure || shot.closure_to_id < 0 {
+                continue;
+            }
+            let from = id_to_import_loc.get(&shot.from_id);
+            let to = id_to_import_loc.get(&shot.closure_to_id);
+            if let (Some(&(from_si, from_st)), Some(&(to_si, to_st))) = (from, to) {
+                import_closures.push(ImportClosure {
+                    from_section_index: from_si,
+                    from_station_index: from_st,
+                    to_section_index: to_si,
+                    to_station_index: to_st,
+                });
+            }
+        }
+    }
+
+    Ok((configs, import_closures))
 }
 
 /// Simplify branch-suffixed names when only one branch of a group survives.
@@ -1683,7 +1706,7 @@ mod tests {
             closures,
         };
 
-        let configs = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| Vec::new());
+        let (configs, _) = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 1);
         match &configs[0].placement {
             ImportPlacement::ZeroDatum {
@@ -2139,7 +2162,7 @@ mod tests {
             closures,
         };
 
-        let configs = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| Vec::new());
+        let (configs, _) = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 2);
 
         // First section → Origin (no GPS)
@@ -2468,12 +2491,12 @@ mod tests {
         };
 
         // With excluded filtered out, section "AllExcluded" has 0 shots → dropped
-        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name.as_deref(), Some("Good"));
 
         // With excluded included, both sections present
-        let configs = convert_tml_to_import_configs(&tml, true).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, true).unwrap();
         assert_eq!(configs.len(), 2);
     }
 
@@ -2539,12 +2562,12 @@ mod tests {
         };
 
         // Excluded filtered: branch 2 dropped, branch 1 renamed to "Gallery"
-        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name.as_deref(), Some("Gallery"));
 
         // Both included: both branches keep their suffixes
-        let configs = convert_tml_to_import_configs(&tml, true).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, true).unwrap();
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].name.as_deref(), Some("Gallery (branch 1)"));
         assert_eq!(configs[1].name.as_deref(), Some("Gallery (branch 2)"));
@@ -2637,7 +2660,7 @@ mod tests {
             closures: Vec::new(),
         };
 
-        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
         assert_eq!(configs.len(), 3);
 
         // After topological sort: C must come before B because B depends on C.
@@ -2752,7 +2775,7 @@ mod tests {
             closures,
         };
 
-        let configs = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
         assert_eq!(configs.len(), 2, "Should have 2 sections");
 
         // Section A: 4 shots → 5 stations (0, 1, 2, 3, 4)

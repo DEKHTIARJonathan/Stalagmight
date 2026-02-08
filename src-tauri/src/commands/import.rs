@@ -99,7 +99,7 @@ pub fn import_sections(
     sections: Vec<crate::models::ImportSectionConfig>,
     file_hash: Option<String>,
 ) -> CommandResult {
-    state.execute_import_sections(sections, file_hash)
+    state.execute_import_sections(sections, Vec::new(), file_hash)
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
@@ -149,8 +149,8 @@ pub fn execute_tml_import(
         }
     };
 
-    let sections = match crate::parsers::tml::convert_tml_to_import_configs(&tml, include_excluded) {
-        Ok(configs) => configs,
+    let (sections, closures) = match crate::parsers::tml::convert_tml_to_import_configs(&tml, include_excluded) {
+        Ok(result) => result,
         Err(e) => {
             tracing::error!(
                 path = ?path,
@@ -165,9 +165,10 @@ pub fn execute_tml_import(
     tracing::info!(
         path = ?path,
         section_count = sections.len(),
+        closure_count = closures.len(),
         purpose = "import Ariane TML/TMLU",
         "Converted TML to import configs, executing import"
     );
 
-    state.execute_import_sections(sections, file_hash)
+    state.execute_import_sections(sections, closures, file_hash)
 }
