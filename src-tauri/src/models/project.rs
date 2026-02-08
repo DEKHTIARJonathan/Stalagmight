@@ -2124,11 +2124,12 @@ impl Project {
             }
         }
 
-        // Align each section's absolute position to solved coordinates (rigid translation).
+        // Align each section's absolute position to solved coordinates (rigid XY translation).
         // This prevents merged stations in different sections from drifting apart.
-        let mut section_deltas: HashMap<SectionId, Coordinates> = HashMap::new();
+        // Only X and Y are compared/applied; Z (depth) is not adjusted.
+        let mut section_deltas: HashMap<SectionId, (f64, f64)> = HashMap::new();
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
-            let mut delta: Option<Coordinates> = None;
+            let mut delta_xy: Option<(f64, f64)> = None;
             for idx in 0..=section.shots.len() {
                 let station = StationRef::new(section.id, idx as u32);
                 let root = *station_root.get(&station).unwrap_or(&station);
@@ -2138,28 +2139,26 @@ impl Project {
                 let current = self
                     .compute_station_raw_coords(station)
                     .ok_or_else(|| "Failed to compute station coordinates".to_string())?;
-                let d = Self::coords_sub(*target, current);
-                if let Some(existing) = delta {
-                    if !Self::coords_close(existing, d, 1e-6) {
+                let dx = target.x - current.x;
+                let dy = target.y - current.y;
+                if let Some((ex, ey)) = delta_xy {
+                    if (ex - dx).abs() > 1e-6 || (ey - dy).abs() > 1e-6 {
                         return Err("Least squares adjustment produced inconsistent section translation".to_string());
                     }
                 } else {
-                    delta = Some(d);
+                    delta_xy = Some((dx, dy));
                 }
             }
-            if let Some(d) = delta {
-                if Self::coords_norm(d) > 1e-9 {
-                    section_deltas.insert(section.id, d);
+            if let Some((dx, dy)) = delta_xy {
+                if dx.abs() > 1e-9 || dy.abs() > 1e-9 {
+                    section_deltas.insert(section.id, (dx, dy));
                 }
             }
         }
 
-        for (section_id, delta) in section_deltas {
-            if delta.x.abs() > 1e-9 || delta.y.abs() > 1e-9 {
-                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-                self.section_offsets.insert(section_id, (current.0 + delta.x, current.1 + delta.y));
-            }
-            // Z offsets are not applied — depths are not adjusted by LSQ.
+        for (section_id, (dx, dy)) in section_deltas {
+            let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+            self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
         }
 
         Ok(())
