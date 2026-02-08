@@ -856,8 +856,6 @@ fn test_delete_first_shot_preserves_station_positions() {
 
     let section_id = create_result.section_id.unwrap();
     let project_before = state.get_project_state().unwrap();
-    let deleted_shot = &project_before.sections[0].shots[0];
-    let deleted_dz = deleted_shot.depth_out - deleted_shot.depth_in;
     let station_1_before = project_before
         .compute_station_raw_coords(StationRef::new(section_id, 1))
         .unwrap();
@@ -881,18 +879,16 @@ fn test_delete_first_shot_preserves_station_positions() {
         .unwrap();
 
     let eps = 1e-6;
+    // X,Y positions preserved: station_0_after matches station_1_before in X,Y
     assert!((station_0_after.x - station_1_before.x).abs() < eps, "x mismatch after delete");
     assert!((station_0_after.y - station_1_before.y).abs() < eps, "y mismatch after delete");
-    assert!(
-        (station_0_after.z - (station_1_before.z - deleted_dz)).abs() < eps,
-        "z mismatch after delete"
-    );
     assert!((station_1_after.x - station_2_before.x).abs() < eps, "x mismatch after delete");
     assert!((station_1_after.y - station_2_before.y).abs() < eps, "y mismatch after delete");
-    assert!(
-        (station_1_after.z - (station_2_before.z - deleted_dz)).abs() < eps,
-        "z mismatch after delete"
-    );
+    // Z is absolute from shot depth measurements — after deleting first shot,
+    // remaining stations get Z from the remaining shot's absolute depths.
+    // Remaining shot: depth_in=10, depth_out=11
+    assert!((station_0_after.z - 10.0).abs() < eps, "z station 0 after delete should be depth_in of remaining shot");
+    assert!((station_1_after.z - 11.0).abs() < eps, "z station 1 after delete should be depth_out of remaining shot");
 }
 
 #[test]

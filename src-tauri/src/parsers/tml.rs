@@ -67,6 +67,10 @@ pub struct TmlSection {
     pub start_ariane_id: i64,
     /// Ariane ID of the last shot in this section.
     pub end_ariane_id: i64,
+    /// Cumulative depth of the parent shot (from_id target) for correct rebasing
+    /// when a section branches mid-chain. 0.0 if the section starts from a
+    /// START shot or has no parent.
+    pub start_depth: f64,
 }
 
 /// A single survey shot.
@@ -513,11 +517,57 @@ fn convert_ariane_color(color_str: Option<&str>) -> String {
 // Sectioning and topology
 // ============================================================================
 
+/// Propagate GPS coordinates from START shots to their immediate successors.
+///
+/// Ariane stores GPS on START shots (section origin markers) which carry no
+/// measurement data and are excluded from sections. To preserve the geo-reference,
+/// copy lat/lng to the first real shot(s) that follow each START shot — but only
+/// if those successors don't already have their own GPS data.
+fn propagate_start_gps(raw_shots: &mut [RawShot]) {
+    // Collect START shots that have GPS data
+    let gps_starts: Vec<(i64, f64, f64)> = raw_shots
+        .iter()
+        .filter(|s| {
+            s.shot_type == TmlShotType::Start
+                && (s.latitude.abs() > f64::EPSILON || s.longitude.abs() > f64::EPSILON)
+        })
+        .map(|s| (s.id, s.latitude, s.longitude))
+        .collect();
+
+    if gps_starts.is_empty() {
+        return;
+    }
+
+    let start_gps: HashMap<i64, (f64, f64)> = gps_starts
+        .into_iter()
+        .map(|(id, lat, lng)| (id, (lat, lng)))
+        .collect();
+
+    // For each non-START shot whose from_id points to a GPS-tagged START,
+    // copy the coordinates if the successor has no GPS of its own.
+    for shot in raw_shots.iter_mut() {
+        if shot.shot_type == TmlShotType::Start {
+            continue;
+        }
+        if shot.latitude.abs() > f64::EPSILON || shot.longitude.abs() > f64::EPSILON {
+            continue; // already has its own GPS
+        }
+        if let Some(&(lat, lng)) = start_gps.get(&shot.from_id) {
+            shot.latitude = lat;
+            shot.longitude = lng;
+        }
+    }
+}
+
 /// Build topology and linearize into sections.
-fn build_sections(raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosure>) {
+fn build_sections(mut raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosure>) {
     if raw_shots.is_empty() {
         return (Vec::new(), Vec::new());
     }
+
+    // Propagate GPS coordinates from START shots to their immediate successors.
+    // Ariane places GPS data on START shots, which we later exclude from sections.
+    propagate_start_gps(&mut raw_shots);
 
     // Index shots by ID
     let shot_by_id: HashMap<i64, &RawShot> = raw_shots.iter().map(|s| (s.id, s)).collect();
@@ -603,7 +653,7 @@ fn build_sections(raw_shots: Vec<RawShot>) -> (Vec<TmlSection>, Vec<TmlClosure>)
     let mut sections: Vec<TmlSection> = Vec::new();
 
     for (section_name, group_shots) in &section_groups {
-        let linearized = linearize_section(section_name, group_shots, &successors);
+        let linearized = linearize_section(section_name, group_shots, &successors, &shot_by_id);
         sections.extend(linearized);
     }
 
@@ -619,6 +669,7 @@ fn linearize_section(
     section_name: &str,
     shots: &[&RawShot],
     successors: &HashMap<i64, Vec<i64>>,
+    all_shots: &HashMap<i64, &RawShot>,
 ) -> Vec<TmlSection> {
     if shots.is_empty() {
         return Vec::new();
@@ -714,6 +765,12 @@ fn linearize_section(
             })
             .collect();
 
+        // Look up the parent shot's cumulative depth for correct rebasing.
+        // If from_id points to a shot (START or REAL/VIRTUAL), use its depth.
+        let start_depth = all_shots
+            .get(&first_shot.from_id)
+            .map_or(0.0, |parent| parent.depth);
+
         result.push(TmlSection {
             name,
             start_ariane_id: first_shot.from_id,
@@ -723,6 +780,7 @@ fn linearize_section(
             date,
             color,
             is_branch_split: needs_split,
+            start_depth,
         });
     }
 
@@ -771,6 +829,10 @@ fn linearize_section(
             })
             .collect();
 
+        let start_depth = all_shots
+            .get(&first_shot.from_id)
+            .map_or(0.0, |parent| parent.depth);
+
         result.push(TmlSection {
             name,
             start_ariane_id: first_shot.from_id,
@@ -780,6 +842,7 @@ fn linearize_section(
             date: first_shot.date,
             color: first_shot.color.clone(),
             is_branch_split: true,
+            start_depth,
         });
     }
 
@@ -1000,8 +1063,8 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile) -> Result<Vec<ImportSectionC
     for (si, section) in tml.sections.iter().enumerate() {
         let section_index = si as u32;
 
-        // Convert shots to ShotData
-        let shot_data = convert_shots_to_shot_data(&section.shots);
+        // Convert shots to ShotData, using start_depth for correct rebasing
+        let shot_data = convert_shots_to_shot_data(&section.shots, section.start_depth);
 
         // Determine placement
         let placement = determine_placement(
@@ -1029,10 +1092,11 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile) -> Result<Vec<ImportSectionC
 
 /// Convert TML shots to `ShotData` for import.
 ///
-/// Depth handling: Ariane `DP` is cumulative station depth. For each shot,
-/// `depth_in` = previous shot's DP (or DPI if != -1.0), `depth_out` = this shot's DP.
-/// Depths are rebased relative to the first shot's starting depth.
-fn convert_shots_to_shot_data(shots: &[TmlShot]) -> Vec<ShotData> {
+/// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
+/// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
+/// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
+/// Depths are stored as absolute values — no rebasing is applied.
+fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64) -> Vec<ShotData> {
     if shots.is_empty() {
         return Vec::new();
     }
@@ -1048,27 +1112,20 @@ fn convert_shots_to_shot_data(shots: &[TmlShot]) -> Vec<ShotData> {
         return Vec::new();
     }
 
-    // The first shot's "incoming" depth reference
-    let base_depth = if real_shots[0].depth_in != -1.0 {
-        real_shots[0].depth_in
-    } else {
-        0.0
-    };
-
     let mut result = Vec::with_capacity(real_shots.len());
 
     for (i, shot) in real_shots.iter().enumerate() {
-        // depth_in for this shot
-        let raw_depth_in = if shot.depth_in != -1.0 {
+        // depth_in: use DPI if available, otherwise depth_out of previous shot,
+        // or start_depth (parent shot's cumulative depth) for the first shot.
+        let depth_in = if shot.depth_in != -1.0 {
             shot.depth_in
         } else if i > 0 {
             real_shots[i - 1].depth
         } else {
-            0.0
+            start_depth
         };
 
-        let depth_in = raw_depth_in - base_depth;
-        let depth_out = shot.depth - base_depth;
+        let depth_out = shot.depth;
 
         // LRUD: pass through, using None for zero values
         let lrud_opt = |v: f64| if v.abs() < f64::EPSILON { None } else { Some(v) };
@@ -1214,6 +1271,41 @@ mod tests {
         )
     }
 
+    fn tml_shot_xml_gps(
+        id: i64,
+        from_id: i64,
+        shot_type: &str,
+        section: &str,
+        lat: f64,
+        lng: f64,
+    ) -> String {
+        format!(
+            r#"<SurveyData>
+    <ID>{id}</ID>
+    <FromID>{from_id}</FromID>
+    <ClosureToID>-1</ClosureToID>
+    <Type>{shot_type}</Type>
+    <Section>{section}</Section>
+    <Azimut>90.0</Azimut>
+    <Length>10.0</Length>
+    <Depth>5.0</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>2.0</Inclination>
+    <Left>1.0</Left>
+    <Right>2.0</Right>
+    <Up>3.0</Up>
+    <Down>4.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>{lat}</Latitude>
+    <Longitude>{lng}</Longitude>
+</SurveyData>"#
+        )
+    }
+
     fn tmlu_shot_xml(id: i64, from_id: i64, shot_type: &str, section: &str) -> String {
         format!(
             r#"<SRVD>
@@ -1337,6 +1429,149 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // GPS propagation from START shots
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_start_gps_propagated_to_first_real_shot() {
+        // START shot has GPS, its successor REAL shot should inherit it
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml_gps(0, -1, "START", "Entrance", 20.2, -87.5),
+                tml_shot_xml(1, 0, "REAL", "Entrance"),
+                tml_shot_xml(2, 1, "REAL", "Entrance"),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+
+        let (sections, _) = build_sections(raw_shots);
+        assert_eq!(sections.len(), 1);
+        // First shot should have GPS from the START shot
+        let first = &sections[0].shots[0];
+        assert!((first.latitude - 20.2).abs() < f64::EPSILON);
+        assert!((first.longitude - (-87.5)).abs() < f64::EPSILON);
+        // Second shot should NOT have GPS (not a direct successor of START)
+        let second = &sections[0].shots[1];
+        assert!(second.latitude.abs() < f64::EPSILON);
+        assert!(second.longitude.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_start_gps_not_overwritten_if_successor_has_own_gps() {
+        // Successor already has GPS — should keep its own
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml_gps(0, -1, "START", "Entrance", 20.2, -87.5),
+                tml_shot_xml_gps(1, 0, "REAL", "Entrance", 19.0, -88.0),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) =
+            parse_raw_shots(&xml).unwrap_or_else(|_| (Vec::new(), FileMetadata::default()));
+
+        let (sections, _) = build_sections(raw_shots);
+        let first = &sections[0].shots[0];
+        assert!((first.latitude - 19.0).abs() < f64::EPSILON);
+        assert!((first.longitude - (-88.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_start_gps_produces_zero_datum_placement() {
+        // When START has GPS and it propagates, section 0 should get ZeroDatum
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml_gps(0, -1, "START", "Entrance", 20.2, -87.5),
+                tml_shot_xml(1, 0, "REAL", "Entrance"),
+                tml_shot_xml(2, 1, "REAL", "Entrance"),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, metadata) = parse_raw_shots(&xml).unwrap_or_else(|_| {
+            (Vec::new(), FileMetadata::default())
+        });
+        let (sections, closures) = build_sections(raw_shots);
+
+        // geo_coding should be populated from propagated GPS
+        let geo_coding = sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .find(|shot| shot.latitude.abs() > f64::EPSILON || shot.longitude.abs() > f64::EPSILON)
+            .map(|shot| TmlGeoCoding {
+                latitude: shot.latitude,
+                longitude: shot.longitude,
+                altitude: metadata.first_start_absolute_elevation,
+            });
+
+        let tml = TmlFile {
+            cave_name: metadata.cave_name,
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: true,
+            first_start_absolute_elevation: 100.0,
+            geo_coding,
+            sections,
+            closures,
+        };
+
+        let configs = convert_tml_to_import_configs(&tml).unwrap_or_else(|_| Vec::new());
+        assert_eq!(configs.len(), 1);
+        match &configs[0].placement {
+            ImportPlacement::ZeroDatum {
+                coordinates,
+                station_index,
+            } => {
+                assert!((coordinates.latitude - 20.2).abs() < f64::EPSILON);
+                assert!((coordinates.longitude - (-87.5)).abs() < f64::EPSILON);
+                assert_eq!(*station_index, 0);
+            }
+            other => {
+                assert!(
+                    false,
+                    "Expected ZeroDatum, got {other:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_geo_coding_extracted_from_propagated_gps() {
+        // TmlFile.geo_coding should be populated from GPS that was on a START shot
+        let xml = wrap_xml(
+            &[
+                tml_shot_xml_gps(0, -1, "START", "Entrance", 20.2, -87.5),
+                tml_shot_xml(1, 0, "REAL", "Entrance"),
+            ]
+            .join("\n"),
+        );
+
+        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
+            (Vec::new(), FileMetadata::default())
+        });
+        let (sections, _) = build_sections(raw_shots);
+
+        // geo_coding extraction (same logic as parse_tml)
+        let geo_coding = sections
+            .iter()
+            .flat_map(|s| &s.shots)
+            .find(|shot| shot.latitude.abs() > f64::EPSILON || shot.longitude.abs() > f64::EPSILON)
+            .map(|shot| TmlGeoCoding {
+                latitude: shot.latitude,
+                longitude: shot.longitude,
+                altitude: 100.0,
+            });
+
+        assert!(geo_coding.is_some());
+        if let Some(gc) = &geo_coding {
+            assert!((gc.latitude - 20.2).abs() < f64::EPSILON);
+            assert!((gc.longitude - (-87.5)).abs() < f64::EPSILON);
+        }
+    }
+
+    // -------------------------------------------------------------------
     // VIRTUAL shot marking
     // -------------------------------------------------------------------
 
@@ -1392,7 +1627,7 @@ mod tests {
             (Vec::new(), FileMetadata::default())
         });
         let (sections, _) = build_sections(raw_shots);
-        let shot_data = convert_shots_to_shot_data(&sections[0].shots);
+        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0);
 
         // Shot 1: depth_in=0 (from START, base=0), depth_out=5
         assert!((shot_data[0].depth_in - 0.0).abs() < f64::EPSILON);
@@ -1429,11 +1664,11 @@ mod tests {
             (Vec::new(), FileMetadata::default())
         });
         let (sections, _) = build_sections(raw_shots);
-        let shot_data = convert_shots_to_shot_data(&sections[0].shots);
+        let shot_data = convert_shots_to_shot_data(&sections[0].shots, 0.0);
 
-        // DPI=2.0 used as base and as depth_in; depth_out = 5.0 - 2.0 = 3.0
-        assert!((shot_data[0].depth_in - 0.0).abs() < f64::EPSILON);
-        assert!((shot_data[0].depth_out - 3.0).abs() < f64::EPSILON);
+        // DPI=2.0 used as absolute depth_in; depth_out = 5.0 (absolute, no rebasing)
+        assert!((shot_data[0].depth_in - 2.0).abs() < f64::EPSILON);
+        assert!((shot_data[0].depth_out - 5.0).abs() < f64::EPSILON);
     }
 
     // -------------------------------------------------------------------
@@ -1473,6 +1708,7 @@ mod tests {
             is_branch_split: false,
             start_ariane_id: 0,
             end_ariane_id: 1,
+            start_depth: 0.0,
         }];
 
         apply_unit_conversion(&mut sections, TmlUnit::Imperial);
@@ -1519,6 +1755,7 @@ mod tests {
             is_branch_split: false,
             start_ariane_id: 0,
             end_ariane_id: 1,
+            start_depth: 0.0,
         }];
 
         apply_unit_conversion(&mut sections, TmlUnit::Metric);
@@ -1826,7 +2063,7 @@ mod tests {
             section: "Test".to_string(),
         }];
 
-        let shot_data = convert_shots_to_shot_data(&shots);
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0);
         assert!(shot_data[0].is_virtual);
     }
 
@@ -1856,7 +2093,7 @@ mod tests {
             section: "Test".to_string(),
         }];
 
-        let shot_data = convert_shots_to_shot_data(&shots);
+        let shot_data = convert_shots_to_shot_data(&shots, 0.0);
         assert!(shot_data[0].left.is_none());
         assert!((shot_data[0].right.unwrap_or(0.0) - 2.5).abs() < f64::EPSILON);
         assert!(shot_data[0].up.is_none());
@@ -1892,27 +2129,27 @@ mod tests {
         };
 
         // Negative azimuth → normalized
-        let data = convert_shots_to_shot_data(&[make_shot(-124.0)]);
+        let data = convert_shots_to_shot_data(&[make_shot(-124.0)], 0.0);
         assert!((data[0].azimuth_in - 236.0).abs() < 1e-6); // -124 + 360 = 236
 
         // Very negative → normalized
-        let data = convert_shots_to_shot_data(&[make_shot(-690.0)]);
+        let data = convert_shots_to_shot_data(&[make_shot(-690.0)], 0.0);
         assert!((data[0].azimuth_in - 30.0).abs() < 1e-6); // -690 + 720 = 30
 
         // >360 → normalized
-        let data = convert_shots_to_shot_data(&[make_shot(450.0)]);
+        let data = convert_shots_to_shot_data(&[make_shot(450.0)], 0.0);
         assert!((data[0].azimuth_in - 90.0).abs() < 1e-6); // 450 - 360 = 90
 
         // Already valid → unchanged
-        let data = convert_shots_to_shot_data(&[make_shot(102.0)]);
+        let data = convert_shots_to_shot_data(&[make_shot(102.0)], 0.0);
         assert!((data[0].azimuth_in - 102.0).abs() < 1e-6);
 
         // Zero → unchanged
-        let data = convert_shots_to_shot_data(&[make_shot(0.0)]);
+        let data = convert_shots_to_shot_data(&[make_shot(0.0)], 0.0);
         assert!(data[0].azimuth_in.abs() < 1e-6);
 
         // azimuth_out should match azimuth_in
-        let data = convert_shots_to_shot_data(&[make_shot(-124.0)]);
+        let data = convert_shots_to_shot_data(&[make_shot(-124.0)], 0.0);
         assert!((data[0].azimuth_out - data[0].azimuth_in).abs() < f64::EPSILON);
     }
 
@@ -1971,5 +2208,62 @@ mod tests {
             sections.len(), sections.iter().map(|s| &s.name).collect::<Vec<_>>());
         assert_eq!(sections[0].name, "MySec");
         assert_eq!(sections[0].shots.len(), 2);
+    }
+
+    /// Test mid-section branching topology (not just end-of-section).
+    /// Verifies that when section C branches from the MIDDLE of section A,
+    /// the target_station_index correctly points to the station at the END
+    /// of the referenced shot.
+    #[test]
+    fn test_mid_section_branching_topology() {
+        // A: START → shot1 → shot2 → shot3 → shot4
+        // B: branches from shot2 (mid-section)
+        let xml = wrap_xml(&[
+            tml_shot_xml(0, -1, "START", "Start"),
+            tml_shot_xml(1, 0, "REAL", "Section A"),
+            tml_shot_xml(2, 1, "REAL", "Section A"),
+            tml_shot_xml(3, 2, "REAL", "Section A"),
+            tml_shot_xml(4, 3, "REAL", "Section A"),
+            tml_shot_xml(5, 2, "REAL", "Section B"), // branches from shot 2 (mid-section A)
+            tml_shot_xml(6, 5, "REAL", "Section B"),
+        ].join("\n"));
+
+        let (raw_shots, metadata) = parse_raw_shots(&xml).unwrap_or_else(|_| {
+            (Vec::new(), FileMetadata::default())
+        });
+        let (sections, closures) = build_sections(raw_shots);
+
+        let tml = TmlFile {
+            cave_name: metadata.cave_name,
+            unit: TmlUnit::Metric,
+            use_magnetic_azimuth: true,
+            first_start_absolute_elevation: 100.0,
+            geo_coding: None,
+            sections,
+            closures,
+        };
+
+        let configs = convert_tml_to_import_configs(&tml).unwrap();
+        assert_eq!(configs.len(), 2, "Should have 2 sections");
+
+        // Section A: 4 shots → 5 stations (0, 1, 2, 3, 4)
+        // Shot ID=2 at import_idx=1 → station_after=2
+        assert_eq!(configs[0].shots.len(), 4);
+        assert!(matches!(configs[0].placement, ImportPlacement::Origin));
+
+        // Section B: from_id=2 → end of shot ID=2 = station 2 of section A
+        match &configs[1].placement {
+            ImportPlacement::FromImporting {
+                import_station,
+                target_section_index,
+                target_station_index,
+            } => {
+                assert_eq!(*import_station, 0);
+                assert_eq!(*target_section_index, 0);
+                assert_eq!(*target_station_index, 2,
+                    "Should link to station 2 (end of shot ID=2 at import_idx=1)");
+            }
+            other => panic!("Expected FromImporting, got {:?}", other),
+        }
     }
 }
