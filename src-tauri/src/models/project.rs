@@ -2111,6 +2111,7 @@ impl Project {
                     .shots
                     .get_mut(idx)
                     .ok_or_else(|| "Shot not found for LSQ update".to_string())?;
+                shot.depth_in = base_i.z;
                 Self::update_shot_from_forward_vector(shot, forward_vec);
             }
         }
