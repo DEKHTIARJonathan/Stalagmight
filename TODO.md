@@ -207,6 +207,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 - [ ] Proportional distribution (distribute errors proportional to shot lengths)
 - [ ] Equal distribution (distribute errors equally to shots)
 
+### Undo/Redo Optimization (v2.0)
+- [ ] Diff-based undo (store diffs instead of full snapshots where possible)
+- [ ] Binary serialization (replace JSON with a compact binary format)
+- [ ] Reduce snapshot frequency (only snapshot on major operations)
+
 ### Display Features (v2.0)
 - [ ] LRUD passage wall visualization
 - [ ] High-contrast theme (full implementation)
