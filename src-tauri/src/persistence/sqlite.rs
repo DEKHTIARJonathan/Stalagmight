@@ -349,6 +349,18 @@ impl Database {
             tracing::info!("Added next_closure_id column to project table");
         }
 
+        // Ensure station_comments table exists (added for station-level comments)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS station_comments (
+                section_id INTEGER NOT NULL,
+                station_index INTEGER NOT NULL,
+                comment TEXT NOT NULL,
+                PRIMARY KEY (section_id, station_index),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -974,6 +986,15 @@ impl Database {
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
+            -- Station comments
+            CREATE TABLE IF NOT EXISTS station_comments (
+                section_id INTEGER NOT NULL,
+                station_index INTEGER NOT NULL,
+                comment TEXT NOT NULL,
+                PRIMARY KEY (section_id, station_index),
+                FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)
             CREATE TABLE IF NOT EXISTS undo_stack (
                 id INTEGER PRIMARY KEY,
@@ -1067,6 +1088,7 @@ impl Database {
             DELETE FROM zero_datums;
             DELETE FROM section_offsets;
             DELETE FROM station_offsets;
+            DELETE FROM station_comments;
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM project;
@@ -1180,6 +1202,14 @@ impl Database {
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![station_ref.section_id, station_ref.station_index, offset_x, offset_y, offset_z],
+            )?;
+        }
+
+        // Save station comments
+        for (station_ref, comment) in &project.station_comments {
+            tx.execute(
+                "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
+                params![station_ref.section_id, station_ref.station_index, comment],
             )?;
         }
 
@@ -1539,6 +1569,9 @@ impl Database {
             None => max_existing + 1,
         };
 
+        // Load station comments
+        let station_comments = self.load_station_comments()?;
+
         Ok(Project {
             name,
             location,
@@ -1550,6 +1583,7 @@ impl Database {
             loop_closures,
             section_offsets,
             station_offsets,
+            station_comments,
             file_path: None,
             next_section_id,
             imported_file_hashes,
@@ -1848,6 +1882,43 @@ impl Database {
         }
 
         Ok(offsets)
+    }
+
+    fn load_station_comments(&self) -> Result<HashMap<StationRef, String>> {
+        let mut comments = HashMap::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='station_comments'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(comments);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT section_id, station_index, comment FROM station_comments",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (section_id, station_index, comment) = row?;
+            comments.insert(
+                StationRef::new(section_id, station_index),
+                comment,
+            );
+        }
+
+        Ok(comments)
     }
 
     /// Load imported file hashes from database

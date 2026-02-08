@@ -9,6 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   getEffectiveShowVirtualShots,
   getEffectiveShowShotData,
+  getEffectiveShowStationComments,
 } from '../../store/displaySelectors';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
@@ -248,6 +249,7 @@ export default function MapCanvas() {
     showScaleBar,
     showSectionNames,
     showStationLabels,
+    showStationComments,
     showStations,
     showShots,
     showVirtualShots,
@@ -1511,6 +1513,12 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowStationLabels(showStationLabels);
   }, [showStationLabels, mapLoaded]);
+
+  // Sync station comments visibility with SurveyLayer (gated by showStations)
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowStationComments(getEffectiveShowStationComments(showStations, showStationComments));
+  }, [showStationComments, showStations, mapLoaded]);
 
   // Sync stations visibility with SurveyLayer
   useEffect(() => {

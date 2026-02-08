@@ -162,6 +162,11 @@ pub struct Project {
     #[ts(skip)]
     #[ts(type = "Array<[StationRef, [number, number, number]]>")]
     pub station_offsets: HashMap<StationRef, (f64, f64, f64)>,
+    /// Station comments keyed by StationRef
+    #[serde(default, serialize_with = "serialize_station_comments", deserialize_with = "deserialize_station_comments")]
+    #[ts(skip)]
+    #[ts(type = "Array<[StationRef, string]>")]
+    pub station_comments: HashMap<StationRef, String>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
@@ -221,6 +226,23 @@ fn deserialize_station_offsets<'de, D: serde::Deserializer<'de>>(
     Ok(entries.into_iter().collect())
 }
 
+/// Serialize station_comments as a Vec of (StationRef, String) tuples.
+fn serialize_station_comments<S: serde::Serializer>(
+    map: &HashMap<StationRef, String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let entries: Vec<(&StationRef, &String)> = map.iter().collect();
+    entries.serialize(serializer)
+}
+
+/// Deserialize station_comments from a Vec of (StationRef, String) tuples.
+fn deserialize_station_comments<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HashMap<StationRef, String>, D::Error> {
+    let entries: Vec<(StationRef, String)> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
+}
+
 impl Project {
     /// Create a new empty project
     pub fn new(name: String, location: Option<String>) -> Self {
@@ -238,6 +260,7 @@ impl Project {
             next_section_id: 0,
             section_offsets: HashMap::new(),
             station_offsets: HashMap::new(),
+            station_comments: HashMap::new(),
             imported_file_hashes: Vec::new(),
             next_closure_id: 1,
         }
@@ -368,6 +391,9 @@ impl Project {
         // Remove station offsets referencing this section
         self.station_offsets.retain(|sr, _| sr.section_id != section_id);
 
+        // Remove station comments referencing this section
+        self.station_comments.retain(|sr, _| sr.section_id != section_id);
+
         // Remove zero datums referencing this section
         self.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
     }
@@ -428,6 +454,23 @@ impl Project {
                 (old_key.station_index as i32 + delta) as u32,
             );
             self.station_offsets.insert(new_key, value);
+        }
+
+        // Shift station_comments (HashMap keys — collect, remove, re-insert)
+        let comments_to_shift: Vec<(StationRef, String)> = self
+            .station_comments
+            .iter()
+            .filter(|(sr, _)| sr.section_id == section_id && sr.station_index >= from_index)
+            .map(|(sr, v)| (*sr, v.clone()))
+            .collect();
+
+        for (old_key, value) in comments_to_shift {
+            self.station_comments.remove(&old_key);
+            let new_key = StationRef::new(
+                old_key.section_id,
+                (old_key.station_index as i32 + delta) as u32,
+            );
+            self.station_comments.insert(new_key, value);
         }
     }
 
@@ -890,6 +933,7 @@ impl Project {
         let removed_station = impact.removed_station;
 
         self.station_offsets.remove(&removed_station);
+        self.station_comments.remove(&removed_station);
         self.zero_datums.retain(|zd| zd.station_ref != removed_station);
 
         self.station_merges.retain(|m| {
@@ -4123,6 +4167,15 @@ impl Project {
                 if station.station_ref == zd.station_ref {
                     station.is_zero_datum = true;
                     station.gps_coordinates = Some(zd.gps);
+                }
+            }
+        }
+
+        // Assign station comments
+        for (station_ref, comment) in &self.station_comments {
+            for station in &mut stations {
+                if station.station_ref == *station_ref {
+                    station.comment = Some(comment.clone());
                 }
             }
         }

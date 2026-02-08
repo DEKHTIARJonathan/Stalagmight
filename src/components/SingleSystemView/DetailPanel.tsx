@@ -423,6 +423,13 @@ function StationDetail({ station }: { station: Station }) {
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(station.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(station.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
 
+          {station.comment && (
+            <div className="pt-2 border-t border-border">
+              <span className="text-sm text-text-secondary">{t('detailPanel.station.comment')}:</span>
+              <p className="mt-1 text-sm whitespace-pre-wrap">{station.comment}</p>
+            </div>
+          )}
+
           {station.is_zero_datum && (
             <div className="pt-2 border-t border-border">
               <span className="text-warning">&#9733; {t('detailPanel.station.zeroDatum')}</span>

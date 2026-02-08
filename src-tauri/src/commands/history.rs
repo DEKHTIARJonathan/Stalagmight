@@ -152,6 +152,7 @@ fn get_command_type(command: &Command) -> String {
         Command::AdjustLoopClosures { .. } => "adjust_loop_closures".to_string(),
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
+        Command::SetStationComment { .. } => "set_station_comment".to_string(),
         Command::MoveSection { .. } => "move_section".to_string(),
         Command::MoveSegment { .. } => "move_segment".to_string(),
         Command::MoveStation { .. } => "move_station".to_string(),
@@ -227,6 +228,15 @@ fn derive_command_details(
         }
         Command::SetZeroDatum { coordinates, .. } => {
             Some(format!("Lat: {:.6}, Lon: {:.6}", coordinates.latitude, coordinates.longitude))
+        }
+        Command::SetStationComment { comment, .. } => {
+            match comment {
+                Some(c) => {
+                    let truncated = if c.len() > 50 { format!("{}…", &c[..47]) } else { c.clone() };
+                    Some(format!("Comment: {truncated}"))
+                }
+                None => Some("(removed)".to_string()),
+            }
         }
         _ => None,
     }
@@ -675,6 +685,25 @@ fn derive_preview_data(
                     field: "Station".to_string(),
                     old_value: String::new(),
                     new_value: station_ref.to_string(),
+                }],
+                additional_changes: 0,
+            })
+        }
+
+        // SetStationComment - show the comment text
+        (Command::SetStationComment { comment, .. }, _) => {
+            let (label, value) = match comment {
+                Some(c) => {
+                    let truncated = if c.len() > 80 { format!("{}…", &c[..77]) } else { c.clone() };
+                    ("Comment".to_string(), truncated)
+                }
+                None => ("Comment".to_string(), "(removed)".to_string()),
+            };
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: label,
+                    old_value: String::new(),
+                    new_value: value,
                 }],
                 additional_changes: 0,
             })

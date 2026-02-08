@@ -91,6 +91,12 @@ pub enum Command {
         station_ref: StationRef,
     },
 
+    // Station comment commands
+    SetStationComment {
+        station_ref: StationRef,
+        comment: Option<String>,
+    },
+
     // Move commands
     MoveSection {
         section_id: SectionId,
@@ -330,6 +336,13 @@ impl Command {
             }
             Command::RemoveZeroDatum { station_ref } => {
                 format!("Remove zero datum from {station_ref}")
+            }
+            Command::SetStationComment { station_ref, comment } => {
+                if comment.is_some() {
+                    format!("Set comment on station {station_ref}")
+                } else {
+                    format!("Remove comment from station {station_ref}")
+                }
             }
             Command::MoveSection { section_id, .. } => {
                 format!("Move section {section_id}")
@@ -596,6 +609,20 @@ mod tests {
                     offset: Coordinates::new(1.0, 2.0, 3.0),
                 },
                 "Move segment (section 2)",
+            ),
+            (
+                Command::SetStationComment {
+                    station_ref: station_a,
+                    comment: Some("Test comment".to_string()),
+                },
+                "Set comment on station 1:0",
+            ),
+            (
+                Command::SetStationComment {
+                    station_ref: station_a,
+                    comment: None,
+                },
+                "Remove comment from station 1:0",
             ),
             (
                 Command::MoveStation {

@@ -10,7 +10,7 @@ import type { StationRef } from '../../types/project';
 export default function EditStationDialog() {
   const precision = useDecimalPrecision();
   const { closeDialog, dialogData } = useUIStore();
-  const { stations, project, setZeroDatum, removeZeroDatum } = useProjectStore();
+  const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment } = useProjectStore();
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
 
@@ -28,6 +28,7 @@ export default function EditStationDialog() {
   const [isZeroDatum, setIsZeroDatumState] = useState(false);
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
+  const [comment, setComment] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,6 +38,7 @@ export default function EditStationDialog() {
       setIsZeroDatumState(station.is_zero_datum);
       setLatitude(station.gps_coordinates?.latitude.toString() ?? '');
       setLongitude(station.gps_coordinates?.longitude.toString() ?? '');
+      setComment(station.comment ?? '');
     }
   }, [station]);
 
@@ -113,6 +115,19 @@ export default function EditStationDialog() {
         }
       }
 
+      // Save comment if changed
+      const oldComment = station.comment ?? '';
+      if (comment !== oldComment) {
+        const commentResult = await updateStationComment(
+          stationRef,
+          comment.trim() || null
+        );
+        if (!commentResult.success) {
+          setError(commentResult.error ?? 'Failed to update comment');
+          return;
+        }
+      }
+
       closeDialog();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'An error occurred');
@@ -125,7 +140,8 @@ export default function EditStationDialog() {
   const isDirty = station ? (
     isZeroDatum !== station.is_zero_datum ||
     latitude !== (station.gps_coordinates?.latitude.toString() ?? '') ||
-    longitude !== (station.gps_coordinates?.longitude.toString() ?? '')
+    longitude !== (station.gps_coordinates?.longitude.toString() ?? '') ||
+    comment !== (station.comment ?? '')
   ) : false;
 
   if (!station || !stationRef) {
@@ -175,6 +191,22 @@ export default function EditStationDialog() {
             </ul>
           </div>
         )}
+
+        {/* Comment section */}
+        <div className="border-t border-border pt-3 space-y-2">
+          <label className="block text-sm font-medium" htmlFor="station-comment">
+            Comment
+          </label>
+          <textarea
+            id="station-comment"
+            data-testid="station-comment-input"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded resize-y min-h-[60px]"
+            placeholder="Add a comment..."
+            rows={2}
+          />
+        </div>
 
         {/* Zero Datum section */}
         <div className="border-t border-border pt-3 space-y-3">

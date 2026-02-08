@@ -186,6 +186,9 @@ pub struct Station {
     /// Loop closures involving this station
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub closures_with: Vec<ClosureRef>,
+    /// User comment for this station
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 impl Station {
@@ -197,6 +200,7 @@ impl Station {
             gps_coordinates: None,
             merged_with: Vec::new(),
             closures_with: Vec::new(),
+            comment: None,
         }
     }
 
@@ -208,6 +212,7 @@ impl Station {
             gps_coordinates: None,
             merged_with: Vec::new(),
             closures_with: Vec::new(),
+            comment: None,
         }
     }
 }
