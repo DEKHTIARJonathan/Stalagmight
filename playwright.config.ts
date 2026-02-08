@@ -62,7 +62,7 @@ export default defineConfig({
   webServer: {
     command: devServerCommand,
     url: 'http://localhost:1420',
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: !process.env.CI && !coverageEnabled,
     timeout: 120000, // 2 minutes to start dev server
   },
 
