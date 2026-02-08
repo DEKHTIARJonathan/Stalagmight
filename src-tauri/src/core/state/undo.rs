@@ -271,6 +271,18 @@ impl AppState {
                 }
             }
 
+            // For station comment, inverse is restoring the previous comment
+            Command::SetStationComment {
+                station_ref,
+                comment: _,
+            } => {
+                let previous_comment = project.station_comments.get(station_ref).cloned();
+                UndoData::InverseCommand(Command::SetStationComment {
+                    station_ref: *station_ref,
+                    comment: previous_comment,
+                })
+            }
+
             // Move commands use inverse commands
             Command::MoveSection { section_id, offset } => {
                 // Inverse is moving back by negative offset
@@ -1103,6 +1115,10 @@ impl AppState {
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
             Command::MoveSection { section_id, offset } => self.move_section(*section_id, *offset),
             Command::MoveSegment { section_id, offset } => self.move_segment(*section_id, *offset),
+            Command::SetStationComment {
+                station_ref,
+                comment,
+            } => self.set_station_comment(*station_ref, comment.clone()),
             Command::MoveStation { station_ref, offset } => self.move_station(*station_ref, *offset),
             Command::Batch { commands } => self.execute_batch(commands.clone(), false),
             _ => CommandResult::failure("Command cannot be executed in undo context".to_string()),

@@ -913,6 +913,7 @@
     "station": {
       "title": "Station",
       "center": "Center map on station {{id}}",
+      "comment": "Comment",
       "zeroDatum": "Zero datum station",
       "mergedWith": "Merged with",
       "connected": "Connected",
@@ -1000,6 +1001,7 @@
       "stationLabels": "Station labels",
       "shots": "Shots",
       "virtualShots": "Virtual shots",
+      "stationComments": "Station comments",
       "shotData": "Shot data",
       "zeroDatum": "Zero datum",
       "grid": "Grid",
@@ -1014,6 +1016,7 @@
       "stationLabels": "Show station IDs",
       "shots": "Show shot lines",
       "virtualShots": "Show virtual shots",
+      "stationComments": "Show station comments on map",
       "shotData": "Show shot data labels",
       "zeroDatum": "Show zero datum stations",
       "grid": "Show grid overlay",

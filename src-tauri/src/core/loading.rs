@@ -145,6 +145,7 @@ pub struct DisplaySettings {
     pub show_scale_bar: bool,
     pub show_satellite: bool,
     pub show_depth_gradient: bool,
+    pub show_station_comments: bool,
     pub grid_spacing: f64,
 }
 
@@ -162,6 +163,7 @@ impl Default for DisplaySettings {
             show_scale_bar: true,
             show_satellite: false,
             show_depth_gradient: false,
+            show_station_comments: false,
             grid_spacing: 10.0,
         }
     }
@@ -183,6 +185,7 @@ impl DisplaySettings {
             show_scale_bar: map.get("showScaleBar").is_none_or(|s| s == "true"),
             show_satellite: map.get("showSatellite").is_some_and(|s| s == "true"),
             show_depth_gradient: map.get("showDepthGradient").is_some_and(|s| s == "true"),
+            show_station_comments: map.get("showStationComments").is_some_and(|s| s == "true"),
             grid_spacing: map.get("gridSpacing").and_then(|s| s.parse().ok()).unwrap_or(10.0),
         }
     }

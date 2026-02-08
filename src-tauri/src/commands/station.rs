@@ -132,6 +132,27 @@ pub(crate) fn remove_zero_datum_impl(state: &AppState, station_ref: StationRef) 
     state.execute(Command::RemoveZeroDatum { station_ref })
 }
 
+/// Set or clear a station comment
+#[tauri::command]
+pub fn set_station_comment(
+    state: State<AppState>,
+    station_ref: StationRef,
+    comment: Option<String>,
+) -> CommandResult {
+    set_station_comment_impl(state.inner(), station_ref, comment)
+}
+
+pub(crate) fn set_station_comment_impl(
+    state: &AppState,
+    station_ref: StationRef,
+    comment: Option<String>,
+) -> CommandResult {
+    state.execute(Command::SetStationComment {
+        station_ref,
+        comment,
+    })
+}
+
 /// Move a station by a delta offset
 #[tauri::command]
 pub fn move_station(

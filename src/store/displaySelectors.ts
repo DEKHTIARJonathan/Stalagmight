@@ -24,6 +24,7 @@ export const DISPLAY_DEFAULTS = {
   showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
+  showStationComments: false,
   showDevStats: false,
   gridSpacing: 10,
 } as const;
@@ -42,4 +43,12 @@ export function getEffectiveShowVirtualShots(showShots: boolean, showVirtualShot
  */
 export function getEffectiveShowShotData(showShots: boolean, showShotData: boolean): boolean {
   return showShots && showShotData;
+}
+
+/**
+ * Compute effective visibility of station comments.
+ * Station comments are only visible when both showStations AND showStationComments are true.
+ */
+export function getEffectiveShowStationComments(showStations: boolean, showStationComments: boolean): boolean {
+  return showStations && showStationComments;
 }

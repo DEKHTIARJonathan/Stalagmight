@@ -66,6 +66,7 @@ export default class SurveyLayer {
   private labelsLayerId = 'survey-labels';
   private shotLabelsLayerId = 'survey-shot-labels';
   private stationLabelsLayerId = 'survey-station-labels';
+  private stationCommentsLayerId = 'survey-station-comments';
   private loopClosuresLayerId = 'survey-loop-closures';
   private dragClosuresLayerId = 'survey-drag-loop-closures';
   private ghostShotsLayerId = 'survey-ghost-shots';
@@ -751,6 +752,38 @@ export default class SurveyLayer {
         // At zoom >= 18: show all
         true,
       ],
+    });
+
+    // Station comments layer - shows comment text near each station
+    // Uses the same source as station labels, filtered to only show stations with comments
+    this.map.addLayer({
+      id: this.stationCommentsLayerId,
+      type: 'symbol',
+      source: this.sourceId + '-station-labels',
+      minzoom: 14,
+      layout: {
+        'text-field': ['get', 'comment'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          14, 8,
+          18, 10,
+        ],
+        'text-offset': [0, 1.5], // Below station dot
+        'text-anchor': 'top',
+        'text-allow-overlap': false,
+        'text-max-width': 12,
+        'visibility': 'none', // Start hidden, controlled by setShowStationComments
+      },
+      paint: {
+        'text-color': this.themeColors.labelColor,
+        'text-halo-color': this.themeColors.textHaloAlt,
+        'text-halo-width': 1.5,
+        'text-opacity': 0.85,
+      },
+      filter: ['!=', ['get', 'comment'], null],
     });
 
   }
@@ -1707,6 +1740,15 @@ export default class SurveyLayer {
     );
   }
 
+  // Control station comments visibility
+  setShowStationComments(show: boolean) {
+    this.map.setLayoutProperty(
+      this.stationCommentsLayerId,
+      'visibility',
+      show ? 'visible' : 'none'
+    );
+  }
+
   // Control stations visibility (also hides loop closures and station hitbox)
   // Note: Highlight layer stays visible - it uses filter to control what renders,
   // allowing snapped/origin stations to appear even when stations layer is hidden
@@ -1746,6 +1788,7 @@ export default class SurveyLayer {
     if (!this.map) return;
     const notVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'isVirtual'], true];
     const notAllVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
+    const commentBaseFilter: maplibregl.FilterSpecification = ['!=', ['get', 'comment'], null];
     if (visible) {
       // Restore original filters (label layers have zoom-based density filters)
       this.map.setFilter(this.shotsLayerId, null);
@@ -1753,6 +1796,7 @@ export default class SurveyLayer {
       this.map.setFilter(this.stationsHitboxLayerId, null);
       this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
       this.map.setFilter(this.stationLabelsLayerId, this.stationLabelsBaseFilter);
+      this.map.setFilter(this.stationCommentsLayerId, commentBaseFilter);
       this.map.setFilter(this.labelsLayerId, null);
     } else {
       // Hide virtual shots and their labels
@@ -1769,6 +1813,10 @@ export default class SurveyLayer {
         this.stationLabelsBaseFilter
           ? ['all', this.stationLabelsBaseFilter, notAllVirtual] as maplibregl.FilterSpecification
           : notAllVirtual
+      );
+      // Hide station comments for virtual-only stations
+      this.map.setFilter(this.stationCommentsLayerId,
+        ['all', commentBaseFilter, notAllVirtual] as maplibregl.FilterSpecification
       );
       // Hide section names when all stations in the section are virtual
       this.map.setFilter(this.labelsLayerId, ['!=', ['get', 'allStationsVirtual'], true]);
@@ -3057,6 +3105,11 @@ export default class SurveyLayer {
     // Station label halo
     if (this.map.getLayer(this.stationLabelsLayerId)) {
       this.map.setPaintProperty(this.stationLabelsLayerId, 'text-halo-color', colors.textHaloAlt);
+    }
+    // Station comments label + halo
+    if (this.map.getLayer(this.stationCommentsLayerId)) {
+      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-color', colors.labelColor);
+      this.map.setPaintProperty(this.stationCommentsLayerId, 'text-halo-color', colors.textHaloAlt);
     }
     // Ghost station stroke
     if (this.map.getLayer(this.ghostStationsLayerId)) {

@@ -208,6 +208,7 @@ interface ProjectStore {
     anchorStation: StationRef,
     method: ClosureStrategy
   ) => Promise<CommandResult>;
+  updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -915,6 +916,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         method,
       },
       { purpose: 'reduce misclosure error', fields: { anchorStation, method } }
+    );
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  updateStationComment: async (stationRef: StationRef, comment: string | null) => {
+    const result = await invokeIpc<CommandResult>(
+      'set_station_comment',
+      { stationRef, comment },
+      { purpose: 'update station comment', fields: { stationRef } }
     );
     if (result.success) {
       await get().refreshProjectState();

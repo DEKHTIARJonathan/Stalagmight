@@ -94,6 +94,10 @@ impl AppState {
                 coordinates,
             } => self.set_zero_datum(*station_ref, *coordinates),
             Command::RemoveZeroDatum { station_ref } => self.remove_zero_datum(*station_ref),
+            Command::SetStationComment {
+                station_ref,
+                comment,
+            } => self.set_station_comment(*station_ref, comment.clone()),
             Command::MoveSection { section_id, offset } => {
                 self.move_section(*section_id, *offset)
             }
@@ -1255,6 +1259,57 @@ impl AppState {
         }
     }
 
+    pub(super) fn set_station_comment(
+        &self,
+        station_ref: StationRef,
+        comment: Option<String>,
+    ) -> CommandResult {
+        let Ok(mut proj_guard) = self.project.lock() else {
+            return CommandResult::failure("Failed to lock project".to_string());
+        };
+
+        let Some(project) = proj_guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
+        };
+
+        // Validate station exists
+        let section = match project.get_section(station_ref.section_id) {
+            Some(s) => s,
+            None => {
+                return CommandResult::failure(format!(
+                    "Section {} not found",
+                    station_ref.section_id
+                ));
+            }
+        };
+
+        let max_station_index = section.shots.len() as u32;
+        if station_ref.station_index > max_station_index {
+            return CommandResult::failure(format!(
+                "Station index {} out of range (section has {} stations)",
+                station_ref.station_index,
+                max_station_index + 1
+            ));
+        }
+
+        match comment {
+            Some(text) if !text.is_empty() => {
+                project.station_comments.insert(station_ref, text);
+            }
+            _ => {
+                project.station_comments.remove(&station_ref);
+            }
+        }
+
+        project.touch();
+        tracing::info!(
+            ?station_ref,
+            purpose = "set station comment",
+            "Station comment updated"
+        );
+        CommandResult::success()
+    }
+
     pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
@@ -1841,6 +1896,27 @@ impl AppState {
                 project.station_offsets.insert(new_ref, offset_val);
             }
 
+            // Remap station comments
+            let comments_to_remap: Vec<(StationRef, String)> = project
+                .station_comments
+                .iter()
+                .filter(|(sr, _)| {
+                    sr.section_id == section_id
+                        && (sr.station_index as usize) >= split_station
+                        && (sr.station_index as usize) < original_station_count
+                })
+                .map(|(sr, v)| (*sr, v.clone()))
+                .collect();
+
+            for (old_ref, comment_val) in comments_to_remap {
+                project.station_comments.remove(&old_ref);
+                let new_ref = StationRef {
+                    section_id: new_id,
+                    station_index: old_ref.station_index - split_station as u32,
+                };
+                project.station_comments.insert(new_ref, comment_val);
+            }
+
             // Remap zero datums
             for zd in &mut project.zero_datums {
                 if zd.station_ref.section_id == section_id
@@ -2005,6 +2081,9 @@ impl AppState {
             for key in station_offset_keys {
                 project.station_offsets.remove(&key);
             }
+
+            // Remove station comments referencing this section
+            project.station_comments.retain(|sr, _| sr.section_id != section_id);
 
             // Remove zero datums referencing this section
             project.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);

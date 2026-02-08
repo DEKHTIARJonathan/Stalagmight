@@ -348,6 +348,7 @@ export function buildSurveyFeatures(
         globalOrdinal,
         isFirstInSection,
         color: stationLabelColor,
+        comment: station.comment ?? null,
         allShotsVirtual: !stationsWithNonVirtualShot.has(
           `${station.station_ref.section_id}:${station.station_ref.station_index}`
         ),

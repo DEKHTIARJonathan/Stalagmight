@@ -20,6 +20,7 @@ const displayOptions: { groupKey: string; items: DisplayOption[] }[] = [
       { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations' },
       { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames' },
       { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels' },
+      { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments', disabledWhen: 'showStations' },
       { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots' },
       { key: 'showVirtualShots', labelKey: 'displayMenu.items.virtualShots', descriptionKey: 'displayMenu.descriptions.virtualShots', disabledWhen: 'showShots' },
       { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots' },
@@ -61,6 +62,7 @@ export default function DisplayMenu() {
     showScaleBar,
     showSatellite,
     showDepthGradient,
+    showStationComments,
     showDevStats,
     gridSpacing,
     toggleDisplay,
@@ -77,6 +79,7 @@ export default function DisplayMenu() {
     showScaleBar: s.showScaleBar,
     showSatellite: s.showSatellite,
     showDepthGradient: s.showDepthGradient,
+    showStationComments: s.showStationComments,
     showDevStats: s.showDevStats,
     gridSpacing: s.gridSpacing,
     toggleDisplay: s.toggleDisplay,
@@ -95,6 +98,7 @@ export default function DisplayMenu() {
     showScaleBar,
     showSatellite,
     showDepthGradient,
+    showStationComments,
     showDevStats,
   };
 
