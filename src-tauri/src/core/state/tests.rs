@@ -8597,7 +8597,7 @@ fn test_execute_import_sections_origin_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, None);
+    let result = state.execute_import_sections(sections, Vec::new(), None);
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8650,7 +8650,7 @@ fn test_execute_import_sections_from_importing_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Some("abc123".to_string()));
+    let result = state.execute_import_sections(sections, Vec::new(), Some("abc123".to_string()));
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8696,7 +8696,7 @@ fn test_execute_import_sections_from_existing_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, None);
+    let result = state.execute_import_sections(sections, Vec::new(), None);
     assert!(result.success, "import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.sections.len(), 2);
@@ -8729,7 +8729,7 @@ fn test_execute_import_sections_manual_with_offset() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, None);
+    let result = state.execute_import_sections(sections, Vec::new(), None);
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8768,7 +8768,7 @@ fn test_execute_import_sections_zero_datum_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, None);
+    let result = state.execute_import_sections(sections, Vec::new(), None);
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8816,7 +8816,7 @@ fn test_execute_import_sections_rollback_on_failure() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, None);
+    let result = state.execute_import_sections(sections, Vec::new(), None);
     assert!(!result.success, "should fail when merge target doesn't exist");
 
     // Project should be rolled back — no sections added
@@ -8832,7 +8832,7 @@ fn test_execute_import_sections_empty_is_noop() {
         location: None,
     });
 
-    let result = state.execute_import_sections(vec![], None);
+    let result = state.execute_import_sections(vec![], Vec::new(), None);
     assert!(result.success);
 }
 
@@ -8854,7 +8854,7 @@ fn test_execute_import_sections_no_project() {
         placement: ImportPlacement::Origin,
     }];
 
-    let result = state.execute_import_sections(sections, None);
+    let result = state.execute_import_sections(sections, Vec::new(), None);
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No project open"));
 }
@@ -8894,7 +8894,7 @@ fn test_execute_import_sections_manual_snap_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, None);
+    let result = state.execute_import_sections(sections, Vec::new(), None);
     assert!(result.success, "import with ManualSnap failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.station_merges.len(), 1);

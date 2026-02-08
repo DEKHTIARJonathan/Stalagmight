@@ -171,6 +171,15 @@ pub enum ImportPlacement {
     },
 }
 
+/// A loop closure to create during import, referencing sections by their import index.
+#[derive(Debug, Clone)]
+pub struct ImportClosure {
+    pub from_section_index: u32,
+    pub from_station_index: u32,
+    pub to_section_index: u32,
+    pub to_station_index: u32,
+}
+
 impl Default for SectionData {
     fn default() -> Self {
         Self {
