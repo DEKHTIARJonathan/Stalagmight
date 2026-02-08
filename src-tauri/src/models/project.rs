@@ -1401,6 +1401,22 @@ impl Project {
         shot.pitch_out = Some(pitch);
     }
 
+    /// Update only the horizontal geometry of a shot (azimuth and slope length)
+    /// from a solved horizontal displacement, preserving original depths and pitch.
+    fn update_shot_horizontal_only(shot: &mut Shot, dx: f64, dy: f64) {
+        let horizontal = (dx * dx + dy * dy).sqrt();
+        let new_azi = if horizontal > 1e-9 {
+            dx.atan2(dy).to_degrees().rem_euclid(360.0)
+        } else {
+            shot.average_azimuth()
+        };
+        let dz = shot.depth_out - shot.depth_in;
+        shot.length = (horizontal * horizontal + dz * dz).sqrt();
+        shot.azimuth_in = new_azi;
+        shot.azimuth_out = new_azi;
+        // depth_in, depth_out, pitch_in, pitch_out are intentionally left unchanged
+    }
+
     #[expect(dead_code)]
     fn collect_segment_shots(
         &self,
@@ -1932,8 +1948,6 @@ impl Project {
         let mut atb_x = vec![0.0; n];
         let mut ata_y = vec![0.0; n * n];
         let mut atb_y = vec![0.0; n];
-        let mut ata_z = vec![0.0; n * n];
-        let mut atb_z = vec![0.0; n];
 
         let add_row = |ata: &mut [f64],
                            atb: &mut [f64],
@@ -1979,7 +1993,6 @@ impl Project {
             };
             let sigma_len = config.base_sigma_length_m * quality;
             let sigma_az = config.base_sigma_azimuth_deg.to_radians() * quality;
-            let sigma_depth = config.base_sigma_depth_m * quality;
 
             for (idx, shot) in section.shots.iter().enumerate() {
                 let station_i = StationRef::new(section.id, idx as u32);
@@ -2002,11 +2015,9 @@ impl Project {
 
                 let sigma_dx = ((az.sin() * sigma_len).powi(2) + (len * az.cos() * sigma_az).powi(2)).sqrt();
                 let sigma_dy = ((az.cos() * sigma_len).powi(2) + (len * az.sin() * sigma_az).powi(2)).sqrt();
-                let sigma_dz = sigma_depth;
 
                 let w_x = if sigma_dx > 0.0 { 1.0 / (sigma_dx * sigma_dx) } else { 0.0 };
                 let w_y = if sigma_dy > 0.0 { 1.0 / (sigma_dy * sigma_dy) } else { 0.0 };
-                let w_z = if sigma_dz > 0.0 { 1.0 / (sigma_dz * sigma_dz) } else { 0.0 };
 
                 let i_idx = unknown_index.get(&root_i).copied();
                 let j_idx = unknown_index.get(&root_j).copied();
@@ -2035,22 +2046,8 @@ impl Project {
                     }
                     (None, None) => 0.0,
                 };
-                let b_z = match (i_idx, j_idx) {
-                    (Some(_), Some(_)) => vec.z,
-                    (Some(_), None) => {
-                        let zj = fixed_coords.get(&root_j).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
-                        vec.z - zj.z
-                    }
-                    (None, Some(_)) => {
-                        let zi = fixed_coords.get(&root_i).copied().unwrap_or_else(|| Coordinates::new(0.0, 0.0, 0.0));
-                        vec.z + zi.z
-                    }
-                    (None, None) => 0.0,
-                };
-
                 add_row(&mut ata_x, &mut atb_x, i_idx, j_idx, b_x, w_x);
                 add_row(&mut ata_y, &mut atb_y, i_idx, j_idx, b_y, w_y);
-                add_row(&mut ata_z, &mut atb_z, i_idx, j_idx, b_z, w_z);
             }
         }
 
@@ -2063,18 +2060,30 @@ impl Project {
 
         let sol_x = solve_axis(ata_x, atb_x)?;
         let sol_y = solve_axis(ata_y, atb_y)?;
-        let sol_z = solve_axis(ata_z, atb_z)?;
+
+        // Collect original Z coordinates for each group root (depths are not adjusted)
+        let mut group_raw_z: HashMap<StationRef, f64> = HashMap::new();
+        for (root, members) in &groups {
+            // Use the first member's raw Z as representative for the group
+            if let Some(member) = members.first() {
+                if let Some(coords) = self.compute_station_raw_coords(*member) {
+                    group_raw_z.insert(*root, coords.z);
+                }
+            }
+        }
 
         let mut group_coords: HashMap<StationRef, Coordinates> = HashMap::new();
         for root in groups.keys() {
+            let raw_z = group_raw_z.get(root).copied().unwrap_or(0.0);
             if let Some(coords) = fixed_coords.get(root) {
-                group_coords.insert(*root, *coords);
+                // Fixed groups keep their original coords but Z is always original
+                group_coords.insert(*root, Coordinates::new(coords.x, coords.y, raw_z));
                 continue;
             }
             if let Some(idx) = unknown_index.get(root) {
                 group_coords.insert(
                     *root,
-                    Coordinates::new(sol_x[*idx], sol_y[*idx], sol_z[*idx]),
+                    Coordinates::new(sol_x[*idx], sol_y[*idx], raw_z),
                 );
             }
         }
@@ -2105,23 +2114,20 @@ impl Project {
 
                 let base_i = Coordinates::new(coords_i.x - offset_i.0, coords_i.y - offset_i.1, coords_i.z - offset_i.2);
                 let base_j = Coordinates::new(coords_j.x - offset_j.0, coords_j.y - offset_j.1, coords_j.z - offset_j.2);
-                let forward_vec = Self::coords_sub(base_j, base_i);
 
                 let shot = section
                     .shots
                     .get_mut(idx)
                     .ok_or_else(|| "Shot not found for LSQ update".to_string())?;
-                shot.depth_in = base_i.z;
-                Self::update_shot_from_forward_vector(shot, forward_vec);
+                // Only adjust horizontal geometry (azimuth + length); depths stay untouched.
+                Self::update_shot_horizontal_only(shot, base_j.x - base_i.x, base_j.y - base_i.y);
             }
         }
 
         // Align each section's absolute position to solved coordinates (rigid translation).
         // This prevents merged stations in different sections from drifting apart.
         let mut section_deltas: HashMap<SectionId, Coordinates> = HashMap::new();
-        let mut section_station_counts: HashMap<SectionId, usize> = HashMap::new();
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
-            section_station_counts.insert(section.id, section.shots.len());
             let mut delta: Option<Coordinates> = None;
             for idx in 0..=section.shots.len() {
                 let station = StationRef::new(section.id, idx as u32);
@@ -2153,15 +2159,7 @@ impl Project {
                 let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
                 self.section_offsets.insert(section_id, (current.0 + delta.x, current.1 + delta.y));
             }
-            if delta.z.abs() > 1e-9 {
-                if let Some(shot_count) = section_station_counts.get(&section_id).copied() {
-                    for idx in 0..=shot_count {
-                        let station = StationRef::new(section_id, idx as u32);
-                        let entry = self.station_offsets.entry(station).or_insert((0.0, 0.0, 0.0));
-                        entry.2 += delta.z;
-                    }
-                }
-            }
+            // Z offsets are not applied — depths are not adjusted by LSQ.
         }
 
         Ok(())
