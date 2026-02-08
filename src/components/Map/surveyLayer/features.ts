@@ -209,6 +209,7 @@ export function buildSurveyFeatures(
             sectionId: section.id,
             shotId: shot.id,
             color: shotLabelColor,
+            isVirtual: shot.is_virtual,
           },
         });
 
@@ -275,16 +276,23 @@ export function buildSurveyFeatures(
   for (const section of sections) {
     const sectionStations = stationsBySection.get(section.id);
     if (sectionStations && sectionStations.length > 0) {
-      const firstStation = sectionStations.reduce((min, s) =>
+      // Prefer the first non-virtual station for label placement so it
+      // doesn't float mid-air when virtual shots are hidden.
+      const nonVirtualStations = sectionStations.filter(s =>
+        stationsWithNonVirtualShot.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`)
+      );
+      const labelStations = nonVirtualStations.length > 0 ? nonVirtualStations : sectionStations;
+      const anchorStation = labelStations.reduce((min, s) =>
         s.station_ref.station_index < min.station_ref.station_index ? s : min
       );
+      const allStationsVirtual = nonVirtualStations.length === 0;
       sectionLabelFeatures.push({
         type: 'Feature',
         geometry: {
           type: 'Point',
           coordinates: metersToMapCoords(
-            firstStation.coordinates.x,
-            firstStation.coordinates.y,
+            anchorStation.coordinates.x,
+            anchorStation.coordinates.y,
             gpsOrigin
           ),
         },
@@ -292,6 +300,7 @@ export function buildSurveyFeatures(
           name: section.name,
           color: section.color,
           sectionId: section.id,
+          allStationsVirtual,
         },
       });
     }
@@ -339,6 +348,9 @@ export function buildSurveyFeatures(
         globalOrdinal,
         isFirstInSection,
         color: stationLabelColor,
+        allShotsVirtual: !stationsWithNonVirtualShot.has(
+          `${station.station_ref.section_id}:${station.station_ref.station_index}`
+        ),
       },
     });
   }

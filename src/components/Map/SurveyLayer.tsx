@@ -75,6 +75,10 @@ export default class SurveyLayer {
   // Hitbox layers for improved click detection
   private stationsHitboxLayerId = 'survey-stations-hitbox';
   private shotsHitboxLayerId = 'survey-shots-hitbox';
+
+  // Base zoom-density filters for label layers (set at init, restored when clearing virtual filter)
+  private shotLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
+  private stationLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
   private ghostStationsHitboxLayerId = 'survey-ghost-stations-hitbox';
   private ghostShotsHitboxLayerId = 'survey-ghost-shots-hitbox';
   private callbacks: SurveyLayerCallbacks;
@@ -651,7 +655,7 @@ export default class SurveyLayer {
           18, 1,
         ],
       },
-      filter: [
+      filter: this.shotLabelsBaseFilter = [
         'case',
         // At zoom < 14: show nothing (filter all)
         ['<', ['zoom'], 14],
@@ -733,7 +737,7 @@ export default class SurveyLayer {
       },
       // Zoom-dependent filtering using globalOrdinal (stable sequential index)
       // Always show first station in each section (isFirstInSection) to avoid empty-looking sections
-      filter: [
+      filter: this.stationLabelsBaseFilter = [
         'case',
         // At zoom < 14: show nothing
         ['<', ['zoom'], 14],
@@ -1736,21 +1740,38 @@ export default class SurveyLayer {
   }
 
   // Control virtual shots visibility via filter (while keeping regular shots visible)
-  // Also hides stations that only connect to virtual shots
+  // Also hides virtual-only stations, their labels, virtual shot labels, and
+  // section names whose stations are all virtual.
   setShowVirtualShots(visible: boolean): void {
     if (!this.map) return;
+    const notVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'isVirtual'], true];
+    const notAllVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
     if (visible) {
-      // Show all shots and stations (clear filters)
+      // Restore original filters (label layers have zoom-based density filters)
       this.map.setFilter(this.shotsLayerId, null);
       this.map.setFilter(this.stationsLayerId, null);
       this.map.setFilter(this.stationsHitboxLayerId, null);
+      this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
+      this.map.setFilter(this.stationLabelsLayerId, this.stationLabelsBaseFilter);
+      this.map.setFilter(this.labelsLayerId, null);
     } else {
-      // Hide virtual shots
-      this.map.setFilter(this.shotsLayerId, ['!=', ['get', 'isVirtual'], true]);
-      // Hide stations that only connect to virtual shots
-      const stationFilter: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
-      this.map.setFilter(this.stationsLayerId, stationFilter);
-      this.map.setFilter(this.stationsHitboxLayerId, stationFilter);
+      // Hide virtual shots and their labels
+      this.map.setFilter(this.shotsLayerId, notVirtual);
+      this.map.setFilter(this.shotLabelsLayerId,
+        this.shotLabelsBaseFilter
+          ? ['all', this.shotLabelsBaseFilter, notVirtual] as maplibregl.FilterSpecification
+          : notVirtual
+      );
+      // Hide stations that only connect to virtual shots (and their labels)
+      this.map.setFilter(this.stationsLayerId, notAllVirtual);
+      this.map.setFilter(this.stationsHitboxLayerId, notAllVirtual);
+      this.map.setFilter(this.stationLabelsLayerId,
+        this.stationLabelsBaseFilter
+          ? ['all', this.stationLabelsBaseFilter, notAllVirtual] as maplibregl.FilterSpecification
+          : notAllVirtual
+      );
+      // Hide section names when all stations in the section are virtual
+      this.map.setFilter(this.labelsLayerId, ['!=', ['get', 'allStationsVirtual'], true]);
     }
   }
 
