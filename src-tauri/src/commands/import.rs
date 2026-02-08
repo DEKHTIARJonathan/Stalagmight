@@ -128,6 +128,7 @@ pub fn execute_tml_import(
     state: State<'_, AppState>,
     path: PathBuf,
     file_hash: Option<String>,
+    include_excluded: bool,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -148,7 +149,7 @@ pub fn execute_tml_import(
         }
     };
 
-    let sections = match crate::parsers::tml::convert_tml_to_import_configs(&tml) {
+    let sections = match crate::parsers::tml::convert_tml_to_import_configs(&tml, include_excluded) {
         Ok(configs) => configs,
         Err(e) => {
             tracing::error!(
