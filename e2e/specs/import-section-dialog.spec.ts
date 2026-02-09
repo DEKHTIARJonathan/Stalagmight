@@ -82,14 +82,14 @@ describe('Import Section Dialog', () => {
     await importDialog.waitForDisplayed({ reverse: true, timeout: 5000 });
   });
 
-  it('should have Import and Cancel buttons', async () => {
+  it('should have Create Section and Cancel buttons', async () => {
     await createNewProject('Buttons Test');
     await openImportSectionDialog();
 
     const importDialog = await $('[data-testid="import-section-dialog"]');
 
-    // Find Import button
-    const importBtn = await importDialog.$('button*=Import');
+    // Find Create Section button
+    const importBtn = await importDialog.$('button*=Create Section');
     await expect(importBtn).toBeExisting();
 
     // Find Cancel button
