@@ -7,6 +7,7 @@ import { CloseIcon } from '../common/icons';
 import { DialogWrapper } from './DialogWrapper';
 import type { ShotData, SectionData } from '../../types/project';
 import { getNextSectionColor } from '../../utils/colors';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
 /** Editable column keys in display order (without LRUD). */
 const BASE_COLS: EditableField[] = ['length', 'azimuth', 'depth_in', 'depth_out'];
@@ -48,6 +49,7 @@ function validateField(field: EditableField, raw: string): string | null {
 export default function ImportDialog() {
   const { closeDialog, openDialog, startPlacementMode, dialogData } = useUIStore();
   const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
+  const precision = useDecimalPrecision();
 
   // Restore form state when reopening after placement cancel
   const saved = dialogData as { savedFormState?: SavedFormState } | undefined;
@@ -138,10 +140,19 @@ export default function ImportDialog() {
   };
 
   const getFieldValue = (shot: ShotData, field: EditableField): string => {
-    if (field === 'azimuth') return String(shot.azimuth_in);
+    if (field === 'azimuth') {
+      return shot.azimuth_in.toFixed(precision.azimuth);
+    }
     if (field === 'left' || field === 'right' || field === 'up' || field === 'down') {
       const v = shot[field];
-      return v === null || v === undefined ? '' : String(v);
+      if (v === null || v === undefined) return '';
+      return v.toFixed(precision.length);
+    }
+    if (field === 'length') {
+      return shot.length.toFixed(precision.length);
+    }
+    if (field === 'depth_in' || field === 'depth_out') {
+      return shot[field].toFixed(precision.depth);
     }
     return String(shot[field]);
   };

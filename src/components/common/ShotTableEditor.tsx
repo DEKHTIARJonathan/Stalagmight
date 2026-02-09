@@ -407,25 +407,25 @@ export function ShotTableEditor({
 
       {/* Table container with scrolling */}
       <div
-        className="overflow-auto border border-border rounded"
+        className="overflow-auto pb-1"
         style={{ maxHeight }}
         data-testid="shot-table-container"
       >
-        <table ref={tableRef} className="w-full text-sm" data-testid="shot-table">
-          <thead className="bg-background sticky top-0 z-10">
-            <tr className="border-b border-border">
-              <th className="px-1 py-1 text-left w-10">{t('shotTable.columns.idShort')}</th>
-              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.length')}</th>
-              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.azimuth')}</th>
-              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.depthIn')}</th>
-              <th className="px-1 py-1 !text-right w-12">{t('shotTable.columns.depthOut')}</th>
-              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.leftShort')}</th>
-              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.rightShort')}</th>
-              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.upShort')}</th>
-              <th className="px-1 py-1 !text-right w-10">{t('shotTable.columns.downShort')}</th>
-              <th className="px-1 py-1 text-left w-20">{t('shotTable.columns.comment')}</th>
-              <th className="px-1 py-1 !text-center w-6" title={t('shotTable.columns.warnings')}></th>
-              <th className="px-1 py-1 w-8"></th>
+        <table ref={tableRef} className="w-full" data-testid="shot-table">
+          <thead>
+            <tr>
+              <th className="text-center" style={{ width: '40px' }}>{t('shotTable.columns.idShort')}</th>
+              <th className="text-right" style={{ width: '100px' }}>{t('shotTable.columns.length')}</th>
+              <th className="text-right" style={{ width: '70px' }}>{t('shotTable.columns.azimuth')}</th>
+              <th className="text-right" style={{ width: '80px' }}>{t('shotTable.columns.depthIn')}</th>
+              <th className="text-right" style={{ width: '95px' }}>{t('shotTable.columns.depthOut')}</th>
+              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.leftShort')}</th>
+              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.rightShort')}</th>
+              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.upShort')}</th>
+              <th className="text-right" style={{ width: '50px' }}>{t('shotTable.columns.downShort')}</th>
+              <th className="text-left" style={{ width: '100px' }}>{t('shotTable.columns.comment')}</th>
+              <th className="text-center" style={{ width: '30px' }} title={t('shotTable.columns.warnings')}></th>
+              <th style={{ width: '30px' }}></th>
             </tr>
           </thead>
           <tbody>
@@ -439,7 +439,7 @@ export function ShotTableEditor({
               const isSelected = selectedRowIndex === actualIndex;
               const avgAzimuth = getAzimuthAverage(shot.azimuth_in, shot.azimuth_out);
               const geoDisabled = readOnly || (frozenShotIndices?.has(actualIndex) ?? false);
-              const rowClassName = `border-b border-border last:border-0 hover:bg-background-50 ${
+              const rowClassName = `hover:bg-background-50 ${
                 isSelected ? 'bg-accent-10' : hasErrors ? 'bg-error-5' : ''
               } ${shot.isNew && !hasErrors ? 'bg-success-5' : ''}`;
 
@@ -453,20 +453,23 @@ export function ShotTableEditor({
                   data-testid={`shot-row-${visibleIdx}`}
                 >
                   {/* Row number */}
-                  <td className="px-1 py-1 text-text-secondary">{visibleIdx + 1}</td>
+                  <td className="p-0 text-center">
+                    <span className="px-2 py-1 inline-block text-text-secondary">{visibleIdx + 1}</span>
+                  </td>
 
                   {/* Length */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'length');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? (Number.isFinite(shot.length) ? String(shot.length) : '');
+                      const rawValue = Number.isFinite(shot.length) ? String(shot.length) : '';
+                      const displayValue = draftValue ?? (Number.isFinite(shot.length) ? shot.length.toFixed(precision.length) : '');
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
                         updateDraft(draftKey, e.target.value)
                       }
@@ -480,7 +483,7 @@ export function ShotTableEditor({
                         () => commitNumberValue(actualIndex, 'length', e.currentTarget.value, 0),
                         draftKey
                       )}
-                      className={`w-12 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
                       disabled={geoDisabled}
                       data-testid={`shot-length-${visibleIdx}`}
@@ -490,11 +493,12 @@ export function ShotTableEditor({
                   </td>
 
                   {/* Azimuth (average of in/out, editing sets both) */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'azimuth');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? avgAzimuth.toFixed(1);
+                      const rawValue = String(avgAzimuth);
+                      const displayValue = draftValue ?? avgAzimuth.toFixed(precision.azimuth);
                       const parsed = draftValue !== undefined && draftValue.trim() !== ''
                         ? parseFloat(draftValue)
                         : null;
@@ -506,7 +510,7 @@ export function ShotTableEditor({
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) => updateDraft(draftKey, e.target.value)}
                       onBlur={(e) => {
                         if (shouldSkipBlurCommit(draftKey)) return;
@@ -518,7 +522,7 @@ export function ShotTableEditor({
                         () => commitAzimuthValue(actualIndex, e.currentTarget.value),
                         draftKey
                       )}
-                      className={`w-12 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
                       min="0"
                       max="360"
@@ -534,17 +538,18 @@ export function ShotTableEditor({
                   </td>
 
                   {/* Depth In */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'depth_in');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? (Number.isFinite(shot.depth_in) ? String(shot.depth_in) : '');
+                      const rawValue = Number.isFinite(shot.depth_in) ? String(shot.depth_in) : '';
+                      const displayValue = draftValue ?? (Number.isFinite(shot.depth_in) ? shot.depth_in.toFixed(precision.depth) : '');
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
                         updateDraft(draftKey, e.target.value)
                       }
@@ -558,7 +563,7 @@ export function ShotTableEditor({
                         () => commitNumberValue(actualIndex, 'depth_in', e.currentTarget.value, 0),
                         draftKey
                       )}
-                      className={`w-12 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
                       disabled={geoDisabled}
                       data-testid={`shot-depth-in-${visibleIdx}`}
@@ -568,17 +573,18 @@ export function ShotTableEditor({
                   </td>
 
                   {/* Depth Out */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'depth_out');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? (Number.isFinite(shot.depth_out) ? String(shot.depth_out) : '');
+                      const rawValue = Number.isFinite(shot.depth_out) ? String(shot.depth_out) : '';
+                      const displayValue = draftValue ?? (Number.isFinite(shot.depth_out) ? shot.depth_out.toFixed(precision.depth) : '');
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
                         updateDraft(draftKey, e.target.value)
                       }
@@ -592,7 +598,7 @@ export function ShotTableEditor({
                         () => commitNumberValue(actualIndex, 'depth_out', e.currentTarget.value, 0),
                         draftKey
                       )}
-                      className={`w-12 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
                       disabled={geoDisabled}
                       data-testid={`shot-depth-out-${visibleIdx}`}
@@ -602,17 +608,18 @@ export function ShotTableEditor({
                   </td>
 
                   {/* LRUD: Left */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'left');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? formatValue(shot.left);
+                      const rawValue = formatValue(shot.left);
+                      const displayValue = draftValue ?? (shot.left !== null && shot.left !== undefined ? shot.left.toFixed(precision.length) : '');
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
                         updateDraft(draftKey, e.target.value)
                       }
@@ -626,9 +633,9 @@ export function ShotTableEditor({
                         () => commitNumberValue(actualIndex, 'left', e.currentTarget.value, null),
                         draftKey
                       )}
-                      className={`w-8 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="-"
+                      placeholder="—"
                       disabled={readOnly}
                       data-testid={`shot-left-${visibleIdx}`}
                     />
@@ -637,17 +644,18 @@ export function ShotTableEditor({
                   </td>
 
                   {/* LRUD: Right */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'right');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? formatValue(shot.right);
+                      const rawValue = formatValue(shot.right);
+                      const displayValue = draftValue ?? (shot.right !== null && shot.right !== undefined ? shot.right.toFixed(precision.length) : '');
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
                         updateDraft(draftKey, e.target.value)
                       }
@@ -661,9 +669,9 @@ export function ShotTableEditor({
                         () => commitNumberValue(actualIndex, 'right', e.currentTarget.value, null),
                         draftKey
                       )}
-                      className={`w-8 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="-"
+                      placeholder="—"
                       disabled={readOnly}
                       data-testid={`shot-right-${visibleIdx}`}
                     />
@@ -672,17 +680,18 @@ export function ShotTableEditor({
                   </td>
 
                   {/* LRUD: Up */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'up');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? formatValue(shot.up);
+                      const rawValue = formatValue(shot.up);
+                      const displayValue = draftValue ?? (shot.up !== null && shot.up !== undefined ? shot.up.toFixed(precision.length) : '');
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
                         updateDraft(draftKey, e.target.value)
                       }
@@ -696,9 +705,9 @@ export function ShotTableEditor({
                         () => commitNumberValue(actualIndex, 'up', e.currentTarget.value, null),
                         draftKey
                       )}
-                      className={`w-8 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="-"
+                      placeholder="—"
                       disabled={readOnly}
                       data-testid={`shot-up-${visibleIdx}`}
                     />
@@ -707,17 +716,18 @@ export function ShotTableEditor({
                   </td>
 
                   {/* LRUD: Down */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0 text-right">
                     {(() => {
                       const draftKey = getDraftKey(shot, 'down');
                       const draftValue = drafts[draftKey];
-                      const displayValue = draftValue ?? formatValue(shot.down);
+                      const rawValue = formatValue(shot.down);
+                      const displayValue = draftValue ?? (shot.down !== null && shot.down !== undefined ? shot.down.toFixed(precision.length) : '');
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
                       type="number"
                       value={displayValue}
-                      onFocus={() => startDraft(draftKey, displayValue)}
+                      onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
                         updateDraft(draftKey, e.target.value)
                       }
@@ -731,9 +741,9 @@ export function ShotTableEditor({
                         () => commitNumberValue(actualIndex, 'down', e.currentTarget.value, null),
                         draftKey
                       )}
-                      className={`w-8 text-xs px-1 py-0.5 text-right tabular-nums min-w-0 ${isInvalid ? 'border border-error' : ''}`}
+                      className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${isInvalid ? 'ring-2 ring-error' : ''}`}
                       step="0.1"
-                      placeholder="-"
+                      placeholder="—"
                       disabled={readOnly}
                       data-testid={`shot-down-${visibleIdx}`}
                     />
@@ -742,22 +752,22 @@ export function ShotTableEditor({
                   </td>
 
                   {/* Comment */}
-                  <td className="px-0.5 py-1">
+                  <td className="p-0">
                     <input
                       type="text"
                       value={shot.comment ?? ''}
                       onChange={(e) =>
                         onShotChange(actualIndex, 'comment', e.target.value || null)
                       }
-                      className="w-20 text-xs px-1 py-0.5 min-w-0"
-                      placeholder="-"
+                      className="w-full px-2 py-1 bg-transparent border-none focus:bg-panel"
+                      placeholder="—"
                       disabled={readOnly}
                       data-testid={`shot-comment-${visibleIdx}`}
                     />
                   </td>
 
                   {/* Warnings */}
-                  <td className="px-0.5 py-1 text-center">
+                  <td className="p-0 text-center">
                     {(hasErrors || warnings.length > 0) && (
                       <span
                         className={`inline-flex items-center justify-center w-5 h-5 text-xs font-bold rounded-full cursor-help ${
@@ -774,7 +784,7 @@ export function ShotTableEditor({
                   </td>
 
                   {/* Actions (delete) */}
-                  <td className="px-1 py-1 text-center">
+                  <td className="p-0 text-center">
                     {!readOnly && (
                       <button
                         type="button"
@@ -795,8 +805,10 @@ export function ShotTableEditor({
             })}
             {visibleShots.length === 0 && (
               <tr>
-                <td colSpan={12} className="px-2 py-4 text-center text-text-secondary">
-                  {readOnly ? t('shotTable.empty') : t('shotTable.emptyWithAction')}
+                <td colSpan={12} className="p-0 text-center text-text-secondary">
+                  <span className="px-2 py-4 inline-block">
+                    {readOnly ? t('shotTable.empty') : t('shotTable.emptyWithAction')}
+                  </span>
                 </td>
               </tr>
             )}
