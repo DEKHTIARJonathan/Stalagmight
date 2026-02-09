@@ -872,7 +872,7 @@
       "y": "Y",
       "depth": "Depth",
       "zeroDatum": "GPS",
-      "merges": "Merges",
+      "connections": "Conn",
       "comment": "Comment"
     },
     "announcement": {

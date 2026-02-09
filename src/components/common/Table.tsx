@@ -1,5 +1,6 @@
 import { type ReactNode, useRef, useEffect, useCallback, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { CheckIcon } from './icons';
 
 interface Column<T> {
   key: string;
@@ -15,6 +16,8 @@ interface Column<T> {
   inputType?: 'text' | 'number';
   /** Step for number inputs */
   inputStep?: string;
+  /** Input mode: 'text' (default) renders an <input>, 'textarea' renders a <textarea> for multiline editing */
+  inputMode?: 'text' | 'textarea';
 }
 
 interface TableProps<T> {
@@ -130,7 +133,9 @@ interface EditableCellProps {
   inputStep?: string | undefined;
   align?: 'left' | 'center' | 'right' | undefined;
   testId?: string;
-  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
+  /** When 'textarea', renders a multiline <textarea> instead of <input> */
+  inputMode?: 'text' | 'textarea' | undefined;
 }
 
 function EditableCell({
@@ -142,11 +147,14 @@ function EditableCell({
   align = 'left',
   testId,
   onKeyDown,
+  inputMode = 'text',
 }: EditableCellProps) {
+  const isTextarea = inputMode === 'textarea';
   const editValue = rawValue ?? value;
   const [localValue, setLocalValue] = useState(editValue);
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Track if we just committed (to prevent double commit on Enter then blur)
   const justCommittedRef = useRef(false);
   // Track the last raw value to detect external changes (undo/redo)
@@ -187,7 +195,7 @@ function EditableCell({
     }
   }, [localValue, onCommit]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       // Commit on Enter if value changed
       if (localValue !== lastEditValueRef.current) {
@@ -204,8 +212,106 @@ function EditableCell({
     onKeyDown?.(e);
   }, [localValue, onCommit, onKeyDown]);
 
+  const handleTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape') {
+      // Revert on Escape
+      setLocalValue(lastEditValueRef.current);
+      textareaRef.current?.blur();
+    } else if (e.key === 'Tab') {
+      // Tab commits and moves to next cell (handled by parent)
+      if (localValue !== lastEditValueRef.current) {
+        justCommittedRef.current = true;
+        lastEditValueRef.current = localValue;
+        onCommit(localValue);
+      }
+      // Parent handler expects HTMLInputElement | HTMLTextAreaElement union
+      onKeyDown?.(e as React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>);
+    }
+    // Enter = newline (default textarea behavior, no preventDefault)
+  }, [localValue, onCommit, onKeyDown]);
+
   // Show formatted value when blurred, local edit value when focused
   const displayedValue = focused ? localValue : value;
+
+  // Commit from the check button — mark as committed so blur doesn't double-fire
+  const handleTextareaCommitClick = useCallback(() => {
+    if (localValue !== lastEditValueRef.current) {
+      justCommittedRef.current = true;
+      lastEditValueRef.current = localValue;
+      onCommit(localValue);
+    }
+    textareaRef.current?.blur();
+  }, [localValue, onCommit]);
+
+  // Fixed-position overlay coordinates for textarea (escapes overflow clipping)
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [overlayStyle, setOverlayStyle] = useState<React.CSSProperties>({});
+
+  const handleTextareaFocus = useCallback(() => {
+    handleFocus();
+    // Calculate fixed position from the wrapper's bounding rect
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (rect) {
+      const TEXTAREA_HEIGHT = 4 * 24; // ~4 rows
+      setOverlayStyle({
+        position: 'fixed',
+        left: rect.left,
+        width: rect.width,
+        // Expand upward from the bottom of the cell
+        top: rect.bottom - TEXTAREA_HEIGHT,
+        height: TEXTAREA_HEIGHT,
+      });
+    }
+  }, [handleFocus]);
+
+  if (isTextarea) {
+    return (
+      <div ref={wrapperRef} className="w-full">
+        {focused ? (
+          <>
+            <textarea
+              ref={textareaRef}
+              value={displayedValue}
+              onChange={(e) => setLocalValue(e.target.value)}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
+              onKeyDown={handleTextareaKeyDown}
+              className={`px-2 py-1 border-none resize-none z-50 bg-panel shadow-lg ring-1 ring-accent ${alignmentClasses[align]}`}
+              style={overlayStyle}
+              data-testid={testId}
+            />
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleTextareaCommitClick();
+              }}
+              className="fixed z-50 p-0.5 rounded bg-accent text-white hover:bg-accent-hover"
+              style={{
+                left: (overlayStyle.left as number) + (overlayStyle.width as number) - 22,
+                top: (overlayStyle.top as number) + (overlayStyle.height as number) - 22,
+              }}
+              title="Save comment"
+            >
+              <CheckIcon size={14} />
+            </button>
+          </>
+        ) : (
+          <textarea
+            ref={textareaRef}
+            value={displayedValue}
+            onChange={(e) => setLocalValue(e.target.value)}
+            onFocus={handleTextareaFocus}
+            onBlur={handleBlur}
+            onKeyDown={handleTextareaKeyDown}
+            rows={1}
+            className={`w-full px-2 py-1 border-none resize-none bg-transparent ${alignmentClasses[align]}`}
+            data-testid={testId}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <input
@@ -216,7 +322,7 @@ function EditableCell({
       onChange={(e) => setLocalValue(e.target.value)}
       onFocus={handleFocus}
       onBlur={handleBlur}
-      onKeyDown={handleKeyDown}
+      onKeyDown={handleInputKeyDown}
       className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel ${alignmentClasses[align]} ${inputType === 'number' ? 'tabular-nums' : ''}`}
       data-testid={testId}
     />
@@ -281,14 +387,21 @@ export function EditableTable<T extends object>({
     onRowHoverRef.current = onRowHover;
   }, [onRowHover]);
 
-  // Scroll to row when scrollToKey changes
+  // Scroll to row when scrollToKey changes (external selection from map/panels)
   useEffect(() => {
     if (scrollToKey == null) return;
 
     const index = data.findIndex((item) => item[keyField] === scrollToKey);
     if (index === -1) return;
 
-    virtualizer.scrollToIndex(index, { align: 'auto' });
+    // Use 'center' to place the target row in the middle of the viewport.
+    // 'auto' doesn't account for the sticky thead, causing off-by-N errors.
+    virtualizer.scrollToIndex(index, { align: 'center' });
+    // Retry after virtualizer has measured (needed on fresh mount after view switch)
+    const timer = setTimeout(() => {
+      virtualizer.scrollToIndex(index, { align: 'center' });
+    }, 50);
+    return () => clearTimeout(timer);
   }, [scrollToKey, data, keyField, virtualizer]);
 
   const handleInputChange = (
@@ -356,7 +469,7 @@ export function EditableTable<T extends object>({
 
   // Handle keyboard navigation in cells
   const handleCellKeyDown = useCallback((
-    e: React.KeyboardEvent<HTMLInputElement>,
+    e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
     rowIndex: number,
     columnIndex: number
   ) => {
@@ -380,10 +493,12 @@ export function EditableTable<T extends object>({
           const cells = targetRow.querySelectorAll('td');
           const targetCell = cells[columnIndex];
           if (targetCell) {
-            const input = targetCell.querySelector('input');
+            const input = targetCell.querySelector('input, textarea') as HTMLInputElement | HTMLTextAreaElement | null;
             if (input) {
               input.focus();
-              input.select();
+              if (input instanceof HTMLInputElement) {
+                input.select();
+              }
             }
           }
         }
@@ -432,7 +547,7 @@ export function EditableTable<T extends object>({
     : 0;
 
   return (
-    <div ref={scrollContainerRef} className={`overflow-auto ${className}`}>
+    <div ref={scrollContainerRef} className={`overflow-auto h-full ${className}`}>
       <table className="w-full">
         <thead>
           <tr>
@@ -521,6 +636,7 @@ export function EditableTable<T extends object>({
                             align={column.align}
                             testId={`table-cell-${String(key)}-${column.key}`}
                             onKeyDown={(e) => handleCellKeyDown(e, index, columnIndex)}
+                            inputMode={column.inputMode}
                           />
                         ) : (
                           <span className="px-2 py-1 inline-block select-text">
