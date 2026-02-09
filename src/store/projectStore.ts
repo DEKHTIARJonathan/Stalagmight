@@ -21,7 +21,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, ConnectivityResult, DmpFile, TmlFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -209,6 +209,7 @@ interface ProjectStore {
     method: ClosureStrategy
   ) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
+  moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
   removeZeroDatum: (stationRef: StationRef) => Promise<CommandResult>;
   moveSection: (sectionId: SectionId, offset: Coordinates) => Promise<CommandResult>;
@@ -929,6 +930,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       'set_station_comment',
       { stationRef, comment },
       { purpose: 'update station comment', fields: { stationRef } }
+    );
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  moveComment: async (source: CommentHolder, target: CommentHolder, swap: boolean) => {
+    const result = await invokeIpc<CommandResult>(
+      'move_comment',
+      { source, target, swap },
+      { purpose: swap ? 'swap comments' : 'move comment', fields: { source, target } }
     );
     if (result.success) {
       await get().refreshProjectState();

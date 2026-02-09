@@ -3,7 +3,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { isNonInteractiveTool, restoreMoveCommentSource } from '../utils/toolUtils';
+import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import {
   ensureExtension,
@@ -345,13 +345,8 @@ export function useKeyboardShortcuts() {
         clearMeasure();
         setDrawFromStation(null);
         useUIStore.getState().clearCommentTarget();
-        // Restore picked-up comment to source before clearing
-        const mcs = useUIStore.getState().moveCommentSource;
-        if (mcs) {
-          restoreMoveCommentSource(mcs).then(() => {
-            useUIStore.getState().clearMoveCommentSource();
-          });
-        }
+        // Cancel move comment — no backend restore needed (pickup doesn't mutate backend)
+        useUIStore.getState().clearMoveCommentSource();
         return;
       }
 

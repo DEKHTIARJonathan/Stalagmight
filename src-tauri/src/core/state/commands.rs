@@ -1,4 +1,4 @@
-use crate::core::{Command, CommandResult, UndoData, Validator};
+use crate::core::{Command, CommentHolder, CommandResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
     SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
@@ -108,6 +108,11 @@ impl AppState {
                 station_ref,
                 offset,
             } => self.move_station(*station_ref, *offset),
+            Command::MoveComment {
+                source,
+                target,
+                swap,
+            } => return self.execute_move_comment(source.clone(), target.clone(), *swap, cmd),
             Command::Batch { commands } => self.execute_batch(commands.clone(), true),
             Command::MergeProjects {
                 source_paths,
@@ -1308,6 +1313,202 @@ impl AppState {
             "Station comment updated"
         );
         CommandResult::success()
+    }
+
+    /// Execute a move-comment operation as a single atomic undo/redo unit.
+    /// Handles its own undo push (like `execute_batch` / `execute_delete_shot_and_split`).
+    fn execute_move_comment(
+        &self,
+        source: CommentHolder,
+        target: CommentHolder,
+        swap: bool,
+        cmd: Command,
+    ) -> CommandResult {
+        // Step 1: Take BEFORE snapshot
+        let before_snapshot = {
+            let Ok(proj_guard) = self.project.lock() else {
+                return CommandResult::failure("Failed to lock project".to_string());
+            };
+            let Some(p) = proj_guard.as_ref() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            match serde_json::to_string(p) {
+                Ok(json) => json,
+                Err(e) => {
+                    return CommandResult::failure(format!("Failed to serialize project: {e}"))
+                }
+            }
+        };
+
+        // Step 2: Read source and target comments, then mutate
+        {
+            let Ok(mut proj_guard) = self.project.lock() else {
+                return CommandResult::failure("Failed to lock project".to_string());
+            };
+            let Some(project) = proj_guard.as_mut() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+
+            let source_comment = match Self::get_holder_comment(project, &source) {
+                Ok(c) => c,
+                Err(e) => return CommandResult::failure(e),
+            };
+            let target_comment = match Self::get_holder_comment(project, &target) {
+                Ok(c) => c,
+                Err(e) => return CommandResult::failure(e),
+            };
+
+            // Source must have a comment
+            let Some(comment_text) = source_comment else {
+                return CommandResult::failure("Source has no comment to move".to_string());
+            };
+
+            // Set target = source's comment
+            if let Err(e) = Self::set_holder_comment(project, &target, Some(comment_text)) {
+                return CommandResult::failure(e);
+            }
+
+            // Set source = target's comment (swap) or None (move)
+            let new_source_comment = if swap { target_comment } else { None };
+            if let Err(e) = Self::set_holder_comment(project, &source, new_source_comment) {
+                return CommandResult::failure(e);
+            }
+
+            project.touch();
+        }
+
+        // Step 3: Take AFTER snapshot
+        let after_snapshot = {
+            let Ok(proj_guard) = self.project.lock() else {
+                return CommandResult::failure("Failed to lock project".to_string());
+            };
+            let Some(p) = proj_guard.as_ref() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            match serde_json::to_string(p) {
+                Ok(json) => json,
+                Err(e) => {
+                    // Rollback to before snapshot
+                    drop(proj_guard);
+                    if let Ok(mut pg) = self.project.lock() {
+                        if let Ok(restored) =
+                            serde_json::from_str::<crate::models::Project>(&before_snapshot)
+                        {
+                            *pg = Some(restored);
+                        }
+                    }
+                    return CommandResult::failure(format!(
+                        "Failed to serialize after snapshot: {e}"
+                    ));
+                }
+            }
+        };
+
+        // Step 4: Push single undo entry
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            undo_stack.push_with_data(
+                cmd,
+                UndoData::ProjectSnapshotPair {
+                    before: before_snapshot,
+                    after: after_snapshot,
+                },
+            );
+        }
+
+        // Auto-save if enabled
+        let should_auto_save = self
+            .config
+            .lock()
+            .map(|c| c.general.auto_save)
+            .unwrap_or(false);
+        if should_auto_save {
+            let _ = self.save_project(None);
+        }
+
+        tracing::info!(
+            swap = swap,
+            purpose = "move comment atomically",
+            "Move comment completed"
+        );
+        CommandResult::success()
+    }
+
+    /// Read the comment from a CommentHolder (station or shot)
+    fn get_holder_comment(
+        project: &crate::models::Project,
+        holder: &CommentHolder,
+    ) -> Result<Option<String>, String> {
+        match holder {
+            CommentHolder::Station { station_ref } => {
+                // Validate station exists
+                let section = project.get_section(station_ref.section_id).ok_or_else(|| {
+                    format!("Section {} not found", station_ref.section_id)
+                })?;
+                let max_station_index = section.shots.len() as u32;
+                if station_ref.station_index > max_station_index {
+                    return Err(format!(
+                        "Station index {} out of range",
+                        station_ref.station_index
+                    ));
+                }
+                Ok(project.station_comments.get(station_ref).cloned())
+            }
+            CommentHolder::Shot {
+                section_id,
+                shot_id,
+            } => {
+                let section = project
+                    .get_section(*section_id)
+                    .ok_or_else(|| format!("Section {section_id} not found"))?;
+                let shot = section
+                    .get_shot(*shot_id)
+                    .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+                Ok(shot.comment.clone())
+            }
+        }
+    }
+
+    /// Set the comment on a CommentHolder (station or shot)
+    fn set_holder_comment(
+        project: &mut crate::models::Project,
+        holder: &CommentHolder,
+        comment: Option<String>,
+    ) -> Result<(), String> {
+        match holder {
+            CommentHolder::Station { station_ref } => {
+                match comment {
+                    Some(text) if !text.is_empty() => {
+                        project.station_comments.insert(*station_ref, text);
+                    }
+                    _ => {
+                        project.station_comments.remove(station_ref);
+                    }
+                }
+                Ok(())
+            }
+            CommentHolder::Shot {
+                section_id,
+                shot_id,
+            } => {
+                let section = project
+                    .get_section_mut(*section_id)
+                    .ok_or_else(|| format!("Section {section_id} not found"))?;
+                let shot = section
+                    .shots
+                    .iter_mut()
+                    .find(|s| s.id == *shot_id)
+                    .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?;
+                match comment {
+                    Some(text) if !text.is_empty() => {
+                        shot.comment = Some(text);
+                    }
+                    _ => {
+                        shot.comment = None;
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 
     pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {

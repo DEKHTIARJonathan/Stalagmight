@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { restoreMoveCommentSource } from '../../utils/toolUtils';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
+import type { CommentHolder } from '../../types/commands';
 
-interface CommentHolder {
+interface CommentHolderUI {
   type: 'station' | 'shot';
   stationRef?: StationRef;
   sectionId?: SectionId;
@@ -14,48 +14,36 @@ interface CommentHolder {
   comment: string;
 }
 
-async function setComment(
-  holder: CommentHolder,
-  comment: string | null,
-  ps: ReturnType<typeof useProjectStore.getState>,
-) {
-  if (holder.type === 'station' && holder.stationRef) {
-    await ps.updateStationComment(holder.stationRef, comment);
-  } else if (holder.type === 'shot' && holder.sectionId !== undefined && holder.shotId !== undefined) {
-    await ps.updateShot(holder.sectionId, holder.shotId, { comment });
+/** Build a CommentHolder IPC payload from a UI holder */
+function toIpcHolder(h: CommentHolderUI): CommentHolder {
+  if (h.type === 'station' && h.stationRef) {
+    return { type: 'station', station_ref: h.stationRef };
   }
+  return { type: 'shot', section_id: h.sectionId!, shot_id: h.shotId! };
 }
 
 export default function SwapCommentsDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
   const dialogData = useUIStore((s) => s.dialogData);
   const clearMoveCommentSource = useUIStore((s) => s.clearMoveCommentSource);
-  const moveCommentSource = useUIStore((s) => s.moveCommentSource);
   const [busy, setBusy] = useState(false);
 
-  const source = dialogData.source as CommentHolder | undefined;
-  const target = dialogData.target as CommentHolder | undefined;
+  const source = dialogData.source as CommentHolderUI | undefined;
+  const target = dialogData.target as CommentHolderUI | undefined;
 
   if (!source || !target) return null;
 
-  // Cancel: restore picked-up comment back to source
-  const handleCancel = async () => {
-    setBusy(true);
-    try {
-      await restoreMoveCommentSource(moveCommentSource);
-      clearMoveCommentSource();
-      closeDialog();
-    } finally {
-      setBusy(false);
-    }
+  // Cancel: no backend mutation happened on pickup, just clear UI state
+  const handleCancel = () => {
+    clearMoveCommentSource();
+    closeDialog();
   };
 
-  // Overwrite: place source's comment on target (source was already cleared on pickup)
+  // Overwrite: atomic move (not swap)
   const handleOverwrite = async () => {
     setBusy(true);
     try {
-      const ps = useProjectStore.getState();
-      await setComment(target, source.comment, ps);
+      await useProjectStore.getState().moveComment(toIpcHolder(source), toIpcHolder(target), false);
       clearMoveCommentSource();
       closeDialog();
     } finally {
@@ -63,13 +51,11 @@ export default function SwapCommentsDialog() {
     }
   };
 
-  // Swap: place source's comment on target, place target's comment on source
+  // Swap: atomic swap
   const handleSwap = async () => {
     setBusy(true);
     try {
-      const ps = useProjectStore.getState();
-      await setComment(target, source.comment, ps);
-      await setComment(source, target.comment, ps);
+      await useProjectStore.getState().moveComment(toIpcHolder(source), toIpcHolder(target), true);
       clearMoveCommentSource();
       closeDialog();
     } finally {

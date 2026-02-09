@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::core::{AppState, Command, CommandResult};
+use crate::core::{AppState, Command, CommentHolder, CommandResult};
 use crate::models::{ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates, StationRef};
 
 /// Check merge connectivity between two stations (read-only, NOT a Command)
@@ -150,6 +150,30 @@ pub(crate) fn set_station_comment_impl(
     state.execute(Command::SetStationComment {
         station_ref,
         comment,
+    })
+}
+
+/// Move or swap a comment between stations/shots atomically (single undo entry)
+#[tauri::command]
+pub fn move_comment(
+    state: State<AppState>,
+    source: CommentHolder,
+    target: CommentHolder,
+    swap: bool,
+) -> CommandResult {
+    move_comment_impl(state.inner(), source, target, swap)
+}
+
+pub(crate) fn move_comment_impl(
+    state: &AppState,
+    source: CommentHolder,
+    target: CommentHolder,
+    swap: bool,
+) -> CommandResult {
+    state.execute(Command::MoveComment {
+        source,
+        target,
+        swap,
     })
 }
 

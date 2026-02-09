@@ -28,6 +28,7 @@ export type {
   DeleteShotImpact,
   ConnectivityResult,
   ClosurePreview,
+  CommentHolder,
   UndoHistoryItem,
   PreviewData,
   FieldChange,

@@ -19,7 +19,7 @@ use stalagmight_lib::config::{
     ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig, ThemeMode, UnitsConfig,
     ValidationConfig,
 };
-use stalagmight_lib::core::command::{CommandResult, ValidationWarning, WarningSeverity};
+use stalagmight_lib::core::command::{CommandResult, CommentHolder, ValidationWarning, WarningSeverity};
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
 };
@@ -54,6 +54,7 @@ fn main() {
 
     // Core command/result types
     export::<CommandResult>(&out_dir);
+    export::<CommentHolder>(&out_dir);
     export::<ValidationWarning>(&out_dir);
     export::<WarningSeverity>(&out_dir);
 
@@ -177,6 +178,7 @@ fn main() {
 
     let export_list = [
         "CommandResult",
+        "CommentHolder",
         "ValidationWarning",
         "WarningSeverity",
         "DisplaySettings",
