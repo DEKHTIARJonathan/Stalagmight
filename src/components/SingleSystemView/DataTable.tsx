@@ -29,6 +29,8 @@ export default function DataTable({ sections }: DataTableProps) {
   const [stationScrollToKey, setStationScrollToKey] = useState<number | null>(null);
   // Track previous selection to only react to actual selection changes
   const prevSelectionRef = useRef<Selection | null>(null);
+  // Flag to skip scroll when selection originated from within the table
+  const internalSelectionRef = useRef(false);
 
   const { updateShot, warnings, isShotFrozen, stations, updateStationComment } = useProjectStore();
   const {
@@ -134,6 +136,12 @@ export default function DataTable({ sections }: DataTableProps) {
 
     if (!selectionChanged) return;
 
+    // Skip scroll/view-switch for selections made from within the table
+    if (internalSelectionRef.current) {
+      internalSelectionRef.current = false;
+      return;
+    }
+
     if (!selection) {
       // No selection - clear scroll target but keep current dropdown
       if (dataTableOpen) {
@@ -143,10 +151,11 @@ export default function DataTable({ sections }: DataTableProps) {
     }
 
     if (selection.type === 'shot' && selection.sectionId !== undefined && selection.shotId !== undefined) {
-      // Shot selected externally - switch dropdown and scroll to row
+      // Shot selected externally - switch to shots view, switch dropdown, and scroll to row
       if (selection.sectionId !== selectedSectionId) {
         setSelectedSectionId(selection.sectionId);
       }
+      if (tableView !== 'shots') setTableView('shots');
       // Only scroll if DataTable is open
       if (dataTableOpen) {
         setScrollToKey(selection.shotId);
@@ -159,24 +168,10 @@ export default function DataTable({ sections }: DataTableProps) {
         if (section_id !== selectedSectionId) {
           setSelectedSectionId(section_id);
         }
-        // Only scroll if DataTable is open
+        // Switch to stations view and scroll to station
+        if (tableView !== 'stations') setTableView('stations');
         if (dataTableOpen) {
-          if (tableView === 'stations') {
-            // Stations view - scroll directly to the station row
-            setStationScrollToKey(station_index);
-          } else {
-            // Shots view - highlight the shot connected to this station
-            // Shot N connects station N to station N+1, so:
-            // - Station 0 is the start of shot 0 (highlight shot 0)
-            // - Station N (N >= 1) is the end of shot N-1 (highlight shot N-1)
-            const shotIndex = station_index >= 1 ? station_index - 1 : 0;
-            if (shotIndex >= 0 && shotIndex < section.shots.length) {
-              const shot = section.shots[shotIndex];
-              if (shot) {
-                setScrollToKey(shot.id);
-              }
-            }
-          }
+          setStationScrollToKey(station_index);
         }
       }
     } else if (selection.type === 'section' && selection.sectionId !== undefined) {
@@ -265,6 +260,7 @@ export default function DataTable({ sections }: DataTableProps) {
     if (!selectedSection) return;
 
     // When entering cell edit mode, set selection to this shot
+    internalSelectionRef.current = true;
     setSelection({
       type: 'shot',
       sectionId: selectedSection.id,
@@ -302,6 +298,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const handleRowClick = useCallback(
     (shot: Shot, _index: number) => {
       if (selectedSection) {
+        internalSelectionRef.current = true;
         setSelection({
           type: 'shot',
           sectionId: selectedSection.id,
@@ -459,55 +456,77 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.stationColumns.index'),
       width: '60px',
       render: (row: StationRow) =>
-        `${row.station_ref.section_id}.${row.station_ref.station_index}`,
+        <span className="px-2 py-1 inline-block">{row.station_ref.section_id}.{row.station_ref.station_index}</span>,
     },
     {
       key: '_x',
       header: t('dataTable.stationColumns.x'),
       width: '90px',
       align: 'right' as const,
-      render: (row: StationRow) => formatFixed(row.coordinates.x, undefined, precision.coordinates),
+      render: (row: StationRow) =>
+        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.x, undefined, precision.coordinates)}</span>,
     },
     {
       key: '_y',
       header: t('dataTable.stationColumns.y'),
       width: '90px',
       align: 'right' as const,
-      render: (row: StationRow) => formatFixed(row.coordinates.y, undefined, precision.coordinates),
+      render: (row: StationRow) =>
+        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.y, undefined, precision.coordinates)}</span>,
     },
     {
       key: '_depth',
       header: t('dataTable.stationColumns.depth'),
       width: '90px',
       align: 'right' as const,
-      render: (row: StationRow) => formatFixed(row.coordinates.z, undefined, precision.depth),
+      render: (row: StationRow) =>
+        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.z, undefined, precision.depth)}</span>,
     },
     {
       key: '_zeroDatum',
       header: t('dataTable.stationColumns.zeroDatum'),
       width: '40px',
       align: 'center' as const,
-      render: (row: StationRow) => (row.is_zero_datum ? <DotIcon size={10} /> : ''),
+      render: (row: StationRow) =>
+        row.is_zero_datum
+          ? <span className="px-2 py-1 flex items-center justify-center"><DotIcon size={16} /></span>
+          : '',
     },
     {
-      key: '_merges',
-      header: t('dataTable.stationColumns.merges'),
+      key: '_connections',
+      header: t('dataTable.stationColumns.connections'),
       width: '60px',
       align: 'center' as const,
-      render: (row: StationRow) =>
-        row.merged_with.length > 0
-          ? <span title={row.merged_with.map((m) => `${m.section_id}.${m.station_index}`).join(', ')}><LinkIcon size={12} /> {row.merged_with.length}</span>
-          : '',
+      render: (row: StationRow) => {
+        const mergeCount = row.merged_with?.length ?? 0;
+        const closureCount = row.closures_with?.length ?? 0;
+        const total = mergeCount + closureCount;
+        if (total === 0) return '';
+        const tooltipParts: string[] = [];
+        if (mergeCount > 0) {
+          tooltipParts.push(`Merges: ${row.merged_with.map((m) => `${m.section_id}.${m.station_index}`).join(', ')}`);
+        }
+        if (closureCount > 0) {
+          tooltipParts.push(`Closures: ${closureCount}`);
+        }
+        return (
+          <span className="px-2 py-1 inline-flex items-center justify-center gap-1" title={tooltipParts.join('\n')}>
+            <LinkIcon size={12} />{total}
+          </span>
+        );
+      },
     },
     {
       key: 'comment',
       header: t('dataTable.stationColumns.comment'),
+      inputMode: 'textarea' as const,
     },
   ], [t, precision.coordinates, precision.depth]);
 
   // Station interaction handlers
   const handleStationRowClick = useCallback(
     (row: StationRow, _index: number) => {
+      internalSelectionRef.current = true;
       setSelection({ type: 'station', stationRef: row.station_ref });
     },
     [setSelection]
@@ -689,9 +708,11 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.columns.virtualShort'),
       width: '40px',
       align: 'center' as const,
-      render: (shot: Shot) => (shot.is_virtual ? <DotIcon size={10} /> : ''),
+      render: (shot: Shot) => shot.is_virtual
+        ? <span className="px-2 py-1 flex items-center justify-center"><DotIcon size={16} /></span>
+        : '',
     },
-    { key: 'comment', header: t('dataTable.columns.comment') },
+    { key: 'comment', header: t('dataTable.columns.comment'), inputMode: 'textarea' as const },
   ];
 
   const editableColumns = [
