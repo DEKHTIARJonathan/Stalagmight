@@ -15,7 +15,7 @@ import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
 // Import tool utilities for internal use and re-export for convenience
-import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool, restoreMoveCommentSource } from '../utils/toolUtils';
+import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
 import { getGroupForTool } from '../utils/toolGroups';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
@@ -323,13 +323,9 @@ export const useUIStore = create<UIStore>((set) => ({
         ? { commentTarget: null }
         : {};
 
-      // Restore & clear move comment source when switching away from move_comment tool
-      const shouldRestoreMoveComment = state.moveCommentSource !== null && activeTool !== 'move_comment';
-      if (shouldRestoreMoveComment) {
-        // Fire-and-forget: restore the picked-up comment back to its source via IPC
-        restoreMoveCommentSource(state.moveCommentSource);
-      }
-      const clearMoveComment = shouldRestoreMoveComment
+      // Clear move comment source when switching away from move_comment tool
+      // No backend restore needed — pickup doesn't mutate backend
+      const clearMoveComment = state.moveCommentSource !== null && activeTool !== 'move_comment'
         ? { moveCommentSource: null }
         : {};
 

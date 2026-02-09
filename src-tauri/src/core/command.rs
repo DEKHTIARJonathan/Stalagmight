@@ -8,6 +8,26 @@ use crate::models::{
     SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
 };
 
+/// Identifies either a station or a shot as a comment holder
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CommentHolder {
+    Station { station_ref: StationRef },
+    Shot { section_id: SectionId, shot_id: ShotId },
+}
+
+impl std::fmt::Display for CommentHolder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommentHolder::Station { station_ref } => write!(f, "station {station_ref}"),
+            CommentHolder::Shot { section_id, shot_id } => {
+                let pos = shot_display_position(*shot_id, *section_id);
+                write!(f, "shot {section_id}:{pos}")
+            }
+        }
+    }
+}
+
 /// All persistent commands that modify project state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -109,6 +129,13 @@ pub enum Command {
     MoveStation {
         station_ref: StationRef,
         offset: Coordinates,
+    },
+
+    // Comment move commands
+    MoveComment {
+        source: CommentHolder,
+        target: CommentHolder,
+        swap: bool,
     },
 
     // Batch commands
@@ -353,6 +380,13 @@ impl Command {
             Command::MoveStation { station_ref, .. } => {
                 format!("Move station {station_ref}")
             }
+            Command::MoveComment { source, target, swap } => {
+                if *swap {
+                    format!("Swap comments between {source} and {target}")
+                } else {
+                    format!("Move comment from {source} to {target}")
+                }
+            }
             Command::Batch { commands } => {
                 format!("Batch of {} commands", commands.len())
             }
@@ -381,6 +415,9 @@ mod tests {
     };
     use chrono::NaiveDate;
     use std::path::PathBuf;
+
+    // Re-import CommentHolder so tests can use it without qualification
+    use super::CommentHolder;
 
     #[test]
     fn command_result_constructors_set_fields() {
@@ -630,6 +667,22 @@ mod tests {
                     offset: Coordinates::new(1.0, 0.0, 0.0),
                 },
                 "Move station 1:0",
+            ),
+            (
+                Command::MoveComment {
+                    source: CommentHolder::Station { station_ref: station_a },
+                    target: CommentHolder::Shot { section_id: 1, shot_id: 0 },
+                    swap: false,
+                },
+                "Move comment from station 1:0 to shot 1:1",
+            ),
+            (
+                Command::MoveComment {
+                    source: CommentHolder::Station { station_ref: station_a },
+                    target: CommentHolder::Station { station_ref: station_b },
+                    swap: true,
+                },
+                "Swap comments between station 1:0 and station 1:1",
             ),
             (
                 Command::Batch {

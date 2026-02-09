@@ -344,6 +344,10 @@ impl AppState {
                 }
             }
 
+            // MoveComment: undo data is handled entirely inside execute_move_comment(),
+            // which captures before+after snapshots and pushes directly.
+            Command::MoveComment { .. } => UndoData::None,
+
             // Batch: undo data is handled entirely inside execute_batch(),
             // which captures before+after snapshots and pushes directly.
             Command::Batch { .. } => UndoData::None,
@@ -474,6 +478,9 @@ impl AppState {
                     undo_data
                 }
             }
+
+            // MoveComment: finalize is a no-op; execute_move_comment handles its own snapshots.
+            Command::MoveComment { .. } => undo_data,
 
             // Batch: finalize_undo_data is a no-op; execute_batch handles
             // ProjectSnapshotPair construction directly so after-snapshot

@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
-import { isNonInteractiveTool, restoreMoveCommentSource } from '../utils/toolUtils';
+import { isNonInteractiveTool } from '../utils/toolUtils';
 import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 
@@ -280,17 +280,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
           );
           if (!moveCommentSource) {
-            // First click: pick up source — immediately remove comment from source
+            // First click: pick up source — just record it, don't mutate backend
             if (!mcStation?.comment) {
               showToast('No comment to move', 'move-comment-empty');
               break;
             }
             setSelection({ type: 'station', stationRef: ref });
             setMoveCommentSource({ type: 'station', stationRef: ref, comment: mcStation.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
-            // Remove comment from source immediately so it visually disappears
-            await useProjectStore.getState().updateStationComment(ref, null);
           } else {
-            // Second click: target — comment was already removed from source on pickup
+            // Second click: target — use atomic move_comment IPC
             const targetComment = mcStation?.comment ?? '';
             if (targetComment) {
               // Target has comment — open swap dialog
@@ -299,9 +297,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
                 target: { type: 'station', stationRef: ref, comment: targetComment },
               });
             } else {
-              // Target empty — place comment
-              const ps = useProjectStore.getState();
-              await ps.updateStationComment(ref, moveCommentSource.comment);
+              // Target empty — atomic move
+              const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
+                ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
+                : { type: 'shot' as const, section_id: moveCommentSource.sectionId!, shot_id: moveCommentSource.shotId! };
+              const target = { type: 'station' as const, station_ref: ref };
+              await useProjectStore.getState().moveComment(source, target, false);
               clearMoveCommentSource();
             }
           }
@@ -435,18 +436,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           const mcSection = project?.sections.find((s) => s.id === sectionId);
           const mcShot = mcSection?.shots.find((s) => s.id === shotId);
           if (!moveCommentSource) {
-            // First click: pick up source — immediately remove comment from source
+            // First click: pick up source — just record it, don't mutate backend
             if (!mcShot?.comment) {
               showToast('No comment to move', 'move-comment-empty');
               break;
             }
             setSelection({ type: 'shot', sectionId, shotId });
             setMoveCommentSource({ type: 'shot', sectionId, shotId, comment: mcShot.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
-            // Remove comment from source immediately so it visually disappears.
-            // Use "" not null: JSON null for Option<Option<String>> deserializes as outer None (= no update).
-            await useProjectStore.getState().updateShot(sectionId, shotId, { comment: "" });
           } else {
-            // Second click: target — comment was already removed from source on pickup
+            // Second click: target — use atomic move_comment IPC
             const targetComment = mcShot?.comment ?? '';
             if (targetComment) {
               // Target has comment — open swap dialog
@@ -455,9 +453,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
                 target: { type: 'shot', sectionId, shotId, comment: targetComment },
               });
             } else {
-              // Target empty — place comment
-              const ps = useProjectStore.getState();
-              await ps.updateShot(sectionId, shotId, { comment: moveCommentSource.comment });
+              // Target empty — atomic move
+              const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
+                ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
+                : { type: 'shot' as const, section_id: moveCommentSource.sectionId!, shot_id: moveCommentSource.shotId! };
+              const target = { type: 'shot' as const, section_id: sectionId, shot_id: shotId };
+              await useProjectStore.getState().moveComment(source, target, false);
               clearMoveCommentSource();
             }
           }
@@ -529,12 +530,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           break;
 
         case 'move_comment': {
-          const mcs = useUIStore.getState().moveCommentSource;
-          if (mcs) {
-            restoreMoveCommentSource(mcs).then(() => {
-              useUIStore.getState().clearMoveCommentSource();
-            });
-          }
+          // Cancel: no backend mutation happened, just clear UI state
+          useUIStore.getState().clearMoveCommentSource();
           break;
         }
 

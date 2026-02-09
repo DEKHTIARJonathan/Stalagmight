@@ -295,6 +295,7 @@ export default function MapCanvas() {
     requestCenterOnShot,
     clearCenterOnShotRequest,
     resolvedTheme,
+    moveCommentSource,
   } = useUIStore(
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest)
@@ -1529,6 +1530,28 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowShotComments(getEffectiveShowShotComments(showShots, showShotComments));
   }, [showShotComments, showShots, mapLoaded]);
+
+  // Hide source comment on map during move_comment pickup (no backend mutation on pickup)
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    if (moveCommentSource) {
+      if (moveCommentSource.type === 'station' && moveCommentSource.stationRef) {
+        surveyLayerRef.current.setHiddenComment({
+          type: 'station',
+          sectionId: moveCommentSource.stationRef.section_id,
+          id: moveCommentSource.stationRef.station_index,
+        });
+      } else if (moveCommentSource.type === 'shot' && moveCommentSource.sectionId !== undefined && moveCommentSource.shotId !== undefined) {
+        surveyLayerRef.current.setHiddenComment({
+          type: 'shot',
+          sectionId: moveCommentSource.sectionId,
+          id: moveCommentSource.shotId,
+        });
+      }
+    } else {
+      surveyLayerRef.current.setHiddenComment(null);
+    }
+  }, [moveCommentSource, mapLoaded]);
 
   // Sync stations visibility with SurveyLayer
   useEffect(() => {

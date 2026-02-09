@@ -104,6 +104,17 @@ export default class SurveyLayer {
   // Multi-section hover for Move Segment tool (highlights all connected sections)
   private hoveredSegmentSectionIds: string[] = [];
 
+  // Hidden comment during move_comment pickup (visually hides without backend mutation)
+  private hiddenComment: { type: 'station' | 'shot'; sectionId: number; id: number } | null = null;
+  // Cached virtual-shots visibility for recomputing comment filters
+  private showVirtualShotsCached = true;
+
+  // Comment tool override: when comment/move_comment tool is active, force both
+  // comment layers visible with text-allow-overlap so comments win over other labels.
+  private commentToolActive = false;
+  private cachedShowStationComments = false;
+  private cachedShowShotComments = false;
+
   // Active tool state (for disabling interactions when non-interactive tools are active)
   private activeTool: ToolType = 'select';
 
@@ -273,6 +284,14 @@ export default class SurveyLayer {
     } else if (!isNonInteractive) {
       // Reset cursor when switching away from move tools to other interactive tools
       this.map.getCanvas().style.cursor = '';
+    }
+
+    // Comment tool override: force comment layers visible + overlap priority
+    const isCommentTool = tool === 'comment' || tool === 'move_comment';
+    if (isCommentTool && !this.commentToolActive) {
+      this._enableCommentToolOverride();
+    } else if (!isCommentTool && this.commentToolActive) {
+      this._disableCommentToolOverride();
     }
   }
 
@@ -1775,6 +1794,9 @@ export default class SurveyLayer {
 
   // Control station comments visibility
   setShowStationComments(show: boolean) {
+    this.cachedShowStationComments = show;
+    // Skip if comment tool override is forcing visibility on
+    if (this.commentToolActive) return;
     this.map.setLayoutProperty(
       this.stationCommentsLayerId,
       'visibility',
@@ -1784,6 +1806,9 @@ export default class SurveyLayer {
 
   // Control shot comments visibility
   setShowShotComments(show: boolean) {
+    this.cachedShowShotComments = show;
+    // Skip if comment tool override is forcing visibility on
+    if (this.commentToolActive) return;
     this.map.setLayoutProperty(
       this.shotCommentsLayerId,
       'visibility',
@@ -1828,9 +1853,9 @@ export default class SurveyLayer {
   // section names whose stations are all virtual.
   setShowVirtualShots(visible: boolean): void {
     if (!this.map) return;
+    this.showVirtualShotsCached = visible;
     const notVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'isVirtual'], true];
     const notAllVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
-    const commentBaseFilter: maplibregl.FilterSpecification = ['!=', ['get', 'comment'], null];
     if (visible) {
       // Restore original filters (label layers have zoom-based density filters)
       this.map.setFilter(this.shotsLayerId, null);
@@ -1838,8 +1863,6 @@ export default class SurveyLayer {
       this.map.setFilter(this.stationsHitboxLayerId, null);
       this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
       this.map.setFilter(this.stationLabelsLayerId, this.stationLabelsBaseFilter);
-      this.map.setFilter(this.stationCommentsLayerId, commentBaseFilter);
-      this.map.setFilter(this.shotCommentsLayerId, commentBaseFilter);
       this.map.setFilter(this.labelsLayerId, null);
     } else {
       // Hide virtual shots and their labels
@@ -1857,17 +1880,87 @@ export default class SurveyLayer {
           ? ['all', this.stationLabelsBaseFilter, notAllVirtual] as maplibregl.FilterSpecification
           : notAllVirtual
       );
-      // Hide station comments for virtual-only stations
-      this.map.setFilter(this.stationCommentsLayerId,
-        ['all', commentBaseFilter, notAllVirtual] as maplibregl.FilterSpecification
-      );
-      // Hide shot comments for virtual shots
-      this.map.setFilter(this.shotCommentsLayerId,
-        ['all', commentBaseFilter, notVirtual] as maplibregl.FilterSpecification
-      );
       // Hide section names when all stations in the section are virtual
       this.map.setFilter(this.labelsLayerId, ['!=', ['get', 'allStationsVirtual'], true]);
     }
+    // Recompute comment filters (respects both virtual-shots and hidden-comment)
+    this._applyCommentFilters();
+  }
+
+  /**
+   * Hide/show the source comment marker during move_comment pickup.
+   * Composes with the virtual-shots filter so both constraints are respected.
+   */
+  setHiddenComment(hidden: { type: 'station' | 'shot'; sectionId: number; id: number } | null): void {
+    this.hiddenComment = hidden;
+    this._applyCommentFilters();
+  }
+
+  /**
+   * Recompute comment layer filters combining base filter, virtual-shot filter,
+   * and hidden-comment filter into one expression.
+   */
+  private _applyCommentFilters(): void {
+    if (!this.map) return;
+    const commentBase: maplibregl.FilterSpecification = ['!=', ['get', 'comment'], null];
+    const notVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'isVirtual'], true];
+    const notAllVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
+
+    // Station comments filter
+    const stationParts: maplibregl.FilterSpecification[] = [commentBase];
+    if (!this.showVirtualShotsCached) stationParts.push(notAllVirtual);
+    if (this.hiddenComment?.type === 'station') {
+      stationParts.push(['any',
+        ['!=', ['get', 'sectionId'], this.hiddenComment.sectionId],
+        ['!=', ['get', 'stationIndex'], this.hiddenComment.id],
+      ] as maplibregl.FilterSpecification);
+    }
+    this.map.setFilter(
+      this.stationCommentsLayerId,
+      stationParts.length === 1 ? stationParts[0]! : ['all', ...stationParts] as maplibregl.FilterSpecification
+    );
+
+    // Shot comments filter
+    const shotParts: maplibregl.FilterSpecification[] = [commentBase];
+    if (!this.showVirtualShotsCached) shotParts.push(notVirtual);
+    if (this.hiddenComment?.type === 'shot') {
+      shotParts.push(['any',
+        ['!=', ['get', 'sectionId'], this.hiddenComment.sectionId],
+        ['!=', ['get', 'shotId'], this.hiddenComment.id],
+      ] as maplibregl.FilterSpecification);
+    }
+    this.map.setFilter(
+      this.shotCommentsLayerId,
+      shotParts.length === 1 ? shotParts[0]! : ['all', ...shotParts] as maplibregl.FilterSpecification
+    );
+  }
+
+  /** Force both comment layers visible with overlap priority (comment/move_comment tool) */
+  private _enableCommentToolOverride(): void {
+    this.commentToolActive = true;
+    // Force visible
+    this.map.setLayoutProperty(this.stationCommentsLayerId, 'visibility', 'visible');
+    this.map.setLayoutProperty(this.shotCommentsLayerId, 'visibility', 'visible');
+    // Allow overlap so comments always render on top of other labels
+    this.map.setLayoutProperty(this.stationCommentsLayerId, 'text-allow-overlap', true);
+    this.map.setLayoutProperty(this.shotCommentsLayerId, 'text-allow-overlap', true);
+  }
+
+  /** Restore comment layer visibility and overlap from cached display settings */
+  private _disableCommentToolOverride(): void {
+    this.commentToolActive = false;
+    // Restore visibility from cached display state
+    this.map.setLayoutProperty(
+      this.stationCommentsLayerId, 'visibility',
+      this.cachedShowStationComments ? 'visible' : 'none'
+    );
+    this.map.setLayoutProperty(
+      this.shotCommentsLayerId, 'visibility',
+      this.cachedShowShotComments ? 'visible' : 'none'
+    );
+    // Restore default overlap behavior
+    this.map.setLayoutProperty(this.stationCommentsLayerId, 'text-allow-overlap', false);
+    this.map.setLayoutProperty(this.shotCommentsLayerId, 'text-allow-overlap', false);
   }
 
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")

@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 14 | 19 | 74% |
-| UI & Polish | 14 | 17 | 82% |
+| UI & Polish | 15 | 17 | 88% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **54** | **64** | **84%** |
+| **Total** | **55** | **64** | **86%** |
 
 ---
 
@@ -103,7 +103,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
 | Bug Reporter Dialog | ✅ | Debug log dialog with ring buffer, level filtering, colored output |
 | Release Automation | ✅ | |
-| Add Comment Tool | ❌ | Text annotations on stations/map |
+| Add Comment Tool | ✅ | Comment + Move Comment tools with atomic undo, swap dialog, visual pickup |
 | Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
 **Subtotals**: ✅ 14 done, ❌ 3 not started
