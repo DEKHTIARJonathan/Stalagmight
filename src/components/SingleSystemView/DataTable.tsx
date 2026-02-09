@@ -489,7 +489,7 @@ export default function DataTable({ sections }: DataTableProps) {
       align: 'center' as const,
       render: (row: StationRow) =>
         row.is_zero_datum
-          ? <span className="px-2 py-1 flex items-center justify-center"><DotIcon size={16} /></span>
+          ? <span className="px-2 py-1 flex items-center justify-center"><DotIcon size={20} /></span>
           : '',
     },
     {
@@ -708,9 +708,20 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.columns.virtualShort'),
       width: '40px',
       align: 'center' as const,
-      render: (shot: Shot) => shot.is_virtual
-        ? <span className="px-2 py-1 flex items-center justify-center"><DotIcon size={16} /></span>
-        : '',
+      render: (shot: Shot) => (
+        <span
+          className="px-2 py-1 flex items-center justify-center cursor-pointer"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (selectedSectionId !== null) {
+              updateShot(selectedSectionId, shot.id, { is_virtual: !shot.is_virtual });
+            }
+          }}
+          title={shot.is_virtual ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markVirtual')}
+        >
+          {shot.is_virtual ? <DotIcon size={20} /> : <span className="opacity-0 hover:opacity-30"><DotIcon size={20} /></span>}
+        </span>
+      ),
     },
     { key: 'comment', header: t('dataTable.columns.comment'), inputMode: 'textarea' as const },
   ];
