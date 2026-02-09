@@ -2,7 +2,7 @@
 
 This document tracks functionality specified in `docs/SPEC.md` and implementation status based on codebase analysis.
 
-**Last Updated**: 2026-02-06
+**Last Updated**: 2026-02-09
 
 ---
 
@@ -10,7 +10,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
-| Import/Export | 15 | 19 | 79% |
+| Import/Export | 16 | 19 | 84% |
 | UI & Polish | 15 | 17 | 88% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
@@ -18,7 +18,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **56** | **64** | **88%** |
+| **Total** | **57** | **64** | **89%** |
 
 ---
 
@@ -58,7 +58,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ## 🚧 v1.0 Remaining Tasks
 
-### Import/Export (15/19 done)
+### Import/Export (16/19 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -78,11 +78,11 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Ariane .tml Import | ✅ | TML/TMLU parser, section linearization, excluded shot filtering |
 | Ariane .tml Export | ✅ | TML (ZIP) and TMLU (plain XML) export |
 | GPX Import | ✅ | Waypoints, tracks, routes; elevation→depth with slope distance; depth sign toggle |
-| Manual Data Input | ❌ | Full spreadsheet-style entry without device import |
+| Manual Data Input | ✅ | Spreadsheet-style entry with validation, LRUD toggle, placement mode, decimal precision |
 | Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
 | Import Dialog/Shot Placement Refactoring | ❌ | Improve shot placement UX in import workflow |
 
-**Subtotals**: ✅ 15 done, ❌ 4 not started
+**Subtotals**: ✅ 16 done, ❌ 3 not started
 
 ### UI & Polish (12/17 done)
 
@@ -184,7 +184,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
-| Import/Export | 19 | 15 | 0 | 4 |
+| Import/Export | 19 | 16 | 0 | 3 |
 | UI & Polish | 17 | 14 | 0 | 3 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
@@ -192,9 +192,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **55** | **0** | **9** |
+| **Total** | **64** | **56** | **0** | **8** |
 
-**Overall Progress**: 55 done = ~86% complete
+**Overall Progress**: 56 done = ~88% complete
 
 ---
 
