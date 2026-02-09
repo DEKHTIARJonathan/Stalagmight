@@ -191,6 +191,7 @@ function App() {
         quality: sectionConfig.quality ?? 1.0,
         shots,
         placement: backendPlacement,
+        station_comments: [],
       };
     });
 

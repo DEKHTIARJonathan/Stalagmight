@@ -436,6 +436,20 @@ impl AppState {
             all_section_ids.push(section_id);
             all_warnings.extend(create_result.warnings);
 
+            // Apply station comments (promoted from shot comments during TML import)
+            if !config.station_comments.is_empty() {
+                let mut proj_guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                if let Some(project) = proj_guard.as_mut() {
+                    for (station_index, comment) in &config.station_comments {
+                        let station_ref = StationRef::new(section_id, *station_index);
+                        project.station_comments.insert(station_ref, comment.clone());
+                    }
+                }
+            }
+
             batch_commands.push(Command::CreateSection {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),

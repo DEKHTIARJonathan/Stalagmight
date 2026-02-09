@@ -133,6 +133,10 @@ pub struct ImportSectionConfig {
     pub quality: f64,
     pub shots: Vec<ShotData>,
     pub placement: ImportPlacement,
+    /// Station comments to apply after section creation.
+    /// Each tuple is (station_index, comment_text).
+    #[serde(default)]
+    pub station_comments: Vec<(u32, String)>,
 }
 
 /// Placement strategy for an imported section.

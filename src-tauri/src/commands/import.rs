@@ -129,6 +129,7 @@ pub fn execute_tml_import(
     path: PathBuf,
     file_hash: Option<String>,
     include_excluded: bool,
+    comments_on_stations: bool,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -149,7 +150,7 @@ pub fn execute_tml_import(
         }
     };
 
-    let (sections, closures) = match crate::parsers::tml::convert_tml_to_import_configs(&tml, include_excluded) {
+    let (sections, closures) = match crate::parsers::tml::convert_tml_to_import_configs(&tml, include_excluded, comments_on_stations) {
         Ok(result) => result,
         Err(e) => {
             tracing::error!(

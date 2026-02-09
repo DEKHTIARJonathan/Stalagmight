@@ -19,6 +19,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   const [isDuplicate, setIsDuplicate] = useState(false);
   const [hashChecked, setHashChecked] = useState(false);
   const [includeExcluded, setIncludeExcluded] = useState(false);
+  const [commentsOnStations, setCommentsOnStations] = useState(true);
 
   // Check for duplicate import on mount
   useEffect(() => {
@@ -46,6 +47,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     let minDepth = Infinity;
     let maxDepth = -Infinity;
     let excludedCount = 0;
+    let commentCount = 0;
 
     for (const section of tmlFile.sections) {
       totalShots += section.shots.length;
@@ -54,6 +56,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         if (shot.depth < minDepth) minDepth = shot.depth;
         if (shot.depth > maxDepth) maxDepth = shot.depth;
         if (shot.excluded) excludedCount++;
+        if (shot.comment) commentCount++;
       }
     }
 
@@ -65,13 +68,14 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
           ? null
           : `${Math.round(minDepth * 10) / 10} - ${Math.round(maxDepth * 10) / 10}`,
       excludedCount,
+      commentCount,
     };
   }, [tmlFile]);
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);
     try {
-      const result = await executeTmlImport(filePath, fileHash, includeExcluded);
+      const result = await executeTmlImport(filePath, fileHash, includeExcluded, commentsOnStations);
 
       closeDialog();
       setView('single');
@@ -90,7 +94,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         message: e instanceof Error ? e.message : 'Failed to import TML file',
       });
     }
-  }, [executeTmlImport, filePath, fileHash, includeExcluded, closeDialog, openDialog, setView, triggerFitToBounds]);
+  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, closeDialog, openDialog, setView, triggerFitToBounds]);
 
   return (
     <DialogWrapper title="Import Ariane Survey" onClose={closeDialog} size="lg" data-testid="tml-import-dialog">
@@ -191,6 +195,19 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
               data-testid="tml-include-excluded"
             />
             Include {stats.excludedCount} excluded shot{stats.excludedCount !== 1 ? 's' : ''}
+          </label>
+        )}
+
+        {/* Comments placement toggle */}
+        {stats.commentCount > 0 && (
+          <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!commentsOnStations}
+              onChange={(e) => setCommentsOnStations(!e.target.checked)}
+              data-testid="tml-comments-on-shots"
+            />
+            Keep comments on shots
           </label>
         )}
 
