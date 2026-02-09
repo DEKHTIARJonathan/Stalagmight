@@ -17,6 +17,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
   const [importWaypoints, setImportWaypoints] = useState(gpxFile.waypoints.length > 0);
   const [importTracks, setImportTracks] = useState(gpxFile.tracks.length > 0);
   const [importRoutes, setImportRoutes] = useState(gpxFile.routes.length > 0);
+  const [depthInverted, setDepthInverted] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [fileHash, setFileHash] = useState<string | null>(null);
   const [isDuplicate, setIsDuplicate] = useState(false);
@@ -72,6 +73,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
       importWaypoints,
       importTracks,
       importRoutes,
+      depthInverted,
     });
   };
 
@@ -84,7 +86,8 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
         importWaypoints,
         false,
         false,
-        []
+        [],
+        depthInverted
       );
 
       closeDialog();
@@ -179,6 +182,22 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
             </label>
           )}
         </div>
+
+        {/* Depth interpretation toggle */}
+        {(importTracks || importRoutes) && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer p-2 bg-surface-alt rounded">
+            <input
+              type="checkbox"
+              checked={depthInverted}
+              onChange={(e) => setDepthInverted(e.target.checked)}
+              data-testid="gpx-depth-inverted"
+            />
+            <span>
+              Elevation values represent depth
+              <span className="text-text-tertiary ml-1">(positive = deeper)</span>
+            </span>
+          </label>
+        )}
 
         {/* Waypoints detail (collapsible) */}
         {gpxFile.waypoints.length > 0 && (

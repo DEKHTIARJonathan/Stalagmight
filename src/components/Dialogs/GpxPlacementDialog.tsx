@@ -27,6 +27,7 @@ export default function GpxPlacementDialog() {
   const importWaypoints = dialogData.importWaypoints as boolean;
   const importTracks = dialogData.importTracks as boolean;
   const importRoutes = dialogData.importRoutes as boolean;
+  const depthInverted = (dialogData.depthInverted as boolean) ?? false;
 
   const [isImporting, setIsImporting] = useState(false);
 
@@ -133,7 +134,8 @@ export default function GpxPlacementDialog() {
         importWaypoints,
         importTracks,
         importRoutes,
-        placements
+        placements,
+        depthInverted
       );
 
       closeDialog();

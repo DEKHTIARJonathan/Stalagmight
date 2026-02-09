@@ -724,19 +724,28 @@ const GPX_COLORS: &[&str] = &[
 
 /// Convert GPS point pairs into virtual `ShotData`.
 ///
-/// Elevation is converted to relative depth (first point = depth 0, lower = deeper).
+/// Elevation is converted to relative depth (first point = depth 0).
 /// Shot length is slope distance incorporating elevation change.
-fn shots_from_points(points: &[(f64, f64, Option<f64>)]) -> Vec<ShotData> {
+///
+/// When `depth_inverted` is false (default): lower elevation = deeper (surface GPS tracks).
+/// When `depth_inverted` is true: higher elevation = deeper (elevation stores positive depth).
+fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -> Vec<ShotData> {
     if points.len() < 2 {
         return Vec::new();
     }
 
     // Compute depths relative to first point's elevation.
-    // Depth increases as elevation decreases (going lower = going deeper).
     let ref_elev = points[0].2.unwrap_or(0.0);
     let depths: Vec<f64> = points
         .iter()
-        .map(|(_lat, _lon, ele)| ref_elev - ele.unwrap_or(ref_elev))
+        .map(|(_lat, _lon, ele)| {
+            let e = ele.unwrap_or(ref_elev);
+            if depth_inverted {
+                e - ref_elev
+            } else {
+                ref_elev - e
+            }
+        })
         .collect();
 
     points
@@ -820,6 +829,7 @@ fn track_segment_to_config(
     name: Option<String>,
     color: &str,
     placement: ImportPlacement,
+    depth_inverted: bool,
 ) -> ImportSectionConfig {
     let points: Vec<(f64, f64, Option<f64>)> = seg
         .points
@@ -835,7 +845,7 @@ fn track_segment_to_config(
         color: color.to_string(),
         direction: None,
         quality: 1.0,
-        shots: shots_from_points(&points),
+        shots: shots_from_points(&points, depth_inverted),
         placement,
         station_comments: Vec::new(),
     }
@@ -847,6 +857,7 @@ fn route_to_config(
     section_index: u32,
     color: &str,
     placement: ImportPlacement,
+    depth_inverted: bool,
 ) -> ImportSectionConfig {
     let points: Vec<(f64, f64, Option<f64>)> = rte
         .points
@@ -862,7 +873,7 @@ fn route_to_config(
         color: color.to_string(),
         direction: None,
         quality: 1.0,
-        shots: shots_from_points(&points),
+        shots: shots_from_points(&points, depth_inverted),
         placement,
         station_comments: Vec::new(),
     }
@@ -881,6 +892,7 @@ pub fn convert_gpx_to_import_configs(
     import_tracks: bool,
     import_routes: bool,
     placements: &[GpxSectionPlacement],
+    depth_inverted: bool,
 ) -> Result<Vec<ImportSectionConfig>> {
     let mut configs = Vec::new();
     let mut section_index = 0u32;
@@ -921,6 +933,7 @@ pub fn convert_gpx_to_import_configs(
                     sec_name,
                     &color,
                     placement,
+                    depth_inverted,
                 ));
                 section_index += 1;
             }
@@ -946,7 +959,7 @@ pub fn convert_gpx_to_import_configs(
             let (placement, _sec_name, color) =
                 resolve_placement(section_index, placements, first_as_trkpt.as_ref(), || rte.name.clone())?;
 
-            configs.push(route_to_config(rte, section_index, &color, placement));
+            configs.push(route_to_config(rte, section_index, &color, placement, depth_inverted));
             section_index += 1;
         }
     }
@@ -1157,7 +1170,7 @@ mod tests {
     fn track_to_configs() {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
 
         assert_eq!(configs.len(), 1);
         let c = &configs[0];
@@ -1172,7 +1185,7 @@ mod tests {
     fn route_to_configs() {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, false, true, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, false, true, &[], false).unwrap();
 
         assert_eq!(configs.len(), 1);
         let c = &configs[0];
@@ -1184,7 +1197,7 @@ mod tests {
     fn all_types_combined() {
         let gpx = parse_gpx_str(SIMPLE_GPX).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, true, true, true, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, true, true, true, &[], false).unwrap();
 
         // 2 waypoints + 1 track segment + 1 route = 4 sections
         assert_eq!(configs.len(), 4);
@@ -1206,7 +1219,7 @@ mod tests {
 
         let gpx = parse_gpx_str(xml).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].shots.len(), 1);
@@ -1242,7 +1255,7 @@ mod tests {
 
         let gpx = parse_gpx_str(xml).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].shots.len(), 2);
@@ -1278,7 +1291,7 @@ mod tests {
 
         let gpx = parse_gpx_str(xml).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
 
         let shot = &configs[0].shots[0];
         // Depth: 100 - 50 = 50m drop
@@ -1288,6 +1301,36 @@ mod tests {
         assert!(shot.length > 111.0, "Slope distance should exceed horizontal, got {}", shot.length);
         // And roughly sqrt(111^2 + 50^2) ~ 121.7
         assert!((shot.length - 121.7).abs() < 2.0, "Expected ~121.7m, got {}", shot.length);
+    }
+
+    #[test]
+    fn depth_inverted_reverses_sign() {
+        // With depth_inverted, higher elevation = deeper
+        let xml = r#"<?xml version="1.0"?>
+<gpx version="1.1">
+  <trk><name>Inverted</name><trkseg>
+    <trkpt lat="45.0" lon="7.0"><ele>0.0</ele></trkpt>
+    <trkpt lat="45.0" lon="7.0"><ele>50.0</ele></trkpt>
+    <trkpt lat="45.0" lon="7.0"><ele>30.0</ele></trkpt>
+  </trkseg></trk>
+</gpx>"#;
+
+        let gpx = parse_gpx_str(xml).unwrap();
+
+        // Normal: ele goes up -> depth decreases (negative)
+        let normal = convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
+        let s0 = &normal[0].shots[0];
+        assert!((s0.depth_in - 0.0).abs() < 1e-9);
+        assert!((s0.depth_out - -50.0).abs() < 1e-9, "Normal: ele +50 -> depth -50");
+
+        // Inverted: ele goes up -> depth increases (positive)
+        let inverted = convert_gpx_to_import_configs(&gpx, false, true, false, &[], true).unwrap();
+        let s0 = &inverted[0].shots[0];
+        assert!((s0.depth_in - 0.0).abs() < 1e-9);
+        assert!((s0.depth_out - 50.0).abs() < 1e-9, "Inverted: ele +50 -> depth +50");
+
+        // Slope length should be the same regardless of sign
+        assert!((normal[0].shots[0].length - inverted[0].shots[0].length).abs() < 1e-9);
     }
 
     #[test]
@@ -1303,7 +1346,7 @@ mod tests {
 
         let gpx = parse_gpx_str(xml).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
 
         let shot = &configs[0].shots[0];
         assert!((shot.depth_in).abs() < 1e-9, "No elevation -> depth 0");
@@ -1333,7 +1376,7 @@ mod tests {
         assert_eq!(gpx.tracks[0].segments.len(), 2);
 
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].name.as_deref(), Some("Multi Seg seg 1"));
         assert_eq!(configs[1].name.as_deref(), Some("Multi Seg seg 2"));
@@ -1352,7 +1395,7 @@ mod tests {
 
         let gpx = parse_gpx_str(xml).unwrap();
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[], false).unwrap();
         assert!(configs.is_empty());
     }
 
@@ -1367,7 +1410,7 @@ mod tests {
         }];
 
         let configs =
-            convert_gpx_to_import_configs(&gpx, false, true, false, &placements).unwrap();
+            convert_gpx_to_import_configs(&gpx, false, true, false, &placements, false).unwrap();
 
         assert_eq!(configs[0].name.as_deref(), Some("Custom Name"));
         assert_eq!(configs[0].color, "#ff0000");
