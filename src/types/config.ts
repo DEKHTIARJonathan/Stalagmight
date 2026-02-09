@@ -153,6 +153,7 @@ export const defaultConfig: Config = {
     move_station: ['T'],
     move_segment: ['V'],
     move_shot: ['G'],
+    comment_tool: ['C'],
 
     // Edit
     undo: ['Ctrl+Z'],

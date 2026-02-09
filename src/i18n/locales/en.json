@@ -1372,6 +1372,7 @@
       "navigate": "Navigate"
     },
     "tools": {
+      "comment": "Comment",
       "delete": "Delete",
       "draw": "Draw",
       "measure": "Measure",
@@ -1383,6 +1384,11 @@
       "select": "Select",
       "zoom": "Zoom"
     }
+  },
+  "commentOverlay": {
+    "placeholder": "Add a comment...",
+    "commit": "Save comment",
+    "cancel": "Cancel"
   },
   "validation": {
     "import": {

@@ -1,6 +1,15 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+
+export interface CommentTarget {
+  type: 'station' | 'shot';
+  stationRef?: StationRef;
+  sectionId?: SectionId;
+  shotId?: ShotId;
+  screenPos: { x: number; y: number };
+  currentComment: string;
+}
 import type { PanelsConfig, ThemeMode } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
@@ -26,7 +35,8 @@ export type ToolType =
   | 'measure'
   | 'move_station'
   | 'move_segment'
-  | 'move_shot';
+  | 'move_shot'
+  | 'comment';
 
 /**
  * Placement result returned when placement mode completes.
@@ -252,6 +262,11 @@ interface UIStore {
   themePreview: ThemeMode | null;
   setThemePreview: (theme: ThemeMode | null) => void;
 
+  // Comment tool state
+  commentTarget: CommentTarget | null;
+  setCommentTarget: (target: CommentTarget | null) => void;
+  clearCommentTarget: () => void;
+
   // ARIA selection announcements for screen readers
   selectionAnnouncement: string;
   announceSelection: (message: string) => void;
@@ -289,6 +304,11 @@ export const useUIStore = create<UIStore>((set) => ({
         ? { ...state.lastSubtoolByGroup, [group.id]: activeTool }
         : state.lastSubtoolByGroup;
 
+      // Clear comment target when switching away from comment tool
+      const clearComment = state.commentTarget !== null && activeTool !== 'comment'
+        ? { commentTarget: null }
+        : {};
+
       // Clear hover state when switching to non-interactive tools (pan/zoom)
       // This ensures store consistency regardless of how hover was set
       // Use explicit null checks (not truthiness) because SectionId can be 0
@@ -296,9 +316,9 @@ export const useUIStore = create<UIStore>((set) => ({
         isNonInteractiveTool(activeTool) &&
         (state.hoveredStation !== null || state.hoveredShot !== null || state.hoveredSectionId !== null)
       ) {
-        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null };
+        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment };
       }
-      return { activeTool, lastSubtoolByGroup };
+      return { activeTool, lastSubtoolByGroup, ...clearComment };
     }),
 
   // Selection state
@@ -688,6 +708,11 @@ export const useUIStore = create<UIStore>((set) => ({
   setResolvedTheme: (resolvedTheme: ResolvedTheme) => set({ resolvedTheme }),
   themePreview: null,
   setThemePreview: (themePreview) => set({ themePreview }),
+
+  // Comment tool state
+  commentTarget: null,
+  setCommentTarget: (commentTarget) => set({ commentTarget }),
+  clearCommentTarget: () => set({ commentTarget: null }),
 
   // ARIA selection announcements for screen readers
   selectionAnnouncement: '',

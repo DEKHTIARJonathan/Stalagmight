@@ -13,6 +13,7 @@ import {
   MagnifierIcon,
   MoveAllIcon,
   MoveDiagonalIcon,
+  MessageIcon,
   MoveHorizontalIcon,
   PencilIcon,
   RulerIcon,
@@ -71,6 +72,7 @@ function getShortcutForTool(tool: ToolType, shortcuts: Record<string, string[]>)
     move_station: 'move_station',
     move_segment: 'move_segment',
     move_shot: 'move_shot',
+    comment: 'comment_tool',
   };
   const configKey = keyMap[tool];
   const bindings = shortcuts[configKey];
@@ -99,6 +101,7 @@ const TOOL_LABEL_KEYS: Record<ToolType, string> = {
   move_station: 'toolbar.tools.moveStation',
   move_segment: 'toolbar.tools.moveSegment',
   move_shot: 'toolbar.tools.moveShot',
+  comment: 'toolbar.tools.comment',
 };
 
 const TOOL_GROUP_LABEL_KEYS: Record<string, string> = {
@@ -119,6 +122,7 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'delete', shortcut: 'X' },
   { kind: 'standalone', id: 'merge', shortcut: 'M' },
   { kind: 'standalone', id: 'measure', shortcut: 'R' },
+  { kind: 'standalone', id: 'comment', shortcut: 'C' },
   { kind: 'separator' },
   { kind: 'group', groupId: 'move' },
 ];
@@ -496,6 +500,7 @@ function ToolIcon({ tool }: { tool: ToolType }) {
     move_station: <MoveAllIcon size={14} />,
     move_segment: <MoveHorizontalIcon size={14} />,
     move_shot: <MoveDiagonalIcon size={14} />,
+    comment: <MessageIcon size={14} />,
   };
 
   return <span className="text-sm">{icons[tool]}</span>;
