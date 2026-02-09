@@ -10,7 +10,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
-| Import/Export | 14 | 19 | 74% |
+| Import/Export | 15 | 19 | 79% |
 | UI & Polish | 15 | 17 | 88% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
@@ -18,7 +18,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **55** | **64** | **86%** |
+| **Total** | **56** | **64** | **88%** |
 
 ---
 
@@ -58,7 +58,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ## 🚧 v1.0 Remaining Tasks
 
-### Import/Export (14/19 done)
+### Import/Export (15/19 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -77,12 +77,12 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | File Hash Tracking | ✅ | |
 | Ariane .tml Import | ✅ | TML/TMLU parser, section linearization, excluded shot filtering |
 | Ariane .tml Export | ✅ | TML (ZIP) and TMLU (plain XML) export |
-| GPX Import | ❌ | Waypoints and tracks |
+| GPX Import | ✅ | Waypoints, tracks, routes; elevation→depth with slope distance; depth sign toggle |
 | Manual Data Input | ❌ | Full spreadsheet-style entry without device import |
 | Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
 | Import Dialog/Shot Placement Refactoring | ❌ | Improve shot placement UX in import workflow |
 
-**Subtotals**: ✅ 14 done, ❌ 5 not started
+**Subtotals**: ✅ 15 done, ❌ 4 not started
 
 ### UI & Polish (12/17 done)
 
@@ -184,7 +184,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
-| Import/Export | 19 | 14 | 0 | 5 |
+| Import/Export | 19 | 15 | 0 | 4 |
 | UI & Polish | 17 | 14 | 0 | 3 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
@@ -192,9 +192,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **54** | **0** | **10** |
+| **Total** | **64** | **55** | **0** | **9** |
 
-**Overall Progress**: 54 done = ~84% complete
+**Overall Progress**: 55 done = ~86% complete
 
 ---
 
@@ -215,9 +215,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 ### Display Features (v2.0)
 - [ ] LRUD passage wall visualization
 - [ ] High-contrast theme (full implementation)
+- [ ] Marker Placement - Place markers on shots, before/after or on stations
+- [ ] Marker placement - off the line with set distance eg fossils/bones/leads
+- [ ] Dive Map Mode - Under Display dropdown, single toggle that styles the line better as a dive map rather than survey details
 
 ### Import/Export (v2.x)
 - [ ] Additional export formats: Survex, Therion, KML/KMZ
+- [ ] Compass format support
+- [ ] GPX Export
 
 ### Platform (v3.0+)
 - [ ] 3D visualization
