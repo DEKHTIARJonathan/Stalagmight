@@ -205,6 +205,7 @@ pub fn execute_gpx_import(
     import_tracks: bool,
     import_routes: bool,
     section_placements: Vec<GpxSectionPlacement>,
+    depth_inverted: bool,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -234,6 +235,7 @@ pub fn execute_gpx_import(
         import_tracks,
         import_routes,
         &section_placements,
+        depth_inverted,
     ) {
         Ok(s) => s,
         Err(e) => {

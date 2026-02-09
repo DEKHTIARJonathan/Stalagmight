@@ -233,7 +233,7 @@ interface ProjectStore {
   parseTml: (path: string) => Promise<TmlFile>;
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseGpx: (path: string) => Promise<GpxFile>;
-  executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[]) => Promise<CommandResult>;
+  executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
@@ -1208,7 +1208,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
   },
 
-  executeGpxImport: async (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[]) => {
+  executeGpxImport: async (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => {
     const result = await invokeIpc<CommandResult>(
       'execute_gpx_import',
       {
@@ -1218,6 +1218,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         importTracks,
         importRoutes,
         sectionPlacements,
+        depthInverted,
       },
       { purpose: 'import GPX file', fields: { path } }
     );
