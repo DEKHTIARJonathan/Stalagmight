@@ -23,3 +23,4 @@ export { default as SplitSectionDialog } from './SplitSectionDialog';
 export { default as CorruptionRecoveryDialog } from './CorruptionRecoveryDialog';
 export { default as TmlImportDialog } from './TmlImportDialog';
 export { default as DebugDialog } from './DebugDialog';
+export { default as SwapCommentsDialog } from './SwapCommentsDialog';

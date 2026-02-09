@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
-import { isNonInteractiveTool } from '../utils/toolUtils';
+import { isNonInteractiveTool, restoreMoveCommentSource } from '../utils/toolUtils';
 import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 
@@ -152,7 +152,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
   // Handle station click based on active tool
   const handleStationClick = useCallback(
-    (ref: StationRef, event: { originalEvent: MouseEvent }) => {
+    async (ref: StationRef, event: { originalEvent: MouseEvent }) => {
       // GUARD: No interactions for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) return;
 
@@ -273,6 +273,40 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           });
           break;
         }
+
+        case 'move_comment': {
+          const { moveCommentSource, setMoveCommentSource, clearMoveCommentSource } = useUIStore.getState();
+          const mcStation = stations.find(
+            (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+          );
+          if (!moveCommentSource) {
+            // First click: pick up source — immediately remove comment from source
+            if (!mcStation?.comment) {
+              showToast('No comment to move', 'move-comment-empty');
+              break;
+            }
+            setSelection({ type: 'station', stationRef: ref });
+            setMoveCommentSource({ type: 'station', stationRef: ref, comment: mcStation.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+            // Remove comment from source immediately so it visually disappears
+            await useProjectStore.getState().updateStationComment(ref, null);
+          } else {
+            // Second click: target — comment was already removed from source on pickup
+            const targetComment = mcStation?.comment ?? '';
+            if (targetComment) {
+              // Target has comment — open swap dialog
+              openDialog('swap-comments', {
+                source: moveCommentSource,
+                target: { type: 'station', stationRef: ref, comment: targetComment },
+              });
+            } else {
+              // Target empty — place comment
+              const ps = useProjectStore.getState();
+              await ps.updateStationComment(ref, moveCommentSource.comment);
+              clearMoveCommentSource();
+            }
+          }
+          break;
+        }
       }
     },
     [
@@ -301,7 +335,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
   // Handle shot click based on active tool
   const handleShotClick = useCallback(
-    (sectionId: SectionId, shotId: ShotId, event: { originalEvent: MouseEvent }) => {
+    async (sectionId: SectionId, shotId: ShotId, event: { originalEvent: MouseEvent }) => {
       // GUARD: No interactions for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) return;
 
@@ -395,6 +429,40 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           });
           break;
         }
+
+        case 'move_comment': {
+          const { moveCommentSource, setMoveCommentSource, clearMoveCommentSource } = useUIStore.getState();
+          const mcSection = project?.sections.find((s) => s.id === sectionId);
+          const mcShot = mcSection?.shots.find((s) => s.id === shotId);
+          if (!moveCommentSource) {
+            // First click: pick up source — immediately remove comment from source
+            if (!mcShot?.comment) {
+              showToast('No comment to move', 'move-comment-empty');
+              break;
+            }
+            setSelection({ type: 'shot', sectionId, shotId });
+            setMoveCommentSource({ type: 'shot', sectionId, shotId, comment: mcShot.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
+            // Remove comment from source immediately so it visually disappears.
+            // Use "" not null: JSON null for Option<Option<String>> deserializes as outer None (= no update).
+            await useProjectStore.getState().updateShot(sectionId, shotId, { comment: "" });
+          } else {
+            // Second click: target — comment was already removed from source on pickup
+            const targetComment = mcShot?.comment ?? '';
+            if (targetComment) {
+              // Target has comment — open swap dialog
+              openDialog('swap-comments', {
+                source: moveCommentSource,
+                target: { type: 'shot', sectionId, shotId, comment: targetComment },
+              });
+            } else {
+              // Target empty — place comment
+              const ps = useProjectStore.getState();
+              await ps.updateShot(sectionId, shotId, { comment: moveCommentSource.comment });
+              clearMoveCommentSource();
+            }
+          }
+          break;
+        }
       }
     },
     [activeTool, addToSelection, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection]
@@ -459,6 +527,16 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         case 'comment':
           useUIStore.getState().clearCommentTarget();
           break;
+
+        case 'move_comment': {
+          const mcs = useUIStore.getState().moveCommentSource;
+          if (mcs) {
+            restoreMoveCommentSource(mcs).then(() => {
+              useUIStore.getState().clearMoveCommentSource();
+            });
+          }
+          break;
+        }
 
         case 'merge':
           // Don't clear during connectivity check - the staleness guard handles cancellation

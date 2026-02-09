@@ -380,6 +380,18 @@ export function MessageIcon(props: IconProps) {
   );
 }
 
+export function MoveCommentIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Speech bubble */}
+      <path d="M3 4 H12 A1 1 0 0 1 13 5 V10 A1 1 0 0 1 12 11 H7 L5 13 V11 H3 A1 1 0 0 1 2 10 V5 A1 1 0 0 1 3 4 Z" />
+      {/* Arrow pointing right */}
+      <line x1="14" y1="8" x2="18" y2="8" />
+      <polyline points="16 6 18 8 16 10" />
+    </BaseIcon>
+  );
+}
+
 export function BugIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>

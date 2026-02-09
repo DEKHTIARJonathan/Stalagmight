@@ -154,6 +154,7 @@ export const defaultConfig: Config = {
     move_segment: ['V'],
     move_shot: ['G'],
     comment_tool: ['C'],
+    move_comment_tool: ['Shift+C'],
 
     // Edit
     undo: ['Ctrl+Z'],

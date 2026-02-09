@@ -22,13 +22,14 @@ import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
 import { MapDevStats } from './MapDevStats';
 import CommentOverlay from './CommentOverlay';
+import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 
 // Tools that support Ctrl+drag for panning
-const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment'];
+const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -1643,6 +1644,7 @@ export default function MapCanvas() {
       move_segment: 'move',
       move_shot: 'move',
       comment: 'crosshair',
+      move_comment: 'crosshair',
     };
 
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
@@ -1663,7 +1665,7 @@ export default function MapCanvas() {
   useEffect(() => {
     if (!map.current) return;
 
-    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment'];
+    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
 
     if (noPanTools.includes(activeTool)) {
       map.current.dragPan.disable();
@@ -1883,6 +1885,7 @@ export default function MapCanvas() {
             move_segment: 'move',
             move_shot: 'default',
             comment: 'crosshair',
+            move_comment: 'crosshair',
           };
           map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
         }
@@ -2523,7 +2526,7 @@ export default function MapCanvas() {
       map.current.dragPan.disable();
     } else {
       // Re-enable drag pan when placement mode ends (unless current tool should disable it)
-      const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment'];
+      const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
       if (!noPanTools.includes(activeTool)) {
         map.current.dragPan.enable();
       }
@@ -2541,6 +2544,7 @@ export default function MapCanvas() {
         move_segment: 'move',
         move_shot: 'move',
         comment: 'crosshair',
+        move_comment: 'crosshair',
       };
       map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
     }
@@ -2802,6 +2806,9 @@ export default function MapCanvas() {
 
       {/* Comment tool overlay */}
       <CommentOverlay />
+
+      {/* Move comment cursor tag — shows picked-up comment following cursor */}
+      <MoveCommentCursorTag />
 
       {/* Hover sync - lightweight child to avoid re-rendering MapCanvas on every mousemove */}
       <MapHoverSync

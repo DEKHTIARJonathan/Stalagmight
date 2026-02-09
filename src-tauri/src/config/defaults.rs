@@ -206,6 +206,7 @@ impl Default for ShortcutsConfig {
             move_segment: vec!["V".to_string()],
             move_shot: vec!["G".to_string()],
             comment_tool: vec!["C".to_string()],
+            move_comment_tool: vec!["Shift+C".to_string()],
 
             // Edit
             undo: vec!["Ctrl+Z".to_string()],

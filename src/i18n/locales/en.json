@@ -1369,10 +1369,12 @@
     "groupAria": "{{group}} tools",
     "groups": {
       "move": "Move",
+      "comment": "Comment",
       "navigate": "Navigate"
     },
     "tools": {
       "comment": "Comment",
+      "moveComment": "Move comment",
       "delete": "Delete",
       "draw": "Draw",
       "measure": "Measure",
