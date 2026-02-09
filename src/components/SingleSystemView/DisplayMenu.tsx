@@ -24,6 +24,7 @@ const displayOptions: { groupKey: string; items: DisplayOption[] }[] = [
       { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots' },
       { key: 'showVirtualShots', labelKey: 'displayMenu.items.virtualShots', descriptionKey: 'displayMenu.descriptions.virtualShots', disabledWhen: 'showShots' },
       { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots' },
+      { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots' },
       { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum' },
     ],
   },
@@ -63,6 +64,7 @@ export default function DisplayMenu() {
     showSatellite,
     showDepthGradient,
     showStationComments,
+    showShotComments,
     showDevStats,
     gridSpacing,
     toggleDisplay,
@@ -80,6 +82,7 @@ export default function DisplayMenu() {
     showSatellite: s.showSatellite,
     showDepthGradient: s.showDepthGradient,
     showStationComments: s.showStationComments,
+    showShotComments: s.showShotComments,
     showDevStats: s.showDevStats,
     gridSpacing: s.gridSpacing,
     toggleDisplay: s.toggleDisplay,
@@ -99,6 +102,7 @@ export default function DisplayMenu() {
     showSatellite,
     showDepthGradient,
     showStationComments,
+    showShotComments,
     showDevStats,
   };
 

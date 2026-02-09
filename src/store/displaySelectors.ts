@@ -25,6 +25,7 @@ export const DISPLAY_DEFAULTS = {
   showSatellite: false,
   showDepthGradient: false,
   showStationComments: false,
+  showShotComments: false,
   showDevStats: false,
   gridSpacing: 10,
 } as const;
@@ -51,4 +52,12 @@ export function getEffectiveShowShotData(showShots: boolean, showShotData: boole
  */
 export function getEffectiveShowStationComments(showStations: boolean, showStationComments: boolean): boolean {
   return showStations && showStationComments;
+}
+
+/**
+ * Compute effective visibility of shot comments.
+ * Shot comments are only visible when both showShots AND showShotComments are true.
+ */
+export function getEffectiveShowShotComments(showShots: boolean, showShotComments: boolean): boolean {
+  return showShots && showShotComments;
 }

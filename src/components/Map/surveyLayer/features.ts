@@ -210,6 +210,7 @@ export function buildSurveyFeatures(
             shotId: shot.id,
             color: shotLabelColor,
             isVirtual: shot.is_virtual,
+            comment: shot.comment ?? null,
           },
         });
 

@@ -67,6 +67,7 @@ export default class SurveyLayer {
   private shotLabelsLayerId = 'survey-shot-labels';
   private stationLabelsLayerId = 'survey-station-labels';
   private stationCommentsLayerId = 'survey-station-comments';
+  private shotCommentsLayerId = 'survey-shot-comments';
   private loopClosuresLayerId = 'survey-loop-closures';
   private dragClosuresLayerId = 'survey-drag-loop-closures';
   private ghostShotsLayerId = 'survey-ghost-shots';
@@ -776,6 +777,38 @@ export default class SurveyLayer {
         'text-allow-overlap': false,
         'text-max-width': 12,
         'visibility': 'none', // Start hidden, controlled by setShowStationComments
+      },
+      paint: {
+        'text-color': this.themeColors.labelColor,
+        'text-halo-color': this.themeColors.textHaloAlt,
+        'text-halo-width': 1.5,
+        'text-opacity': 0.85,
+      },
+      filter: ['!=', ['get', 'comment'], null],
+    });
+
+    // Shot comments layer - shows comment text near each shot midpoint
+    // Uses the same source as shot labels, filtered to only show shots with comments
+    this.map.addLayer({
+      id: this.shotCommentsLayerId,
+      type: 'symbol',
+      source: this.sourceId + '-shot-labels',
+      minzoom: 14,
+      layout: {
+        'text-field': ['get', 'comment'],
+        'text-font': ['Open Sans Regular'],
+        'text-size': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          14, 8,
+          18, 10,
+        ],
+        'text-offset': [0, 1.5], // Below shot midpoint
+        'text-anchor': 'top',
+        'text-allow-overlap': false,
+        'text-max-width': 12,
+        'visibility': 'none', // Start hidden, controlled by setShowShotComments
       },
       paint: {
         'text-color': this.themeColors.labelColor,
@@ -1749,6 +1782,15 @@ export default class SurveyLayer {
     );
   }
 
+  // Control shot comments visibility
+  setShowShotComments(show: boolean) {
+    this.map.setLayoutProperty(
+      this.shotCommentsLayerId,
+      'visibility',
+      show ? 'visible' : 'none'
+    );
+  }
+
   // Control stations visibility (also hides loop closures and station hitbox)
   // Note: Highlight layer stays visible - it uses filter to control what renders,
   // allowing snapped/origin stations to appear even when stations layer is hidden
@@ -1797,6 +1839,7 @@ export default class SurveyLayer {
       this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
       this.map.setFilter(this.stationLabelsLayerId, this.stationLabelsBaseFilter);
       this.map.setFilter(this.stationCommentsLayerId, commentBaseFilter);
+      this.map.setFilter(this.shotCommentsLayerId, commentBaseFilter);
       this.map.setFilter(this.labelsLayerId, null);
     } else {
       // Hide virtual shots and their labels
@@ -1817,6 +1860,10 @@ export default class SurveyLayer {
       // Hide station comments for virtual-only stations
       this.map.setFilter(this.stationCommentsLayerId,
         ['all', commentBaseFilter, notAllVirtual] as maplibregl.FilterSpecification
+      );
+      // Hide shot comments for virtual shots
+      this.map.setFilter(this.shotCommentsLayerId,
+        ['all', commentBaseFilter, notVirtual] as maplibregl.FilterSpecification
       );
       // Hide section names when all stations in the section are virtual
       this.map.setFilter(this.labelsLayerId, ['!=', ['get', 'allStationsVirtual'], true]);
@@ -3110,6 +3157,11 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.stationCommentsLayerId)) {
       this.map.setPaintProperty(this.stationCommentsLayerId, 'text-color', colors.labelColor);
       this.map.setPaintProperty(this.stationCommentsLayerId, 'text-halo-color', colors.textHaloAlt);
+    }
+    // Shot comments label + halo
+    if (this.map.getLayer(this.shotCommentsLayerId)) {
+      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-color', colors.labelColor);
+      this.map.setPaintProperty(this.shotCommentsLayerId, 'text-halo-color', colors.textHaloAlt);
     }
     // Ghost station stroke
     if (this.map.getLayer(this.ghostStationsLayerId)) {

@@ -177,6 +177,7 @@ interface UIStore {
   showSatellite: boolean;
   showDepthGradient: boolean;
   showStationComments: boolean;
+  showShotComments: boolean;
   showDevStats: boolean;
   gridSpacing: number;
   toggleDisplay: (key: DisplayToggleKey) => void;
@@ -269,6 +270,7 @@ export type DisplayToggleKey =
   | 'showSatellite'
   | 'showDepthGradient'
   | 'showStationComments'
+  | 'showShotComments'
   | 'showDevStats';
 
 export const useUIStore = create<UIStore>((set) => ({
@@ -465,6 +467,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showSatellite: DISPLAY_DEFAULTS.showSatellite,
   showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
+  showShotComments: DISPLAY_DEFAULTS.showShotComments,
   showDevStats: DISPLAY_DEFAULTS.showDevStats,
   gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
   toggleDisplay: (key) => {
@@ -541,6 +544,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showSatellite: DISPLAY_DEFAULTS.showSatellite,
       showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
+      showShotComments: DISPLAY_DEFAULTS.showShotComments,
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
       gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
     });
