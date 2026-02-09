@@ -2119,3 +2119,102 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
     assert!(!lc2.is_aligned);
     assert_eq!(loaded.next_closure_id, 3);
 }
+
+// ── Gzip compression unit tests ─────────────────────────────────────
+
+#[test]
+fn test_compress_decompress_round_trip() {
+    let original = r#"{"type":"AddSection","data":{"name":"Main"}}"#;
+    let compressed = compress_json(original);
+    let decompressed = decompress_json(&compressed).unwrap();
+    assert_eq!(decompressed, original);
+}
+
+#[test]
+fn test_compress_produces_gzip_magic_bytes() {
+    let compressed = compress_json("hello");
+    assert!(compressed.len() >= 2, "compressed output should have at least 2 bytes");
+    assert_eq!(compressed[0], 0x1f, "first magic byte");
+    assert_eq!(compressed[1], 0x8b, "second magic byte");
+}
+
+#[test]
+fn test_decompress_plain_utf8_backward_compat() {
+    // Old uncompressed TEXT entries should be returned as-is
+    let plain = b"plain JSON string";
+    let result = decompress_json(plain).unwrap();
+    assert_eq!(result, "plain JSON string");
+}
+
+#[test]
+fn test_decompress_empty_data() {
+    let result = decompress_json(b"").unwrap();
+    assert_eq!(result, "");
+}
+
+#[test]
+fn test_compress_empty_string() {
+    let compressed = compress_json("");
+    let decompressed = decompress_json(&compressed).unwrap();
+    assert_eq!(decompressed, "");
+}
+
+#[test]
+fn test_compress_large_json() {
+    // Large repetitive JSON compresses well
+    let large = format!(r#"{{"data":[{}]}}"#, "1,".repeat(10_000).trim_end_matches(','));
+    let compressed = compress_json(&large);
+    let decompressed = decompress_json(&compressed).unwrap();
+    assert_eq!(decompressed, large);
+    // Compression should be significantly smaller
+    assert!(
+        compressed.len() < large.len() / 2,
+        "compressed ({}) should be much smaller than original ({})",
+        compressed.len(),
+        large.len()
+    );
+}
+
+#[test]
+fn test_compress_unicode() {
+    let unicode = r#"{"name":"Grotte de l'Émeraude","探検":"洞窟"}"#;
+    let compressed = compress_json(unicode);
+    let decompressed = decompress_json(&compressed).unwrap();
+    assert_eq!(decompressed, unicode);
+}
+
+#[test]
+fn test_decompress_single_byte_not_gzip() {
+    // Single byte can't be gzip — should return as lossy UTF-8
+    let result = decompress_json(&[0x41]).unwrap();
+    assert_eq!(result, "A");
+}
+
+#[test]
+fn test_undo_stack_round_trips_through_compression() {
+    // Verify the full pipeline: save → (compress) → load → (decompress) matches
+    let db = Database::in_memory().unwrap();
+    let json_with_special_chars = r##"{"color":"#ff0000","value":"hello\nworld"}"##;
+    let entries = vec![
+        (json_with_special_chars.to_string(), r#"{"undo":"data"}"#.to_string()),
+    ];
+    db.save_undo_stack(entries).unwrap();
+    let loaded = db.load_undo_stack().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].1, json_with_special_chars);
+    assert_eq!(loaded[0].2, r#"{"undo":"data"}"#);
+}
+
+#[test]
+fn test_migrate_undo_redo_to_blob_on_fresh_db() {
+    // Fresh in-memory DB already has BLOB columns (schema v3).
+    // Migration should be idempotent and not error.
+    let db = Database::in_memory().unwrap();
+    db.migrate_undo_redo_to_blob().unwrap();
+    // Save and load should still work after migration
+    let entries = vec![("cmd".to_string(), "undo".to_string())];
+    db.save_undo_stack(entries).unwrap();
+    let loaded = db.load_undo_stack().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].1, "cmd");
+}
