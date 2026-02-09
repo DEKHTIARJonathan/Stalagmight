@@ -231,7 +231,7 @@ interface ProjectStore {
 
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
-  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean) => Promise<CommandResult>;
+  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
@@ -1181,13 +1181,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
   },
 
-  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean) => {
+  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => {
     const result = await invokeIpc<CommandResult>(
       'execute_tml_import',
       {
         path,
         fileHash: fileHash ?? null,
         includeExcluded: includeExcluded ?? false,
+        commentsOnStations: commentsOnStations ?? true,
       },
       { purpose: 'import Ariane TML/TMLU', fields: { path } }
     );

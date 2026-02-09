@@ -8582,6 +8582,7 @@ fn test_execute_import_sections_origin_placement() {
             direction: None,
             quality: 1.0,
             shots: vec![test_shot_data(5.0)],
+            station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
@@ -8593,6 +8594,7 @@ fn test_execute_import_sections_origin_placement() {
             direction: None,
             quality: 1.0,
             shots: vec![test_shot_data(3.0)],
+            station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
         },
     ];
@@ -8631,6 +8633,7 @@ fn test_execute_import_sections_from_importing_placement() {
             direction: None,
             quality: 1.0,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
@@ -8642,6 +8645,7 @@ fn test_execute_import_sections_from_importing_placement() {
             direction: None,
             quality: 1.0,
             shots: vec![test_shot_data(4.0)],
+            station_comments: Vec::new(),
             placement: ImportPlacement::FromImporting {
                 import_station: 0,
                 target_section_index: 0,
@@ -8689,6 +8693,7 @@ fn test_execute_import_sections_from_existing_placement() {
             direction: None,
             quality: 1.0,
             shots: vec![test_shot_data(4.0)],
+            station_comments: Vec::new(),
             placement: ImportPlacement::FromExisting {
                 import_station: 0,
                 existing_station: StationRef::new(existing_id, 2),
@@ -8723,6 +8728,7 @@ fn test_execute_import_sections_manual_with_offset() {
         direction: None,
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
         placement: ImportPlacement::Manual {
             align_station_index: 0,
             offset: Some(Coordinates { x: 10.0, y: 20.0, z: 0.0 }),
@@ -8762,6 +8768,7 @@ fn test_execute_import_sections_zero_datum_placement() {
         direction: None,
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: gps,
             station_index: 0,
@@ -8798,6 +8805,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             direction: None,
             quality: 1.0,
             shots: vec![test_shot_data(5.0)],
+            station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
@@ -8809,6 +8817,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             direction: None,
             quality: 1.0,
             shots: vec![test_shot_data(3.0)],
+            station_comments: Vec::new(),
             placement: ImportPlacement::FromExisting {
                 import_station: 0,
                 existing_station: StationRef::new(9999, 0), // nonexistent
@@ -8851,6 +8860,7 @@ fn test_execute_import_sections_no_project() {
         direction: None,
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
+        station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
     }];
 
@@ -8888,6 +8898,7 @@ fn test_execute_import_sections_manual_snap_placement() {
         direction: None,
         quality: 1.0,
         shots: vec![test_shot_data(4.0)],
+        station_comments: Vec::new(),
         placement: ImportPlacement::ManualSnap {
             align_station_index: 0,
             snapped_to_station: StationRef::new(existing_id, 1),

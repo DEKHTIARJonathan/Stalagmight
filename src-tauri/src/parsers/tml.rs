@@ -1020,7 +1020,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
 
 /// Convert a parsed TML file into `ImportSectionConfig` values ready for
 /// `execute_import_sections`.
-pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>)> {
+pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool, comments_on_stations: bool) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>)> {
     if tml.sections.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
@@ -1091,6 +1091,24 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
             tml.geo_coding.as_ref(),
         );
 
+        // When comments_on_stations is true, promote shot comments to the
+        // "to" station (station_index = shot_index + 1) and clear them from shots.
+        let mut station_comments = Vec::new();
+        if comments_on_stations {
+            for (shot_idx, shot) in shot_data.iter().enumerate() {
+                if let Some(ref comment) = shot.comment {
+                    if !comment.is_empty() {
+                        station_comments.push((shot_idx as u32 + 1, comment.clone()));
+                    }
+                }
+            }
+        }
+        let shots = if comments_on_stations && !station_comments.is_empty() {
+            shot_data.into_iter().map(|mut s| { s.comment = None; s }).collect()
+        } else {
+            shot_data
+        };
+
         configs.push(ImportSectionConfig {
             section_index,
             name: Some(section.name.clone()),
@@ -1099,8 +1117,9 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool) -> R
             color: section.color.clone(),
             direction: None, // Ariane doesn't distinguish in/out direction
             quality: 1.0,
-            shots: shot_data,
+            shots,
             placement,
+            station_comments,
         });
     }
 
@@ -1706,7 +1725,7 @@ mod tests {
             closures,
         };
 
-        let (configs, _) = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
+        let (configs, _) = convert_tml_to_import_configs(&tml, false, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 1);
         match &configs[0].placement {
             ImportPlacement::ZeroDatum {
@@ -2162,7 +2181,7 @@ mod tests {
             closures,
         };
 
-        let (configs, _) = convert_tml_to_import_configs(&tml, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
+        let (configs, _) = convert_tml_to_import_configs(&tml, false, false).unwrap_or_else(|_| (Vec::new(), Vec::new()));
         assert_eq!(configs.len(), 2);
 
         // First section → Origin (no GPS)
@@ -2491,12 +2510,12 @@ mod tests {
         };
 
         // With excluded filtered out, section "AllExcluded" has 0 shots → dropped
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name.as_deref(), Some("Good"));
 
         // With excluded included, both sections present
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, true).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, true, false).unwrap();
         assert_eq!(configs.len(), 2);
     }
 
@@ -2562,12 +2581,12 @@ mod tests {
         };
 
         // Excluded filtered: branch 2 dropped, branch 1 renamed to "Gallery"
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].name.as_deref(), Some("Gallery"));
 
         // Both included: both branches keep their suffixes
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, true).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, true, false).unwrap();
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].name.as_deref(), Some("Gallery (branch 1)"));
         assert_eq!(configs[1].name.as_deref(), Some("Gallery (branch 2)"));
@@ -2660,7 +2679,7 @@ mod tests {
             closures: Vec::new(),
         };
 
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 3);
 
         // After topological sort: C must come before B because B depends on C.
@@ -2775,7 +2794,7 @@ mod tests {
             closures,
         };
 
-        let (configs, _closures) = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, _closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert_eq!(configs.len(), 2, "Should have 2 sections");
 
         // Section A: 4 shots → 5 stations (0, 1, 2, 3, 4)
@@ -2823,7 +2842,7 @@ mod tests {
         assert_eq!(tml.unit, TmlUnit::Metric);
 
         // 2. Convert to import configs (exclude excluded shots)
-        let (configs, closures) = convert_tml_to_import_configs(&tml, false).unwrap();
+        let (configs, closures) = convert_tml_to_import_configs(&tml, false, false).unwrap();
         assert!(!configs.is_empty(), "Should produce import configs");
 
         // 3. Create a project and import all sections

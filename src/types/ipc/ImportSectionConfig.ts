@@ -3,4 +3,4 @@ import type { ImportPlacement } from "./ImportPlacement";
 import type { ShotData } from "./ShotData";
 import type { SurveyDirection } from "./SurveyDirection";
 
-export interface ImportSectionConfig { section_index: number, name: string | null, surveyor: string | null, date: string | null, color: string, direction: SurveyDirection | null, quality: number, shots: Array<ShotData>, placement: ImportPlacement, }
+export interface ImportSectionConfig { section_index: number, name: string | null, surveyor: string | null, date: string | null, color: string, direction: SurveyDirection | null, quality: number, shots: Array<ShotData>, placement: ImportPlacement, station_comments: Array<[number, string]>, }
