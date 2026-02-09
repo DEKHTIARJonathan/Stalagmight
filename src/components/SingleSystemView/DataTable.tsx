@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Section, type Shot, type ShotUpdates } from '../../types/project';
+import { type Section, type Shot, type ShotUpdates, type Station } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
-import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon, LockIcon } from '../common/icons';
+import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon, LinkIcon, LockIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
@@ -23,12 +23,14 @@ export default function DataTable({ sections }: DataTableProps) {
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(
     sections[0]?.id ?? null
   );
+  const [tableView, setTableView] = useState<'shots' | 'stations'>('shots');
   // Track key for scrolling to a row (set when external selection changes)
   const [scrollToKey, setScrollToKey] = useState<number | null>(null);
+  const [stationScrollToKey, setStationScrollToKey] = useState<number | null>(null);
   // Track previous selection to only react to actual selection changes
   const prevSelectionRef = useRef<Selection | null>(null);
 
-  const { updateShot, warnings, isShotFrozen } = useProjectStore();
+  const { updateShot, warnings, isShotFrozen, stations, updateStationComment } = useProjectStore();
   const {
     selection,
     setSelection,
@@ -41,6 +43,9 @@ export default function DataTable({ sections }: DataTableProps) {
     announceSelection,
     setHoveredSectionId,
     openDialog,
+    triggerCenterOnStation,
+    setHoveredStation,
+    hoveredStation,
   } = useUIStore(useShallow((s) => ({
     selection: s.selection,
     setSelection: s.setSelection,
@@ -53,6 +58,9 @@ export default function DataTable({ sections }: DataTableProps) {
     announceSelection: s.announceSelection,
     setHoveredSectionId: s.setHoveredSectionId,
     openDialog: s.openDialog,
+    triggerCenterOnStation: s.triggerCenterOnStation,
+    setHoveredStation: s.setHoveredStation,
+    hoveredStation: s.hoveredStation,
   })));
 
   // Create a map of shot warnings for quick lookup
@@ -144,10 +152,6 @@ export default function DataTable({ sections }: DataTableProps) {
         setScrollToKey(selection.shotId);
       }
     } else if (selection.type === 'station' && selection.stationRef) {
-      // Station selected - highlight the shot connected to this station.
-      // Shot N connects station N to station N+1, so:
-      // - Station 0 is the start of shot 0 (highlight shot 0)
-      // - Station N (N >= 1) is the end of shot N-1 (highlight shot N-1)
       const { section_id, station_index } = selection.stationRef;
       const section = sections.find((s) => s.id === section_id);
       if (section) {
@@ -157,12 +161,20 @@ export default function DataTable({ sections }: DataTableProps) {
         }
         // Only scroll if DataTable is open
         if (dataTableOpen) {
-          // Compute which shot to highlight/scroll to
-          const shotIndex = station_index >= 1 ? station_index - 1 : 0;
-          if (shotIndex >= 0 && shotIndex < section.shots.length) {
-            const shot = section.shots[shotIndex];
-            if (shot) {
-              setScrollToKey(shot.id);
+          if (tableView === 'stations') {
+            // Stations view - scroll directly to the station row
+            setStationScrollToKey(station_index);
+          } else {
+            // Shots view - highlight the shot connected to this station
+            // Shot N connects station N to station N+1, so:
+            // - Station 0 is the start of shot 0 (highlight shot 0)
+            // - Station N (N >= 1) is the end of shot N-1 (highlight shot N-1)
+            const shotIndex = station_index >= 1 ? station_index - 1 : 0;
+            if (shotIndex >= 0 && shotIndex < section.shots.length) {
+              const shot = section.shots[shotIndex];
+              if (shot) {
+                setScrollToKey(shot.id);
+              }
             }
           }
         }
@@ -176,7 +188,7 @@ export default function DataTable({ sections }: DataTableProps) {
         setScrollToKey(null);
       }
     }
-  }, [selection, selectedSectionId, sections, dataTableOpen]);
+  }, [selection, selectedSectionId, sections, dataTableOpen, tableView]);
 
   // Clear scrollToKey after it's been consumed (to allow re-scrolling to same row)
   useEffect(() => {
@@ -184,6 +196,12 @@ export default function DataTable({ sections }: DataTableProps) {
     const timer = setTimeout(() => setScrollToKey(null), 100);
     return () => clearTimeout(timer);
   }, [scrollToKey]);
+
+  useEffect(() => {
+    if (stationScrollToKey === null) return;
+    const timer = setTimeout(() => setStationScrollToKey(null), 100);
+    return () => clearTimeout(timer);
+  }, [stationScrollToKey]);
 
   const selectedSection = sections.find((s) => s.id === selectedSectionId);
 
@@ -417,6 +435,121 @@ export default function DataTable({ sections }: DataTableProps) {
     return null;
   }, [selection, selectedSectionId, sections]);
 
+  // --- Station view data ---
+
+  type StationRow = Station & { id: number };
+
+  const sectionStations = useMemo((): StationRow[] => {
+    if (tableView !== 'stations' || selectedSectionId === null) return [];
+    return stations
+      .filter((s) => s.station_ref.section_id === selectedSectionId)
+      .map((s) => ({ ...s, id: s.station_ref.station_index }));
+  }, [stations, selectedSectionId, tableView]);
+
+  const highlightedStationIndex = useMemo((): number | null => {
+    if (tableView !== 'stations') return null;
+    if (!selection || selection.type !== 'station') return null;
+    if (selection.stationRef?.section_id !== selectedSectionId) return null;
+    return selection.stationRef.station_index;
+  }, [selection, selectedSectionId, tableView]);
+
+  const stationColumns = useMemo(() => [
+    {
+      key: 'id',
+      header: t('dataTable.stationColumns.index'),
+      width: '60px',
+      render: (row: StationRow) =>
+        `${row.station_ref.section_id}.${row.station_ref.station_index}`,
+    },
+    {
+      key: '_x',
+      header: t('dataTable.stationColumns.x'),
+      width: '90px',
+      align: 'right' as const,
+      render: (row: StationRow) => formatFixed(row.coordinates.x, undefined, precision.coordinates),
+    },
+    {
+      key: '_y',
+      header: t('dataTable.stationColumns.y'),
+      width: '90px',
+      align: 'right' as const,
+      render: (row: StationRow) => formatFixed(row.coordinates.y, undefined, precision.coordinates),
+    },
+    {
+      key: '_depth',
+      header: t('dataTable.stationColumns.depth'),
+      width: '90px',
+      align: 'right' as const,
+      render: (row: StationRow) => formatFixed(row.coordinates.z, undefined, precision.depth),
+    },
+    {
+      key: '_zeroDatum',
+      header: t('dataTable.stationColumns.zeroDatum'),
+      width: '40px',
+      align: 'center' as const,
+      render: (row: StationRow) => (row.is_zero_datum ? <DotIcon size={10} /> : ''),
+    },
+    {
+      key: '_merges',
+      header: t('dataTable.stationColumns.merges'),
+      width: '60px',
+      align: 'center' as const,
+      render: (row: StationRow) =>
+        row.merged_with.length > 0
+          ? <span title={row.merged_with.map((m) => `${m.section_id}.${m.station_index}`).join(', ')}><LinkIcon size={12} /> {row.merged_with.length}</span>
+          : '',
+    },
+    {
+      key: 'comment',
+      header: t('dataTable.stationColumns.comment'),
+    },
+  ], [t, precision.coordinates, precision.depth]);
+
+  // Station interaction handlers
+  const handleStationRowClick = useCallback(
+    (row: StationRow, _index: number) => {
+      setSelection({ type: 'station', stationRef: row.station_ref });
+    },
+    [setSelection]
+  );
+
+  const handleStationRowDoubleClick = useCallback(
+    (row: StationRow, _index: number) => {
+      triggerCenterOnStation(row.station_ref);
+    },
+    [triggerCenterOnStation]
+  );
+
+  const handleStationRowHover = useCallback(
+    (row: StationRow | null, _index: number | null) => {
+      if (row) {
+        setHoveredStation(row.station_ref);
+      } else {
+        setHoveredStation(null);
+      }
+    },
+    [setHoveredStation]
+  );
+
+  const handleStationCellEdit = useCallback(
+    async (row: StationRow, key: string, value: unknown) => {
+      if (key !== 'comment') return;
+      const comment = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+      await updateStationComment(row.station_ref, comment);
+    },
+    [updateStationComment]
+  );
+
+  // View toggle options
+  const viewOptions: SelectOption[] = useMemo(() => [
+    { value: 'shots', label: t('dataTable.viewShots') },
+    { value: 'stations', label: t('dataTable.viewStations') },
+  ], [t]);
+
+  const handleViewChange = useCallback((value: string) => {
+    setTableView(value as 'shots' | 'stations');
+  }, []);
+
   const columns = [
     {
       key: '_warnings',
@@ -607,6 +740,14 @@ export default function DataTable({ sections }: DataTableProps) {
         {dataTableOpen && (
           <>
             <span className="text-text-secondary">|</span>
+            <Select
+              value={tableView}
+              onChange={handleViewChange}
+              options={viewOptions}
+              className="min-w-[100px]"
+              data-testid="data-table-view-select"
+            />
+            <span className="text-text-secondary">|</span>
             <label className="text-sm text-text-secondary">{t('common.labels.section')}:</label>
             <Select
               value={String(selectedSectionId ?? '')}
@@ -621,10 +762,17 @@ export default function DataTable({ sections }: DataTableProps) {
         {!dataTableOpen && selectedSection && (
           <span className="text-sm text-text-secondary ml-auto">
             {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}{' '}
-            ({t('dataTable.shotCount', {
-              count: selectedSection.shots.length,
-              countFormatted: formatNumber(selectedSection.shots.length),
-            })})
+            ({tableView === 'stations'
+              ? t('dataTable.stationCount', {
+                  countFormatted: formatNumber(
+                    stations.filter((s) => s.station_ref.section_id === selectedSectionId).length
+                  ),
+                })
+              : t('dataTable.shotCount', {
+                  count: selectedSection.shots.length,
+                  countFormatted: formatNumber(selectedSection.shots.length),
+                })
+            })
           </span>
         )}
       </div>
@@ -633,40 +781,71 @@ export default function DataTable({ sections }: DataTableProps) {
       {dataTableOpen && (
         <div className="flex-1 overflow-auto">
           {selectedSection ? (
-            <EditableTable<Shot>
-              columns={columns}
-              data={selectedSection.shots}
-              keyField="id"
-              onCellEdit={handleCellEdit}
-              editableColumns={editableColumns}
-              isRowEditable={isRowEditable}
-              selectedKey={highlightedShotId}
-              hoveredKey={
-                hoveredShot?.sectionId === selectedSectionId
-                  ? hoveredShot.shotId
-                  : null
-              }
-              scrollToKey={scrollToKey}
-              onRowClick={handleRowClick}
-              onRowDoubleClick={handleRowDoubleClick}
-              onRowContextMenu={handleRowContextMenu}
-              onRowHover={handleRowHover}
-              emptyMessage={t('dataTable.empty')}
-              rowClassName={(shot: Shot, isSelected, isHovered) => {
-                const index = selectedSection?.shots.indexOf(shot) ?? -1;
-                const frozen = selectedSectionId !== null && index >= 0 && isShotFrozen(selectedSectionId, index);
-                const classes: string[] = [];
-                if (isSelected) {
-                  classes.push('bg-accent-20');
-                } else if (isHovered) {
-                  classes.push('bg-accent-10');
-                } else if (frozen) {
-                  classes.push('bg-warning-5');
+            tableView === 'shots' ? (
+              <EditableTable<Shot>
+                columns={columns}
+                data={selectedSection.shots}
+                keyField="id"
+                onCellEdit={handleCellEdit}
+                editableColumns={editableColumns}
+                isRowEditable={isRowEditable}
+                selectedKey={highlightedShotId}
+                hoveredKey={
+                  hoveredShot?.sectionId === selectedSectionId
+                    ? hoveredShot.shotId
+                    : null
                 }
-                classes.push('cursor-pointer');
-                return classes.join(' ');
-              }}
-            />
+                scrollToKey={scrollToKey}
+                onRowClick={handleRowClick}
+                onRowDoubleClick={handleRowDoubleClick}
+                onRowContextMenu={handleRowContextMenu}
+                onRowHover={handleRowHover}
+                emptyMessage={t('dataTable.empty')}
+                rowClassName={(shot: Shot, isSelected, isHovered) => {
+                  const index = selectedSection?.shots.indexOf(shot) ?? -1;
+                  const frozen = selectedSectionId !== null && index >= 0 && isShotFrozen(selectedSectionId, index);
+                  const classes: string[] = [];
+                  if (isSelected) {
+                    classes.push('bg-accent-20');
+                  } else if (isHovered) {
+                    classes.push('bg-accent-10');
+                  } else if (frozen) {
+                    classes.push('bg-warning-5');
+                  }
+                  classes.push('cursor-pointer');
+                  return classes.join(' ');
+                }}
+              />
+            ) : (
+              <EditableTable<StationRow>
+                columns={stationColumns}
+                data={sectionStations}
+                keyField="id"
+                onCellEdit={handleStationCellEdit}
+                editableColumns={['comment']}
+                selectedKey={highlightedStationIndex}
+                hoveredKey={
+                  hoveredStation?.section_id === selectedSectionId
+                    ? hoveredStation.station_index
+                    : null
+                }
+                scrollToKey={stationScrollToKey}
+                onRowClick={handleStationRowClick}
+                onRowDoubleClick={handleStationRowDoubleClick}
+                onRowHover={handleStationRowHover}
+                emptyMessage={t('dataTable.stationsEmpty')}
+                rowClassName={(_row: StationRow, isSelected, isHovered) => {
+                  const classes: string[] = [];
+                  if (isSelected) {
+                    classes.push('bg-accent-20');
+                  } else if (isHovered) {
+                    classes.push('bg-accent-10');
+                  }
+                  classes.push('cursor-pointer');
+                  return classes.join(' ');
+                }}
+              />
+            )
           ) : (
             <div className="flex items-center justify-center h-full text-text-secondary">
               {t('dataTable.selectSection')}

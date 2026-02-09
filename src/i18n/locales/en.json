@@ -858,10 +858,23 @@
       "virtualShort": "V",
       "comment": "Comment"
     },
+    "viewShots": "Shots",
+    "viewStations": "Stations",
     "empty": "No shots in this section.",
+    "stationsEmpty": "No stations in this section.",
     "frozen": "Geometry locked — part of adjusted network",
     "selectSection": "Select a section to view shots.",
     "shotCount": "{{countFormatted}} shots",
+    "stationCount": "{{countFormatted}} stations",
+    "stationColumns": {
+      "index": "Stn",
+      "x": "X",
+      "y": "Y",
+      "depth": "Depth",
+      "zeroDatum": "GPS",
+      "merges": "Merges",
+      "comment": "Comment"
+    },
     "announcement": {
       "shotSelected": "Selected shot {{shotId}}."
     }
