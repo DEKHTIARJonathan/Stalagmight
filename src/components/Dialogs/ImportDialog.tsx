@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import { Panel } from '../common/Panel';
@@ -22,6 +22,15 @@ type EditableField =
   | 'up'
   | 'down';
 
+interface SavedFormState {
+  name: string;
+  surveyor: string;
+  date: string;
+  color: string;
+  shots: ShotData[];
+  showLrud: boolean;
+}
+
 function validateField(field: EditableField, raw: string): string | null {
   if (field === 'left' || field === 'right' || field === 'up' || field === 'down') {
     if (raw.trim() === '') return null; // empty is valid (→ null)
@@ -37,15 +46,19 @@ function validateField(field: EditableField, raw: string): string | null {
 }
 
 export default function ImportDialog() {
-  const { closeDialog } = useUIStore();
-  const { createSection, project } = useProjectStore();
+  const { closeDialog, openDialog, startPlacementMode, dialogData } = useUIStore();
+  const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
+
+  // Restore form state when reopening after placement cancel
+  const saved = dialogData as { savedFormState?: SavedFormState } | undefined;
+  const restored = saved?.savedFormState;
 
   // Form state
-  const [name, setName] = useState<string>('');
-  const [surveyor, setSurveyor] = useState<string>('');
-  const [date, setDate] = useState<string>('');
-  const [shots, setShots] = useState<ShotData[]>([createEmptyShot()]);
-  const [showLrud, setShowLrud] = useState(false);
+  const [name, setName] = useState<string>(restored?.name ?? '');
+  const [surveyor, setSurveyor] = useState<string>(restored?.surveyor ?? '');
+  const [date, setDate] = useState<string>(restored?.date ?? '');
+  const [shots, setShots] = useState<ShotData[]>(restored?.shots ?? [createEmptyShot()]);
+  const [showLrud, setShowLrud] = useState(restored?.showLrud ?? false);
 
   // Validation state
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({});
@@ -56,7 +69,7 @@ export default function ImportDialog() {
 
   // Get next available color
   const usedColors = project?.sections.map((s) => s.color) ?? [];
-  const [color, setColor] = useState<string>(getNextSectionColor(usedColors));
+  const [color, setColor] = useState<string>(restored?.color ?? getNextSectionColor(usedColors));
 
   const editableCols = showLrud ? [...BASE_COLS, ...LRUD_COLS] : BASE_COLS;
 
@@ -233,7 +246,7 @@ export default function ImportDialog() {
     }
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     const sectionData: SectionData = {
       name: name || null,
       surveyor: surveyor || null,
@@ -244,8 +257,30 @@ export default function ImportDialog() {
       shots: shots.filter((s) => s.length > 0),
     };
 
-    await createSection(sectionData);
+    // Save form state so we can restore on cancel
+    const formState: SavedFormState = { name, surveyor, date, color, shots, showLrud };
+
+    // Close dialog and enter placement mode
     closeDialog();
+    startPlacementMode(
+      sectionData,
+      0, // align station 0 to cursor
+      // onComplete: create section, merge if snapped or move to position
+      async (result: PlacementResult) => {
+        if (result.snappedToStation) {
+          await createSectionAndMerge(sectionData, 0, result.snappedToStation, 'Move');
+        } else {
+          const cmdResult = await createSection(sectionData);
+          if (cmdResult.success && cmdResult.section_id != null) {
+            await moveSection(cmdResult.section_id, result.position);
+          }
+        }
+      },
+      // onCancel: reopen dialog with saved form state
+      () => {
+        openDialog('import', { savedFormState: formState });
+      },
+    );
   };
 
   // Track if form has been modified
