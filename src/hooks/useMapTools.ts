@@ -257,6 +257,22 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           });
           break;
         }
+
+        case 'comment': {
+          setSelection({ type: 'station', stationRef: ref });
+          // Lookup the station's current comment
+          const station = stations.find(
+            (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
+          );
+          const currentComment = station?.comment ?? '';
+          useUIStore.getState().setCommentTarget({
+            type: 'station',
+            stationRef: ref,
+            screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY },
+            currentComment,
+          });
+          break;
+        }
       }
     },
     [
@@ -278,6 +294,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       setSelection,
       showStations,
       showToast,
+      stations,
       toggleSelection,
     ]
   );
@@ -363,7 +380,21 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           break;
         }
 
-        // Other tools don't respond to shot clicks
+        case 'comment': {
+          setSelection({ type: 'shot', sectionId, shotId });
+          // Lookup the shot's current comment
+          const section = project?.sections.find((s) => s.id === sectionId);
+          const shot = section?.shots.find((s) => s.id === shotId);
+          const currentComment = shot?.comment ?? '';
+          useUIStore.getState().setCommentTarget({
+            type: 'shot',
+            sectionId,
+            shotId,
+            screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY },
+            currentComment,
+          });
+          break;
+        }
       }
     },
     [activeTool, addToSelection, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection]
@@ -423,6 +454,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         case 'select':
         case 'move_segment':
           clearSelection();
+          break;
+
+        case 'comment':
+          useUIStore.getState().clearCommentTarget();
           break;
 
         case 'merge':

@@ -105,6 +105,7 @@ describe('buildShortcutMap logic', () => {
       move_station: ['T'],
       move_segment: ['V'],
       move_shot: ['G'],
+      comment_tool: ['C'],
       undo: ['Ctrl+Z'],
       redo: ['Ctrl+Y'],
       save: ['Ctrl+S'],
@@ -148,6 +149,7 @@ describe('buildShortcutMap logic', () => {
       move_station: ['T'],
       move_segment: ['V'],
       move_shot: ['G'],
+      comment_tool: ['C'],
       undo: ['Ctrl+Z'],
       redo: ['Ctrl+Y', 'Ctrl+Shift+Z'],
       save: ['Ctrl+S'],
@@ -197,6 +199,7 @@ describe('buildShortcutMap logic', () => {
       move_station: ['T'],
       move_segment: ['V'],
       move_shot: ['G'],
+      comment_tool: ['C'],
       undo: ['ctrl+z'], // lowercase
       redo: ['Shift+Ctrl+Z'], // wrong order
       save: ['Cmd+S'], // Mac alias
@@ -252,6 +255,7 @@ describe('buildShortcutMap logic', () => {
       move_station: ['T'],
       move_segment: ['V'],
       move_shot: ['G'],
+      comment_tool: ['C'],
       undo: ['Ctrl+Z'],
       redo: ['Ctrl+Y'],
       save: ['Ctrl+S'],
@@ -296,6 +300,7 @@ describe('buildShortcutMap logic', () => {
       move_station: ['T'],
       move_segment: ['V'],
       move_shot: ['G'],
+      comment_tool: ['C'],
       undo: ['Ctrl+Z'],
       redo: ['Ctrl+Y'],
       save: ['Ctrl+S'],

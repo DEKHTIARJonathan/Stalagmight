@@ -768,6 +768,8 @@ pub struct ShortcutsConfig {
     pub move_segment: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub move_shot: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub comment_tool: Vec<String>,
 
     // Edit
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
@@ -872,6 +874,7 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.move_station, &defaults.move_station, "move_station");
         normalize_shortcut_field(&mut self.move_segment, &defaults.move_segment, "move_segment");
         normalize_shortcut_field(&mut self.move_shot, &defaults.move_shot, "move_shot");
+        normalize_shortcut_field(&mut self.comment_tool, &defaults.comment_tool, "comment_tool");
         normalize_shortcut_field(&mut self.undo, &defaults.undo, "undo");
         normalize_shortcut_field(&mut self.redo, &defaults.redo, "redo");
         normalize_shortcut_field(

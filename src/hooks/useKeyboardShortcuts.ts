@@ -31,6 +31,7 @@ type ShortcutAction =
   | 'move_station'
   | 'move_segment'
   | 'move_shot'
+  | 'comment_tool'
   // Edit
   | 'undo'
   | 'redo'
@@ -70,6 +71,7 @@ const TOOL_ACTIONS: Partial<Record<ShortcutAction, ToolType>> = {
   move_station: 'move_station',
   move_segment: 'move_segment',
   move_shot: 'move_shot',
+  comment_tool: 'comment',
 };
 
 /**
@@ -116,6 +118,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   move_station: 'Move station tool',
   move_segment: 'Move segment tool',
   move_shot: 'Move shot tool',
+  comment_tool: 'Comment tool',
   undo: 'Undo',
   redo: 'Redo',
   toggle_depth_gradient: 'Depth gradient',
@@ -167,6 +170,7 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'move_station',
     'move_segment',
     'move_shot',
+    'comment_tool',
     // Edit
     'undo',
     'redo',
@@ -336,6 +340,7 @@ export function useKeyboardShortcuts() {
         clearMergeStations();
         clearMeasure();
         setDrawFromStation(null);
+        useUIStore.getState().clearCommentTarget();
         return;
       }
 
@@ -446,7 +451,8 @@ export function useKeyboardShortcuts() {
         case 'measure':
         case 'move_station':
         case 'move_segment':
-        case 'move_shot': {
+        case 'move_shot':
+        case 'comment_tool': {
           const tool = TOOL_ACTIONS[action];
           if (tool) {
             event.preventDefault();

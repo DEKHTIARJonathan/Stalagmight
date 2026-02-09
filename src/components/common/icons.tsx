@@ -372,6 +372,14 @@ export function LockIcon(props: IconProps) {
   );
 }
 
+export function MessageIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M4 4 H16 A1 1 0 0 1 17 5 V13 A1 1 0 0 1 16 14 H8 L5 17 V14 H4 A1 1 0 0 1 3 13 V5 A1 1 0 0 1 4 4 Z" />
+    </BaseIcon>
+  );
+}
+
 export function BugIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
