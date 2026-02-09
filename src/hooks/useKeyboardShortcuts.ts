@@ -3,7 +3,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { isNonInteractiveTool } from '../utils/toolUtils';
+import { isNonInteractiveTool, restoreMoveCommentSource } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import {
   ensureExtension,
@@ -32,6 +32,7 @@ type ShortcutAction =
   | 'move_segment'
   | 'move_shot'
   | 'comment_tool'
+  | 'move_comment_tool'
   // Edit
   | 'undo'
   | 'redo'
@@ -72,6 +73,7 @@ const TOOL_ACTIONS: Partial<Record<ShortcutAction, ToolType>> = {
   move_segment: 'move_segment',
   move_shot: 'move_shot',
   comment_tool: 'comment',
+  move_comment_tool: 'move_comment',
 };
 
 /**
@@ -119,6 +121,7 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   move_segment: 'Move segment tool',
   move_shot: 'Move shot tool',
   comment_tool: 'Comment tool',
+  move_comment_tool: 'Move comment tool',
   undo: 'Undo',
   redo: 'Redo',
   toggle_depth_gradient: 'Depth gradient',
@@ -171,6 +174,7 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'move_segment',
     'move_shot',
     'comment_tool',
+    'move_comment_tool',
     // Edit
     'undo',
     'redo',
@@ -341,6 +345,13 @@ export function useKeyboardShortcuts() {
         clearMeasure();
         setDrawFromStation(null);
         useUIStore.getState().clearCommentTarget();
+        // Restore picked-up comment to source before clearing
+        const mcs = useUIStore.getState().moveCommentSource;
+        if (mcs) {
+          restoreMoveCommentSource(mcs).then(() => {
+            useUIStore.getState().clearMoveCommentSource();
+          });
+        }
         return;
       }
 
@@ -452,7 +463,8 @@ export function useKeyboardShortcuts() {
         case 'move_station':
         case 'move_segment':
         case 'move_shot':
-        case 'comment_tool': {
+        case 'comment_tool':
+        case 'move_comment_tool': {
           const tool = TOOL_ACTIONS[action];
           if (tool) {
             event.preventDefault();

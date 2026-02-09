@@ -236,7 +236,13 @@ impl Shot {
             self.down = *v;
         }
         if let Some(v) = &updates.comment {
-            self.comment.clone_from(v);
+            // Normalize empty string → None (clear comment).
+            // JSON `null` for Option<Option<String>> deserializes as outer None (= no update),
+            // so the frontend sends "" to signal "clear", which arrives as Some(Some("")).
+            self.comment = match v {
+                Some(s) if s.is_empty() => None,
+                _ => v.clone(),
+            };
         }
         if let Some(v) = updates.is_virtual {
             self.is_virtual = v;
@@ -376,6 +382,34 @@ mod tests {
         assert_eq!(shot.up, Some(0.7));
         assert_eq!(shot.down, Some(0.8));
         assert_eq!(shot.temperature, Some(21.5));
+    }
+
+    #[test]
+    fn apply_updates_empty_string_clears_comment() {
+        let mut shot = Shot::new(1, base_shot_data());
+        assert_eq!(shot.comment.as_deref(), Some("note"));
+
+        // Empty string should clear comment (workaround for JSON null → outer None serde issue)
+        let updates = ShotUpdates {
+            comment: Some(Some(String::new())),
+            ..Default::default()
+        };
+        shot.apply_updates(&updates);
+        assert!(shot.comment.is_none(), "empty string should clear comment");
+    }
+
+    #[test]
+    fn apply_updates_none_comment_leaves_unchanged() {
+        let mut shot = Shot::new(1, base_shot_data());
+        assert_eq!(shot.comment.as_deref(), Some("note"));
+
+        // None (missing key) should leave comment unchanged
+        let updates = ShotUpdates {
+            comment: None,
+            ..Default::default()
+        };
+        shot.apply_updates(&updates);
+        assert_eq!(shot.comment.as_deref(), Some("note"));
     }
 
     #[test]

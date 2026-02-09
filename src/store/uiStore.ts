@@ -15,7 +15,7 @@ import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
 // Import tool utilities for internal use and re-export for convenience
-import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
+import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool, restoreMoveCommentSource } from '../utils/toolUtils';
 import { getGroupForTool } from '../utils/toolGroups';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
@@ -36,7 +36,8 @@ export type ToolType =
   | 'move_station'
   | 'move_segment'
   | 'move_shot'
-  | 'comment';
+  | 'comment'
+  | 'move_comment';
 
 /**
  * Placement result returned when placement mode completes.
@@ -267,6 +268,19 @@ interface UIStore {
   setCommentTarget: (target: CommentTarget | null) => void;
   clearCommentTarget: () => void;
 
+  // Move comment tool state
+  moveCommentSource: {
+    type: 'station' | 'shot';
+    stationRef?: StationRef;
+    sectionId?: SectionId;
+    shotId?: ShotId;
+    comment: string;
+    /** Screen position of the click that picked up the comment (for cursor tag) */
+    screenPos?: { x: number; y: number };
+  } | null;
+  setMoveCommentSource: (source: UIStore['moveCommentSource']) => void;
+  clearMoveCommentSource: () => void;
+
   // ARIA selection announcements for screen readers
   selectionAnnouncement: string;
   announceSelection: (message: string) => void;
@@ -309,6 +323,16 @@ export const useUIStore = create<UIStore>((set) => ({
         ? { commentTarget: null }
         : {};
 
+      // Restore & clear move comment source when switching away from move_comment tool
+      const shouldRestoreMoveComment = state.moveCommentSource !== null && activeTool !== 'move_comment';
+      if (shouldRestoreMoveComment) {
+        // Fire-and-forget: restore the picked-up comment back to its source via IPC
+        restoreMoveCommentSource(state.moveCommentSource);
+      }
+      const clearMoveComment = shouldRestoreMoveComment
+        ? { moveCommentSource: null }
+        : {};
+
       // Clear hover state when switching to non-interactive tools (pan/zoom)
       // This ensures store consistency regardless of how hover was set
       // Use explicit null checks (not truthiness) because SectionId can be 0
@@ -316,9 +340,9 @@ export const useUIStore = create<UIStore>((set) => ({
         isNonInteractiveTool(activeTool) &&
         (state.hoveredStation !== null || state.hoveredShot !== null || state.hoveredSectionId !== null)
       ) {
-        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment };
+        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment, ...clearMoveComment };
       }
-      return { activeTool, lastSubtoolByGroup, ...clearComment };
+      return { activeTool, lastSubtoolByGroup, ...clearComment, ...clearMoveComment };
     }),
 
   // Selection state
@@ -713,6 +737,11 @@ export const useUIStore = create<UIStore>((set) => ({
   commentTarget: null,
   setCommentTarget: (commentTarget) => set({ commentTarget }),
   clearCommentTarget: () => set({ commentTarget: null }),
+
+  // Move comment tool state
+  moveCommentSource: null,
+  setMoveCommentSource: (moveCommentSource) => set({ moveCommentSource }),
+  clearMoveCommentSource: () => set({ moveCommentSource: null }),
 
   // ARIA selection announcements for screen readers
   selectionAnnouncement: '',
