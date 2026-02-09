@@ -221,6 +221,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 - [ ] Marker Placement - Place markers on shots, before/after or on stations
 - [ ] Marker placement - off the line with set distance eg fossils/bones/leads
 - [ ] Dive Map Mode - Under Display dropdown, single toggle that styles the line better as a dive map rather than survey details
+- [ ] E-ink theme - Optimized for color/BW e-ink displays
 
 ### Import/Export (v2.x)
 - [ ] Additional export formats: Survex, Therion, KML/KMZ
