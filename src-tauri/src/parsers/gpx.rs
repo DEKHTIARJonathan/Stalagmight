@@ -722,46 +722,44 @@ const GPX_COLORS: &[&str] = &[
     "#e74c3c", "#f39c12", "#2980b9", "#8e44ad", "#27ae60",
 ];
 
-/// Build a station comment from elevation data.
-fn elevation_comment(elevation: Option<f64>) -> Option<String> {
-    elevation.map(|e| format!("Elev: {e:.1}m"))
-}
-
 /// Convert GPS point pairs into virtual `ShotData`.
+///
+/// Elevation is converted to relative depth (first point = depth 0, lower = deeper).
+/// Shot length is slope distance incorporating elevation change.
 fn shots_from_points(points: &[(f64, f64, Option<f64>)]) -> Vec<ShotData> {
     if points.len() < 2 {
         return Vec::new();
     }
 
+    // Compute depths relative to first point's elevation.
+    // Depth increases as elevation decreases (going lower = going deeper).
+    let ref_elev = points[0].2.unwrap_or(0.0);
+    let depths: Vec<f64> = points
+        .iter()
+        .map(|(_lat, _lon, ele)| ref_elev - ele.unwrap_or(ref_elev))
+        .collect();
+
     points
         .windows(2)
-        .map(|pair| {
-            let (lat1, lon1, _ele1) = pair[0];
-            let (lat2, lon2, _ele2) = pair[1];
+        .enumerate()
+        .map(|(i, pair)| {
+            let (lat1, lon1, _) = pair[0];
+            let (lat2, lon2, _) = pair[1];
 
-            let length = haversine_distance(lat1, lon1, lat2, lon2);
+            let horiz = haversine_distance(lat1, lon1, lat2, lon2);
+            let dz = depths[i + 1] - depths[i];
+            let length = (horiz * horiz + dz * dz).sqrt();
             let azimuth = initial_bearing(lat1, lon1, lat2, lon2);
 
             ShotData {
                 azimuth_in: azimuth,
                 azimuth_out: azimuth,
                 length,
-                depth_in: 0.0,
-                depth_out: 0.0,
+                depth_in: depths[i],
+                depth_out: depths[i + 1],
                 is_virtual: true,
                 ..Default::default()
             }
-        })
-        .collect()
-}
-
-/// Station comments from point elevation data.
-fn station_comments_from_points(points: &[(f64, f64, Option<f64>)]) -> Vec<(u32, String)> {
-    points
-        .iter()
-        .enumerate()
-        .filter_map(|(i, (_lat, _lon, ele))| {
-            elevation_comment(*ele).map(|c| (i as u32, c))
         })
         .collect()
 }
@@ -786,7 +784,8 @@ pub fn waypoints_to_import_configs(
         if let Some(ref c) = wpt.comment {
             station_comments.push((0u32, c.clone()));
         }
-        if let Some(elev_comment) = elevation_comment(wpt.elevation) {
+        if let Some(e) = wpt.elevation {
+            let elev_comment = format!("Elev: {e:.1}m");
             if let Some((_idx, existing)) = station_comments.first_mut() {
                 existing.push_str(&format!(" | {elev_comment}"));
             } else {
@@ -838,7 +837,7 @@ fn track_segment_to_config(
         quality: 1.0,
         shots: shots_from_points(&points),
         placement,
-        station_comments: station_comments_from_points(&points),
+        station_comments: Vec::new(),
     }
 }
 
@@ -865,7 +864,7 @@ fn route_to_config(
         quality: 1.0,
         shots: shots_from_points(&points),
         placement,
-        station_comments: station_comments_from_points(&points),
+        station_comments: Vec::new(),
     }
 }
 
@@ -1226,6 +1225,91 @@ mod tests {
         assert!((shot.depth_in).abs() < 1e-9);
         assert!((shot.depth_out).abs() < 1e-9);
         assert!(shot.is_virtual);
+    }
+
+    #[test]
+    fn elevation_converts_to_depth_and_slope_length() {
+        // Two points at same lat/lon but different elevation:
+        // horizontal distance = 0, vertical drop = 50m
+        let xml = r#"<?xml version="1.0"?>
+<gpx version="1.1">
+  <trk><name>Descent</name><trkseg>
+    <trkpt lat="45.0" lon="7.0"><ele>200.0</ele></trkpt>
+    <trkpt lat="45.0" lon="7.0"><ele>150.0</ele></trkpt>
+    <trkpt lat="45.0" lon="7.0"><ele>180.0</ele></trkpt>
+  </trkseg></trk>
+</gpx>"#;
+
+        let gpx = parse_gpx_str(xml).unwrap();
+        let configs =
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].shots.len(), 2);
+
+        let s0 = &configs[0].shots[0];
+        // First station: depth 0 (reference elevation 200)
+        // Second station: elevation dropped 50m -> depth = 50
+        assert!((s0.depth_in - 0.0).abs() < 1e-9, "First station depth should be 0");
+        assert!((s0.depth_out - 50.0).abs() < 1e-9, "Second station depth should be 50");
+        // Pure vertical drop -> length = 50m
+        assert!((s0.length - 50.0).abs() < 0.1, "Shot length should be ~50m, got {}", s0.length);
+
+        let s1 = &configs[0].shots[1];
+        // Third station: elevation 180, depth = 200 - 180 = 20
+        assert!((s1.depth_in - 50.0).abs() < 1e-9);
+        assert!((s1.depth_out - 20.0).abs() < 1e-9);
+        // Going up 30m -> length = 30m
+        assert!((s1.length - 30.0).abs() < 0.1, "Shot length should be ~30m, got {}", s1.length);
+    }
+
+    #[test]
+    fn elevation_slope_distance_with_horizontal() {
+        // Points separated horizontally AND vertically
+        // Horizontal ~111m (0.001 deg lat at equator), vertical 50m
+        // Slope = sqrt(111^2 + 50^2) ~ 121.7m
+        let xml = r#"<?xml version="1.0"?>
+<gpx version="1.1">
+  <trk><name>Slope</name><trkseg>
+    <trkpt lat="0.0" lon="0.0"><ele>100.0</ele></trkpt>
+    <trkpt lat="0.001" lon="0.0"><ele>50.0</ele></trkpt>
+  </trkseg></trk>
+</gpx>"#;
+
+        let gpx = parse_gpx_str(xml).unwrap();
+        let configs =
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+
+        let shot = &configs[0].shots[0];
+        // Depth: 100 - 50 = 50m drop
+        assert!((shot.depth_in - 0.0).abs() < 1e-9);
+        assert!((shot.depth_out - 50.0).abs() < 1e-9);
+        // Slope should be > horizontal distance (~111m)
+        assert!(shot.length > 111.0, "Slope distance should exceed horizontal, got {}", shot.length);
+        // And roughly sqrt(111^2 + 50^2) ~ 121.7
+        assert!((shot.length - 121.7).abs() < 2.0, "Expected ~121.7m, got {}", shot.length);
+    }
+
+    #[test]
+    fn no_elevation_defaults_to_zero_depth() {
+        // Points without elevation -> depth stays 0, length = horizontal only
+        let xml = r#"<?xml version="1.0"?>
+<gpx version="1.1">
+  <trk><name>NoElev</name><trkseg>
+    <trkpt lat="0.0" lon="0.0"/>
+    <trkpt lat="0.0" lon="0.0005"/>
+  </trkseg></trk>
+</gpx>"#;
+
+        let gpx = parse_gpx_str(xml).unwrap();
+        let configs =
+            convert_gpx_to_import_configs(&gpx, false, true, false, &[]).unwrap();
+
+        let shot = &configs[0].shots[0];
+        assert!((shot.depth_in).abs() < 1e-9, "No elevation -> depth 0");
+        assert!((shot.depth_out).abs() < 1e-9, "No elevation -> depth 0");
+        // Should be ~55.6m horizontal
+        assert!((shot.length - 55.6).abs() < 1.0);
     }
 
     #[test]
