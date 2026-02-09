@@ -24,3 +24,5 @@ export { default as CorruptionRecoveryDialog } from './CorruptionRecoveryDialog'
 export { default as TmlImportDialog } from './TmlImportDialog';
 export { default as DebugDialog } from './DebugDialog';
 export { default as SwapCommentsDialog } from './SwapCommentsDialog';
+export { default as GpxSelectionDialog } from './GpxSelectionDialog';
+export { default as GpxPlacementDialog } from './GpxPlacementDialog';

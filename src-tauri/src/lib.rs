@@ -1021,6 +1021,8 @@ pub fn run() {
             commands::import::import_sections,
             commands::import::parse_tml,
             commands::import::execute_tml_import,
+            commands::import::parse_gpx,
+            commands::import::execute_gpx_import,
             commands::export::export_csv,
             commands::export::export_json,
             commands::export::export_tml,

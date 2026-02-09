@@ -21,7 +21,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -232,6 +232,8 @@ interface ProjectStore {
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  parseGpx: (path: string) => Promise<GpxFile>;
+  executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[]) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
@@ -1191,6 +1193,33 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         commentsOnStations: commentsOnStations ?? true,
       },
       { purpose: 'import Ariane TML/TMLU', fields: { path } }
+    );
+    if (result.success) {
+      await get().refreshProjectState();
+      set({ isDirty: true });
+    }
+    return result;
+  },
+
+  parseGpx: async (path: string) => {
+    return await invokeIpc<GpxFile>('parse_gpx', { path }, {
+      purpose: 'parse GPX for import preview',
+      fields: { path },
+    });
+  },
+
+  executeGpxImport: async (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[]) => {
+    const result = await invokeIpc<CommandResult>(
+      'execute_gpx_import',
+      {
+        path,
+        fileHash,
+        importWaypoints,
+        importTracks,
+        importRoutes,
+        sectionPlacements,
+      },
+      { purpose: 'import GPX file', fields: { path } }
     );
     if (result.success) {
       await get().refreshProjectState();

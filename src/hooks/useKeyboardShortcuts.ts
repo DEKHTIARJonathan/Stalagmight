@@ -287,7 +287,7 @@ export function useKeyboardShortcuts() {
     showStations,
     showToast,
   } = useUIStore();
-  const { undo, redo, saveProject, project, stations, importDmp, parseTml, executeTmlImport, config } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, importDmp, parseTml, parseGpx, executeTmlImport, config } = useProjectStore();
   const { setImportContext } = useUIStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
@@ -654,7 +654,24 @@ export function useKeyboardShortcuts() {
               }
 
               const lowerPath = selected.toLowerCase();
-              if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
+              if (lowerPath.endsWith('.gpx')) {
+                // GPX import
+                const gpxFile = await parseGpx(selected);
+                if (!gpxFile) return;
+
+                const currentProject = useProjectStore.getState().project;
+                if (currentProject) {
+                  openDialog('gpx-selection', { gpxFile, filePath: selected });
+                } else {
+                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+                  openDialog('new-project-for-import', {
+                    gpxFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                    importType: 'gpx',
+                  });
+                }
+              } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
                 // TML/TMLU import
                 const currentProject = useProjectStore.getState().project;
                 if (currentProject) {
@@ -726,6 +743,7 @@ export function useKeyboardShortcuts() {
       project,
       importDmp,
       parseTml,
+      parseGpx,
       executeTmlImport,
       setImportContext,
       showStations,

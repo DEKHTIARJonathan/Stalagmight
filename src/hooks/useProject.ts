@@ -9,6 +9,7 @@ import {
   projectSaveFilters,
   dmpOpenFilters,
   tmlOpenFilters,
+  gpxOpenFilters,
   exportSaveFilters,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
@@ -232,6 +233,57 @@ export function useProject() {
     }
   }, [store, openDialog]);
 
+  /**
+   * Handle GPX file import with context-aware dialog flow.
+   * - From existing project: Opens file picker, parses GPX, then shows GpxSelectionDialog.
+   * - From home screen (no project): Opens file picker, parses GPX, then shows NewProjectDialog,
+   *   which on completion opens GpxSelectionDialog.
+   */
+  const handleImportGpx = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    let selectedPath = filePath;
+
+    if (!skipFilePicker) {
+      const selected = await open({
+        multiple: false,
+        filters: gpxOpenFilters(),
+      });
+
+      if (!selected || typeof selected !== 'string') {
+        return;
+      }
+      selectedPath = selected;
+    }
+
+    if (!selectedPath) return;
+
+    const hasProject = !!store.project;
+
+    try {
+      const gpxFile = await store.parseGpx(selectedPath);
+      if (!gpxFile) return;
+
+      if (hasProject) {
+        openDialog('gpx-selection', {
+          gpxFile,
+          filePath: selectedPath,
+        });
+      } else {
+        const fileName = selectedPath.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+        openDialog('new-project-for-import', {
+          gpxFile,
+          filePath: selectedPath,
+          defaultName: fileName,
+          importType: 'gpx',
+        });
+      }
+    } catch (e) {
+      openDialog('error', {
+        title: 'Import Failed',
+        message: e instanceof Error ? e.message : 'Failed to parse GPX file',
+      });
+    }
+  }, [store, openDialog]);
+
   const handleExportCsv = useCallback(async () => {
     const selected = await save({
       filters: exportSaveFilters('CSV', 'csv'),
@@ -278,6 +330,7 @@ export function useProject() {
     handleCloseProject,
     handleImportDmp,
     handleImportTml,
+    handleImportGpx,
     handleExportCsv,
     handleExportJson,
 

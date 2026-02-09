@@ -34,6 +34,10 @@ use stalagmight_lib::models::{
     ShotUpdates, Station, StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
 };
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
+use stalagmight_lib::parsers::gpx::{
+    GpxFile, GpxRoute, GpxRoutePoint, GpxSectionPlacement, GpxTrack, GpxTrackPoint,
+    GpxTrackSegment, GpxWaypoint,
+};
 use stalagmight_lib::parsers::tml::{
     TmlClosure, TmlFile, TmlGeoCoding, TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
@@ -111,6 +115,16 @@ fn main() {
     export::<DmpShot>(&out_dir);
     export::<DmpDirection>(&out_dir);
     export::<DmpShotType>(&out_dir);
+
+    // GPX import
+    export::<GpxFile>(&out_dir);
+    export::<GpxWaypoint>(&out_dir);
+    export::<GpxTrack>(&out_dir);
+    export::<GpxTrackSegment>(&out_dir);
+    export::<GpxTrackPoint>(&out_dir);
+    export::<GpxRoute>(&out_dir);
+    export::<GpxRoutePoint>(&out_dir);
+    export::<GpxSectionPlacement>(&out_dir);
 
     // TML/TMLU import
     export::<TmlFile>(&out_dir);
@@ -227,6 +241,14 @@ fn main() {
         "DmpShot",
         "DmpDirection",
         "DmpShotType",
+        "GpxFile",
+        "GpxWaypoint",
+        "GpxTrack",
+        "GpxTrackSegment",
+        "GpxTrackPoint",
+        "GpxRoute",
+        "GpxRoutePoint",
+        "GpxSectionPlacement",
         "TmlFile",
         "TmlSection",
         "TmlShot",

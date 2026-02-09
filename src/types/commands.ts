@@ -38,6 +38,14 @@ export type {
   DepthPreset,
   DepthPresetColors,
   ColorStop,
+  GpxFile,
+  GpxWaypoint,
+  GpxTrack,
+  GpxTrackSegment,
+  GpxTrackPoint,
+  GpxRoute,
+  GpxRoutePoint,
+  GpxSectionPlacement,
 } from './ipc.generated';
 
 // Batch command types for execute_batch IPC.

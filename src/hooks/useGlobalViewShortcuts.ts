@@ -97,7 +97,7 @@ export function useGlobalViewShortcuts({
 }: UseGlobalViewShortcutsOptions): void {
   const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore();
   const { openDialog, setImportContext } = useUIStore();
-  const { importDmp, parseTml, config } = useProjectStore();
+  const { importDmp, parseTml, parseGpx, config } = useProjectStore();
 
   // File shortcut map - config-aware, updated when config changes
   const fileShortcutMapRef = useRef(buildFileShortcutMap(defaultConfig.shortcuts));
@@ -380,7 +380,23 @@ export function useGlobalViewShortcuts({
               }
 
               const lowerPath = selected.toLowerCase();
-              if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
+              if (lowerPath.endsWith('.gpx')) {
+                const gpxFile = await parseGpx(selected);
+                if (!gpxFile) return;
+
+                const currentProject = useProjectStore.getState().project;
+                if (currentProject) {
+                  openDialog('gpx-selection', { gpxFile, filePath: selected });
+                } else {
+                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+                  openDialog('new-project-for-import', {
+                    gpxFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                    importType: 'gpx',
+                  });
+                }
+              } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
                 const tmlFile = await parseTml(selected);
                 if (!tmlFile) return;
 
@@ -429,7 +445,7 @@ export function useGlobalViewShortcuts({
       }
     },
     [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef,
-     openDialog, setImportContext, importDmp, parseTml]
+     openDialog, setImportContext, importDmp, parseTml, parseGpx]
   );
 
   // Register single keyboard event listener
