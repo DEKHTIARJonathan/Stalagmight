@@ -212,6 +212,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 - [ ] Binary serialization (replace JSON with a compact binary format)
 - [ ] Reduce snapshot frequency (only snapshot on major operations)
 
+### Data & Editing (v2.0)
+- [ ] Raw Data Table dialog - Displays all raw data including closures and other relationships much closer to what it is stored as in SQLite for advanced user operations
+
 ### Display Features (v2.0)
 - [ ] LRUD passage wall visualization
 - [ ] High-contrast theme (full implementation)
