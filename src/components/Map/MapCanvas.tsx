@@ -10,6 +10,7 @@ import {
   getEffectiveShowVirtualShots,
   getEffectiveShowShotData,
   getEffectiveShowStationComments,
+  getEffectiveShowShotComments,
 } from '../../store/displaySelectors';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
@@ -250,6 +251,7 @@ export default function MapCanvas() {
     showSectionNames,
     showStationLabels,
     showStationComments,
+    showShotComments,
     showStations,
     showShots,
     showVirtualShots,
@@ -1519,6 +1521,12 @@ export default function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowStationComments(getEffectiveShowStationComments(showStations, showStationComments));
   }, [showStationComments, showStations, mapLoaded]);
+
+  // Sync shot comments visibility with SurveyLayer (gated by showShots)
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowShotComments(getEffectiveShowShotComments(showShots, showShotComments));
+  }, [showShotComments, showShots, mapLoaded]);
 
   // Sync stations visibility with SurveyLayer
   useEffect(() => {
