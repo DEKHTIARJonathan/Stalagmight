@@ -38,6 +38,7 @@ export function dmpOpenFilters() {
 }
 
 export const TML_EXTENSIONS = ['tml', 'tmlu'];
+export const GPX_EXTENSION = 'gpx';
 
 export function tmlOpenFilters() {
   return [
@@ -46,11 +47,19 @@ export function tmlOpenFilters() {
   ];
 }
 
+export function gpxOpenFilters() {
+  return [
+    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
 export function importOpenFilters() {
   return [
-    { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS] },
+    { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION] },
     { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
+    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
     { name: 'All Files', extensions: ['*'] },
   ];
 }

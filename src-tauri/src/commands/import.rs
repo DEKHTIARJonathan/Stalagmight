@@ -7,6 +7,7 @@ use tauri::State;
 use crate::core::state::AppState;
 use crate::core::CommandResult;
 use crate::parsers::DmpFile;
+use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
 use crate::parsers::tml::TmlFile;
 
 /// Import a DMP file and return parsed data
@@ -172,4 +173,86 @@ pub fn execute_tml_import(
     );
 
     state.execute_import_sections(sections, closures, file_hash)
+}
+
+/// Parse a GPX file and return preview data for the import dialog.
+#[tauri::command]
+pub fn parse_gpx(path: PathBuf) -> Result<GpxFile, String> {
+    tracing::info!(
+        path = ?path,
+        purpose = "prepare GPX import preview",
+        "Parsing GPX file for import preview"
+    );
+    let result = crate::parsers::gpx::parse_gpx(&path);
+    if let Err(ref e) = result {
+        tracing::error!(
+            path = ?path,
+            purpose = "prepare GPX import preview",
+            reason = %e,
+            "Failed to parse GPX file for import preview"
+        );
+    }
+    result.map_err(|e| e.to_string())
+}
+
+/// Parse a GPX file, convert to import configs, and execute the import.
+#[tauri::command]
+pub fn execute_gpx_import(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    file_hash: Option<String>,
+    import_waypoints: bool,
+    import_tracks: bool,
+    import_routes: bool,
+    section_placements: Vec<GpxSectionPlacement>,
+) -> CommandResult {
+    tracing::info!(
+        path = ?path,
+        purpose = "import GPX",
+        import_waypoints,
+        import_tracks,
+        import_routes,
+        "Executing GPX import"
+    );
+
+    let gpx = match crate::parsers::gpx::parse_gpx(&path) {
+        Ok(gpx) => gpx,
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "import GPX",
+                reason = %e,
+                "Failed to parse GPX file for import"
+            );
+            return CommandResult::failure(format!("Failed to parse GPX file: {e}"));
+        }
+    };
+
+    let sections = match crate::parsers::gpx::convert_gpx_to_import_configs(
+        &gpx,
+        import_waypoints,
+        import_tracks,
+        import_routes,
+        &section_placements,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "import GPX",
+                reason = %e,
+                "Failed to convert GPX data to import configs"
+            );
+            return CommandResult::failure(format!("Failed to convert GPX data: {e}"));
+        }
+    };
+
+    tracing::info!(
+        path = ?path,
+        section_count = sections.len(),
+        purpose = "import GPX",
+        "Converted GPX to import configs, executing import"
+    );
+
+    state.execute_import_sections(sections, Vec::new(), file_hash)
 }

@@ -10,7 +10,7 @@ import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, TmlImportDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
@@ -67,7 +67,7 @@ function calculateStationPositions(shots: ImportedSectionConfig['shots']): Array
 }
 
 function App() {
-  const { project, stations, loadConfig, config, isDirty, importDmp, parseTml, importSections } = useProjectStore();
+  const { project, stations, loadConfig, config, isDirty, importDmp, parseTml, parseGpx, importSections } = useProjectStore();
   const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
@@ -102,8 +102,12 @@ function App() {
     if (activeDialog === 'dmp-selection' && dialogData.dmpFile) {
       return true;
     }
+    // Block during GPX selection/placement dialog
+    if ((activeDialog === 'gpx-selection' || activeDialog === 'gpx-placement') && dialogData.gpxFile) {
+      return true;
+    }
     // Block during new project for import dialog
-    if (activeDialog === 'new-project-for-import' && (dialogData.dmpFile || dialogData.tmlFile)) {
+    if (activeDialog === 'new-project-for-import' && (dialogData.dmpFile || dialogData.tmlFile || dialogData.gpxFile)) {
       return true;
     }
     return false;
@@ -298,9 +302,32 @@ function App() {
   const handleImportFileDrop = useCallback(async (filePath: string) => {
     const lowerPath = filePath.toLowerCase();
     const isTml = lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu');
+    const isGpx = lowerPath.endsWith('.gpx');
     const currentProject = useProjectStore.getState().project;
 
-    if (isTml) {
+    if (isGpx) {
+      try {
+        const gpxFile = await parseGpx(filePath);
+        if (!gpxFile) return;
+
+        if (currentProject) {
+          openDialog('gpx-selection', { gpxFile, filePath });
+        } else {
+          const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+          openDialog('new-project-for-import', {
+            gpxFile,
+            filePath,
+            defaultName: fileName,
+            importType: 'gpx',
+          });
+        }
+      } catch (e) {
+        openDialog('error', {
+          title: 'Import Failed',
+          message: e instanceof Error ? e.message : 'Failed to parse GPX file',
+        });
+      }
+    } else if (isTml) {
       try {
         const tmlFile = await parseTml(filePath);
         if (!tmlFile) return;
@@ -359,12 +386,12 @@ function App() {
         }
       }
     }
-  }, [importDmp, parseTml, openDialog, setImportContext]);
+  }, [importDmp, parseTml, parseGpx, openDialog, setImportContext]);
 
   // Set up drag-drop event listener for importable files (DMP/TML/TMLU)
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    const importExts = ['.dmp', '.tml', '.tmlu'];
+    const importExts = ['.dmp', '.tml', '.tmlu', '.gpx'];
 
     const setupDragDrop = async () => {
       try {
@@ -481,6 +508,15 @@ function App() {
           tmlFile={dialogData.tmlFile as import('./types/commands').TmlFile}
           filePath={dialogData.filePath as string}
         />
+      ) : null}
+      {activeDialog === 'gpx-selection' && dialogData.gpxFile ? (
+        <GpxSelectionDialog
+          gpxFile={dialogData.gpxFile as import('./types/commands').GpxFile}
+          filePath={dialogData.filePath as string}
+        />
+      ) : null}
+      {activeDialog === 'gpx-placement' && dialogData.gpxFile ? (
+        <GpxPlacementDialog />
       ) : null}
       {activeDialog === 'confirm-delete' && <ConfirmDialog />}
       {activeDialog === 'delete-shot-choice' && <DeleteShotChoiceDialog />}

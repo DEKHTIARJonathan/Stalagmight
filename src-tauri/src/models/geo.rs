@@ -98,6 +98,41 @@ pub fn gps_to_local(gps: &GpsCoordinates, origin: &GpsCoordinates) -> (f64, f64)
     (east, north)
 }
 
+/// Haversine distance between two GPS points in meters.
+///
+/// Uses WGS84 mean earth radius for the calculation.
+pub fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const EARTH_RADIUS: f64 = 6_371_008.8; // WGS84 mean radius in meters
+
+    let lat1_rad = lat1.to_radians();
+    let lat2_rad = lat2.to_radians();
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+
+    let a = (dlat / 2.0).sin().powi(2)
+        + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+
+    EARTH_RADIUS * c
+}
+
+/// Initial bearing from point 1 to point 2 in degrees [0, 360).
+///
+/// Returns the forward azimuth (compass bearing) from the first point to
+/// the second point, measured clockwise from north.
+pub fn initial_bearing(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let lat1_rad = lat1.to_radians();
+    let lat2_rad = lat2.to_radians();
+    let dlon_rad = (lon2 - lon1).to_radians();
+
+    let x = dlon_rad.sin() * lat2_rad.cos();
+    let y = lat1_rad.cos() * lat2_rad.sin()
+        - lat1_rad.sin() * lat2_rad.cos() * dlon_rad.cos();
+
+    let bearing = x.atan2(y).to_degrees();
+    (bearing + 360.0) % 360.0
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
@@ -230,6 +265,81 @@ mod tests {
         assert!(
             (z - expected_z).abs() < 1.0,
             "Z at north pole should be ~{expected_z}, got {z}"
+        );
+    }
+
+    // === haversine_distance tests ===
+
+    #[test]
+    fn haversine_same_point_is_zero() {
+        let d = haversine_distance(45.0, -90.0, 45.0, -90.0);
+        assert!(d.abs() < 1e-9, "Same point should be 0m, got {d}");
+    }
+
+    #[test]
+    fn haversine_equator_one_degree_lon() {
+        // At equator, 1 degree of longitude ~ 111,195 meters (with mean radius)
+        let d = haversine_distance(0.0, 0.0, 0.0, 1.0);
+        assert!(
+            (d - 111_195.0).abs() < 100.0,
+            "1 deg lon at equator should be ~111,195m, got {d}"
+        );
+    }
+
+    #[test]
+    fn haversine_equator_one_degree_lat() {
+        let d = haversine_distance(0.0, 0.0, 1.0, 0.0);
+        assert!(
+            (d - 111_195.0).abs() < 100.0,
+            "1 deg lat at equator should be ~111,195m, got {d}"
+        );
+    }
+
+    #[test]
+    fn haversine_known_distance() {
+        // London (51.5074, -0.1278) to Paris (48.8566, 2.3522) ~ 343.5 km
+        let d = haversine_distance(51.5074, -0.1278, 48.8566, 2.3522);
+        assert!(
+            (d - 343_500.0).abs() < 1000.0,
+            "London-Paris should be ~343.5km, got {d}m"
+        );
+    }
+
+    // === initial_bearing tests ===
+
+    #[test]
+    fn bearing_due_north() {
+        let b = initial_bearing(0.0, 0.0, 1.0, 0.0);
+        assert!(
+            b.abs() < 0.01 || (b - 360.0).abs() < 0.01,
+            "Due north should be ~0 degrees, got {b}"
+        );
+    }
+
+    #[test]
+    fn bearing_due_east() {
+        let b = initial_bearing(0.0, 0.0, 0.0, 1.0);
+        assert!(
+            (b - 90.0).abs() < 0.01,
+            "Due east should be ~90 degrees, got {b}"
+        );
+    }
+
+    #[test]
+    fn bearing_due_south() {
+        let b = initial_bearing(1.0, 0.0, 0.0, 0.0);
+        assert!(
+            (b - 180.0).abs() < 0.01,
+            "Due south should be ~180 degrees, got {b}"
+        );
+    }
+
+    #[test]
+    fn bearing_due_west() {
+        let b = initial_bearing(0.0, 1.0, 0.0, 0.0);
+        assert!(
+            (b - 270.0).abs() < 0.01,
+            "Due west should be ~270 degrees, got {b}"
         );
     }
 }
