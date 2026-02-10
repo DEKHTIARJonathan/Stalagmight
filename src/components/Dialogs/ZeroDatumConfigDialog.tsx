@@ -272,6 +272,7 @@ export default function ZeroDatumConfigDialog({
       overflow="hidden"
       fixedSize={{ width: 'min(1100px, 95vw)', height: 'min(800px, 90vh)' }}
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
+      closeOnBackdropClick={false}
       data-testid="zero-datum-config-dialog"
     >
       {/* Scrollable content area */}
