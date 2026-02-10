@@ -1571,3 +1571,196 @@ export async function getProjectMerges(): Promise<
     }
   );
 }
+
+// ============================================================================
+// TML Import/Export Helpers
+// ============================================================================
+
+/**
+ * Parse a TML/TMLU file via the store (uses IPC internally).
+ * Returns the parsed TmlFile data.
+ *
+ * @param filePath - Absolute path to the TML/TMLU file
+ */
+export async function parseTmlFile(filePath: string): Promise<{ tmlFile?: unknown; error?: string }> {
+  return await browser.executeAsync(
+    async (path: string, done: (result: { tmlFile?: unknown; error?: string }) => void) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              parseTml: (path: string) => Promise<unknown>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ error: 'E2E helpers not available' });
+        return;
+      }
+
+      try {
+        const tmlFile = await e2e.projectStore.getState().parseTml(path);
+        done({ tmlFile });
+      } catch (err) {
+        done({ error: String(err) });
+      }
+    },
+    filePath
+  );
+}
+
+/**
+ * Open the TML Import Dialog with a parsed TML file.
+ * Parses the file via IPC, then opens the tml-import dialog with the data.
+ *
+ * @param filePath - Absolute path to the TML/TMLU file
+ */
+export async function openTmlImportWithFile(filePath: string): Promise<void> {
+  // Close any existing dialog first
+  await browser.execute(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: {
+          getState: () => {
+            closeDialog: () => void;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+    if (e2e) {
+      e2e.uiStore.getState().closeDialog();
+    }
+  });
+  await waitForUiIdle(100);
+
+  // Parse TML file
+  const parseResult = await parseTmlFile(filePath);
+  if (parseResult.error) {
+    throw new Error(`Failed to parse TML file: ${parseResult.error}`);
+  }
+
+  // Open tml-import dialog with parsed data
+  await browser.execute(
+    (tmlFile: unknown, path: string) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => {
+              openDialog: (name: string, data?: unknown) => void;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (e2e) {
+        e2e.uiStore.getState().openDialog('tml-import', {
+          tmlFile,
+          filePath: path,
+        });
+      }
+    },
+    parseResult.tmlFile,
+    filePath
+  );
+
+  // Wait for TML import dialog to appear
+  const importDialog = await $('[data-testid="tml-import-dialog"]');
+  await importDialog.waitForDisplayed({
+    timeout: 10000,
+    timeoutMsg: 'TML Import dialog did not appear',
+  });
+
+  await waitForUiIdle(200);
+}
+
+/**
+ * Import a TML/TMLU file directly via the store's executeTmlImport.
+ * This bypasses the UI dialog for quick programmatic import.
+ *
+ * @param filePath - Absolute path to the TML/TMLU file
+ * @param includeExcluded - Whether to include excluded shots (default: false)
+ */
+export async function importTmlFile(
+  filePath: string,
+  includeExcluded = false
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    return await browser.executeAsync(
+      async (
+        path: string,
+        inclExcl: boolean,
+        done: (result: { success: boolean; error?: string }) => void
+      ) => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore: {
+              getState: () => {
+                calculateFileHash: (path: string) => Promise<string>;
+                executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean) => Promise<{ success: boolean; error?: string | null }>;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+
+        if (!e2e) {
+          done({ success: false, error: 'E2E helpers not found' });
+          return;
+        }
+
+        try {
+          const hash = await e2e.projectStore.getState().calculateFileHash(path);
+          const result = await e2e.projectStore.getState().executeTmlImport(path, hash, inclExcl);
+          done({ success: result.success, error: result.error ?? undefined });
+        } catch (err) {
+          done({ success: false, error: String(err) });
+        }
+      },
+      filePath,
+      includeExcluded
+    );
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return { success: false, error: errorMessage };
+  }
+}
+
+/**
+ * Export the current project as TML format.
+ *
+ * @param filePath - Absolute path for the output TML file
+ */
+export async function exportTmlFile(
+  filePath: string
+): Promise<{ success: boolean; error?: string }> {
+  return await browser.executeAsync(
+    async (
+      path: string,
+      done: (result: { success: boolean; error?: string }) => void
+    ) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              exportTml: (path: string) => Promise<void>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      if (!e2e) {
+        done({ success: false, error: 'E2E helpers not found' });
+        return;
+      }
+
+      try {
+        await e2e.projectStore.getState().exportTml(path);
+        done({ success: true });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    },
+    filePath
+  );
+}
