@@ -82,6 +82,10 @@ export default function DmpNewImportDialog({
   // Ref-based guard against double-click — state alone is stale in the closure
   const isImportingRef = useRef(false);
 
+  // Guard against React StrictMode double-firing the mount effect.
+  // Refs survive the cleanup→re-run cycle, preventing duplicate IPC calls.
+  const importStartedRef = useRef(false);
+
   // Refs to avoid stale closures
   const importedIndicesRef = useRef(importedIndices);
   importedIndicesRef.current = importedIndices;
@@ -122,7 +126,8 @@ export default function DmpNewImportDialog({
 
   // On mount: import zero datum section if provided
   useEffect(() => {
-    let cancelled = false;
+    if (importStartedRef.current) return;
+    importStartedRef.current = true;
 
     const importZeroDatum = async () => {
       if (!zeroDatumConfig) {
@@ -167,7 +172,6 @@ export default function DmpNewImportDialog({
       };
 
       const result = await importSections([config], selectionConfig.fileHash);
-      if (cancelled) return;
 
       setIsImporting(false);
 
@@ -188,7 +192,6 @@ export default function DmpNewImportDialog({
     };
 
     importZeroDatum();
-    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
