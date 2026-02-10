@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 17 | 19 | 89% |
-| UI & Polish | 15 | 17 | 88% |
+| UI & Polish | 15 | 18 | 83% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **58** | **64** | **91%** |
+| **Total** | **58** | **65** | **89%** |
 
 ---
 
@@ -84,7 +84,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 17 done, ❌ 2 not started
 
-### UI & Polish (15/17 done)
+### UI & Polish (15/18 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -101,12 +101,13 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Splash Screen | ✅ | React overlay with branding; opt-in via Settings > General > Startup |
 | About Dialog | ✅ | AlertDialog in Settings footer |
 | Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
+| Custom Icons for All Tools/SVGs | ❌ | Custom icon set for toolbar and UI elements |
 | Bug Reporter Dialog | ✅ | Debug log dialog with ring buffer, level filtering, colored output |
 | Release Automation | ✅ | |
 | Add Comment Tool | ✅ | Comment + Move Comment tools with atomic undo, swap dialog, visual pickup |
 | Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
-**Subtotals**: ✅ 15 done, ❌ 2 not started
+**Subtotals**: ✅ 15 done, ❌ 3 not started
 
 ### Data & Editing (5/5 done)
 
@@ -185,16 +186,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 17 | 0 | 2 |
-| UI & Polish | 17 | 15 | 0 | 2 |
+| UI & Polish | 18 | 15 | 0 | 3 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **58** | **0** | **6** |
+| **Total** | **65** | **58** | **0** | **7** |
 
-**Overall Progress**: 58 done = ~91% complete
+**Overall Progress**: 58 done = ~89% complete
 
 ---
 
