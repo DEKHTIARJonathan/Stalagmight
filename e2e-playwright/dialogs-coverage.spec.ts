@@ -170,8 +170,8 @@ test.describe('Dialog Coverage - Draw Shot', () => {
     const leftInput = dialog.locator('label:has-text("Left")').locator('..').locator('input');
     await leftInput.fill('0.8');
 
-    const virtualToggle = dialog.locator('input[type="checkbox"]');
-    await virtualToggle.check();
+    const referenceToggle = dialog.locator('input[type="checkbox"]');
+    await referenceToggle.check();
 
     await dialog.getByRole('button', { name: 'Create Shot' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });

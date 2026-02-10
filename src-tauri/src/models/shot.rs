@@ -75,8 +75,9 @@ pub struct Shot {
     pub down: Option<f64>,
     /// Optional comment
     pub comment: Option<String>,
-    /// Whether this is a virtual (temporary connection) shot
-    pub is_virtual: bool,
+    /// Whether this is a reference (temporary connection) shot
+    #[serde(alias = "is_virtual")]
+    pub is_reference: bool,
     /// Physical marker index on cave line
     pub marker_index: Option<u32>,
     /// Water temperature in celsius
@@ -105,8 +106,8 @@ pub struct ShotData {
     pub down: Option<f64>,
     #[serde(default)]
     pub comment: Option<String>,
-    #[serde(default)]
-    pub is_virtual: bool,
+    #[serde(default, alias = "is_virtual")]
+    pub is_reference: bool,
     #[serde(default)]
     pub marker_index: Option<u32>,
     #[serde(default)]
@@ -152,9 +153,9 @@ pub struct ShotUpdates {
     #[serde(default)]
     #[ts(optional)]
     pub comment: Option<Option<String>>,
-    #[serde(default)]
+    #[serde(default, alias = "is_virtual")]
     #[ts(optional)]
-    pub is_virtual: Option<bool>,
+    pub is_reference: Option<bool>,
     #[serde(default)]
     #[ts(optional)]
     pub marker_index: Option<Option<u32>>,
@@ -194,7 +195,7 @@ impl Shot {
             up: data.up,
             down: data.down,
             comment: data.comment,
-            is_virtual: data.is_virtual,
+            is_reference: data.is_reference,
             marker_index: data.marker_index,
             temperature: data.temperature,
         }
@@ -244,8 +245,8 @@ impl Shot {
                 _ => v.clone(),
             };
         }
-        if let Some(v) = updates.is_virtual {
-            self.is_virtual = v;
+        if let Some(v) = updates.is_reference {
+            self.is_reference = v;
         }
         if let Some(v) = &updates.marker_index {
             self.marker_index = *v;
@@ -288,7 +289,7 @@ impl Shot {
             up: self.up,
             down: self.down,
             comment: self.comment.clone(),
-            is_virtual: self.is_virtual,
+            is_reference: self.is_reference,
             marker_index: self.marker_index,
             temperature: self.temperature,
         }
@@ -318,7 +319,7 @@ impl From<Shot> for ShotData {
             up: shot.up,
             down: shot.down,
             comment: shot.comment,
-            is_virtual: shot.is_virtual,
+            is_reference: shot.is_reference,
             marker_index: shot.marker_index,
             temperature: shot.temperature,
         }
@@ -344,7 +345,7 @@ mod tests {
             up: Some(0.7),
             down: Some(0.8),
             comment: Some("note".to_string()),
-            is_virtual: false,
+            is_reference: false,
             marker_index: Some(3),
             temperature: Some(21.5),
         }
@@ -359,7 +360,7 @@ mod tests {
             pitch_in: Some(None),
             right: Some(Some(1.2)),
             comment: Some(Some("updated".to_string())),
-            is_virtual: Some(true),
+            is_reference: Some(true),
             marker_index: Some(None),
             ..Default::default()
         };
@@ -371,7 +372,7 @@ mod tests {
         assert!(shot.pitch_in.is_none());
         assert_eq!(shot.right, Some(1.2));
         assert_eq!(shot.comment.as_deref(), Some("updated"));
-        assert!(shot.is_virtual);
+        assert!(shot.is_reference);
         assert!(shot.marker_index.is_none());
 
         assert_eq!(shot.azimuth_out, 20.0);

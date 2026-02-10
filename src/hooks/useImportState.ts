@@ -144,7 +144,7 @@ function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
       up: shot.up ?? null,
       down: shot.down ?? null,
       comment: shot.comment || null,
-      is_virtual: false,
+      is_reference: false,
     }));
 }
 
@@ -189,7 +189,7 @@ function createBlankShot(tempId: number): EditableShot {
     up: null,
     down: null,
     comment: null,
-    is_virtual: false,
+    is_reference: false,
     isNew: true,
     tempId,
   };

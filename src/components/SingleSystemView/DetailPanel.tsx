@@ -563,7 +563,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
-  const { setShotVirtual } = useProjectStore();
+  const { setShotReference } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
   );
@@ -590,8 +590,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === endStationIndex
   );
 
-  const handleToggleVirtual = async () => {
-    await setShotVirtual(section.id, shot.id, !shot.is_virtual);
+  const handleToggleReference = async () => {
+    await setShotReference(section.id, shot.id, !shot.is_reference);
   };
 
   const handleDelete = () => {
@@ -748,8 +748,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
             </div>
           </div>
 
-          {shot.is_virtual && (
-            <div className="text-warning text-sm">{t('detailPanel.shot.virtual')}</div>
+          {shot.is_reference && (
+            <div className="text-warning text-sm">{t('detailPanel.shot.reference')}</div>
           )}
 
           {shot.comment && (
@@ -762,8 +762,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       </Panel>
 
       <div className="p-3 border-t border-border space-y-2">
-        <Button size="sm" className="w-full" onClick={handleToggleVirtual}>
-          {shot.is_virtual ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markVirtual')}
+        <Button size="sm" className="w-full" onClick={handleToggleReference}>
+          {shot.is_reference ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markReference')}
         </Button>
         <Button size="sm" variant="danger" className="w-full" onClick={handleDelete}>
           {t('common.actions.delete')}
@@ -789,7 +789,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
   const shotCount = section.shots.length;
-  const virtualCount = section.shots.filter((s) => s.is_virtual).length;
+  const referenceCount = section.shots.filter((s) => s.is_reference).length;
   const avgShotLength = shotCount > 0 ? sectionLength / shotCount : 0;
   const contributionPercent = totalProjectLength > 0
     ? (sectionLength / totalProjectLength) * 100
@@ -895,8 +895,8 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
               <StatCard label={t('detailPanel.section.totalLength')} value={`${formatFixed(sectionLength, undefined, precision.length)} ${t('common.units.meters')}`} />
               <StatCard label={t('detailPanel.section.shotCount')} value={formatNumber(shotCount)} />
               <StatCard label={t('detailPanel.section.avgShot')} value={`${formatFixed(avgShotLength, undefined, precision.length)} ${t('common.units.meters')}`} />
-              {virtualCount > 0 && (
-                <StatCard label={t('detailPanel.section.virtualShots')} value={formatNumber(virtualCount)} />
+              {referenceCount > 0 && (
+                <StatCard label={t('detailPanel.section.referenceShots')} value={formatNumber(referenceCount)} />
               )}
             </div>
           </div>

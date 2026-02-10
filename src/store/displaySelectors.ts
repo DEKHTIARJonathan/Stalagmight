@@ -18,7 +18,7 @@ export const DISPLAY_DEFAULTS = {
   showSectionNames: true,
   showStationLabels: false,
   showShotData: false,
-  showVirtualShots: true,
+  showReferenceShots: true,
   showZeroDatum: true,
   showGrid: false,
   showScaleBar: true,
@@ -31,11 +31,11 @@ export const DISPLAY_DEFAULTS = {
 } as const;
 
 /**
- * Compute effective visibility of virtual shots.
- * Virtual shots are only visible when both showShots AND showVirtualShots are true.
+ * Compute effective visibility of reference shots.
+ * Reference shots are only visible when both showShots AND showReferenceShots are true.
  */
-export function getEffectiveShowVirtualShots(showShots: boolean, showVirtualShots: boolean): boolean {
-  return showShots && showVirtualShots;
+export function getEffectiveShowReferenceShots(showShots: boolean, showReferenceShots: boolean): boolean {
+  return showShots && showReferenceShots;
 }
 
 /**

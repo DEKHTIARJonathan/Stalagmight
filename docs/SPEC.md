@@ -62,7 +62,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Manual data entry via spreadsheet interface
 - 2D plan view map with satellite imagery
 - Section management (create, edit, delete, merge)
-- Virtual shots for temporary survey connections
+- Reference shots for temporary survey connections
 - Loop closure detection and error distribution
 - Multi-project workspace (Global View)
 - Export: PNG, SVG, PDF (map images), CSV, JSON (data)
@@ -164,7 +164,7 @@ All formats required:
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
 | **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. |
 | **Section** | A group of consecutive shots collected during a single survey session. Has metadata (name, surveyor, date). |
-| **Virtual Shot** | A temporary shot used to connect sections that aren't physically connected yet. Displayed with dotted line. |
+| **Reference Shot** | A temporary shot used to connect sections that aren't physically connected yet. Displayed with dotted line. |
 | **Zero Datum** | A station with GPS coordinates assigned. The fixed reference point for the coordinate system. |
 | **LRUD** | Left, Right, Up, Down - passage dimension measurements at a station. |
 | **Loop Closure** | When two survey paths meet at the same physical point, creating a loop. |
@@ -207,7 +207,7 @@ Project (Cave System)
 │       ├── up: Option<f64> (meters)
 │       ├── down: Option<f64> (meters)
 │       ├── comment: Option<String>
-│       ├── is_virtual: bool
+│       ├── is_reference: bool
 │       ├── marker_index: Option<u32>
 │       └── temperature: Option<f64> (celsius)
 ├── Stations[] (computed from shots)
@@ -675,7 +675,7 @@ Each item shows:
   - `◉` Set zero datum
   - `○` Remove zero datum
   - `↔` Move station
-  - `┄` Set shot virtual
+  - `┄` Set shot reference
   - `▤` Batch operation
   - `•` Default/other
 - **Description**: Truncated at ~40 characters with ellipsis
@@ -751,7 +751,7 @@ When an action is performed while the dropdown is open:
 - Stations (dots)
 - Section names (labels)
 - Shot data (azimuth, length, depth)
-- Virtual shots (dotted lines)
+- Reference shots (dotted lines)
 - Zero datum (golden star)
 - Grid overlay
 - Scale bar
@@ -772,7 +772,7 @@ When an action is performed while the dropdown is open:
 | Element | Appearance |
 |---------|------------|
 | Regular shot | Solid colored line (section color) |
-| Virtual shot | Dotted line, semi-transparent |
+| Reference shot | Dotted line, semi-transparent |
 | Station | Filled circle |
 | Selected station | Highlighted ring |
 | Zero datum | Golden star icon |
@@ -1070,15 +1070,15 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 6. Closure stations updated with `closures_with` references (direct + transitive)
 7. Detail Panel shows "Loop Closures" section for involved stations
 
-**Connecting Sections with Virtual Shots:**
+**Connecting Sections with Reference Shots:**
 1. User imports/creates new section with the connection survey
-2. In data table, user marks connecting shots as Virtual (checkbox)
+2. In data table, user marks connecting shots as Reference (checkbox)
 3. User places section using "From Station" to connect one end
 4. User uses Merge Tool to connect other end to second section
 5. If sections are unconnected → MergeDialog (simple merge)
 6. If sections are already connected → ClosureDialog (loop closure with error preview)
-7. Virtual shots displayed as dotted lines
-8. User can toggle virtual shot visibility in display options
+7. Reference shots displayed as dotted lines
+8. User can toggle reference shot visibility in display options
 
 ### 7.6 Editing Existing Data
 
@@ -1098,7 +1098,7 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 
 **Via Right-Click:**
 1. Right-click station/shot
-2. Context menu → Edit, Delete, Mark Virtual, etc.
+2. Context menu → Edit, Delete, Mark Reference, etc.
 3. Dialog or inline edit as appropriate
 
 ### 7.7 Deleting Data
@@ -1222,10 +1222,10 @@ pub enum Command {
         section_id: SectionId,
         shot_id: ShotId,
     },
-    SetShotVirtual {
+    SetShotReference {
         section_id: SectionId,
         shot_id: ShotId,
-        is_virtual: bool,
+        is_reference: bool,
     },
 
     // Station commands
@@ -2228,7 +2228,7 @@ CREATE TABLE shots (
     up_distance REAL,
     down_distance REAL,
     comment TEXT,
-    is_virtual INTEGER NOT NULL DEFAULT 0,
+    is_reference INTEGER NOT NULL DEFAULT 0,
     marker_index INTEGER,
     temperature REAL,
     UNIQUE(section_id, sequence_order)
@@ -2360,7 +2360,7 @@ All SVG elements use pixel-stable sizing via the `px()` helper function. This en
 | Station radius (Zero Datum) | 6px | Double size for visibility |
 | Station stroke-width | 1px | Black outline |
 | Shot stroke-width | 2px | Section or depth color |
-| Virtual shot dasharray | 4px, 2px | Dotted line pattern |
+| Reference shot dasharray | 4px, 2px | Dotted line pattern |
 | Grid stroke-width | 0.5px | Thin grid lines |
 | Shot-label font-size | 8px | Depth labels when enabled |
 | Shot-label dx/dy | 2px, -2px | Offset from midpoint |
@@ -2374,7 +2374,7 @@ All SVG elements use pixel-stable sizing via the `px()` helper function. This en
 
 **Survey Data (CSV):**
 ```csv
-section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,is_virtual,comment
+section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,is_reference,comment
 0,Main Line,0,3.2,45.0,225.0,5.1,5.8,1.2,0.8,2.1,1.5,false,
 0,Main Line,1,4.1,52.3,232.0,5.8,6.2,1.0,1.1,1.8,1.2,false,
 ```
@@ -2401,7 +2401,7 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
           "depth_in": 5.1,
           "depth_out": 5.8,
           "lrud": [1.2, 0.8, 2.1, 1.5],
-          "is_virtual": false
+          "is_reference": false
         }
       ]
     }
@@ -2756,7 +2756,7 @@ Success: #95e1d3
 Map Colors:
 Grid: #333366
 Zero Datum Star: #ffd700 (Gold)
-Virtual Shot: #ffffff40 (White, 25% opacity)
+Reference Shot: #ffffff40 (White, 25% opacity)
 Selection Highlight: #4ecdc4
 Loop Closure Line: #ffcb77 (dashed)
 ```

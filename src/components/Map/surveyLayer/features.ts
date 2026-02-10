@@ -140,8 +140,8 @@ export function buildSurveyFeatures(
   }
 
   let globalShotIndex = 0;
-  // Track stations that have at least one non-virtual shot (key: "sectionId:stationIndex")
-  const stationsWithNonVirtualShot = new Set<string>();
+  // Track stations that have at least one non-reference shot (key: "sectionId:stationIndex")
+  const stationsWithNonReferenceShot = new Set<string>();
 
   for (const section of sections) {
     const sectionStations = (stationsBySection.get(section.id) ?? [])
@@ -154,9 +154,9 @@ export function buildSurveyFeatures(
       const toStation = sectionStations[i + 1];
 
       if (fromStation && toStation && shot) {
-        if (!shot.is_virtual) {
-          stationsWithNonVirtualShot.add(`${section.id}:${fromStation.station_ref.station_index}`);
-          stationsWithNonVirtualShot.add(`${section.id}:${toStation.station_ref.station_index}`);
+        if (!shot.is_reference) {
+          stationsWithNonReferenceShot.add(`${section.id}:${fromStation.station_ref.station_index}`);
+          stationsWithNonReferenceShot.add(`${section.id}:${toStation.station_ref.station_index}`);
         }
         const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
         const depthColor = showDepthGradient
@@ -180,7 +180,7 @@ export function buildSurveyFeatures(
             sectionId: section.id,
             shotId: shot.id,
             color: shotColor,
-            isVirtual: shot.is_virtual,
+            isReference: shot.is_reference,
             length: shot.length,
             azimuth: shot.azimuth_in,
           },
@@ -209,7 +209,7 @@ export function buildSurveyFeatures(
             sectionId: section.id,
             shotId: shot.id,
             color: shotLabelColor,
-            isVirtual: shot.is_virtual,
+            isReference: shot.is_reference,
             comment: shot.comment ?? null,
           },
         });
@@ -258,7 +258,7 @@ export function buildSurveyFeatures(
         depth: station.coordinates.z,
         color,
         strokeColor: featureStrokeColor,
-        allShotsVirtual: !stationsWithNonVirtualShot.has(
+        allShotsReference: !stationsWithNonReferenceShot.has(
           `${station.station_ref.section_id}:${station.station_ref.station_index}`
         ),
       },
@@ -277,16 +277,16 @@ export function buildSurveyFeatures(
   for (const section of sections) {
     const sectionStations = stationsBySection.get(section.id);
     if (sectionStations && sectionStations.length > 0) {
-      // Prefer the first non-virtual station for label placement so it
-      // doesn't float mid-air when virtual shots are hidden.
-      const nonVirtualStations = sectionStations.filter(s =>
-        stationsWithNonVirtualShot.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`)
+      // Prefer the first non-reference station for label placement so it
+      // doesn't float mid-air when reference shots are hidden.
+      const nonReferenceStations = sectionStations.filter(s =>
+        stationsWithNonReferenceShot.has(`${s.station_ref.section_id}:${s.station_ref.station_index}`)
       );
-      const labelStations = nonVirtualStations.length > 0 ? nonVirtualStations : sectionStations;
+      const labelStations = nonReferenceStations.length > 0 ? nonReferenceStations : sectionStations;
       const anchorStation = labelStations.reduce((min, s) =>
         s.station_ref.station_index < min.station_ref.station_index ? s : min
       );
-      const allStationsVirtual = nonVirtualStations.length === 0;
+      const allStationsReference = nonReferenceStations.length === 0;
       sectionLabelFeatures.push({
         type: 'Feature',
         geometry: {
@@ -301,7 +301,7 @@ export function buildSurveyFeatures(
           name: section.name,
           color: section.color,
           sectionId: section.id,
-          allStationsVirtual,
+          allStationsReference,
         },
       });
     }
@@ -350,7 +350,7 @@ export function buildSurveyFeatures(
         isFirstInSection,
         color: stationLabelColor,
         comment: station.comment ?? null,
-        allShotsVirtual: !stationsWithNonVirtualShot.has(
+        allShotsReference: !stationsWithNonReferenceShot.has(
           `${station.station_ref.section_id}:${station.station_ref.station_index}`
         ),
       },

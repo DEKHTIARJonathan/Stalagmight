@@ -11,7 +11,7 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
     // Write header
     writeln!(
         file,
-        "section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,is_virtual,comment"
+        "section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,is_reference,comment"
     )?;
 
     // Write shots
@@ -34,7 +34,7 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
                 format_optional(shot.right),
                 format_optional(shot.up),
                 format_optional(shot.down),
-                shot.is_virtual,
+                shot.is_reference,
                 escape_csv(shot.comment.as_deref().unwrap_or(""))
             )?;
         }

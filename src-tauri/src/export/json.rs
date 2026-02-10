@@ -51,7 +51,7 @@ pub struct JsonShot {
     pub depth_out: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lrud: Option<[f64; 4]>,
-    pub is_virtual: bool,
+    pub is_reference: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
 }
@@ -97,7 +97,7 @@ impl JsonExport {
                             } else {
                                 None
                             },
-                            is_virtual: shot.is_virtual,
+                            is_reference: shot.is_reference,
                             comment: shot.comment.clone(),
                         })
                         .collect(),
@@ -193,8 +193,8 @@ mod tests {
     }
 
     #[test]
-    fn test_export_json_virtual_shots_and_optional_fields() {
-        let mut project = Project::new("Virtual".to_string(), None);
+    fn test_export_json_reference_shots_and_optional_fields() {
+        let mut project = Project::new("Reference".to_string(), None);
         project.add_section(SectionData {
             name: None,
             surveyor: None,
@@ -208,7 +208,7 @@ mod tests {
                 length: 1.0,
                 depth_in: 0.0,
                 depth_out: 0.0,
-                is_virtual: true,
+                is_reference: true,
                 ..Default::default()
             }],
         });
@@ -220,6 +220,6 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         let shot = &parsed["sections"][0]["shots"][0];
-        assert_eq!(shot["is_virtual"], true);
+        assert_eq!(shot["is_reference"], true);
     }
 }

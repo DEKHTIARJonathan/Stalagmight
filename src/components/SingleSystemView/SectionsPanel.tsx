@@ -254,19 +254,19 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
 
 function calculateSectionStats(section: Section) {
   let length = 0;
-  let virtualCount = 0;
+  let referenceCount = 0;
 
   for (const shot of section.shots) {
     length += shot.length;
-    if (shot.is_virtual) {
-      virtualCount++;
+    if (shot.is_reference) {
+      referenceCount++;
     }
   }
 
   return {
     shotCount: section.shots.length,
     length,
-    virtualCount,
+    referenceCount,
   };
 }
 

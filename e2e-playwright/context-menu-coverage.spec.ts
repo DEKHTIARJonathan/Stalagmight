@@ -91,7 +91,7 @@ async function openContextMenu(page: Page, target: Record<string, unknown>) {
 }
 
 test.describe('Context Menu Coverage', () => {
-  test('shot menu toggles virtual and routes delete dialogs', async ({ page }) => {
+  test('shot menu toggles reference and routes delete dialogs', async ({ page }) => {
     const { sectionId, shotIds, sectionName } = await setupProjectWithShots(page, 3);
 
     const [firstShotId, midShotId] = shotIds;
@@ -99,14 +99,14 @@ test.describe('Context Menu Coverage', () => {
     await openContextMenu(page, { type: 'shot', sectionId, shotId: firstShotId });
     await expect(page.getByRole('button', { name: 'Edit Shot' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Mark as Virtual' }).click();
+    await page.getByRole('button', { name: 'Mark as Reference' }).click();
 
     await expect.poll(async () => {
       return page.evaluate(({ sectionId, shotId }) => {
         const state = (window as any).__E2E_TEST__.projectStore.getState();
         const section = state.project.sections.find((s: any) => s.id === sectionId);
         const shot = section?.shots.find((s: any) => s.id === shotId);
-        return shot?.is_virtual ?? null;
+        return shot?.is_reference ?? null;
       }, { sectionId, shotId: firstShotId });
     }).toBe(true);
 

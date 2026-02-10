@@ -6,7 +6,7 @@
  * that use mocked IPC, these tests parse real TML files.
  *
  * Test fixtures:
- * - test_synthetic.tmlu: Small TMLU (plain XML) with 2 sections, closures, virtual shots
+ * - test_synthetic.tmlu: Small TMLU (plain XML) with 2 sections, closures, reference shots
  * - test_simple.tml: Larger TML (ZIP'd XML) with real cave survey data
  */
 

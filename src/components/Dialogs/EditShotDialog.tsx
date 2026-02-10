@@ -102,7 +102,7 @@ export default function EditShotDialog() {
         up: up ? parseFloat(up) : null,
         down: down ? parseFloat(down) : null,
         comment: comment.trim() || null,
-        is_virtual: shot?.is_virtual ?? false,
+        is_reference: shot?.is_reference ?? false,
         marker_index: shot?.marker_index ?? null,
         temperature: shot?.temperature ?? null,
       });

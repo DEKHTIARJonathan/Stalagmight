@@ -52,7 +52,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset |
 | LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
 | `shot.comment` | `Comment` / `CM` | Empty string if unset |
-| `shot.is_virtual` | `Type` / `TY` | `VIRTUAL` vs `REAL` |
+| `shot.is_reference` | `Type` / `TY` | `VIRTUAL` vs `REAL` (TML keeps Ariane's naming for compatibility) |
 | — | `Locked` / `LCK` | `false` for normal shots, `true` for START |
 | — | `Name` / `NM` | `"START"` for START shot, empty otherwise |
 | — | `Profiletype` / `PT` | Always `VERTICAL` |
@@ -64,7 +64,7 @@ Ariane represents survey data as a directed graph rooted at a single START shot.
 
 ### Single START shot
 
-Only the **root section** (the first section, or the one with no parent) gets a synthesized START shot with `FromID = -1`. All other sections connect to their parent via `FromID` on their first real/virtual shot.
+Only the **root section** (the first section, or the one with no parent) gets a synthesized START shot with `FromID = -1`. All other sections connect to their parent via `FromID` on their first real/reference shot.
 
 ### Section connectivity
 

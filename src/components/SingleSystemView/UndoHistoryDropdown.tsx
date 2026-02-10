@@ -61,7 +61,7 @@ function getCommandIcon(commandType: string): ReactNode {
       return commandType === 'move_segment' ? <MoveHorizontalIcon size={14} /> : <MoveAllIcon size={14} />;
     case 'unmerge_stations':
       return <LinkOffIcon size={14} />;
-    case 'set_shot_virtual':
+    case 'set_shot_reference':
       return <DashedLineIcon size={14} />;
     default:
       return <DotIcon size={14} />;

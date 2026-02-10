@@ -27,8 +27,8 @@ pub struct GeometryShot {
     pub from: [f64; 2],
     /// GPS coordinates of the to station [lng, lat] (MapLibre order)
     pub to: [f64; 2],
-    /// Whether this shot is virtual (temporary connection)
-    pub is_virtual: bool,
+    /// Whether this shot is a reference (temporary connection)
+    pub is_reference: bool,
     /// Section ID this shot belongs to (for coloring/filtering)
     pub section_id: SectionId,
 }
@@ -216,7 +216,7 @@ fn get_survey_geometry_for_project(project: &Project) -> Result<SurveyGeometry, 
             shots.push(GeometryShot {
                 from: [from_gps.0, from_gps.1],
                 to: [to_gps.0, to_gps.1],
-                is_virtual: shot.is_virtual,
+                is_reference: shot.is_reference,
                 section_id: section.id,
             });
         }
@@ -455,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_survey_geometry_includes_virtual_shots_and_origin() {
+    fn test_get_survey_geometry_includes_reference_shots_and_origin() {
         let mut project = Project::new("Geometry".to_string(), None);
         let shot = ShotData {
             azimuth_in: 0.0,
@@ -463,7 +463,7 @@ mod tests {
             length: 10.0,
             depth_in: 0.0,
             depth_out: 0.0,
-            is_virtual: true,
+            is_reference: true,
             ..Default::default()
         };
         let section_id = project
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(geometry.shots.len(), 1);
 
         let geom_shot = &geometry.shots[0];
-        assert!(geom_shot.is_virtual);
+        assert!(geom_shot.is_reference);
         assert_eq!(geom_shot.section_id, section_id);
         assert!((geom_shot.from[0]).abs() < 1e-9);
         assert!((geom_shot.from[1]).abs() < 1e-9);

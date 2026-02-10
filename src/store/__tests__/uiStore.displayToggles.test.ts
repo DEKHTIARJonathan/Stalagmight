@@ -14,7 +14,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { useUIStore, type DisplayToggleKey } from '../uiStore';
 import {
   DISPLAY_DEFAULTS,
-  getEffectiveShowVirtualShots,
+  getEffectiveShowReferenceShots,
   getEffectiveShowShotData,
 } from '../displaySelectors';
 
@@ -26,7 +26,7 @@ const getCleanTestState = () => ({
   showSectionNames: true,
   showStationLabels: false,
   showShotData: false,
-  showVirtualShots: true,
+  showReferenceShots: true,
   showZeroDatum: true,
   showGrid: false,
   showScaleBar: true,
@@ -71,8 +71,8 @@ describe('Display Toggle State', () => {
       expect(useUIStore.getState().showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
     });
 
-    it('store showVirtualShots uses DISPLAY_DEFAULTS value', () => {
-      expect(useUIStore.getState().showVirtualShots).toBe(DISPLAY_DEFAULTS.showVirtualShots);
+    it('store showReferenceShots uses DISPLAY_DEFAULTS value', () => {
+      expect(useUIStore.getState().showReferenceShots).toBe(DISPLAY_DEFAULTS.showReferenceShots);
     });
 
     it('store showZeroDatum uses DISPLAY_DEFAULTS value', () => {
@@ -108,7 +108,7 @@ describe('Display Toggle State', () => {
         'showSectionNames',
         'showStationLabels',
         'showShotData',
-        'showVirtualShots',
+        'showReferenceShots',
         'showZeroDatum',
         'showGrid',
         'showScaleBar',
@@ -131,7 +131,7 @@ describe('Display Toggle State', () => {
         showSectionNames: !DISPLAY_DEFAULTS.showSectionNames,
         showStationLabels: !DISPLAY_DEFAULTS.showStationLabels,
         showShotData: !DISPLAY_DEFAULTS.showShotData,
-        showVirtualShots: !DISPLAY_DEFAULTS.showVirtualShots,
+        showReferenceShots: !DISPLAY_DEFAULTS.showReferenceShots,
         showZeroDatum: !DISPLAY_DEFAULTS.showZeroDatum,
         showGrid: !DISPLAY_DEFAULTS.showGrid,
         showScaleBar: !DISPLAY_DEFAULTS.showScaleBar,
@@ -150,7 +150,7 @@ describe('Display Toggle State', () => {
       expect(state.showSectionNames).toBe(DISPLAY_DEFAULTS.showSectionNames);
       expect(state.showStationLabels).toBe(DISPLAY_DEFAULTS.showStationLabels);
       expect(state.showShotData).toBe(DISPLAY_DEFAULTS.showShotData);
-      expect(state.showVirtualShots).toBe(DISPLAY_DEFAULTS.showVirtualShots);
+      expect(state.showReferenceShots).toBe(DISPLAY_DEFAULTS.showReferenceShots);
       expect(state.showZeroDatum).toBe(DISPLAY_DEFAULTS.showZeroDatum);
       expect(state.showGrid).toBe(DISPLAY_DEFAULTS.showGrid);
       expect(state.showScaleBar).toBe(DISPLAY_DEFAULTS.showScaleBar);
@@ -197,7 +197,7 @@ describe('Display Toggle State', () => {
         'showSectionNames',
         'showStationLabels',
         'showShotData',
-        'showVirtualShots',
+        'showReferenceShots',
         'showZeroDatum',
         'showGrid',
         'showScaleBar',
@@ -246,18 +246,18 @@ describe('Effective Value Selectors', () => {
   // These tests verify the effective value gating logic used for rendering.
   // Effective values determine actual visibility based on parent-child toggle relationships.
 
-  describe('getEffectiveShowVirtualShots', () => {
-    it('returns true when both showShots and showVirtualShots are true', () => {
-      expect(getEffectiveShowVirtualShots(true, true)).toBe(true);
+  describe('getEffectiveShowReferenceShots', () => {
+    it('returns true when both showShots and showReferenceShots are true', () => {
+      expect(getEffectiveShowReferenceShots(true, true)).toBe(true);
     });
 
-    it('returns false when showShots is false (regardless of showVirtualShots)', () => {
-      expect(getEffectiveShowVirtualShots(false, true)).toBe(false);
-      expect(getEffectiveShowVirtualShots(false, false)).toBe(false);
+    it('returns false when showShots is false (regardless of showReferenceShots)', () => {
+      expect(getEffectiveShowReferenceShots(false, true)).toBe(false);
+      expect(getEffectiveShowReferenceShots(false, false)).toBe(false);
     });
 
-    it('returns false when showVirtualShots is false (regardless of showShots)', () => {
-      expect(getEffectiveShowVirtualShots(true, false)).toBe(false);
+    it('returns false when showReferenceShots is false (regardless of showShots)', () => {
+      expect(getEffectiveShowReferenceShots(true, false)).toBe(false);
     });
   });
 
@@ -285,21 +285,21 @@ describe('Effective Value Selectors', () => {
       useUIStore.setState(getCleanTestState());
     });
 
-    it('effective virtual shots is true when store has showShots=true and showVirtualShots=true', () => {
+    it('effective reference shots is true when store has showShots=true and showReferenceShots=true', () => {
       const state = useUIStore.getState();
-      expect(getEffectiveShowVirtualShots(state.showShots, state.showVirtualShots)).toBe(true);
+      expect(getEffectiveShowReferenceShots(state.showShots, state.showReferenceShots)).toBe(true);
     });
 
-    it('effective virtual shots is false when showShots is toggled off', () => {
+    it('effective reference shots is false when showShots is toggled off', () => {
       useUIStore.getState().toggleDisplay('showShots');
       const state = useUIStore.getState();
-      expect(getEffectiveShowVirtualShots(state.showShots, state.showVirtualShots)).toBe(false);
+      expect(getEffectiveShowReferenceShots(state.showShots, state.showReferenceShots)).toBe(false);
     });
 
-    it('effective virtual shots is false when showVirtualShots is toggled off', () => {
-      useUIStore.getState().toggleDisplay('showVirtualShots');
+    it('effective reference shots is false when showReferenceShots is toggled off', () => {
+      useUIStore.getState().toggleDisplay('showReferenceShots');
       const state = useUIStore.getState();
-      expect(getEffectiveShowVirtualShots(state.showShots, state.showVirtualShots)).toBe(false);
+      expect(getEffectiveShowReferenceShots(state.showShots, state.showReferenceShots)).toBe(false);
     });
 
     it('effective shot data is false by default (showShotData defaults to false)', () => {
@@ -330,28 +330,28 @@ describe('Toggle State Preservation', () => {
     useUIStore.setState(getCleanTestState());
   });
 
-  it('showVirtualShots state is preserved when showShots toggles off/on', () => {
-    // Initial: showShots=true, showVirtualShots=true
+  it('showReferenceShots state is preserved when showShots toggles off/on', () => {
+    // Initial: showShots=true, showReferenceShots=true
     expect(useUIStore.getState().showShots).toBe(true);
-    expect(useUIStore.getState().showVirtualShots).toBe(true);
+    expect(useUIStore.getState().showReferenceShots).toBe(true);
 
-    // Turn off showVirtualShots
-    useUIStore.getState().toggleDisplay('showVirtualShots');
-    expect(useUIStore.getState().showVirtualShots).toBe(false);
+    // Turn off showReferenceShots
+    useUIStore.getState().toggleDisplay('showReferenceShots');
+    expect(useUIStore.getState().showReferenceShots).toBe(false);
 
     // Toggle showShots off
     useUIStore.getState().toggleDisplay('showShots');
     expect(useUIStore.getState().showShots).toBe(false);
 
-    // showVirtualShots state should be preserved (still false)
-    expect(useUIStore.getState().showVirtualShots).toBe(false);
+    // showReferenceShots state should be preserved (still false)
+    expect(useUIStore.getState().showReferenceShots).toBe(false);
 
     // Toggle showShots back on
     useUIStore.getState().toggleDisplay('showShots');
     expect(useUIStore.getState().showShots).toBe(true);
 
-    // showVirtualShots should still be false (preserved state)
-    expect(useUIStore.getState().showVirtualShots).toBe(false);
+    // showReferenceShots should still be false (preserved state)
+    expect(useUIStore.getState().showReferenceShots).toBe(false);
   });
 
   it('showShotData state is preserved when showShots toggles off/on', () => {
@@ -373,12 +373,12 @@ describe('Toggle State Preservation', () => {
   });
 
   it('multiple dependent toggles preserve state through parent toggle cycle', () => {
-    // Set up: showShots=true, showVirtualShots=false, showShotData=true
-    useUIStore.getState().toggleDisplay('showVirtualShots'); // true -> false
+    // Set up: showShots=true, showReferenceShots=false, showShotData=true
+    useUIStore.getState().toggleDisplay('showReferenceShots'); // true -> false
     useUIStore.getState().toggleDisplay('showShotData'); // false -> true
 
     expect(useUIStore.getState().showShots).toBe(true);
-    expect(useUIStore.getState().showVirtualShots).toBe(false);
+    expect(useUIStore.getState().showReferenceShots).toBe(false);
     expect(useUIStore.getState().showShotData).toBe(true);
 
     // Toggle parent off then on
@@ -386,7 +386,7 @@ describe('Toggle State Preservation', () => {
     useUIStore.getState().toggleDisplay('showShots');
 
     // Both dependent states should be preserved
-    expect(useUIStore.getState().showVirtualShots).toBe(false);
+    expect(useUIStore.getState().showReferenceShots).toBe(false);
     expect(useUIStore.getState().showShotData).toBe(true);
   });
 });

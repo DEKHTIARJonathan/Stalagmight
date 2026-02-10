@@ -310,7 +310,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showSectionNames: true,
                 showStationLabels: false,
                 showShotData: false,
-                showVirtualShots: true,
+                showReferenceShots: true,
                 showZeroDatum: true,
                 showGrid: false,
                 showScaleBar: true,
@@ -352,8 +352,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: now.split('T')[0],
                 color: '#4ECDC4',
                 shots: [
-                  { id: 1, azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, is_virtual: false },
-                  { id: 2, azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, is_virtual: false },
+                  { id: 1, azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, is_reference: false },
+                  { id: 2, azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, is_reference: false },
                 ],
               },
             ];
@@ -509,7 +509,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 showSectionNames: true,
                 showStationLabels: false,
                 showShotData: false,
-                showVirtualShots: true,
+                showReferenceShots: true,
                 showZeroDatum: true,
                 showGrid: false,
                 showScaleBar: true,
@@ -671,7 +671,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               up: (shot.up as number | null | undefined) ?? null,
               down: (shot.down as number | null | undefined) ?? null,
               comment: (shot.comment as string | null | undefined) ?? null,
-              is_virtual: (shot.is_virtual as boolean | undefined) ?? false,
+              is_reference: (shot.is_reference as boolean | undefined) ?? false,
               marker_index: (shot.marker_index as number | null | undefined) ?? null,
               temperature: (shot.temperature as number | null | undefined) ?? null,
             }));
@@ -724,7 +724,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 up: (shot.up as number | null | undefined) ?? null,
                 down: (shot.down as number | null | undefined) ?? null,
                 comment: (shot.comment as string | null | undefined) ?? null,
-                is_virtual: (shot.is_virtual as boolean | undefined) ?? false,
+                is_reference: (shot.is_reference as boolean | undefined) ?? false,
                 marker_index: (shot.marker_index as number | null | undefined) ?? null,
                 temperature: (shot.temperature as number | null | undefined) ?? null,
               }));
@@ -1887,17 +1887,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_projects called with:', args);
             return { success: true };
 
-          case 'set_shot_virtual': {
-            console.log('[Mock IPC] set_shot_virtual called with:', args);
+          case 'set_shot_reference': {
+            console.log('[Mock IPC] set_shot_reference called with:', args);
             const sectionId = (args?.sectionId ?? args?.section_id) as number;
             const shotId = (args?.shotId ?? args?.shot_id) as number;
-            const isVirtual = (args?.isVirtual ?? args?.is_virtual) as boolean;
+            const isReference = (args?.isReference ?? args?.is_reference) as boolean;
             if (currentProject && sectionId && shotId !== undefined) {
               const section = currentProject.sections.find(s => s.id === sectionId);
               if (section) {
                 const shot = section.shots.find((s: { id: number }) => s.id === shotId);
                 if (shot) {
-                  (shot as { is_virtual?: boolean }).is_virtual = isVirtual;
+                  (shot as { is_reference?: boolean }).is_reference = isReference;
                 }
               }
             }
@@ -1996,8 +1996,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const mockGeometry = {
               origin: [-82.46, 24.93] as [number, number],
               shots: [
-                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], is_virtual: false, section_id: 1 },
-                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], is_virtual: false, section_id: 1 },
+                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], is_reference: false, section_id: 1 },
+                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], is_reference: false, section_id: 1 },
               ],
             };
 

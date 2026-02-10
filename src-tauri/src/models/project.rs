@@ -1002,16 +1002,16 @@ impl Project {
             .map(|(shot, _)| shot)
     }
 
-    /// Set a shot as virtual or not
-    pub fn set_shot_virtual(
+    /// Set a shot as reference or not
+    pub fn set_shot_reference(
         &mut self,
         section_id: SectionId,
         shot_id: ShotId,
-        is_virtual: bool,
+        is_reference: bool,
     ) -> Option<&Shot> {
         let section = self.get_section_mut(section_id)?;
         let shot = section.get_shot_mut(shot_id)?;
-        shot.is_virtual = is_virtual;
+        shot.is_reference = is_reference;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }

@@ -136,26 +136,26 @@ pub(crate) fn delete_last_shot_and_section_impl(
     state.execute_delete_last_shot_and_section(section_id, shot_id)
 }
 
-/// Set shot virtual status
+/// Set shot reference status
 #[tauri::command]
-pub fn set_shot_virtual(
+pub fn set_shot_reference(
     state: State<AppState>,
     section_id: SectionId,
     shot_id: ShotId,
-    is_virtual: bool,
+    is_reference: bool,
 ) -> CommandResult {
-    set_shot_virtual_impl(state.inner(), section_id, shot_id, is_virtual)
+    set_shot_reference_impl(state.inner(), section_id, shot_id, is_reference)
 }
 
-pub(crate) fn set_shot_virtual_impl(
+pub(crate) fn set_shot_reference_impl(
     state: &AppState,
     section_id: SectionId,
     shot_id: ShotId,
-    is_virtual: bool,
+    is_reference: bool,
 ) -> CommandResult {
-    state.execute(Command::SetShotVirtual {
+    state.execute(Command::SetShotReference {
         section_id,
         shot_id,
-        is_virtual,
+        is_reference,
     })
 }

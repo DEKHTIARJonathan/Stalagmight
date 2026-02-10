@@ -243,7 +243,7 @@ export default function ImportDialog() {
     }
   };
 
-  /** Enter on non-editable cells (Virtual, ✕) creates a new row or moves down. */
+  /** Enter on non-editable cells (Reference, ✕) creates a new row or moves down. */
   const handleRowKeyDown = (e: React.KeyboardEvent, rowIndex: number) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -387,7 +387,7 @@ export default function ImportDialog() {
                       <th className="text-right" style={{ width: '50px' }}>D</th>
                     </>
                   )}
-                  <th className="text-center" style={{ width: '40px' }}>Virt</th>
+                  <th className="text-center" style={{ width: '40px' }}>Ref</th>
                   <th style={{ width: '30px' }}></th>
                 </tr>
               </thead>
@@ -427,9 +427,9 @@ export default function ImportDialog() {
                       <span className="px-2 py-1 flex items-center justify-center">
                         <input
                           type="checkbox"
-                          checked={shot.is_virtual ?? false}
+                          checked={shot.is_reference ?? false}
                           onChange={(e) =>
-                            handleShotChange(rowIndex, 'is_virtual', e.target.checked)
+                            handleShotChange(rowIndex, 'is_reference', e.target.checked)
                           }
                           onKeyDown={(e) => handleRowKeyDown(e, rowIndex)}
                         />
@@ -484,7 +484,7 @@ function createEmptyShot(): ShotData {
     up: null,
     down: null,
     comment: null,
-    is_virtual: false,
+    is_reference: false,
     marker_index: null,
     temperature: null,
   };

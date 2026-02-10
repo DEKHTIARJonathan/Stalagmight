@@ -70,11 +70,11 @@ impl AppState {
                 section_id,
                 shot_id,
             } => self.delete_shot(*section_id, *shot_id),
-            Command::SetShotVirtual {
+            Command::SetShotReference {
                 section_id,
                 shot_id,
-                is_virtual,
-            } => self.set_shot_virtual(*section_id, *shot_id, *is_virtual),
+                is_reference,
+            } => self.set_shot_reference(*section_id, *shot_id, *is_reference),
             Command::MergeStations {
                 station_a,
                 station_b,
@@ -1040,11 +1040,11 @@ impl AppState {
         }
     }
 
-    pub(super) fn set_shot_virtual(
+    pub(super) fn set_shot_reference(
         &self,
         section_id: SectionId,
         shot_id: ShotId,
-        is_virtual: bool,
+        is_reference: bool,
     ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
@@ -1055,15 +1055,15 @@ impl AppState {
         };
 
         if project
-            .set_shot_virtual(section_id, shot_id, is_virtual)
+            .set_shot_reference(section_id, shot_id, is_reference)
             .is_some()
         {
             tracing::info!(
                 section_id,
                 shot_id,
-                is_virtual,
-                purpose = "toggle virtual shot visibility",
-                "Shot virtual status updated"
+                is_reference,
+                purpose = "toggle reference shot visibility",
+                "Shot reference status updated"
             );
             CommandResult::success()
         } else {

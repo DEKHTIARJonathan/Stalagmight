@@ -34,7 +34,7 @@ Commands go through a two-phase capture during execution:
 
 | Variant | Used By | Undo | Redo |
 |---------|---------|------|------|
-| `InverseCommand` | SetShotVirtual, Move{Section,Station} | Execute the inverse command | Execute the original command |
+| `InverseCommand` | SetShotReference, Move{Section,Station} | Execute the inverse command | Execute the original command |
 | `PreviousValues` | UpdateShot, UpdateSectionMetadata | Parse JSON, apply old values | Execute the original command |
 | `CreatedSectionSnapshot` | CreateSection | Delete the section | Restore from snapshot (preserves original ID) |
 | `CreatedShotSnapshot` | CreateShot | Delete the shot | Restore from snapshot (preserves original ID) |
@@ -115,7 +115,7 @@ Section names in preview data are resolved at **display time**, not execution ti
 
 `derive_preview_data()` matches `(Command, UndoData)` pairs to extract meaningful field changes. Every command type produces preview data — the fallback arm returns the command description as an "Action" field so hover is never empty.
 
-For `UpdateShot`, all changed fields are shown (up to 5): Length, Azimuth In/Out, Depth In/Out, Pitch In/Out, LRUD, Comment, Virtual, Temperature. The previous values come from `PreviousValues.values_json`.
+For `UpdateShot`, all changed fields are shown (up to 5): Length, Azimuth In/Out, Depth In/Out, Pitch In/Out, LRUD, Comment, Reference, Temperature. The previous values come from `PreviousValues.values_json`.
 
 For batch commands, `derive_command_details()` extracts a compact detail string from each sub-command (without access to undo data, since the batch uses a single `ProjectSnapshotPair`).
 

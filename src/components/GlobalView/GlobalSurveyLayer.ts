@@ -52,12 +52,12 @@ export function generateSystemColor(filePath: string): string {
 
 /**
  * Extract unique station positions from shots.
- * Returns [lng, lat, allShotsVirtual] for each unique station.
- * allShotsVirtual is true when the station only connects to virtual shots.
+ * Returns [lng, lat, allShotsReference] for each unique station.
+ * allShotsReference is true when the station only connects to reference shots.
  */
 function extractStations(shots: GeometryShot[]): [number, number, boolean][] {
   const stationCoords = new Map<string, [number, number]>();
-  const stationsWithNonVirtualShot = new Set<string>();
+  const stationsWithNonReferenceShot = new Set<string>();
 
   for (const shot of shots) {
     let fromKey: string | undefined;
@@ -84,16 +84,16 @@ function extractStations(shots: GeometryShot[]): [number, number, boolean][] {
       }
     }
 
-    if (!shot.is_virtual) {
-      if (fromKey) stationsWithNonVirtualShot.add(fromKey);
-      if (toKey) stationsWithNonVirtualShot.add(toKey);
+    if (!shot.is_reference) {
+      if (fromKey) stationsWithNonReferenceShot.add(fromKey);
+      if (toKey) stationsWithNonReferenceShot.add(toKey);
     }
   }
 
   return Array.from(stationCoords.entries()).map(([key, coords]) => [
     coords[0],
     coords[1],
-    !stationsWithNonVirtualShot.has(key),
+    !stationsWithNonReferenceShot.has(key),
   ]);
 }
 
@@ -245,13 +245,13 @@ export default class GlobalSurveyLayer {
         'line-color': this.themeColors.grayLine, // Fallback, replaced by match expression on update()
         'line-width': [
           'case',
-          ['boolean', ['get', 'isVirtual'], false],
+          ['boolean', ['get', 'isReference'], false],
           1,
           2,
         ],
         'line-opacity': [
           'case',
-          ['boolean', ['get', 'isVirtual'], false],
+          ['boolean', ['get', 'isReference'], false],
           0.5,
           1,
         ],
@@ -491,14 +491,14 @@ export default class GlobalSurveyLayer {
             name: system.metadata.name,
             totalLength: system.metadata.total_length,
             stationCount: system.metadata.station_count,
-            isVirtual: shot.is_virtual,
+            isReference: shot.is_reference,
           },
         });
       }
 
       // Extract and build station features
       const stations = extractStations(system.geometry.shots);
-      for (const [lng, lat, allShotsVirtual] of stations) {
+      for (const [lng, lat, allShotsReference] of stations) {
         features.push({
           type: 'Feature',
           geometry: {
@@ -511,7 +511,7 @@ export default class GlobalSurveyLayer {
             name: system.metadata.name,
             totalLength: system.metadata.total_length,
             stationCount: system.metadata.station_count,
-            allShotsVirtual,
+            allShotsReference,
           },
         });
       }
@@ -601,18 +601,18 @@ export default class GlobalSurveyLayer {
   }
 
   /**
-   * Set filter to hide virtual shots (or show all).
+   * Set filter to hide reference shots (or show all).
    * Applies to both visual and hitbox layers to prevent hidden shots from being clickable.
-   * Also hides stations that only connect to virtual shots.
+   * Also hides stations that only connect to reference shots.
    */
-  setShowVirtualShots(visible: boolean): void {
+  setShowReferenceShots(visible: boolean): void {
     // Base filter for shot features
     const shotTypeFilter: maplibregl.ExpressionSpecification = ['==', ['get', 'featureType'], 'shot'];
 
-    // Combined filter: show shots AND (optionally) exclude virtual
+    // Combined filter: show shots AND (optionally) exclude reference
     const shotFilter: maplibregl.FilterSpecification = visible
       ? shotTypeFilter
-      : ['all', shotTypeFilter, ['!=', ['get', 'isVirtual'], true]];
+      : ['all', shotTypeFilter, ['!=', ['get', 'isReference'], true]];
 
     // Apply filter to visual layer
     if (this.map.getLayer(this.shotsLayerId)) {
@@ -624,11 +624,11 @@ export default class GlobalSurveyLayer {
       this.map.setFilter(this.shotsHitboxLayerId, shotFilter);
     }
 
-    // Station filter: hide virtual-only stations when virtual shots are hidden
+    // Station filter: hide reference-only stations when reference shots are hidden
     const stationTypeFilter: maplibregl.ExpressionSpecification = ['==', ['get', 'featureType'], 'station'];
     const stationFilter: maplibregl.FilterSpecification = visible
       ? stationTypeFilter
-      : ['all', stationTypeFilter, ['!=', ['get', 'allShotsVirtual'], true]];
+      : ['all', stationTypeFilter, ['!=', ['get', 'allShotsReference'], true]];
 
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.setFilter(this.stationsLayerId, stationFilter);
@@ -760,10 +760,10 @@ export default class GlobalSurveyLayer {
     let stationsOpacity: maplibregl.ExpressionSpecification | number;
 
     if (!this.searchFilter) {
-      // No search filter - shots use default opacity (virtual shots dimmed)
+      // No search filter - shots use default opacity (reference shots dimmed)
       shotsOpacity = [
         'case',
-        ['boolean', ['get', 'isVirtual'], false],
+        ['boolean', ['get', 'isReference'], false],
         0.5,
         1,
       ];
@@ -778,11 +778,11 @@ export default class GlobalSurveyLayer {
         0,
       ];
 
-      // Shots: full opacity if match (with virtual dimming), 25% if no match
+      // Shots: full opacity if match (with reference dimming), 25% if no match
       shotsOpacity = [
         'case',
         matchExpr,
-        ['case', ['boolean', ['get', 'isVirtual'], false], 0.5, 1],
+        ['case', ['boolean', ['get', 'isReference'], false], 0.5, 1],
         0.25,
       ];
 
@@ -824,8 +824,8 @@ export default class GlobalSurveyLayer {
       // Selected systems: medium-thick lines
       isSelectedExpr,
       3,
-      // Virtual shots: thin
-      ['boolean', ['get', 'isVirtual'], false],
+      // Reference shots: thin
+      ['boolean', ['get', 'isReference'], false],
       1,
       // Default
       2,
