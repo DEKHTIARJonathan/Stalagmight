@@ -95,36 +95,25 @@ export default function DmpNewImportDialog({
 
   const totalSelected = selectedIndices.length;
 
-  // Dedup key for a suggestion — identifies equivalent placements
-  const suggestionKey = (s: RankedSuggestion) =>
-    `${s.importStationIndex}-${s.existingSectionId}-${s.existingStationIndex}-${s.direction}`;
-
   // Pick the next suggestion from the cached pool, filtering out imported/skipped sections.
   // Returns true if a suggestion was found, false if pool is empty.
   const pickFromPool = useCallback(() => {
     const imported = importedIndicesRef.current;
     const skipped = skippedIndicesRef.current;
 
-    // Filter pool to only remaining sections, and deduplicate by key (keeping
-    // the first occurrence which has the highest score since pool is sorted)
-    const seen = new Set<string>();
-    const pool = suggestionPoolRef.current.filter((s) => {
-      if (imported.has(s.importSectionIndex) || skipped.has(s.importSectionIndex)) return false;
-      const key = suggestionKey(s);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    // Filter pool to only remaining sections
+    const pool = suggestionPoolRef.current.filter(
+      (s) => !imported.has(s.importSectionIndex) && !skipped.has(s.importSectionIndex)
+    );
     suggestionPoolRef.current = pool;
 
     if (pool.length === 0) return false;
 
     const top = pool[0]!;
-    const topKey = suggestionKey(top);
     setCurrentSuggestion(top);
     setAlternatives(
       pool
-        .filter((s) => suggestionKey(s) !== topKey && s.importSectionIndex === top.importSectionIndex)
+        .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
         .slice(0, 4)
     );
     setShowAlternatives(false);
@@ -471,11 +460,10 @@ export default function DmpNewImportDialog({
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: RankedSuggestion) => {
-    const altKey = suggestionKey(alt);
     setCurrentSuggestion(alt);
     setAlternatives((prev) => {
       // Replace the clicked one with the current top suggestion
-      const newAlts = prev.filter((a) => suggestionKey(a) !== altKey);
+      const newAlts = prev.filter((a) => a !== alt);
       if (currentSuggestion) {
         newAlts.unshift(currentSuggestion);
       }
