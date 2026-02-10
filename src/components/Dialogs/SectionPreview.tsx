@@ -108,6 +108,8 @@ interface SectionPreviewProps {
   gpsOrigin?: GpsOrigin | null;
   /** Station index to offset the gpsOrigin to (default 0). The section is positioned so this station sits at gpsOrigin. */
   gpsStationIndex?: number;
+  /** When set with mergePreview, fit bounds focus around this station index in the import section rather than fitting all stations. */
+  focusStationIndex?: number | null;
 }
 
 /**
@@ -133,6 +135,7 @@ export default function SectionPreview({
   size = 250,
   gpsOrigin,
   gpsStationIndex = 0,
+  focusStationIndex,
 }: SectionPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -721,35 +724,112 @@ export default function SectionPreview({
     // the container has proper dimensions and the map is fully rendered
     if (stations.length > 0) {
       const doFitBounds = () => {
-        // Get bounds for import section (with combined offset applied)
-        const offsetStations = stations.map((s) => ({
-          x: s.x + totalOffset.x,
-          y: s.y + totalOffset.y,
-          z: s.z,
-        }));
-        const bounds = getBounds(offsetStations);
+        let bounds: { minX: number; maxX: number; minY: number; maxY: number };
 
-        // Include target section in bounds if merge preview is active
-        if (mergePreview && targetStations.length > 0) {
-          const targetBounds = getBounds(targetStations);
-          bounds.minX = Math.min(bounds.minX, targetBounds.minX);
-          bounds.maxX = Math.max(bounds.maxX, targetBounds.maxX);
-          bounds.minY = Math.min(bounds.minY, targetBounds.minY);
-          bounds.maxY = Math.max(bounds.maxY, targetBounds.maxY);
+        // When focusStationIndex is set with mergePreview, zoom to the overlap area
+        if (focusStationIndex != null && mergePreview && targetStations.length > 0) {
+          const focusStation = stations[focusStationIndex];
+          if (focusStation) {
+            const focusX = focusStation.x + totalOffset.x;
+            const focusY = focusStation.y + totalOffset.y;
+            const minRadius = 30; // meters minimum around connection
+
+            // Gather nearby stations from both sections within radius
+            const offsetImportStations = stations.map((s) => ({
+              x: s.x + totalOffset.x,
+              y: s.y + totalOffset.y,
+            }));
+
+            const nearby: Array<{ x: number; y: number }> = [];
+            for (const s of offsetImportStations) {
+              const dist = Math.hypot(s.x - focusX, s.y - focusY);
+              if (dist <= minRadius * 1.5) nearby.push(s);
+            }
+            for (const s of targetStations) {
+              const dist = Math.hypot(s.x - focusX, s.y - focusY);
+              if (dist <= minRadius * 1.5) nearby.push(s);
+            }
+
+            // If too few stations nearby, include ±5 nearest from each section
+            if (nearby.length < 3) {
+              const sortedImport = [...offsetImportStations]
+                .map((s) => ({ ...s, dist: Math.hypot(s.x - focusX, s.y - focusY) }))
+                .sort((a, b) => a.dist - b.dist)
+                .slice(0, 5);
+              const sortedTarget = [...targetStations]
+                .map((s) => ({ x: s.x, y: s.y, dist: Math.hypot(s.x - focusX, s.y - focusY) }))
+                .sort((a, b) => a.dist - b.dist)
+                .slice(0, 5);
+              for (const s of [...sortedImport, ...sortedTarget]) {
+                if (!nearby.some((n) => n.x === s.x && n.y === s.y)) {
+                  nearby.push(s);
+                }
+              }
+            }
+
+            if (nearby.length > 0) {
+              const nearbyBounds = getBounds(nearby.map((s) => ({ ...s, z: 0 })));
+              // Ensure minimum extent of minRadius
+              const cx = (nearbyBounds.minX + nearbyBounds.maxX) / 2;
+              const cy = (nearbyBounds.minY + nearbyBounds.maxY) / 2;
+              const halfW = Math.max((nearbyBounds.maxX - nearbyBounds.minX) / 2, minRadius);
+              const halfH = Math.max((nearbyBounds.maxY - nearbyBounds.minY) / 2, minRadius);
+              bounds = {
+                minX: cx - halfW,
+                maxX: cx + halfW,
+                minY: cy - halfH,
+                maxY: cy + halfH,
+              };
+            } else {
+              // Fallback: center on focus point with minimum radius
+              bounds = {
+                minX: focusX - minRadius,
+                maxX: focusX + minRadius,
+                minY: focusY - minRadius,
+                maxY: focusY + minRadius,
+              };
+            }
+          } else {
+            // focusStation not found, fall through to default bounds
+            bounds = computeDefaultBounds();
+          }
+        } else {
+          bounds = computeDefaultBounds();
         }
 
-        // Include existing station in bounds if present (legacy mode)
-        if (!mergePreview && existingStationFeatures.length > 0) {
-          const importStation =
-            importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
-          if (importStation) {
-            const existingX = importStation.x + 10;
-            const existingY = importStation.y + 10;
-            bounds.minX = Math.min(bounds.minX, existingX);
-            bounds.maxX = Math.max(bounds.maxX, existingX);
-            bounds.minY = Math.min(bounds.minY, existingY);
-            bounds.maxY = Math.max(bounds.maxY, existingY);
+        function computeDefaultBounds() {
+          // Get bounds for import section (with combined offset applied)
+          const offsetStations = stations.map((s) => ({
+            x: s.x + totalOffset.x,
+            y: s.y + totalOffset.y,
+            z: s.z,
+          }));
+          const b = getBounds(offsetStations);
+
+          // Include target section in bounds if merge preview is active
+          if (mergePreview && targetStations.length > 0) {
+            const targetBounds = getBounds(targetStations);
+            b.minX = Math.min(b.minX, targetBounds.minX);
+            b.maxX = Math.max(b.maxX, targetBounds.maxX);
+            b.minY = Math.min(b.minY, targetBounds.minY);
+            b.maxY = Math.max(b.maxY, targetBounds.maxY);
           }
+
+          // Include existing station in bounds if present (legacy mode)
+          if (!mergePreview && existingStationFeatures.length > 0) {
+            const importStation =
+              importStationIndex === 'first' ? stations[0] : stations[stations.length - 1];
+            if (importStation) {
+              const existingX = importStation.x + 10;
+              const existingY = importStation.y + 10;
+              b.minX = Math.min(b.minX, existingX);
+              b.maxX = Math.max(b.maxX, existingX);
+              b.minY = Math.min(b.minY, existingY);
+              b.maxY = Math.max(b.maxY, existingY);
+            }
+          }
+
+          return b;
         }
 
         // Check for degenerate bounds (single point or very small extent)
@@ -790,7 +870,7 @@ export default function SectionPreview({
         }
       });
     }
-  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset]);
+  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex]);
 
   // Re-apply theme colors when resolvedTheme changes
   useEffect(() => {
