@@ -763,7 +763,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
 
       <div className="p-3 border-t border-border space-y-2">
         <Button size="sm" className="w-full" onClick={handleToggleReference}>
-          {shot.is_reference ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markReference')}
+          {shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
         </Button>
         <Button size="sm" variant="danger" className="w-full" onClick={handleDelete}>
           {t('common.actions.delete')}

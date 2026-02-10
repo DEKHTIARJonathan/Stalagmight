@@ -944,7 +944,7 @@
       "endStation": "End station",
       "reference": "Reference shot",
       "markReference": "Mark as reference",
-      "markReal": "Mark as real"
+      "markPermanent": "Mark as permanent"
     },
     "section": {
       "title": "Section",
