@@ -475,26 +475,26 @@ pub fn suggest_placements(
                         SuggestionConfidence::Low
                     };
 
-                    // Check for duplicates
+                    // Check for duplicates — forward/reverse at the same
+                    // station pair represent the same physical connection,
+                    // so dedup ignores direction and keeps the best score.
                     let is_dup = suggestions.iter().any(|s| {
                         s.existing_section_id == existing.id
                             && s.existing_station_index == existing_station_index
                             && s.import_station_index == import_station
-                            && s.direction == direction
                     });
                     if is_dup {
-                        // Keep the better score
                         if let Some(existing_suggestion) = suggestions.iter_mut().find(|s| {
                             s.existing_section_id == existing.id
                                 && s.existing_station_index == existing_station_index
                                 && s.import_station_index == import_station
-                                && s.direction == direction
                         }) {
                             if result.score > existing_suggestion.score {
                                 existing_suggestion.score = result.score;
                                 existing_suggestion.matched_shots = result.matched_count;
                                 existing_suggestion.is_partial = result.is_partial;
                                 existing_suggestion.confidence = confidence;
+                                existing_suggestion.direction = direction;
                             }
                         }
                         continue;
@@ -1043,16 +1043,16 @@ mod tests {
         ];
 
         let suggestions = suggest_placements(&import_shots, &existing);
-        // Should not have duplicate entries for the same position
+        // Should not have duplicate entries for the same station pair,
+        // even across forward/reverse directions
         let count = suggestions
             .iter()
             .filter(|s| {
                 s.existing_section_id == 1
                     && s.existing_station_index == 0
                     && s.import_station_index == 0
-                    && s.direction == MatchDirection::Forward
             })
             .count();
-        assert!(count <= 1, "should not have duplicate suggestions");
+        assert!(count <= 1, "should not have duplicate suggestions for same station pair");
     }
 }
