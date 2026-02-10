@@ -100,11 +100,23 @@ export default function ZeroDatumSelectionDialog({
   const config = useProjectStore((s) => s.config);
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
 
-  // Single-fire guard: prevent double-click from calling onSelectSection twice
+  // Guard against double-click: prevent the handler from firing twice, and
+  // absorb stale pointer events with a temporary overlay so the second click
+  // cannot reach the next dialog's backdrop during the transition.
   const selectedRef = useRef(false);
   const handleSelectSection = useCallback((index: number) => {
     if (selectedRef.current) return;
     selectedRef.current = true;
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;';
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        overlay.remove();
+      });
+    });
+
     onSelectSection(index);
   }, [onSelectSection]);
 
