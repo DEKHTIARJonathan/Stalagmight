@@ -110,11 +110,22 @@ export default function ZeroDatumSelectionDialog({
         const standardShots = section.shots.filter((s) => s.shot_type === 'Standard');
         const totalLength = standardShots.reduce((sum, s) => sum + (s.length >= 0 ? s.length : 0), 0);
 
+        // Extract time from first shot
+        const firstShot = standardShots[0];
+        const dateStr = section.date?.split(/[T ]/)[0] ?? null;
+        let dateTimeStr = dateStr;
+        if (dateStr && firstShot) {
+          const hh = String(firstShot.hour).padStart(2, '0');
+          const mm = String(firstShot.minute).padStart(2, '0');
+          dateTimeStr = `${dateStr} ${hh}:${mm}`;
+        }
+
         return {
           index: idx,
           section,
           shotCount: standardShots.length,
           totalLength,
+          dateTimeStr,
         };
       })
       .filter((s): s is NonNullable<typeof s> => s !== null);
@@ -129,32 +140,32 @@ export default function ZeroDatumSelectionDialog({
       bodyClassName="flex-1 flex flex-col p-4 min-h-0"
       data-testid="zero-datum-selection-dialog"
     >
-      <p className="text-sm text-text-secondary mb-4 px-1 shrink-0">
+      <p className="text-sm text-text-secondary mb-2 px-1 shrink-0">
         {t('dialogs.zeroDatumSelection.subtitle')}
       </p>
 
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4 p-1">
-          {selectedSections.map(({ index, section, shotCount, totalLength }) => (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-2 p-1">
+          {selectedSections.map(({ index, section, shotCount, totalLength, dateTimeStr }) => (
             <button
               key={index}
               type="button"
               onClick={() => onSelectSection(index)}
-              className="flex flex-col items-center gap-2 p-3 bg-panel border border-border rounded-lg cursor-pointer transition-colors hover:border-accent focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              className="flex flex-col items-center gap-1 p-2 bg-panel border border-border rounded-lg cursor-pointer transition-colors hover:border-accent focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
               data-testid={`zero-datum-section-card-${index}`}
             >
-              <SectionMiniPreview shots={section.shots} size={140} />
-              <span className="text-sm font-medium text-text-primary">{section.name}</span>
-              <span className="text-xs text-text-secondary">
+              <SectionMiniPreview shots={section.shots} size={110} />
+              <span className="text-sm font-medium text-text-primary leading-tight">{section.name}</span>
+              <span className="text-xs text-text-secondary leading-tight">
                 {t('dialogs.zeroDatumSelection.shotCount', { count: shotCount })}
                 {' \u00b7 '}
                 {t('dialogs.zeroDatumSelection.totalLength', {
                   length: formatLength(totalLength, lengthUnit),
                 })}
               </span>
-              {section.date && (
-                <span className="text-xs text-text-secondary">
-                  {section.date.split(/[T ]/)[0]}
+              {dateTimeStr && (
+                <span className="text-xs text-text-secondary leading-tight">
+                  {dateTimeStr}
                 </span>
               )}
             </button>
@@ -162,7 +173,7 @@ export default function ZeroDatumSelectionDialog({
         </div>
       </div>
 
-      <div className="flex justify-start gap-2 pt-4 border-t border-border mt-2 shrink-0">
+      <div className="flex justify-start gap-2 pt-3 border-t border-border mt-1 shrink-0">
         <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-selection-cancel">
           {t('common.actions.cancel')}
         </Button>
