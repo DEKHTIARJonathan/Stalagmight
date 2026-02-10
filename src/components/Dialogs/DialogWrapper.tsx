@@ -295,8 +295,18 @@ export function DialogWrapper({
     [requestClose, showConfirm, handleCancelDiscard, onKeyDown],
   );
 
+  // Guard against stale clicks from a previous dialog landing on this backdrop.
+  // When a click in dialog A causes dialog B to mount, the second click of a
+  // double-click can land on B's backdrop and immediately close it.
+  // useEffect fires after React has flushed the current event batch, so the ref
+  // won't be true until all pending input events have been dispatched.
+  const backdropReadyRef = useRef(false);
+  useEffect(() => {
+    backdropReadyRef.current = true;
+  }, []);
+
   const handleBackdropClick = useCallback(() => {
-    if (closeOnBackdropClick) {
+    if (closeOnBackdropClick && backdropReadyRef.current) {
       requestClose();
     }
   }, [closeOnBackdropClick, requestClose]);
