@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
@@ -64,9 +64,11 @@ export default function ZeroDatumConfigDialog({
     return sorted.indexOf(sectionIndex);
   }, [selectionConfig.selectedIndices, sectionIndex]);
 
-  // Station selection
+  // Station selection: stationIndex is the committed value, previewStationIndex
+  // tracks what the map highlights (follows hover, reverts on dropdown close).
   const [stationIndex, setStationIndex] = useState(0);
-  const [hoveredStationIndex, setHoveredStationIndex] = useState<number | null>(null);
+  const [previewStationIndex, setPreviewStationIndex] = useState(0);
+  const stationIndexRef = useRef(0);
 
   // GPS input state
   const [gpsInput, setGpsInput] = useState('');
@@ -109,9 +111,15 @@ export default function ZeroDatumConfigDialog({
     return { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude };
   }, [gpsCoords]);
 
-  // Station hover handler for dropdown
+  // When dropdown hovers an option, show it on the map; when dropdown closes
+  // without selecting, revert to the committed station.
   const handleStationHover = useCallback((value: string | null) => {
-    setHoveredStationIndex(value !== null ? parseInt(value, 10) : null);
+    if (value !== null) {
+      setPreviewStationIndex(parseInt(value, 10));
+    } else {
+      // Dropdown closed without selection — revert
+      setPreviewStationIndex(stationIndexRef.current);
+    }
   }, []);
 
   // GPS input handler
@@ -285,9 +293,10 @@ export default function ZeroDatumConfigDialog({
             size={340}
             onStationClick={(index) => {
               setStationIndex(index);
-              setHoveredStationIndex(null);
+              setPreviewStationIndex(index);
+              stationIndexRef.current = index;
             }}
-            selectedStationIndex={hoveredStationIndex ?? stationIndex}
+            selectedStationIndex={previewStationIndex}
             gpsOrigin={gpsOrigin}
             gpsStationIndex={stationIndex}
           />
@@ -302,7 +311,12 @@ export default function ZeroDatumConfigDialog({
             </label>
             <Select
               value={String(stationIndex)}
-              onChange={(v) => setStationIndex(parseInt(v, 10))}
+              onChange={(v) => {
+                const index = parseInt(v, 10);
+                setStationIndex(index);
+                setPreviewStationIndex(index);
+                stationIndexRef.current = index;
+              }}
               options={stationOptions}
               className="flex-1"
               data-testid="zero-datum-station-select"
