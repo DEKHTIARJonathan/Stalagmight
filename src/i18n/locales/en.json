@@ -803,8 +803,20 @@
       "note": "This will only affect the current category. Changes are not saved until you click {{action}}."
     },
     "dmpNewImport": {
-      "title": "New DMP Import",
-      "body": "This workflow is under development."
+      "title": "Import Sections",
+      "suggestedPlacements": "Suggested placements",
+      "sections": "Sections",
+      "sectionOf": "Section {{current}} of {{total}}",
+      "allPlaced": "All sections placed",
+      "importAll": "Import All",
+      "placeSection": "Place Section",
+      "placeAndFinish": "Place and finish",
+      "unplace": "Unplace",
+      "exclude": "Exclude",
+      "include": "Include",
+      "nextSection": "Next section",
+      "cancelAllExcluded": "Cancel (all sections excluded)",
+      "finishImport": "Finish Import"
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Section",
