@@ -4798,3 +4798,492 @@ fn shift_station_refs_adjusts_all_references() {
     // zero datum was (sec,2) → (sec,3)
     assert_eq!(project.zero_datums[0].station_ref.station_index, 3);
 }
+
+// ── Station depth computation tests ─────────────────────────────────
+
+#[test]
+fn compute_station_depth_from_surrounding_shots() {
+    // Station 1 has an incoming shot (depth_out=5.0) and outgoing shot (depth_in=6.0).
+    // Average = (5 + 6) / 2 = 5.5
+    let mut project = Project::new("Depth".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 1.0, 0.0, 5.0),  // shot 0: depth_in=0, depth_out=5
+            shot(0.0, 0.0, 1.0, 6.0, 10.0),  // shot 1: depth_in=6, depth_out=10
+        ],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    // Station 1 is between the two shots
+    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
+    // Average of shot[0].depth_out (5.0) and shot[1].depth_in (6.0)
+    assert!((coords.z - 5.5).abs() < 1e-9, "depth should be 5.5, got {}", coords.z);
+}
+
+#[test]
+fn compute_station_depth_first_station() {
+    // Station 0 has only an outgoing shot — depth = shot[0].depth_in
+    let mut project = Project::new("Depth".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 1.0, 3.0, 7.0),
+        ],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
+    assert!((coords.z - 3.0).abs() < 1e-9, "first station depth should be 3.0, got {}", coords.z);
+}
+
+#[test]
+fn compute_station_depth_last_station() {
+    // Station 2 (last) has only an incoming shot — depth = shot[1].depth_out
+    let mut project = Project::new("Depth".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 1.0, 0.0, 5.0),
+            shot(0.0, 0.0, 1.0, 5.0, 12.0),
+        ],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 2)).unwrap();
+    assert!((coords.z - 12.0).abs() < 1e-9, "last station depth should be 12.0, got {}", coords.z);
+}
+
+#[test]
+fn compute_station_depth_with_merge_averages_both_sections() {
+    // Two sections merged at a station — depth should average across all colocated readings
+    let mut project = Project::new("MergeDepth".to_string(), None);
+    let a = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 1.0, 0.0, 8.0),  // shot 0: depth_out=8
+        ],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![
+            shot(90.0, 90.0, 1.0, 10.0, 20.0),  // shot 0: depth_in=10
+        ],
+        ..Default::default()
+    }).id;
+
+    // Merge A:1 with B:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Station A:1 is colocated with B:0
+    // Depths: A shot[0].depth_out=8, B shot[0].depth_in=10 → average = 9
+    let coords = project.compute_station_raw_coords(StationRef::new(a, 1)).unwrap();
+    assert!((coords.z - 9.0).abs() < 1e-9, "merged station depth should be 9.0, got {}", coords.z);
+}
+
+#[test]
+fn compute_station_depth_no_shots_returns_zero() {
+    // Edge case: section with no shots, station 0 has no surrounding shots
+    let mut project = Project::new("Empty".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    let coords = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
+    assert!((coords.z).abs() < 1e-9, "depth should be 0.0 for empty section, got {}", coords.z);
+}
+
+#[test]
+fn compute_raw_coords_xy_walk_north() {
+    // A shot due north (azimuth=0) with length 5m, flat (depth_in == depth_out)
+    // horizontal_length = sqrt(5^2 - 0^2) = 5
+    // dx = 5 * sin(0) = 0, dy = 5 * cos(0) = 5
+    let mut project = Project::new("Walk".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 5.0, 10.0, 10.0),
+        ],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    let c0 = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
+    assert!((c0.x).abs() < 1e-9, "station 0 x should be 0");
+    assert!((c0.y).abs() < 1e-9, "station 0 y should be 0");
+
+    let c1 = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
+    assert!((c1.x).abs() < 1e-9, "station 1 x should be 0 (due north)");
+    assert!((c1.y - 5.0).abs() < 1e-9, "station 1 y should be 5.0, got {}", c1.y);
+}
+
+#[test]
+fn compute_raw_coords_xy_walk_east() {
+    // A shot due east (azimuth=90) with length 3m, flat
+    let mut project = Project::new("Walk".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(90.0, 90.0, 3.0, 5.0, 5.0),
+        ],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    let c1 = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
+    assert!((c1.x - 3.0).abs() < 1e-9, "station 1 x should be 3.0 (due east), got {}", c1.x);
+    assert!((c1.y).abs() < 1e-9, "station 1 y should be ~0, got {}", c1.y);
+}
+
+#[test]
+fn compute_raw_coords_depth_independent_of_xy() {
+    // Z is computed from absolute depth values, not from XY walk
+    // Two shots: shot 0 goes north 10m at depth 5→8, shot 1 goes east 10m at depth 7→12
+    let mut project = Project::new("IndepZ".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 5.0, 8.0),
+            shot(90.0, 90.0, 10.0, 7.0, 12.0),
+        ],
+        ..Default::default()
+    });
+    let sec_id = project.sections[0].id;
+
+    // Station 0: only outgoing shot → depth_in = 5.0
+    let c0 = project.compute_station_raw_coords(StationRef::new(sec_id, 0)).unwrap();
+    assert!((c0.z - 5.0).abs() < 1e-9, "station 0 depth should be 5.0, got {}", c0.z);
+
+    // Station 1: incoming depth_out=8, outgoing depth_in=7 → average = 7.5
+    let c1 = project.compute_station_raw_coords(StationRef::new(sec_id, 1)).unwrap();
+    assert!((c1.z - 7.5).abs() < 1e-9, "station 1 depth should be 7.5, got {}", c1.z);
+
+    // Station 2: only incoming → depth_out = 12.0
+    let c2 = project.compute_station_raw_coords(StationRef::new(sec_id, 2)).unwrap();
+    assert!((c2.z - 12.0).abs() < 1e-9, "station 2 depth should be 12.0, got {}", c2.z);
+}
+
+#[test]
+fn compute_raw_coords_with_section_offset() {
+    let mut project = Project::new("Offset".to_string(), None);
+    let sec = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
+        ..Default::default()
+    }).id;
+
+    project.section_offsets.insert(sec, (100.0, 200.0));
+
+    let c0 = project.compute_station_raw_coords(StationRef::new(sec, 0)).unwrap();
+    assert!((c0.x - 100.0).abs() < 1e-9, "x should include section offset");
+    assert!((c0.y - 200.0).abs() < 1e-9, "y should include section offset");
+}
+
+#[test]
+fn compute_raw_coords_with_station_offset() {
+    let mut project = Project::new("StaOff".to_string(), None);
+    let sec = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
+        ..Default::default()
+    }).id;
+
+    project.station_offsets.insert(StationRef::new(sec, 0), (1.0, 2.0, 3.0));
+
+    let c0 = project.compute_station_raw_coords(StationRef::new(sec, 0)).unwrap();
+    assert!((c0.x - 1.0).abs() < 1e-9, "x should include station offset");
+    assert!((c0.y - 2.0).abs() < 1e-9, "y should include station offset");
+    assert!((c0.z - 13.0).abs() < 1e-9, "z should be depth(10) + offset(3)");
+}
+
+// ── adjust_least_squares tests ──────────────────────────────────────
+
+#[test]
+fn lsq_no_closures_is_noop() {
+    // With no closures, there are no constraints to adjust — should return Ok
+    let mut project = Project::new("LSQ".to_string(), None);
+    let sec = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 5.0, 5.0),
+            shot(90.0, 90.0, 10.0, 5.0, 5.0),
+        ],
+        ..Default::default()
+    }).id;
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [sec].into_iter().collect();
+    let result = project.adjust_least_squares(&component, &[], StationRef::new(sec, 0), &config);
+    assert!(result.is_ok(), "No closures should succeed: {:?}", result);
+}
+
+#[test]
+fn lsq_preserves_depth_values() {
+    // Key test: LSQ should adjust XY but NOT touch depth_in/depth_out
+    let mut project = Project::new("LSQDepth".to_string(), None);
+
+    // Create a triangle: section A (north 10m), section B (east 10m), section C (south-west ~14m)
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 5.0, 8.0)],  // north, depth 5→8
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 10.0, 8.0, 12.0)],  // east, depth 8→12
+        ..Default::default()
+    }).id;
+    let c = project.add_section(SectionData {
+        shots: vec![shot(225.0, 225.0, 14.5, 12.0, 5.5)],  // south-west back, depth 12→5.5
+        ..Default::default()
+    }).id;
+
+    // Merge to form a loop: A:1 → B:0, B:1 → C:0
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        merged_at: Utc::now(),
+    });
+
+    // Closure: C:1 should be at A:0 (closing the loop)
+    let closure = LoopClosure {
+        id: 1,
+        station_a: StationRef::new(c, 1),
+        station_b: StationRef::new(a, 0),
+        path_length: 34.5,
+        misclosure_distance: 0.5,
+        error_percentage: 1.4,
+        horizontal_misclosure: 0.5,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    };
+
+    // Save original depths
+    let orig_depths: Vec<(f64, f64)> = project.sections.iter()
+        .flat_map(|s| s.shots.iter().map(|sh| (sh.depth_in, sh.depth_out)))
+        .collect();
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
+    let result = project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
+    assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
+
+    // Verify depths are unchanged
+    let new_depths: Vec<(f64, f64)> = project.sections.iter()
+        .flat_map(|s| s.shots.iter().map(|sh| (sh.depth_in, sh.depth_out)))
+        .collect();
+    assert_eq!(orig_depths, new_depths, "depth_in/depth_out must not change after LSQ adjustment");
+}
+
+#[test]
+fn lsq_anchor_station_stays_fixed() {
+    // The anchor station (or its group) should not move
+    let mut project = Project::new("LSQAnchor".to_string(), None);
+    let a = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 5.0, 5.0),
+            shot(0.0, 0.0, 10.0, 5.0, 5.0),
+        ],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(180.0, 180.0, 20.5, 5.0, 5.0)],  // slight error for closure
+        ..Default::default()
+    }).id;
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+
+    let closure = LoopClosure {
+        id: 1,
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(a, 0),
+        path_length: 30.5,
+        misclosure_distance: 0.5,
+        error_percentage: 1.6,
+        horizontal_misclosure: 0.5,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    };
+
+    let anchor = StationRef::new(a, 0);
+    let coords_before = project.compute_station_raw_coords(anchor).unwrap();
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let result = project.adjust_least_squares(&component, &[closure], anchor, &config);
+    assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
+
+    let coords_after = project.compute_station_raw_coords(anchor).unwrap();
+    assert!(
+        (coords_after.x - coords_before.x).abs() < 1e-6
+            && (coords_after.y - coords_before.y).abs() < 1e-6,
+        "anchor XY should not move: before=({}, {}), after=({}, {})",
+        coords_before.x, coords_before.y, coords_after.x, coords_after.y
+    );
+}
+
+#[test]
+fn lsq_produces_finite_coordinates() {
+    // After adjustment, all station coordinates should be finite
+    let mut project = Project::new("LSQFinite".to_string(), None);
+    let a = project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 5.0, 5.0),
+            shot(90.0, 90.0, 10.0, 5.0, 5.0),
+        ],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(225.0, 225.0, 14.0, 5.0, 5.0)],
+        ..Default::default()
+    }).id;
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+
+    let closure = LoopClosure {
+        id: 1,
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(a, 0),
+        path_length: 34.0,
+        misclosure_distance: 0.2,
+        error_percentage: 0.6,
+        horizontal_misclosure: 0.2,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    };
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let result = project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
+    assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
+
+    for section in &project.sections {
+        for idx in 0..=section.shots.len() {
+            let coords = project.compute_station_raw_coords(StationRef::new(section.id, idx as u32)).unwrap();
+            assert!(coords.x.is_finite(), "x should be finite for {}:{}", section.id, idx);
+            assert!(coords.y.is_finite(), "y should be finite for {}:{}", section.id, idx);
+            assert!(coords.z.is_finite(), "z should be finite for {}:{}", section.id, idx);
+        }
+    }
+}
+
+#[test]
+fn lsq_with_zero_datum_fixes_that_group() {
+    // When a zero datum exists, its group should be fixed and not move
+    let mut project = Project::new("LSQDatum".to_string(), None);
+    let a = project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 5.0, 5.0)],
+        ..Default::default()
+    }).id;
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 10.0, 5.0, 5.0)],
+        ..Default::default()
+    }).id;
+    let c = project.add_section(SectionData {
+        shots: vec![shot(225.0, 225.0, 14.5, 5.0, 5.0)],
+        ..Default::default()
+    }).id;
+
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(b, 1),
+        station_b: StationRef::new(c, 0),
+        merged_at: Utc::now(),
+    });
+
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        gps: GpsCoordinates::new(45.0, 10.0, 100.0).unwrap(),
+    });
+
+    let closure = LoopClosure {
+        id: 1,
+        station_a: StationRef::new(c, 1),
+        station_b: StationRef::new(a, 0),
+        path_length: 34.5,
+        misclosure_distance: 0.5,
+        error_percentage: 1.4,
+        horizontal_misclosure: 0.5,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    };
+
+    let datum_coords_before = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
+    let result = project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
+    assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
+
+    let datum_coords_after = project.compute_station_raw_coords(StationRef::new(a, 0)).unwrap();
+    assert!(
+        (datum_coords_after.x - datum_coords_before.x).abs() < 1e-6
+            && (datum_coords_after.y - datum_coords_before.y).abs() < 1e-6,
+        "zero datum station should stay fixed"
+    );
+}
+
+#[test]
+fn lsq_update_shot_horizontal_only_preserves_depth() {
+    // Direct test of update_shot_horizontal_only
+    let mut s = Shot::new(1, ShotData {
+        azimuth_in: 45.0,
+        azimuth_out: 45.0,
+        length: 10.0,
+        depth_in: 3.0,
+        depth_out: 7.0,
+        pitch_in: Some(23.5),
+        pitch_out: Some(23.5),
+        ..Default::default()
+    });
+
+    // Update horizontal displacement to pure east (dx=5, dy=0)
+    Project::update_shot_horizontal_only(&mut s, 5.0, 0.0);
+
+    assert!((s.depth_in - 3.0).abs() < 1e-9, "depth_in must not change");
+    assert!((s.depth_out - 7.0).abs() < 1e-9, "depth_out must not change");
+    assert_eq!(s.pitch_in, Some(23.5), "pitch_in must not change");
+    assert_eq!(s.pitch_out, Some(23.5), "pitch_out must not change");
+    // Azimuth should now point east (90 degrees)
+    assert!((s.azimuth_in - 90.0).abs() < 1e-6, "azimuth should be 90, got {}", s.azimuth_in);
+    // Length should account for horizontal + dz: sqrt(5^2 + 4^2) = sqrt(41)
+    let expected_len = (25.0_f64 + 16.0).sqrt();
+    assert!((s.length - expected_len).abs() < 1e-6, "length should be sqrt(41), got {}", s.length);
+}
+
+#[test]
+fn lsq_update_shot_horizontal_only_zero_displacement() {
+    // When dx=dy=0, azimuth should be preserved, length = |dz|
+    let mut s = Shot::new(1, ShotData {
+        azimuth_in: 135.0,
+        azimuth_out: 135.0,
+        length: 5.0,
+        depth_in: 2.0,
+        depth_out: 6.0,
+        ..Default::default()
+    });
+
+    Project::update_shot_horizontal_only(&mut s, 0.0, 0.0);
+
+    assert!((s.azimuth_in - 135.0).abs() < 1e-6, "azimuth should be preserved when displacement is zero");
+    // length = sqrt(0 + dz^2) = |4| = 4
+    assert!((s.length - 4.0).abs() < 1e-6, "length should be |dz|=4, got {}", s.length);
+}

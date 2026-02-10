@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<CaveFile>
+    <caveName>Synthetic Test Cave</caveName>
+    <unit>m</unit>
+    <useMagneticAzimuth>true</useMagneticAzimuth>
+    <firstStartAbsoluteElevation>150.0</firstStartAbsoluteElevation>
+    <Data>
+        <SRVD>
+            <ID>0</ID><FRID>-1</FRID><CID>-1</CID>
+            <TY>START</TY><SC>Start</SC>
+            <AZ>0.0</AZ><LG>0.0</LG><DP>0.0</DP><DPI>-1.0</DPI>
+            <INC>0.0</INC><L>0.0</L><R>0.0</R><U>0.0</U><D>0.0</D>
+            <CM></CM><EX></EX><DT>2025-03-01</DT>
+            <CL>0x4ecdc4ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>1</ID><FRID>0</FRID><CID>-1</CID>
+            <TY>REAL</TY><SC>Main Passage</SC>
+            <AZ>45.0</AZ><LG>12.5</LG><DP>2.0</DP><DPI>-1.0</DPI>
+            <INC>-3.0</INC><L>1.5</L><R>2.0</R><U>3.0</U><D>0.5</D>
+            <CM>First shot</CM><EX>Alice</EX><DT>2025-03-01</DT>
+            <CL>0xff5733ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>2</ID><FRID>1</FRID><CID>-1</CID>
+            <TY>REAL</TY><SC>Main Passage</SC>
+            <AZ>50.0</AZ><LG>8.3</LG><DP>4.5</DP><DPI>-1.0</DPI>
+            <INC>-5.0</INC><L>2.0</L><R>1.0</R><U>2.5</U><D>1.0</D>
+            <CM></CM><EX>Alice</EX><DT>2025-03-01</DT>
+            <CL>0xff5733ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>3</ID><FRID>2</FRID><CID>-1</CID>
+            <TY>REAL</TY><SC>Main Passage</SC>
+            <AZ>60.0</AZ><LG>15.0</LG><DP>7.0</DP><DPI>-1.0</DPI>
+            <INC>-2.0</INC><L>3.0</L><R>3.0</R><U>4.0</U><D>2.0</D>
+            <CM></CM><EX>Alice</EX><DT>2025-03-01</DT>
+            <CL>0xff5733ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>4</ID><FRID>3</FRID><CID>-1</CID>
+            <TY>REAL</TY><SC>Main Passage</SC>
+            <AZ>55.0</AZ><LG>10.0</LG><DP>9.0</DP><DPI>-1.0</DPI>
+            <INC>-1.0</INC><L>2.5</L><R>2.5</R><U>3.5</U><D>1.5</D>
+            <CM></CM><EX>Alice</EX><DT>2025-03-01</DT>
+            <CL>0xff5733ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>5</ID><FRID>2</FRID><CID>-1</CID>
+            <TY>REAL</TY><SC>Side Branch</SC>
+            <AZ>120.0</AZ><LG>6.0</LG><DP>5.0</DP><DPI>-1.0</DPI>
+            <INC>0.0</INC><L>1.0</L><R>1.0</R><U>1.5</U><D>0.5</D>
+            <CM>Branch start</CM><EX>Bob</EX><DT>2025-03-02</DT>
+            <CL>0x33cc99ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>6</ID><FRID>5</FRID><CID>-1</CID>
+            <TY>REAL</TY><SC>Side Branch</SC>
+            <AZ>130.0</AZ><LG>4.5</LG><DP>5.5</DP><DPI>-1.0</DPI>
+            <INC>1.0</INC><L>0.8</L><R>0.8</R><U>1.0</U><D>0.3</D>
+            <CM></CM><EX>Bob</EX><DT>2025-03-02</DT>
+            <CL>0x33cc99ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>7</ID><FRID>6</FRID><CID>-1</CID>
+            <TY>REAL</TY><SC>Side Branch</SC>
+            <AZ>140.0</AZ><LG>3.0</LG><DP>6.0</DP><DPI>-1.0</DPI>
+            <INC>-1.0</INC><L>0.5</L><R>0.5</R><U>0.8</U><D>0.2</D>
+            <CM></CM><EX>Bob</EX><DT>2025-03-02</DT>
+            <CL>0x33cc99ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>8</ID><FRID>4</FRID><CID>-1</CID>
+            <TY>VIRTUAL</TY><SC>Main Passage</SC>
+            <AZ>65.0</AZ><LG>5.0</LG><DP>10.0</DP><DPI>-1.0</DPI>
+            <INC>0.0</INC><L>2.0</L><R>2.0</R><U>3.0</U><D>1.0</D>
+            <CM>Virtual shot</CM><EX>Alice</EX><DT>2025-03-01</DT>
+            <CL>0xff5733ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+        <SRVD>
+            <ID>9</ID><FRID>8</FRID><CID>1</CID>
+            <TY>CLOSURE</TY><SC>Main Passage</SC>
+            <AZ>225.0</AZ><LG>20.0</LG><DP>2.0</DP><DPI>-1.0</DPI>
+            <INC>3.0</INC><L>0.0</L><R>0.0</R><U>0.0</U><D>0.0</D>
+            <CM>Closure back to shot 1</CM><EX>Alice</EX><DT>2025-03-01</DT>
+            <CL>0xff5733ff</CL><EXC>false</EXC><LT>0.0</LT><LGT>0.0</LGT>
+        </SRVD>
+    </Data>
+</CaveFile>
