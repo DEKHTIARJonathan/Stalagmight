@@ -33,6 +33,7 @@ use stalagmight_lib::models::{
     Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
     ShotUpdates, Station, StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
 };
+use stalagmight_lib::models::placement_suggest::{MatchDirection, PlacementSuggestion, SuggestionConfidence};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
     GpxFile, GpxRoute, GpxRoutePoint, GpxSectionPlacement, GpxTrack, GpxTrackPoint,
@@ -103,6 +104,11 @@ fn main() {
     export::<ProjectWarning>(&out_dir);
     export::<FrozenShotRef>(&out_dir);
     export::<ProjectState>(&out_dir);
+
+    // Placement suggestions
+    export::<MatchDirection>(&out_dir);
+    export::<SuggestionConfidence>(&out_dir);
+    export::<PlacementSuggestion>(&out_dir);
 
     // Undo history
     export::<UndoHistoryItem>(&out_dir);
@@ -233,6 +239,9 @@ fn main() {
         "ProjectWarning",
         "FrozenShotRef",
         "ProjectState",
+        "MatchDirection",
+        "SuggestionConfidence",
+        "PlacementSuggestion",
         "UndoHistoryItem",
         "PreviewData",
         "FieldChange",

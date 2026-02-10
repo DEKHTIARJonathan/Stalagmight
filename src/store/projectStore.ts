@@ -21,7 +21,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -238,6 +238,7 @@ interface ProjectStore {
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
   importSections: (sections: ImportSectionConfig[], fileHash?: string | null) => Promise<CommandResult>;
+  suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
   exportTml: (path: string) => Promise<void>;
@@ -1264,6 +1265,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       set({ isDirty: true });
     }
     return result;
+  },
+
+  suggestImportPlacement: async (shots: ShotData[]) => {
+    return await invokeIpc<PlacementSuggestion[]>('suggest_import_placement', { shots }, {
+      purpose: 'suggest placement from reference shot overlap',
+    });
   },
 
   exportCsv: async (path: string) => {

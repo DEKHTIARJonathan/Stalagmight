@@ -2,9 +2,9 @@ import { useState, useEffect, useMemo, useCallback, type KeyboardEvent as ReactK
 import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronLeftIcon, ChevronRightIcon, CircleIcon, XCircleIcon } from '../common/icons';
-import type { DmpFile, DmpSection } from '../../types/commands';
+import type { DmpFile, DmpSection, PlacementSuggestion } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
-import type { Project, Station } from '../../types/project';
+import type { Project, Station, ShotData } from '../../types/project';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { Select, type SelectOptionGroup } from '../common/Select';
@@ -75,8 +75,9 @@ export default function DmpSectionConfigDialog({
   // Get placement mode controls from UI store
   const { startPlacementMode, closeDialog, openDialog, dialogData, getMapViewportCenter } = useUIStore();
 
-  // Get config for unit conversion (fallback to defaults)
+  // Get config and suggestImportPlacement for unit conversion and suggestions
   const config = useProjectStore((state) => state.config);
+  const suggestImportPlacement = useProjectStore((state) => state.suggestImportPlacement);
   const precision = useDecimalPrecision();
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
   const depthUnit = config?.units?.depth ?? defaultConfig.units.depth;
@@ -166,6 +167,9 @@ export default function DmpSectionConfigDialog({
 
   // Selected shot key (stable across insert/delete)
   const [selectedShotKey, setSelectedShotKey] = useState<string | null>(null);
+
+  // Placement suggestions from reference shot overlap detection
+  const [suggestions, setSuggestions] = useState<PlacementSuggestion[]>([]);
 
   // ===== Placement Mode State =====
   // Zero Datum fields
@@ -319,6 +323,52 @@ export default function DmpSectionConfigDialog({
     if (!project) return [];
     return project.sections;
   }, [project]);
+
+  // Fetch placement suggestions when current section changes
+  useEffect(() => {
+    setSuggestions([]);
+
+    if (!currentConfig || !project || existingSections.length === 0) return;
+
+    const status = currentSectionIndex !== undefined ? getSectionStatus(currentSectionIndex) : undefined;
+    if (status === 'placed' || status === 'excluded') return;
+
+    // Convert editable shots to ShotData for the backend
+    const shotData: ShotData[] = currentConfig.shots
+      .filter((s) => !s.isDeleted)
+      .map((s) => ({
+        azimuth_in: s.azimuth_in,
+        azimuth_out: s.azimuth_out,
+        length: s.length,
+        depth_in: s.depth_in,
+        depth_out: s.depth_out,
+        pitch_in: s.pitch_in ?? null,
+        pitch_out: s.pitch_out ?? null,
+        left: s.left ?? null,
+        right: s.right ?? null,
+        up: s.up ?? null,
+        down: s.down ?? null,
+        comment: s.comment ?? null,
+        is_reference: s.is_reference ?? false,
+        marker_index: null,
+        temperature: null,
+      }));
+
+    if (shotData.length === 0) return;
+
+    let cancelled = false;
+    suggestImportPlacement(shotData)
+      .then((results) => {
+        if (!cancelled) setSuggestions(results);
+      })
+      .catch(() => {
+        // Silently ignore — suggestions are non-critical
+      });
+
+    return () => { cancelled = true; };
+  // Only re-fetch when section changes, not on every shot edit
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSectionIndex, project, existingSections.length]);
 
   // Get stations for a selected existing section
   const getStationsForSection = useCallback(
@@ -1318,6 +1368,62 @@ export default function DmpSectionConfigDialog({
 
                 {/* Placement options */}
                 <Panel title="Placement" className="mb-4" data-testid="placement-panel">
+                  {/* Suggested placements from reference shot overlap */}
+                  {suggestions.length > 0 && !isCurrentPlaced && !isCurrentExcluded && (
+                    <div className="mb-3 space-y-2" data-testid="placement-suggestions">
+                      <div className="text-xs font-medium text-text-secondary uppercase tracking-wide">Suggested placements</div>
+                      {suggestions.slice(0, 3).map((suggestion, idx) => {
+                        const confidenceColors = {
+                          high: 'bg-success-10 text-success border-success-30',
+                          medium: 'bg-warning-10 text-warning border-warning-30',
+                          low: 'bg-background-50 text-text-secondary border-border',
+                        };
+                        const confidenceLabel = {
+                          high: 'High',
+                          medium: 'Med',
+                          low: 'Low',
+                        };
+                        const directionLabel = suggestion.direction === 'forward' ? '→' : '←';
+                        return (
+                          <button
+                            key={`${suggestion.existingSectionId}-${suggestion.existingStationIndex}-${suggestion.importStationIndex}-${suggestion.direction}`}
+                            type="button"
+                            className={`w-full p-2 rounded border text-left text-sm flex items-center gap-2 hover:bg-accent-5 transition-colors ${
+                              suggestion.confidence === 'low' ? 'opacity-70' : ''
+                            } ${confidenceColors[suggestion.confidence]}`}
+                            onClick={() => {
+                              // Auto-select "From Existing" placement mode
+                              const actualImportStation = suggestion.importStationIndex;
+                              setImportStationIndex(actualImportStation);
+                              setTargetSectionRef(String(suggestion.existingSectionId));
+                              setTargetStationIndex(suggestion.existingStationIndex);
+                              handlePlacementChange({
+                                type: 'fromExisting',
+                                importStation: actualImportStation,
+                                existingStation: {
+                                  section_id: suggestion.existingSectionId,
+                                  station_index: suggestion.existingStationIndex,
+                                },
+                              });
+                            }}
+                            data-testid={`placement-suggestion-${idx}`}
+                          >
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${confidenceColors[suggestion.confidence]}`}>
+                              {confidenceLabel[suggestion.confidence]}
+                            </span>
+                            <span className="flex-1 truncate">
+                              <span className="font-medium">{suggestion.existingSectionName}</span>
+                              <span className="text-text-secondary"> stn {suggestion.existingStationIndex}</span>
+                            </span>
+                            <span className="text-text-secondary text-xs" title={`${suggestion.matchedShots} shots matched ${suggestion.direction}${suggestion.isPartial ? ' (partial)' : ''}`}>
+                              {suggestion.matchedShots} {directionLabel}
+                              {suggestion.isPartial && <span className="ml-0.5 opacity-60">~</span>}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   <div className="space-y-3">
                     {/* Place at center of screen */}
                     <div
