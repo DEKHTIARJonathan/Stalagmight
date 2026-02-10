@@ -46,6 +46,9 @@ export type {
   GpxRoute,
   GpxRoutePoint,
   GpxSectionPlacement,
+  MatchDirection,
+  SuggestionConfidence,
+  PlacementSuggestion,
 } from './ipc.generated';
 
 // Batch command types for execute_batch IPC.
