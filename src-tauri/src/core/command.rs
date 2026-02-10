@@ -340,7 +340,7 @@ impl Command {
                 if *is_reference {
                     format!("Mark shot {section_id}:{pos} as reference")
                 } else {
-                    format!("Mark shot {section_id}:{pos} as real")
+                    format!("Mark shot {section_id}:{pos} as permanent")
                 }
             }
             Command::MergeStations {
@@ -598,7 +598,7 @@ mod tests {
                     shot_id: 2,
                     is_reference: false,
                 },
-                "Mark shot 4:3 as real",
+                "Mark shot 4:3 as permanent",
             ),
             (
                 Command::MergeStations {

@@ -717,7 +717,7 @@ export default function DataTable({ sections }: DataTableProps) {
               updateShot(selectedSectionId, shot.id, { is_reference: !shot.is_reference });
             }
           }}
-          title={shot.is_reference ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markReference')}
+          title={shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
         >
           {shot.is_reference ? <DotIcon size={20} /> : <span className="opacity-0 hover:opacity-30"><DotIcon size={20} /></span>}
         </span>
