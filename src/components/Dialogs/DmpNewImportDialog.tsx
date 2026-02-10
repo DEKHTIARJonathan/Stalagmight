@@ -129,8 +129,6 @@ export default function DmpNewImportDialog({
     if (importStartedRef.current) return;
     importStartedRef.current = true;
 
-    let cancelled = false;
-
     const importZeroDatum = async () => {
       if (!zeroDatumConfig) {
         // No zero datum to import — check if we can suggest
@@ -174,7 +172,6 @@ export default function DmpNewImportDialog({
       };
 
       const result = await importSections([config], selectionConfig.fileHash);
-      if (cancelled) return;
 
       setIsImporting(false);
 
@@ -195,7 +192,6 @@ export default function DmpNewImportDialog({
     };
 
     importZeroDatum();
-    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
