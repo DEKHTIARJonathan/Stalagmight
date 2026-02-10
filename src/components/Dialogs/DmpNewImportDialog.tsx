@@ -247,8 +247,16 @@ export default function DmpNewImportDialog({
         return;
       }
 
-      setCurrentSuggestion(allSuggestions[0] ?? null);
-      setAlternatives(allSuggestions.slice(1, 5));
+      const top = allSuggestions[0] ?? null;
+      setCurrentSuggestion(top);
+      // Only show alternatives for the same import section as the top suggestion
+      setAlternatives(
+        top
+          ? allSuggestions
+              .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
+              .slice(0, 4)
+          : []
+      );
       setIsCalculating(false);
     };
 
@@ -430,11 +438,14 @@ export default function DmpNewImportDialog({
   const placedCount = importedIndices.size;
   const skippedCount = skippedIndices.size;
 
+  // Whether we're in the suggestion view with a current suggestion (side-by-side layout)
+  const showSideBySide = phase === 'suggesting' && !isCalculating && currentSuggestion != null;
+
   return (
     <DialogWrapper
       title={t('dialogs.dmpNewImport.title')}
       onClose={handleCancel}
-      fixedSize={{ width: 'min(700px, 95vw)', height: 'min(550px, 90vh)' }}
+      fixedSize={{ width: 'min(1000px, 95vw)', height: 'min(700px, 90vh)' }}
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       data-testid="dmp-new-import-dialog"
@@ -452,84 +463,63 @@ export default function DmpNewImportDialog({
           )}
         </div>
 
-        {/* Body */}
-        <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
-          {/* Init/Importing zero datum */}
-          {phase === 'init' && isImporting && (
-            <div className="text-center" data-testid="wizard-importing-zero-datum">
-              <div className="text-lg mb-2">{t('dialogs.dmpNewImport.importingZeroDatum')}</div>
-              <div className="animate-pulse text-text-secondary">...</div>
+        {/* Body: side-by-side when showing suggestion, centered otherwise */}
+        {showSideBySide ? (
+          <div className="flex-1 flex min-h-0 overflow-hidden relative">
+            {/* Left column: SectionPreview */}
+            <div className="shrink-0 flex flex-col items-center p-4 border-r border-border" style={{ width: 380 }}>
+              <SectionPreview
+                section={importPreviewSection}
+                color={importColor}
+                size={340}
+                mergePreview={mergePreviewConfig}
+                focusStationIndex={currentSuggestion!.importStationIndex}
+              />
             </div>
-          )}
 
-          {/* Calculating suggestions */}
-          {phase === 'suggesting' && isCalculating && (
-            <div className="text-center" data-testid="wizard-calculating">
-              <div className="text-lg mb-2">{t('dialogs.dmpNewImport.calculating')}</div>
-              <div className="animate-pulse text-text-secondary">...</div>
-            </div>
-          )}
-
-          {/* Show current suggestion */}
-          {phase === 'suggesting' && !isCalculating && currentSuggestion && (
-            <div className="w-full max-w-lg" data-testid="wizard-suggestion">
-              {/* Preview panels */}
-              <div className="flex items-start justify-center gap-4 mb-4">
-                {/* Import section preview */}
-                <div className="text-center">
-                  <div className="text-xs text-text-secondary mb-1 truncate max-w-[200px]">
-                    {currentSuggestion.importSectionName}
-                  </div>
-                  <SectionPreview
-                    section={importPreviewSection}
-                    color={importColor}
-                    size={180}
-                    mergePreview={mergePreviewConfig}
-                  />
-                </div>
-              </div>
-
+            {/* Right column: connection details */}
+            <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4" data-testid="wizard-suggestion">
               {/* Connection description */}
-              <div className="text-center mb-4" data-testid="wizard-connection-description">
+              <div data-testid="wizard-connection-description">
                 <div className="text-sm">
-                  <span className="font-medium">&ldquo;{currentSuggestion.importSectionName}&rdquo;</span>
-                  {' '}{t('dialogs.dmpNewImport.station', { index: currentSuggestion.importStationIndex })}
+                  <span className="font-medium">&ldquo;{currentSuggestion!.importSectionName}&rdquo;</span>
+                  {' '}{t('dialogs.dmpNewImport.station', { index: currentSuggestion!.importStationIndex })}
                 </div>
                 <div className="text-text-secondary text-sm my-1">
                   {t('dialogs.dmpNewImport.connectsTo')}
                 </div>
                 <div className="text-sm">
-                  <span className="font-medium">&ldquo;{currentSuggestion.existingSectionName}&rdquo;</span>
-                  {' '}{t('dialogs.dmpNewImport.station', { index: currentSuggestion.existingStationIndex })}
+                  <span className="font-medium">&ldquo;{currentSuggestion!.existingSectionName}&rdquo;</span>
+                  {' '}{t('dialogs.dmpNewImport.station', { index: currentSuggestion!.existingStationIndex })}
                 </div>
               </div>
 
               {/* Confidence badge */}
-              <div className="flex items-center justify-center gap-2 mb-4" data-testid="wizard-confidence">
-                <span className={`px-2 py-1 rounded border text-xs font-medium ${confidenceColors[currentSuggestion.confidence] ?? ''}`}>
-                  {t(`dialogs.dmpNewImport.confidence.${currentSuggestion.confidence}`)}
+              <div className="flex items-center gap-2" data-testid="wizard-confidence">
+                <span className={`px-2 py-1 rounded border text-xs font-medium ${confidenceColors[currentSuggestion!.confidence] ?? ''}`}>
+                  {t(`dialogs.dmpNewImport.confidence.${currentSuggestion!.confidence}`)}
                 </span>
                 <span className="text-xs text-text-secondary">
-                  · {t('dialogs.dmpNewImport.matchedShots', { count: currentSuggestion.matchedShots })} {directionLabel(currentSuggestion.direction)}
-                  {currentSuggestion.isPartial && <span className="ml-0.5 opacity-60">~</span>}
+                  · {t('dialogs.dmpNewImport.matchedShots', { count: currentSuggestion!.matchedShots })} {directionLabel(currentSuggestion!.direction)}
+                  {currentSuggestion!.isPartial && <span className="ml-0.5 opacity-60">~</span>}
                 </span>
               </div>
 
               {/* Prompt */}
-              <div className="text-center text-sm font-medium mb-4">
+              <div className="text-sm font-medium">
                 {t('dialogs.dmpNewImport.doesThisLookRight')}
               </div>
 
               {/* Error */}
               {error && (
-                <div className="text-center text-sm text-error mb-3" data-testid="wizard-error">
+                <div className="text-sm text-error" data-testid="wizard-error">
                   {error}
                 </div>
               )}
 
               {/* Alternatives */}
               {alternatives.length > 0 && (
-                <div className="mb-2">
+                <div>
                   <button
                     type="button"
                     onClick={() => setShowAlternatives(!showAlternatives)}
@@ -556,8 +546,7 @@ export default function DmpNewImportDialog({
                             {t(`dialogs.dmpNewImport.confidence.${alt.confidence}`).split(' ')[0]}
                           </span>
                           <span className="flex-1 truncate">
-                            <span className="font-medium">{alt.importSectionName}</span>
-                            <span className="text-text-secondary"> stn {alt.importStationIndex}</span>
+                            <span className="text-text-secondary">stn {alt.importStationIndex}</span>
                             <span className="text-text-secondary"> → </span>
                             <span className="font-medium">{alt.existingSectionName}</span>
                             <span className="text-text-secondary"> stn {alt.existingStationIndex}</span>
@@ -572,37 +561,55 @@ export default function DmpNewImportDialog({
                 </div>
               )}
             </div>
-          )}
 
-          {/* Importing section */}
-          {phase === 'suggesting' && !isCalculating && currentSuggestion && isImporting && (
-            <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10">
-              <div className="text-sm animate-pulse">Importing...</div>
-            </div>
-          )}
+            {/* Importing overlay */}
+            {isImporting && (
+              <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10">
+                <div className="text-sm animate-pulse">Importing...</div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
+            {/* Init/Importing zero datum */}
+            {phase === 'init' && isImporting && (
+              <div className="text-center" data-testid="wizard-importing-zero-datum">
+                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.importingZeroDatum')}</div>
+                <div className="animate-pulse text-text-secondary">...</div>
+              </div>
+            )}
 
-          {/* No suggestions — show done phase briefly before handoff */}
-          {phase === 'suggesting' && !isCalculating && !currentSuggestion && (
-            <div className="text-center" data-testid="wizard-no-suggestions">
-              <div className="text-lg mb-2">{t('dialogs.dmpNewImport.noSuggestions')}</div>
-              {selectedIndices.filter((idx) => !importedIndices.has(idx)).length > 0 && (
-                <div className="text-sm text-text-secondary">
-                  {t('dialogs.dmpNewImport.handoffMessage', {
-                    count: selectedIndices.filter((idx) => !importedIndices.has(idx)).length,
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+            {/* Calculating suggestions */}
+            {phase === 'suggesting' && isCalculating && (
+              <div className="text-center" data-testid="wizard-calculating">
+                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.calculating')}</div>
+                <div className="animate-pulse text-text-secondary">...</div>
+              </div>
+            )}
 
-          {/* Done — all placed */}
-          {phase === 'done' && importedIndices.size === totalSelected && (
-            <div className="text-center" data-testid="wizard-all-placed">
-              <CheckCircleIcon size={32} className="text-success mx-auto mb-2" />
-              <div className="text-lg">{t('dialogs.dmpNewImport.allPlaced')}</div>
-            </div>
-          )}
-        </div>
+            {/* No suggestions — show done phase briefly before handoff */}
+            {phase === 'suggesting' && !isCalculating && !currentSuggestion && (
+              <div className="text-center" data-testid="wizard-no-suggestions">
+                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.noSuggestions')}</div>
+                {selectedIndices.filter((idx) => !importedIndices.has(idx)).length > 0 && (
+                  <div className="text-sm text-text-secondary">
+                    {t('dialogs.dmpNewImport.handoffMessage', {
+                      count: selectedIndices.filter((idx) => !importedIndices.has(idx)).length,
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Done — all placed */}
+            {phase === 'done' && importedIndices.size === totalSelected && (
+              <div className="text-center" data-testid="wizard-all-placed">
+                <CheckCircleIcon size={32} className="text-success mx-auto mb-2" />
+                <div className="text-lg">{t('dialogs.dmpNewImport.allPlaced')}</div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-border flex justify-between items-center">
