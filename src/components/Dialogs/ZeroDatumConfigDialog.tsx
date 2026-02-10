@@ -283,7 +283,10 @@ export default function ZeroDatumConfigDialog({
             section={section}
             color={color}
             size={340}
-            onStationClick={setStationIndex}
+            onStationClick={(index) => {
+              setStationIndex(index);
+              setHoveredStationIndex(null);
+            }}
             selectedStationIndex={hoveredStationIndex ?? stationIndex}
             gpsOrigin={gpsOrigin}
             gpsStationIndex={stationIndex}
