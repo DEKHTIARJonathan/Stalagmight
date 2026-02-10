@@ -1,4 +1,4 @@
-import { useLayoutEffect, useEffect, useId, useRef, type ReactNode, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useLayoutEffect, useEffect, useId, useRef, type ReactNode, useCallback, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, IconButton } from '../common/Button';
 import { CloseIcon } from '../common/icons';
@@ -295,20 +295,22 @@ export function DialogWrapper({
     [requestClose, showConfirm, handleCancelDiscard, onKeyDown],
   );
 
-  // Guard against stale clicks from a previous dialog landing on this backdrop.
-  // When a click in dialog A causes dialog B to mount, the second click of a
-  // double-click can land on B's backdrop and immediately close it.
-  // useEffect fires after React has flushed the current event batch, so the ref
-  // won't be true until all pending input events have been dispatched.
-  const backdropReadyRef = useRef(false);
-  useEffect(() => {
-    backdropReadyRef.current = true;
+  // Only close on backdrop click when the mousedown also started on the backdrop.
+  // This prevents stale double-click events from a previous dialog from closing
+  // a newly mounted dialog, and also prevents drag-to-backdrop from triggering close.
+  const backdropMouseDownRef = useRef(false);
+
+  const handleBackdropMouseDown = useCallback((e: ReactMouseEvent) => {
+    if (e.target === e.currentTarget) {
+      backdropMouseDownRef.current = true;
+    }
   }, []);
 
-  const handleBackdropClick = useCallback(() => {
-    if (closeOnBackdropClick && backdropReadyRef.current) {
+  const handleBackdropClick = useCallback((e: ReactMouseEvent) => {
+    if (closeOnBackdropClick && e.target === e.currentTarget && backdropMouseDownRef.current) {
       requestClose();
     }
+    backdropMouseDownRef.current = false;
   }, [closeOnBackdropClick, requestClose]);
 
   const portalTarget = getPortalTarget();
@@ -323,7 +325,7 @@ export function DialogWrapper({
       tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
-      <div className="absolute inset-0 bg-overlay" onClick={handleBackdropClick} />
+      <div className="absolute inset-0 bg-overlay" onMouseDown={handleBackdropMouseDown} onClick={handleBackdropClick} />
       <div
         ref={dialogContentRef}
         role="dialog"
