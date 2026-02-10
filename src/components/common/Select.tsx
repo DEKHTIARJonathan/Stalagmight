@@ -4,7 +4,7 @@
  * Dropdown renders via createPortal to document.body with position:fixed
  * to escape stacking contexts (e.g. sticky table headers).
  */
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 
 export interface SelectOption {
@@ -156,8 +156,9 @@ export function Select({
   const listboxId = `${baseId}-listbox`;
   const getOptionId = (index: number) => `${baseId}-option-${index}`;
 
-  // Flatten options for keyboard navigation
-  const flatOptions = flattenOptions(options);
+  // Flatten options for keyboard navigation (memoized so effects that depend
+  // on flatOptions don't re-fire when the options reference is stable).
+  const flatOptions = useMemo(() => flattenOptions(options), [options]);
 
   // Find index of currently selected value
   const findSelectedIndex = useCallback(() => {
