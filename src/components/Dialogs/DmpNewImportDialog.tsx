@@ -75,9 +75,15 @@ export default function DmpNewImportDialog({
   // Track suggestion recalculation trigger
   const [recalcTrigger, setRecalcTrigger] = useState(0);
 
+  // Cache all ranked suggestions from the last full calculation.
+  // After confirm/skip we filter this instead of recalculating.
+  const suggestionPoolRef = useRef<RankedSuggestion[]>([]);
+
   // Refs to avoid stale closures
   const importedIndicesRef = useRef(importedIndices);
   importedIndicesRef.current = importedIndices;
+  const skippedIndicesRef = useRef(skippedIndices);
+  skippedIndicesRef.current = skippedIndices;
 
   const selectedIndices = useMemo(
     () => Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b),
@@ -85,6 +91,31 @@ export default function DmpNewImportDialog({
   );
 
   const totalSelected = selectedIndices.length;
+
+  // Pick the next suggestion from the cached pool, filtering out imported/skipped sections.
+  // Returns true if a suggestion was found, false if pool is empty.
+  const pickFromPool = useCallback(() => {
+    const imported = importedIndicesRef.current;
+    const skipped = skippedIndicesRef.current;
+
+    // Filter pool to only remaining sections
+    const pool = suggestionPoolRef.current.filter(
+      (s) => !imported.has(s.importSectionIndex) && !skipped.has(s.importSectionIndex)
+    );
+    suggestionPoolRef.current = pool;
+
+    if (pool.length === 0) return false;
+
+    const top = pool[0]!;
+    setCurrentSuggestion(top);
+    setAlternatives(
+      pool
+        .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
+        .slice(0, 4)
+    );
+    setShowAlternatives(false);
+    return true;
+  }, []);
 
   // On mount: import zero datum section if provided
   useEffect(() => {
@@ -238,25 +269,16 @@ export default function DmpNewImportDialog({
 
       if (cancelled) return;
 
-      // Sort by score descending
+      // Sort by score descending and cache the full pool
       allSuggestions.sort((a, b) => b.score - a.score);
+      suggestionPoolRef.current = allSuggestions;
 
-      if (allSuggestions.length === 0) {
+      if (!pickFromPool()) {
         setIsCalculating(false);
         setPhase('done');
         return;
       }
 
-      const top = allSuggestions[0] ?? null;
-      setCurrentSuggestion(top);
-      // Only show alternatives for the same import section as the top suggestion
-      setAlternatives(
-        top
-          ? allSuggestions
-              .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
-              .slice(0, 4)
-          : []
-      );
       setIsCalculating(false);
     };
 
@@ -369,29 +391,62 @@ export default function DmpNewImportDialog({
     }
 
     // Add to imported
+    const importedIdx = currentSuggestion.importSectionIndex;
     setImportedIndices((prev) => {
       const next = new Set(prev);
-      next.add(currentSuggestion.importSectionIndex);
+      next.add(importedIdx);
       return next;
     });
 
-    // Trigger recalculation
-    setRecalcTrigger((n) => n + 1);
-  }, [currentSuggestion, isImporting, dmpFile.sections, importSections, selectionConfig, importedIndices.size]);
+    // Check remaining from selectedIndices
+    const newImported = new Set(importedIndicesRef.current);
+    newImported.add(importedIdx);
+    const remaining = selectedIndices.filter(
+      (idx) => !newImported.has(idx) && !skippedIndicesRef.current.has(idx)
+    );
+
+    if (remaining.length === 0) {
+      setPhase('done');
+      return;
+    }
+
+    // Try to pick next suggestion from cached pool (instant)
+    if (!pickFromPool()) {
+      // Pool exhausted — do a full recalculation to find matches against
+      // newly imported sections
+      setRecalcTrigger((n) => n + 1);
+    }
+  }, [currentSuggestion, isImporting, dmpFile.sections, importSections, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
 
   // Skip handler
   const handleSkip = useCallback(() => {
     if (!currentSuggestion) return;
 
+    const skippedIdx = currentSuggestion.importSectionIndex;
     setSkippedIndices((prev) => {
       const next = new Set(prev);
-      next.add(currentSuggestion.importSectionIndex);
+      next.add(skippedIdx);
       return next;
     });
 
-    // Trigger recalculation
-    setRecalcTrigger((n) => n + 1);
-  }, [currentSuggestion]);
+    // Check remaining
+    const newSkipped = new Set(skippedIndicesRef.current);
+    newSkipped.add(skippedIdx);
+    const remaining = selectedIndices.filter(
+      (idx) => !importedIndicesRef.current.has(idx) && !newSkipped.has(idx)
+    );
+
+    if (remaining.length === 0) {
+      setPhase('done');
+      return;
+    }
+
+    // Try to pick next from cached pool (instant)
+    if (!pickFromPool()) {
+      // Pool exhausted — full recalculation needed
+      setRecalcTrigger((n) => n + 1);
+    }
+  }, [currentSuggestion, selectedIndices, pickFromPool]);
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: RankedSuggestion) => {
