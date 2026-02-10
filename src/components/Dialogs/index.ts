@@ -27,3 +27,5 @@ export { default as DebugDialog } from './DebugDialog';
 export { default as SwapCommentsDialog } from './SwapCommentsDialog';
 export { default as GpxSelectionDialog } from './GpxSelectionDialog';
 export { default as GpxPlacementDialog } from './GpxPlacementDialog';
+export { default as ZeroDatumSelectionDialog } from './ZeroDatumSelectionDialog';
+export { default as ZeroDatumConfigDialog } from './ZeroDatumConfigDialog';

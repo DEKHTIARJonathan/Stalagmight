@@ -10,10 +10,11 @@ import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, DmpNewImportDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
+import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { ShotData } from './types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from './types/commands';
 
@@ -475,11 +476,21 @@ function App() {
           onContinue={(selectionCfg) => {
             // Proceed to Step 2: legacy or new workflow
             const useLegacy = useProjectStore.getState().config?.general.legacy_dmp_import ?? false;
-            openDialog(useLegacy ? 'dmp-section-config' : 'dmp-import-new', {
-              dmpFile: dialogData.dmpFile,
-              filePath: dialogData.filePath,
-              selectionConfig: selectionCfg,
-            });
+            if (useLegacy) {
+              openDialog('dmp-section-config', {
+                dmpFile: dialogData.dmpFile,
+                filePath: dialogData.filePath,
+                selectionConfig: selectionCfg,
+              });
+            } else {
+              // New workflow: check if project has zero datums
+              const hasZeroDatums = (project?.zero_datums?.length ?? 0) > 0;
+              openDialog(hasZeroDatums ? 'dmp-import-new' : 'zero-datum-selection', {
+                dmpFile: dialogData.dmpFile,
+                filePath: dialogData.filePath,
+                selectionConfig: selectionCfg,
+              });
+            }
           }}
         />
       ) : null}
@@ -507,10 +518,67 @@ function App() {
       {activeDialog === 'dmp-import-new' && dialogData.dmpFile ? (
         <DmpNewImportDialog
           onCancel={closeDialog}
+          zeroDatumConfig={dialogData.zeroDatumConfig as ZeroDatumConfigResult | undefined}
+          onBack={() => {
+            if (dialogData.zeroDatumConfig) {
+              // Came through zero datum flow — go back to zero datum config
+              openDialog('zero-datum-config', {
+                dmpFile: dialogData.dmpFile,
+                filePath: dialogData.filePath,
+                selectionConfig: dialogData.selectionConfig,
+                zeroDatumSectionIndex: (dialogData.zeroDatumConfig as ZeroDatumConfigResult).sectionIndex,
+              });
+            } else {
+              openDialog('dmp-selection', {
+                dmpFile: dialogData.dmpFile,
+                filePath: dialogData.filePath,
+              });
+            }
+          }}
+        />
+      ) : null}
+      {activeDialog === 'zero-datum-selection' && dialogData.dmpFile && dialogData.selectionConfig ? (
+        <ZeroDatumSelectionDialog
+          dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
+          selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
+          filePath={dialogData.filePath as string}
+          onCancel={closeDialog}
           onBack={() => {
             openDialog('dmp-selection', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
+            });
+          }}
+          onSelectSection={(sectionIndex) => {
+            openDialog('zero-datum-config', {
+              dmpFile: dialogData.dmpFile,
+              filePath: dialogData.filePath,
+              selectionConfig: dialogData.selectionConfig,
+              zeroDatumSectionIndex: sectionIndex,
+            });
+          }}
+        />
+      ) : null}
+      {activeDialog === 'zero-datum-config' && dialogData.dmpFile && dialogData.selectionConfig ? (
+        <ZeroDatumConfigDialog
+          dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
+          selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
+          sectionIndex={dialogData.zeroDatumSectionIndex as number}
+          filePath={dialogData.filePath as string}
+          onCancel={closeDialog}
+          onBack={() => {
+            openDialog('zero-datum-selection', {
+              dmpFile: dialogData.dmpFile,
+              filePath: dialogData.filePath,
+              selectionConfig: dialogData.selectionConfig,
+            });
+          }}
+          onConfirm={(result) => {
+            openDialog('dmp-import-new', {
+              dmpFile: dialogData.dmpFile,
+              filePath: dialogData.filePath,
+              selectionConfig: dialogData.selectionConfig,
+              zeroDatumConfig: result,
             });
           }}
         />
