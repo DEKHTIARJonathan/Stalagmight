@@ -10,7 +10,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
-| Import/Export | 16 | 19 | 84% |
+| Import/Export | 17 | 19 | 89% |
 | UI & Polish | 15 | 17 | 88% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
@@ -18,7 +18,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **57** | **64** | **89%** |
+| **Total** | **58** | **64** | **91%** |
 
 ---
 
@@ -58,7 +58,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 ## 🚧 v1.0 Remaining Tasks
 
-### Import/Export (16/19 done)
+### Import/Export (17/19 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -82,9 +82,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
 | Import Dialog/Shot Placement Refactoring | ❌ | Improve shot placement UX in import workflow |
 
-**Subtotals**: ✅ 16 done, ❌ 3 not started
+**Subtotals**: ✅ 17 done, ❌ 2 not started
 
-### UI & Polish (12/17 done)
+### UI & Polish (15/17 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -106,9 +106,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Add Comment Tool | ✅ | Comment + Move Comment tools with atomic undo, swap dialog, visual pickup |
 | Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
-**Subtotals**: ✅ 14 done, ❌ 3 not started
+**Subtotals**: ✅ 15 done, ❌ 2 not started
 
-### Data & Editing (4/5 done)
+### Data & Editing (5/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -184,17 +184,17 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
-| Import/Export | 19 | 16 | 0 | 3 |
-| UI & Polish | 17 | 14 | 0 | 3 |
+| Import/Export | 19 | 17 | 0 | 2 |
+| UI & Polish | 17 | 15 | 0 | 2 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **64** | **56** | **0** | **8** |
+| **Total** | **64** | **58** | **0** | **6** |
 
-**Overall Progress**: 56 done = ~88% complete
+**Overall Progress**: 58 done = ~91% complete
 
 ---
 
