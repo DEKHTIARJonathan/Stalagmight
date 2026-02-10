@@ -6,6 +6,8 @@ use tauri::State;
 
 use crate::core::state::AppState;
 use crate::core::CommandResult;
+use crate::models::placement_suggest::{ExistingSection, PlacementSuggestion, suggest_placements};
+use crate::models::ShotData;
 use crate::parsers::DmpFile;
 use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
 use crate::parsers::tml::TmlFile;
@@ -257,4 +259,25 @@ pub fn execute_gpx_import(
     );
 
     state.execute_import_sections(sections, Vec::new(), file_hash)
+}
+
+/// Suggest placement positions for an import section by detecting reference shot overlap.
+#[tauri::command]
+pub fn suggest_import_placement(
+    state: State<'_, AppState>,
+    shots: Vec<ShotData>,
+) -> Result<Vec<PlacementSuggestion>, String> {
+    let project = state.get_project_state().ok_or("No project open")?;
+
+    let existing_sections: Vec<ExistingSection> = project
+        .sections
+        .iter()
+        .map(|s| ExistingSection {
+            id: s.id,
+            name: s.name.clone().unwrap_or_else(|| format!("Section {}", s.id)),
+            shots: s.shots.clone(),
+        })
+        .collect();
+
+    Ok(suggest_placements(&shots, &existing_sections))
 }

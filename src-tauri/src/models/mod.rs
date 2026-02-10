@@ -1,4 +1,6 @@
 pub mod geo;
+pub mod id_stride;
+pub mod placement_suggest;
 pub mod project;
 pub mod section;
 pub mod shot;
@@ -7,10 +9,10 @@ pub mod warning;
 
 pub use geo::*;
 pub use id_stride::*;
+pub use placement_suggest::*;
 pub use project::*;
 pub use section::*;
 pub use shot::*;
 pub use station::*;
 pub use station::ClosureStrategy;
 pub use warning::*;
-pub mod id_stride;

@@ -1023,6 +1023,7 @@ pub fn run() {
             commands::import::execute_tml_import,
             commands::import::parse_gpx,
             commands::import::execute_gpx_import,
+            commands::import::suggest_import_placement,
             commands::export::export_csv,
             commands::export::export_json,
             commands::export::export_tml,
