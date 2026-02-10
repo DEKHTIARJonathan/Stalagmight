@@ -79,6 +79,9 @@ export default function DmpNewImportDialog({
   // After confirm/skip we filter this instead of recalculating.
   const suggestionPoolRef = useRef<RankedSuggestion[]>([]);
 
+  // Ref-based guard against double-click — state alone is stale in the closure
+  const isImportingRef = useRef(false);
+
   // Refs to avoid stale closures
   const importedIndicesRef = useRef(importedIndices);
   importedIndicesRef.current = importedIndices;
@@ -339,13 +342,15 @@ export default function DmpNewImportDialog({
 
   // Confirm handler
   const handleConfirm = useCallback(async () => {
-    if (!currentSuggestion || isImporting) return;
+    if (!currentSuggestion || isImportingRef.current) return;
 
+    isImportingRef.current = true;
     setIsImporting(true);
     setError(null);
 
     const section = dmpFile.sections[currentSuggestion.importSectionIndex];
     if (!section) {
+      isImportingRef.current = false;
       setIsImporting(false);
       return;
     }
@@ -383,6 +388,7 @@ export default function DmpNewImportDialog({
 
     const result = await importSections([config], selectionConfig.fileHash);
 
+    isImportingRef.current = false;
     setIsImporting(false);
 
     if (!result.success) {
@@ -398,9 +404,11 @@ export default function DmpNewImportDialog({
       return next;
     });
 
-    // Check remaining from selectedIndices
+    // Update ref eagerly so pickFromPool sees the just-imported section
     const newImported = new Set(importedIndicesRef.current);
     newImported.add(importedIdx);
+    importedIndicesRef.current = newImported;
+
     const remaining = selectedIndices.filter(
       (idx) => !newImported.has(idx) && !skippedIndicesRef.current.has(idx)
     );
@@ -416,7 +424,7 @@ export default function DmpNewImportDialog({
       // newly imported sections
       setRecalcTrigger((n) => n + 1);
     }
-  }, [currentSuggestion, isImporting, dmpFile.sections, importSections, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, dmpFile.sections, importSections, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
 
   // Skip handler
   const handleSkip = useCallback(() => {
@@ -429,9 +437,11 @@ export default function DmpNewImportDialog({
       return next;
     });
 
-    // Check remaining
+    // Update ref eagerly so pickFromPool sees the just-skipped section
     const newSkipped = new Set(skippedIndicesRef.current);
     newSkipped.add(skippedIdx);
+    skippedIndicesRef.current = newSkipped;
+
     const remaining = selectedIndices.filter(
       (idx) => !importedIndicesRef.current.has(idx) && !newSkipped.has(idx)
     );
