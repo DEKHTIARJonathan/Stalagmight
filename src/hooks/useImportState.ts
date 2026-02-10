@@ -127,7 +127,7 @@ const MAX_UNDO_HISTORY = 50;
 /**
  * Convert DMP shots to EditableShots.
  */
-function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
+export function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
   return shots
     .filter((shot) => shot.shot_type === 'Standard')
     .map((shot, index) => ({

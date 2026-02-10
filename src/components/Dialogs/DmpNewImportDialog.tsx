@@ -1,17 +1,19 @@
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
+import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 
 interface DmpNewImportDialogProps {
   onCancel: () => void;
   onBack: () => void;
+  zeroDatumConfig?: ZeroDatumConfigResult | undefined;
 }
 
 /**
  * Placeholder dialog for the new DMP import workflow.
  * Shown when "Use legacy DMP import" is disabled in Advanced settings.
  */
-export default function DmpNewImportDialog({ onCancel, onBack }: DmpNewImportDialogProps) {
+export default function DmpNewImportDialog({ onCancel, onBack, zeroDatumConfig: _zeroDatumConfig }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
 
   return (

@@ -806,6 +806,21 @@
       "title": "New DMP Import",
       "body": "This workflow is under development."
     },
+    "zeroDatumSelection": {
+      "title": "Select Zero Datum Section",
+      "subtitle": "Choose which section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
+      "shotCount": "{{count}} shots",
+      "totalLength": "{{length}} total"
+    },
+    "zeroDatumConfig": {
+      "title": "Configure Zero Datum",
+      "stationLabel": "Station",
+      "gpsLabel": "GPS",
+      "gpsPlaceholder": "48.8584, 2.2945",
+      "confirm": "Confirm Zero Datum",
+      "metadataHeading": "Section Metadata",
+      "shotsHeading": "Shot Data"
+    },
     "about": {
       "title": "About Stalagmight",
       "version": "Version {{version}}",
