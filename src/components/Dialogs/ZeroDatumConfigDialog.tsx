@@ -259,22 +259,24 @@ export default function ZeroDatumConfigDialog({
       size="5xl"
       overflow="hidden"
       fixedSize={{ width: 'min(1100px, 95vw)', height: 'min(800px, 90vh)' }}
+      bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       data-testid="zero-datum-config-dialog"
     >
-      <div className="flex h-full min-h-0 gap-4">
-        {/* Left column: Preview */}
-        <div className="shrink-0 flex flex-col items-center" style={{ width: 380 }}>
+      {/* Scrollable content area */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {/* Left column: Preview (fixed) */}
+        <div className="shrink-0 flex flex-col items-center p-4 border-r border-border" style={{ width: 380 }}>
           <SectionPreview
             section={section}
             color={color}
-            size={350}
+            size={340}
             onStationClick={setStationIndex}
             selectedStationIndex={stationIndex}
           />
         </div>
 
-        {/* Right column: Configuration */}
-        <div className="flex-1 min-w-0 overflow-y-auto space-y-5 pr-1">
+        {/* Right column: Configuration (scrollable) */}
+        <div className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5">
           {/* Station selection */}
           <div className="flex items-center gap-2">
             <label className="text-sm text-text-secondary w-16 shrink-0">
@@ -365,8 +367,8 @@ export default function ZeroDatumConfigDialog({
         </div>
       </div>
 
-      {/* Footer */}
-      <div className="flex justify-between items-center pt-4 border-t border-border mt-4 shrink-0">
+      {/* Footer - always visible */}
+      <div className="px-4 py-3 border-t border-border flex justify-between items-center shrink-0">
         <div className="flex gap-2">
           <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-config-cancel">
             {t('common.actions.cancel')}
