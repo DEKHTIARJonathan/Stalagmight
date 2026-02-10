@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
@@ -100,6 +100,14 @@ export default function ZeroDatumSelectionDialog({
   const config = useProjectStore((s) => s.config);
   const lengthUnit = config?.units?.length ?? defaultConfig.units.length;
 
+  // Single-fire guard: prevent double-click from calling onSelectSection twice
+  const selectedRef = useRef(false);
+  const handleSelectSection = useCallback((index: number) => {
+    if (selectedRef.current) return;
+    selectedRef.current = true;
+    onSelectSection(index);
+  }, [onSelectSection]);
+
   const selectedSections = useMemo(() => {
     return Array.from(selectionConfig.selectedIndices)
       .sort((a, b) => a - b)
@@ -150,7 +158,7 @@ export default function ZeroDatumSelectionDialog({
             <button
               key={index}
               type="button"
-              onClick={() => onSelectSection(index)}
+              onClick={() => handleSelectSection(index)}
               className="flex flex-col items-center gap-1 p-2 bg-panel border border-border rounded-lg cursor-pointer transition-colors hover:border-accent focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
               data-testid={`zero-datum-section-card-${index}`}
             >
