@@ -66,6 +66,7 @@ export default function ZeroDatumConfigDialog({
 
   // Station selection
   const [stationIndex, setStationIndex] = useState(0);
+  const [hoveredStationIndex, setHoveredStationIndex] = useState<number | null>(null);
 
   // GPS input state
   const [gpsInput, setGpsInput] = useState('');
@@ -101,6 +102,17 @@ export default function ZeroDatumConfigDialog({
       label: `Station ${i}`,
     }));
   }, [stationCount]);
+
+  // GPS origin for map preview - only set when valid GPS coordinates are entered
+  const gpsOrigin = useMemo(() => {
+    if (!gpsCoords) return null;
+    return { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude };
+  }, [gpsCoords]);
+
+  // Station hover handler for dropdown
+  const handleStationHover = useCallback((value: string | null) => {
+    setHoveredStationIndex(value !== null ? parseInt(value, 10) : null);
+  }, []);
 
   // GPS input handler
   const handleGpsInputChange = useCallback((value: string) => {
@@ -271,7 +283,9 @@ export default function ZeroDatumConfigDialog({
             color={color}
             size={340}
             onStationClick={setStationIndex}
-            selectedStationIndex={stationIndex}
+            selectedStationIndex={hoveredStationIndex ?? stationIndex}
+            gpsOrigin={gpsOrigin}
+            gpsStationIndex={stationIndex}
           />
         </div>
 
@@ -288,6 +302,7 @@ export default function ZeroDatumConfigDialog({
               options={stationOptions}
               className="flex-1"
               data-testid="zero-datum-station-select"
+              onOptionHover={handleStationHover}
             />
           </div>
 

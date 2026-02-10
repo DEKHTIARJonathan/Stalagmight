@@ -6,6 +6,8 @@ import { metersToMapCoords, getBounds } from '../../utils/coordinates';
 import { circularMeanDegrees } from '../../utils/angles';
 import { useUIStore } from '../../store/uiStore';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
+import { getTileConfig } from '../../utils/tileConfig';
+import type { GpsOrigin } from '../../types/config';
 
 /**
  * Merge preview configuration for "From Existing" placement mode.
@@ -102,6 +104,10 @@ interface SectionPreviewProps {
   selectedStationIndex?: number | null;
   /** Size of the preview container in pixels (default 250) */
   size?: number;
+  /** GPS origin for real-world positioning. When set, enables satellite tiles and positions geometry at real coordinates. */
+  gpsOrigin?: GpsOrigin | null;
+  /** Station index to offset the gpsOrigin to (default 0). The section is positioned so this station sits at gpsOrigin. */
+  gpsStationIndex?: number;
 }
 
 /**
@@ -125,6 +131,8 @@ export default function SectionPreview({
   onStationClick,
   selectedStationIndex,
   size = 250,
+  gpsOrigin,
+  gpsStationIndex = 0,
 }: SectionPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -150,6 +158,14 @@ export default function SectionPreview({
     const nonReferenceShots = mergePreview.targetSection.shots.filter((s) => !s.is_reference);
     return computeStationsFromShots(nonReferenceShots);
   }, [mergePreview]);
+
+  // Compute offset so the GPS station sits at the GPS origin (local 0,0)
+  const gpsStationOffset = useMemo(() => {
+    if (!gpsOrigin || stations.length === 0) return { x: 0, y: 0 };
+    const station = stations[gpsStationIndex];
+    if (!station) return { x: 0, y: 0 };
+    return { x: -station.x, y: -station.y };
+  }, [gpsOrigin, stations, gpsStationIndex]);
 
   // Initialize MapLibre instance - container is always mounted
   useEffect(() => {
@@ -369,6 +385,53 @@ export default function SectionPreview({
     };
   }, []);
 
+  // Toggle satellite tiles when gpsOrigin changes
+  useEffect(() => {
+    if (!mapRef.current || !mapLoaded) return;
+    const map = mapRef.current;
+
+    if (gpsOrigin) {
+      // Add satellite tiles if not already present
+      if (!map.getSource('satellite-tiles')) {
+        const tileConfig = getTileConfig('esri');
+        map.addSource('satellite-tiles', {
+          type: 'raster',
+          tiles: tileConfig.tiles,
+          tileSize: tileConfig.tileSize,
+          attribution: tileConfig.attribution,
+          minzoom: tileConfig.minZoom,
+          maxzoom: tileConfig.maxZoom,
+        });
+        // Insert satellite below all other layers (above background)
+        map.addLayer(
+          {
+            id: 'satellite-tiles-layer',
+            type: 'raster',
+            source: 'satellite-tiles',
+            paint: { 'raster-opacity': 0.85 },
+          },
+          'preview-target-shots-layer'
+        );
+      }
+      // Dim the background so satellite shows through
+      if (map.getLayer('background')) {
+        map.setPaintProperty('background', 'background-opacity', 0);
+      }
+    } else {
+      // Remove satellite tiles
+      if (map.getLayer('satellite-tiles-layer')) {
+        map.removeLayer('satellite-tiles-layer');
+      }
+      if (map.getSource('satellite-tiles')) {
+        map.removeSource('satellite-tiles');
+      }
+      // Restore background
+      if (map.getLayer('background')) {
+        map.setPaintProperty('background', 'background-opacity', 1);
+      }
+    }
+  }, [gpsOrigin, mapLoaded]);
+
   // Update data and fit bounds when section changes
   useEffect(() => {
     if (!mapRef.current || !mapLoaded) return;
@@ -389,6 +452,12 @@ export default function SectionPreview({
       }
     }
 
+    // Combined offset: merge preview alignment + GPS station positioning
+    const totalOffset = {
+      x: importOffset.x + gpsStationOffset.x,
+      y: importOffset.y + gpsStationOffset.y,
+    };
+
     // Build shot features for the current (import) section with offset
     const shotFeatures: GeoJSON.Feature[] = [];
     const standardShots = section?.shots.filter((s) => s.shot_type === 'Standard') ?? [];
@@ -403,8 +472,8 @@ export default function SectionPreview({
         geometry: {
           type: 'LineString',
           coordinates: [
-            metersToMapCoords(from.x + importOffset.x, from.y + importOffset.y),
-            metersToMapCoords(to.x + importOffset.x, to.y + importOffset.y),
+            metersToMapCoords(from.x + totalOffset.x, from.y + totalOffset.y, gpsOrigin),
+            metersToMapCoords(to.x + totalOffset.x, to.y + totalOffset.y, gpsOrigin),
           ],
         },
         properties: { color },
@@ -416,7 +485,7 @@ export default function SectionPreview({
       type: 'Feature',
       geometry: {
         type: 'Point',
-        coordinates: metersToMapCoords(station.x + importOffset.x, station.y + importOffset.y),
+        coordinates: metersToMapCoords(station.x + totalOffset.x, station.y + totalOffset.y, gpsOrigin),
       },
       properties: { color, stationIndex: index },
     }));
@@ -442,8 +511,8 @@ export default function SectionPreview({
           geometry: {
             type: 'LineString',
             coordinates: [
-              metersToMapCoords(from.x, from.y),
-              metersToMapCoords(to.x, to.y),
+              metersToMapCoords(from.x, from.y, gpsOrigin),
+              metersToMapCoords(to.x, to.y, gpsOrigin),
             ],
           },
           properties: {},
@@ -458,7 +527,7 @@ export default function SectionPreview({
           type: 'Feature',
           geometry: {
             type: 'Point',
-            coordinates: metersToMapCoords(station.x, station.y),
+            coordinates: metersToMapCoords(station.x, station.y, gpsOrigin),
           },
           properties: { stationIndex: i },
         });
@@ -474,8 +543,9 @@ export default function SectionPreview({
           geometry: {
             type: 'Point',
             coordinates: metersToMapCoords(
-              importMergeStation.x + importOffset.x,
-              importMergeStation.y + importOffset.y
+              importMergeStation.x + totalOffset.x,
+              importMergeStation.y + totalOffset.y,
+              gpsOrigin
             ),
           },
           properties: { type: 'import' },
@@ -487,7 +557,7 @@ export default function SectionPreview({
           type: 'Feature',
           geometry: {
             type: 'Point',
-            coordinates: metersToMapCoords(targetMergeStation.x, targetMergeStation.y),
+            coordinates: metersToMapCoords(targetMergeStation.x, targetMergeStation.y, gpsOrigin),
           },
           properties: { type: 'target' },
         });
@@ -502,10 +572,11 @@ export default function SectionPreview({
             type: 'LineString',
             coordinates: [
               metersToMapCoords(
-                importMergeStation.x + importOffset.x,
-                importMergeStation.y + importOffset.y
+                importMergeStation.x + totalOffset.x,
+                importMergeStation.y + totalOffset.y,
+                gpsOrigin
               ),
-              metersToMapCoords(targetMergeStation.x, targetMergeStation.y),
+              metersToMapCoords(targetMergeStation.x, targetMergeStation.y, gpsOrigin),
             ],
           },
           properties: {},
@@ -536,8 +607,8 @@ export default function SectionPreview({
           geometry: {
             type: 'LineString',
             coordinates: [
-              metersToMapCoords(importStationCoords.x, importStationCoords.y),
-              metersToMapCoords(existingX, existingY),
+              metersToMapCoords(importStationCoords.x, importStationCoords.y, gpsOrigin),
+              metersToMapCoords(existingX, existingY, gpsOrigin),
             ],
           },
           properties: {},
@@ -548,7 +619,7 @@ export default function SectionPreview({
           type: 'Feature',
           geometry: {
             type: 'Point',
-            coordinates: metersToMapCoords(existingX, existingY),
+            coordinates: metersToMapCoords(existingX, existingY, gpsOrigin),
           },
           properties: { label: 'Existing' },
         });
@@ -613,7 +684,7 @@ export default function SectionPreview({
       });
     }
 
-    // Build and update selected station highlight feature (with offset for merge preview)
+    // Build and update selected station highlight feature (with combined offset)
     const selectedStationFeatures: GeoJSON.Feature[] = [];
     if (
       selectedStationIndex !== null &&
@@ -628,8 +699,9 @@ export default function SectionPreview({
           geometry: {
             type: 'Point',
             coordinates: metersToMapCoords(
-              selectedStation.x + importOffset.x,
-              selectedStation.y + importOffset.y
+              selectedStation.x + totalOffset.x,
+              selectedStation.y + totalOffset.y,
+              gpsOrigin
             ),
           },
           properties: {},
@@ -649,10 +721,10 @@ export default function SectionPreview({
     // the container has proper dimensions and the map is fully rendered
     if (stations.length > 0) {
       const doFitBounds = () => {
-        // Get bounds for import section (with offset applied)
+        // Get bounds for import section (with combined offset applied)
         const offsetStations = stations.map((s) => ({
-          x: s.x + importOffset.x,
-          y: s.y + importOffset.y,
+          x: s.x + totalOffset.x,
+          y: s.y + totalOffset.y,
           z: s.z,
         }));
         const bounds = getBounds(offsetStations);
@@ -690,12 +762,12 @@ export default function SectionPreview({
           const centerX = (bounds.minX + bounds.maxX) / 2;
           const centerY = (bounds.minY + bounds.maxY) / 2;
           map.jumpTo({
-            center: metersToMapCoords(centerX, centerY),
-            zoom: 16,
+            center: metersToMapCoords(centerX, centerY, gpsOrigin),
+            zoom: gpsOrigin ? 18 : 16,
           });
         } else {
-          const sw = metersToMapCoords(bounds.minX, bounds.minY);
-          const ne = metersToMapCoords(bounds.maxX, bounds.maxY);
+          const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
+          const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
           // Calculate 10% padding based on container size
           const container = map.getContainer();
@@ -718,7 +790,7 @@ export default function SectionPreview({
         }
       });
     }
-  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex]);
+  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset]);
 
   // Re-apply theme colors when resolvedTheme changes
   useEffect(() => {
