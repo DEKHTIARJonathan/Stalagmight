@@ -4,6 +4,7 @@ export { default as NewProjectDialog } from './NewProjectDialog';
 export { default as NewProjectForImportDialog } from './NewProjectForImportDialog';
 export { default as DmpSelectionDialog } from './DmpSelectionDialog';
 export { default as DmpSectionConfigDialog } from './DmpSectionConfigDialog';
+export { default as DmpNewImportDialog } from './DmpNewImportDialog';
 export { default as ConfirmDialog } from './ConfirmDialog';
 export { default as DeleteShotChoiceDialog } from './DeleteShotChoiceDialog';
 export { default as MergeDialog } from './MergeDialog';

@@ -446,6 +446,9 @@ pub struct GeneralConfig {
     /// Show splash screen with branding on startup
     #[serde(default)]
     pub splash_screen: bool,
+    /// Use legacy DMP import workflow (per-section config dialog)
+    #[serde(default)]
+    pub legacy_dmp_import: bool,
 }
 
 fn default_locale() -> String {
