@@ -145,7 +145,7 @@ fn get_command_type(command: &Command) -> String {
         Command::CreateShot { .. } => "create_shot".to_string(),
         Command::UpdateShot { .. } => "update_shot".to_string(),
         Command::DeleteShot { .. } => "delete_shot".to_string(),
-        Command::SetShotVirtual { .. } => "set_shot_virtual".to_string(),
+        Command::SetShotReference { .. } => "set_shot_reference".to_string(),
         Command::MergeStations { .. } => "merge_stations".to_string(),
         Command::UnmergeStations { .. } => "unmerge_stations".to_string(),
         Command::CreateLoopClosure { .. } => "create_loop_closure".to_string(),
@@ -205,8 +205,8 @@ fn derive_command_details(
         Command::AdjustLoopClosures { method, .. } => {
             Some(format!("Method: {}", method.as_str()))
         }
-        Command::SetShotVirtual { is_virtual, .. } => {
-            Some(format!("Virtual: {is_virtual}"))
+        Command::SetShotReference { is_reference, .. } => {
+            Some(format!("Reference: {is_reference}"))
         }
         Command::CreateShot { shot, .. } => {
             Some(format!("Length: {:.2}, Azimuth: {:.1}", shot.length, shot.azimuth_in))
@@ -308,13 +308,13 @@ fn derive_preview_data(
                     });
                 }
 
-                // is_virtual
-                if let Some(new_virtual) = updates.is_virtual {
-                    let old_virtual = prev.get("is_virtual").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                // is_reference
+                if let Some(new_reference) = updates.is_reference {
+                    let old_reference = prev.get("is_reference").and_then(serde_json::Value::as_bool).unwrap_or(false);
                     changes.push(FieldChange {
-                        field: "Virtual".to_string(),
-                        old_value: old_virtual.to_string(),
-                        new_value: new_virtual.to_string(),
+                        field: "Reference".to_string(),
+                        old_value: old_reference.to_string(),
+                        new_value: new_reference.to_string(),
                     });
                 }
 
@@ -535,13 +535,13 @@ fn derive_preview_data(
             })
         }
 
-        // SetShotVirtual - show the toggle
-        (Command::SetShotVirtual { is_virtual, .. }, _) => {
+        // SetShotReference - show the toggle
+        (Command::SetShotReference { is_reference, .. }, _) => {
             Some(PreviewData {
                 changes: vec![FieldChange {
-                    field: "Virtual".to_string(),
-                    old_value: (!is_virtual).to_string(),
-                    new_value: is_virtual.to_string(),
+                    field: "Reference".to_string(),
+                    old_value: (!is_reference).to_string(),
+                    new_value: is_reference.to_string(),
                 }],
                 additional_changes: 0,
             })
@@ -997,19 +997,19 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_preview_data_set_shot_virtual() {
+    fn test_derive_preview_data_set_shot_reference() {
         let entry = UndoEntry {
-            command: Command::SetShotVirtual {
+            command: Command::SetShotReference {
                 section_id: 1,
                 shot_id: 2,
-                is_virtual: true,
+                is_reference: true,
             },
             undo_data: UndoData::None,
             timestamp: None,
         };
 
         let preview = derive_preview_data(&entry, &empty_names()).unwrap();
-        assert_eq!(preview.changes[0].field, "Virtual");
+        assert_eq!(preview.changes[0].field, "Reference");
         assert_eq!(preview.changes[0].old_value, "false");
         assert_eq!(preview.changes[0].new_value, "true");
     }

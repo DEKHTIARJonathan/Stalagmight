@@ -140,7 +140,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               showSectionNames: true,
               showStationLabels: false,
               showShotData: false,
-              showVirtualShots: true,
+              showReferenceShots: true,
               showZeroDatum: true,
               showGrid: false,
               showScaleBar: true,
@@ -187,7 +187,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               showSectionNames: true,
               showStationLabels: false,
               showShotData: false,
-              showVirtualShots: true,
+              showReferenceShots: true,
               showZeroDatum: true,
               showGrid: false,
               showScaleBar: true,
@@ -523,7 +523,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
         case 'update_section':
         case 'delete_section':
         case 'create_shot':
-        case 'set_shot_virtual':
+        case 'set_shot_reference':
           return { success: true };
 
         default:

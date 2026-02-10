@@ -113,7 +113,7 @@ pub struct SectionStats {
     pub total_length: f64,
     pub min_depth: f64,
     pub max_depth: f64,
-    pub virtual_shot_count: usize,
+    pub reference_shot_count: usize,
 }
 
 /// Configuration for a single section being imported via the batch import command.
@@ -338,7 +338,7 @@ impl Section {
     /// (like station positions) not from raw shot depth_in/depth_out values.
     pub fn stats(&self) -> SectionStats {
         let mut total_length = 0.0;
-        let mut virtual_count = 0;
+        let mut reference_count = 0;
 
         // Compute min/max from accumulated z-coordinates (station depths)
         // First station starts at z=0
@@ -348,8 +348,8 @@ impl Section {
 
         for shot in &self.shots {
             total_length += shot.length;
-            if shot.is_virtual {
-                virtual_count += 1;
+            if shot.is_reference {
+                reference_count += 1;
             }
 
             // Accumulate depth change (same as station computation)
@@ -363,7 +363,7 @@ impl Section {
             total_length,
             min_depth,
             max_depth,
-            virtual_shot_count: virtual_count,
+            reference_shot_count: reference_count,
         }
     }
 }
@@ -457,14 +457,14 @@ mod tests {
         }
     }
 
-    fn test_virtual_shot_data(length: f64) -> ShotData {
+    fn test_reference_shot_data(length: f64) -> ShotData {
         ShotData {
             azimuth_in: 0.0,
             azimuth_out: 180.0,
             length,
             depth_in: 5.0,
             depth_out: 5.0,
-            is_virtual: true,
+            is_reference: true,
             ..Default::default()
         }
     }
@@ -757,7 +757,7 @@ mod tests {
         assert_eq!(stats.total_length, 0.0);
         assert_eq!(stats.min_depth, 0.0);
         assert_eq!(stats.max_depth, 0.0);
-        assert_eq!(stats.virtual_shot_count, 0);
+        assert_eq!(stats.reference_shot_count, 0);
     }
 
     #[test]
@@ -775,7 +775,7 @@ mod tests {
         assert_eq!(stats.total_length, 10.0);
         assert_eq!(stats.min_depth, 0.0); // First station at z=0
         assert_eq!(stats.max_depth, 3.0); // Second station at z=3 (depth_out - depth_in)
-        assert_eq!(stats.virtual_shot_count, 0);
+        assert_eq!(stats.reference_shot_count, 0);
     }
 
     #[test]
@@ -801,13 +801,13 @@ mod tests {
     }
 
     #[test]
-    fn test_stats_with_virtual_shots() {
+    fn test_stats_with_reference_shots() {
         let section = Section::new(0, SectionData {
             shots: vec![
                 test_shot_data(5.0),
-                test_virtual_shot_data(3.0),
+                test_reference_shot_data(3.0),
                 test_shot_data(7.0),
-                test_virtual_shot_data(2.0),
+                test_reference_shot_data(2.0),
             ],
             ..Default::default()
         });
@@ -816,7 +816,7 @@ mod tests {
 
         assert_eq!(stats.shot_count, 4);
         assert_eq!(stats.total_length, 17.0); // 5 + 3 + 7 + 2
-        assert_eq!(stats.virtual_shot_count, 2);
+        assert_eq!(stats.reference_shot_count, 2);
     }
 
     #[test]
@@ -958,7 +958,7 @@ mod tests {
             total_length: 42.5,
             min_depth: 3.0,
             max_depth: 25.0,
-            virtual_shot_count: 1,
+            reference_shot_count: 1,
         };
 
         let json = serde_json::to_string(&stats).unwrap();
@@ -968,7 +968,7 @@ mod tests {
         assert_eq!(deserialized.total_length, 42.5);
         assert_eq!(deserialized.min_depth, 3.0);
         assert_eq!(deserialized.max_depth, 25.0);
-        assert_eq!(deserialized.virtual_shot_count, 1);
+        assert_eq!(deserialized.reference_shot_count, 1);
     }
 
     // === Split Shots Tests ===

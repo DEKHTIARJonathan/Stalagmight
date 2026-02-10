@@ -547,19 +547,19 @@ test.describe('Toggle Relationship Tests', () => {
     await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
-  test('Virtual Shots toggle is disabled when Shots hidden', async ({ page }) => {
+  test('Reference Shots toggle is disabled when Shots hidden', async ({ page }) => {
     await openDisplayMenu(page);
 
-    // Virtual Shots toggle should be enabled initially (Shots is on)
-    const virtualShotsToggle = page.locator('[data-testid="display-toggle-showVirtualShots"]');
-    await expect(virtualShotsToggle).toBeVisible();
-    await expect(virtualShotsToggle).not.toBeDisabled();
+    // Reference Shots toggle should be enabled initially (Shots is on)
+    const referenceShotsToggle = page.locator('[data-testid="display-toggle-showReferenceShots"]');
+    await expect(referenceShotsToggle).toBeVisible();
+    await expect(referenceShotsToggle).not.toBeDisabled();
 
     // Hide Shots
     await toggleDisplayOption(page, 'showShots');
 
-    // Virtual Shots toggle should now be disabled
-    await expect(virtualShotsToggle).toBeDisabled();
+    // Reference Shots toggle should now be disabled
+    await expect(referenceShotsToggle).toBeDisabled();
   });
 
   test('Shot Data toggle is disabled when Shots hidden', async ({ page }) => {
@@ -584,36 +584,36 @@ test.describe('Toggle Relationship Tests', () => {
     await toggleDisplayOption(page, 'showShots');
 
     // Verify dependent toggles are disabled
-    const virtualShotsToggle = page.locator('[data-testid="display-toggle-showVirtualShots"]');
+    const referenceShotsToggle = page.locator('[data-testid="display-toggle-showReferenceShots"]');
     const shotDataToggle = page.locator('[data-testid="display-toggle-showShotData"]');
-    await expect(virtualShotsToggle).toBeDisabled();
+    await expect(referenceShotsToggle).toBeDisabled();
     await expect(shotDataToggle).toBeDisabled();
 
     // Show shots again
     await toggleDisplayOption(page, 'showShots');
 
     // Dependent toggles should be re-enabled
-    await expect(virtualShotsToggle).not.toBeDisabled();
+    await expect(referenceShotsToggle).not.toBeDisabled();
     await expect(shotDataToggle).not.toBeDisabled();
   });
 
   test('dependent toggle state is preserved through parent toggle cycle', async ({ page }) => {
     await openDisplayMenu(page);
 
-    // Get initial showVirtualShots state (should be true by default)
-    const initialState = await isToggleOn(page, 'showVirtualShots');
+    // Get initial showReferenceShots state (should be true by default)
+    const initialState = await isToggleOn(page, 'showReferenceShots');
     expect(initialState).toBe(true);
 
-    // Turn off Virtual Shots
-    await toggleDisplayOption(page, 'showVirtualShots');
-    expect(await isToggleOn(page, 'showVirtualShots')).toBe(false);
+    // Turn off Reference Shots
+    await toggleDisplayOption(page, 'showReferenceShots');
+    expect(await isToggleOn(page, 'showReferenceShots')).toBe(false);
 
     // Toggle parent (showShots) off then on
     await toggleDisplayOption(page, 'showShots');
     await toggleDisplayOption(page, 'showShots');
 
-    // Virtual Shots state should be preserved (still off)
-    expect(await isToggleOn(page, 'showVirtualShots')).toBe(false);
+    // Reference Shots state should be preserved (still off)
+    expect(await isToggleOn(page, 'showReferenceShots')).toBe(false);
   });
 });
 
@@ -791,7 +791,7 @@ test.describe('Display Menu State Persistence', () => {
     expect(await isToggleOn(page, 'showSectionNames')).toBe(true);
     expect(await isToggleOn(page, 'showStationLabels')).toBe(false);
     expect(await isToggleOn(page, 'showShotData')).toBe(false);
-    expect(await isToggleOn(page, 'showVirtualShots')).toBe(true);
+    expect(await isToggleOn(page, 'showReferenceShots')).toBe(true);
     expect(await isToggleOn(page, 'showZeroDatum')).toBe(true);
     expect(await isToggleOn(page, 'showGrid')).toBe(false);
     expect(await isToggleOn(page, 'showScaleBar')).toBe(true);

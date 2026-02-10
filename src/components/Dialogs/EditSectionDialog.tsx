@@ -93,7 +93,7 @@ export default function EditSectionDialog() {
       up: null,
       down: null,
       comment: null,
-      is_virtual: false,
+      is_reference: false,
       isNew: true,
     };
     setShots(prev => [...prev, newShot]);
@@ -217,7 +217,7 @@ export default function EditSectionDialog() {
       up: null,
       down: null,
       comment: null,
-      is_virtual: false,
+      is_reference: false,
       isNew: true,
     };
     setShots(prev => {
@@ -244,7 +244,7 @@ export default function EditSectionDialog() {
       up: null,
       down: null,
       comment: null,
-      is_virtual: false,
+      is_reference: false,
       isNew: true,
     };
     setShots(prev => {
@@ -307,7 +307,7 @@ export default function EditSectionDialog() {
             up: shot.up,
             down: shot.down,
             comment: shot.comment,
-            is_virtual: shot.is_virtual ?? false,
+            is_reference: shot.is_reference ?? false,
             marker_index: original.marker_index ?? null,
             temperature: original.temperature ?? null,
           });
@@ -334,7 +334,7 @@ export default function EditSectionDialog() {
           up: shot.up,
           down: shot.down,
           comment: shot.comment,
-          is_virtual: shot.is_virtual ?? false,
+          is_reference: shot.is_reference ?? false,
           marker_index: null,
           temperature: null,
         };
@@ -502,6 +502,6 @@ function hasChanges(original: Shot, current: EditableShot): boolean {
     original.up !== current.up ||
     original.down !== current.down ||
     original.comment !== current.comment ||
-    original.is_virtual !== current.is_virtual
+    original.is_reference !== current.is_reference
   );
 }

@@ -139,7 +139,7 @@ pub struct DisplaySettings {
     pub show_section_names: bool,
     pub show_station_labels: bool,
     pub show_shot_data: bool,
-    pub show_virtual_shots: bool,
+    pub show_reference_shots: bool,
     pub show_zero_datum: bool,
     pub show_grid: bool,
     pub show_scale_bar: bool,
@@ -157,7 +157,7 @@ impl Default for DisplaySettings {
             show_section_names: true,
             show_station_labels: false,
             show_shot_data: false,
-            show_virtual_shots: true,
+            show_reference_shots: true,
             show_zero_datum: true,
             show_grid: false,
             show_scale_bar: true,
@@ -179,7 +179,9 @@ impl DisplaySettings {
             show_section_names: map.get("showSectionNames").is_none_or(|s| s == "true"),
             show_station_labels: map.get("showStationLabels").is_some_and(|s| s == "true"),
             show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
-            show_virtual_shots: map.get("showVirtualShots").is_none_or(|s| s == "true"),
+            show_reference_shots: map.get("showReferenceShots")
+                .or_else(|| map.get("showVirtualShots"))
+                .is_none_or(|s| s == "true"),
             show_zero_datum: map.get("showZeroDatum").is_none_or(|s| s == "true"),
             show_grid: map.get("showGrid").is_some_and(|s| s == "true"),
             show_scale_bar: map.get("showScaleBar").is_none_or(|s| s == "true"),
@@ -641,7 +643,7 @@ mod tests {
         assert!(defaults.show_section_names);      // true
         assert!(!defaults.show_station_labels);    // false
         assert!(!defaults.show_shot_data);         // false
-        assert!(defaults.show_virtual_shots);      // true
+        assert!(defaults.show_reference_shots);     // true
         assert!(defaults.show_zero_datum);         // true
         assert!(!defaults.show_grid);              // false
         assert!(defaults.show_scale_bar);          // true
@@ -660,7 +662,7 @@ mod tests {
         assert!(settings.show_section_names);      // true
         assert!(!settings.show_station_labels);    // false
         assert!(!settings.show_shot_data);         // false
-        assert!(settings.show_virtual_shots);      // true
+        assert!(settings.show_reference_shots);     // true
         assert!(settings.show_zero_datum);         // true
         assert!(!settings.show_grid);              // false
         assert!(settings.show_scale_bar);          // true
@@ -691,7 +693,7 @@ mod tests {
         stored.insert("showSectionNames".to_string(), "false".to_string());
         stored.insert("showStationLabels".to_string(), "true".to_string());
         stored.insert("showShotData".to_string(), "true".to_string());
-        stored.insert("showVirtualShots".to_string(), "false".to_string());
+        stored.insert("showReferenceShots".to_string(), "false".to_string());
         stored.insert("showZeroDatum".to_string(), "false".to_string());
         stored.insert("showGrid".to_string(), "true".to_string());
         stored.insert("showScaleBar".to_string(), "false".to_string());
@@ -706,7 +708,7 @@ mod tests {
         assert!(!settings.show_section_names, "showSectionNames should be false");
         assert!(settings.show_station_labels, "showStationLabels should be true");
         assert!(settings.show_shot_data, "showShotData should be true");
-        assert!(!settings.show_virtual_shots, "showVirtualShots should be false");
+        assert!(!settings.show_reference_shots, "showReferenceShots should be false");
         assert!(!settings.show_zero_datum, "showZeroDatum should be false");
         assert!(settings.show_grid, "showGrid should be true");
         assert!(!settings.show_scale_bar, "showScaleBar should be false");

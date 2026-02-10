@@ -1074,8 +1074,8 @@ assert!((r * scale - 3.0).abs() < 0.1);
 | Station radius | 3px | `r="..."` attribute |
 | Shot stroke-width | 2px | CSS `.shot { stroke-width: ... }` |
 | Grid stroke-width | 0.5px | `class="grid" ... stroke-width="..."` |
-| Virtual shot dash | 4px | `stroke-dasharray="X,Y"` |
-| Virtual shot gap | 2px | `stroke-dasharray="X,Y"` |
+| Reference shot dash | 4px | `stroke-dasharray="X,Y"` |
+| Reference shot gap | 2px | `stroke-dasharray="X,Y"` |
 | Label font-size | 10px | CSS `.label { font-size: ... }` |
 | Section-name font-size | 12px | CSS `.section-name { font-size: ... }` |
 
@@ -1165,7 +1165,7 @@ case 'get_survey_geometry': {
     total_length: 100.0,
     station_count: 10,
     gps_origin: [-81.78, 24.55],
-    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], is_virtual: false }],
+    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], is_reference: false }],
     stations: [[-81.78, 24.55], [-81.77, 24.56]],
   };
 }

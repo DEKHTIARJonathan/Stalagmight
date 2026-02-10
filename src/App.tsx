@@ -34,7 +34,7 @@ function editableShotToShotData(shot: ImportedSectionConfig['shots'][0]): ShotDa
     up: shot.up,
     down: shot.down,
     comment: shot.comment,
-    is_virtual: shot.is_virtual ?? false,
+    is_reference: shot.is_reference ?? false,
     marker_index: null,
     temperature: null,
   };

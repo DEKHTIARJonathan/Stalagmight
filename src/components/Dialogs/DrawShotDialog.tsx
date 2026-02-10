@@ -52,7 +52,7 @@ export default function DrawShotDialog() {
   const [length, setLength] = useState((prependMode || appendMode) ? '0' : '');
   const [depthIn, setDepthIn] = useState(sourceGeometry ? String(sourceGeometry.depth_in) : '');
   const [depthOut, setDepthOut] = useState(sourceGeometry ? String(sourceGeometry.depth_out) : '');
-  const [isVirtual, setIsVirtual] = useState(false);
+  const [isReference, setIsReference] = useState(false);
   const [left, setLeft] = useState('');
   const [right, setRight] = useState('');
   const [up, setUp] = useState('');
@@ -140,7 +140,7 @@ export default function DrawShotDialog() {
         up: up ? parseFloat(up) : null,
         down: down ? parseFloat(down) : null,
         comment: null,
-        is_virtual: isVirtual,
+        is_reference: isReference,
         marker_index: null,
         temperature: null,
       };
@@ -198,7 +198,7 @@ export default function DrawShotDialog() {
   // Track if form has been modified (exclude auto-initialized depth/length from making dirty)
   const userModifiedDepth = depthIn !== '' && !depthAutoInitialized.current;
   const userModifiedLength = length !== '' && !lengthAutoInitialized.current;
-  const isDirty = azimuthIn !== '' || userModifiedLength || userModifiedDepth || isVirtual || left !== '' || right !== '' || up !== '' || down !== '';
+  const isDirty = azimuthIn !== '' || userModifiedLength || userModifiedDepth || isReference || left !== '' || right !== '' || up !== '' || down !== '';
 
   if (!fromStation) {
     return null;
@@ -344,10 +344,10 @@ export default function DrawShotDialog() {
           </div>
         </details>
 
-        {/* Virtual checkbox */}
+        {/* Reference checkbox */}
         <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={isVirtual} onChange={(e) => setIsVirtual(e.target.checked)} />
-          <span>Mark as virtual shot</span>
+          <input type="checkbox" checked={isReference} onChange={(e) => setIsReference(e.target.checked)} />
+          <span>Mark as reference shot</span>
           <span className="text-text-secondary text-sm">(temporary connection)</span>
         </label>
 

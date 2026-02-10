@@ -1340,7 +1340,7 @@ fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_exclu
             up: lrud_opt(shot.up),
             down: lrud_opt(shot.down),
             comment: shot.comment.clone(),
-            is_virtual: shot.shot_type == TmlShotType::Virtual,
+            is_reference: shot.shot_type == TmlShotType::Virtual,
             marker_index: None,
             temperature: None,
         });
@@ -2272,7 +2272,7 @@ mod tests {
         }];
 
         let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
-        assert!(shot_data[0].is_virtual);
+        assert!(shot_data[0].is_reference);
     }
 
     #[test]

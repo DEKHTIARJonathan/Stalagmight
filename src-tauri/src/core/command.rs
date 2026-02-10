@@ -80,10 +80,11 @@ pub enum Command {
         section_id: SectionId,
         shot_id: ShotId,
     },
-    SetShotVirtual {
+    #[serde(alias = "set_shot_virtual")]
+    SetShotReference {
         section_id: SectionId,
         shot_id: ShotId,
-        is_virtual: bool,
+        is_reference: bool,
     },
 
     // Station commands
@@ -330,14 +331,14 @@ impl Command {
                 section_id,
                 shot_id,
             } => format!("Delete shot {}:{}", section_id, shot_display_position(*shot_id, *section_id)),
-            Command::SetShotVirtual {
+            Command::SetShotReference {
                 section_id,
                 shot_id,
-                is_virtual,
+                is_reference,
             } => {
                 let pos = shot_display_position(*shot_id, *section_id);
-                if *is_virtual {
-                    format!("Mark shot {section_id}:{pos} as virtual")
+                if *is_reference {
+                    format!("Mark shot {section_id}:{pos} as reference")
                 } else {
                     format!("Mark shot {section_id}:{pos} as real")
                 }
@@ -584,18 +585,18 @@ mod tests {
                 "Delete shot 4:3",
             ),
             (
-                Command::SetShotVirtual {
+                Command::SetShotReference {
                     section_id: 4,
                     shot_id: 2,
-                    is_virtual: true,
+                    is_reference: true,
                 },
-                "Mark shot 4:3 as virtual",
+                "Mark shot 4:3 as reference",
             ),
             (
-                Command::SetShotVirtual {
+                Command::SetShotReference {
                     section_id: 4,
                     shot_id: 2,
-                    is_virtual: false,
+                    is_reference: false,
                 },
                 "Mark shot 4:3 as real",
             ),

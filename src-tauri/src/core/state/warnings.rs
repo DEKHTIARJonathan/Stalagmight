@@ -54,7 +54,7 @@ impl AppState {
                     up: shot.up,
                     down: shot.down,
                     comment: shot.comment.clone(),
-                    is_virtual: shot.is_virtual,
+                    is_reference: shot.is_reference,
                     marker_index: shot.marker_index,
                     temperature: shot.temperature,
                 };

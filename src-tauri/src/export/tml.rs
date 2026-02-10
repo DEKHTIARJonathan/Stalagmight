@@ -464,7 +464,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
             shots.push(ExportShot {
                 id: shot_ariane_id,
                 from_id: prev_id,
-                shot_type: if shot.is_virtual { "VIRTUAL" } else { "REAL" },
+                shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
                 section: section_name.clone(),
                 azimuth: shot.azimuth_in,
                 length: shot.length,
@@ -787,12 +787,12 @@ mod tests {
             color: "#000000".to_string(),
             shots: vec![
                 ShotData {
-                    is_virtual: true,
+                    is_reference: true,
                     length: 5.0,
                     ..Default::default()
                 },
                 ShotData {
-                    is_virtual: false,
+                    is_reference: false,
                     length: 3.0,
                     ..Default::default()
                 },

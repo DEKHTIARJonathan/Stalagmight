@@ -438,7 +438,7 @@ export default function DmpSectionConfigDialog({
       up: shot.up ?? null,
       down: shot.down ?? null,
       comment: shot.comment ?? null,
-      is_virtual: false,
+      is_reference: false,
       marker_index: null,
       temperature: null,
     }));
@@ -685,7 +685,7 @@ export default function DmpSectionConfigDialog({
           up: s.up,
           down: s.down,
           comment: s.comment,
-          is_virtual: s.is_virtual ?? false,
+          is_reference: s.is_reference ?? false,
           marker_index: null,
           temperature: null,
         })),

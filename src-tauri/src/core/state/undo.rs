@@ -95,7 +95,7 @@ impl AppState {
                             up: updates.up.as_ref().map(|_| shot.up),
                             down: updates.down.as_ref().map(|_| shot.down),
                             comment: updates.comment.as_ref().map(|_| shot.comment.clone()),
-                            is_virtual: updates.is_virtual.map(|_| shot.is_virtual),
+                            is_reference: updates.is_reference.map(|_| shot.is_reference),
                             marker_index: updates.marker_index.as_ref().map(|_| shot.marker_index),
                             temperature: updates.temperature.as_ref().map(|_| shot.temperature),
                         };
@@ -146,15 +146,15 @@ impl AppState {
                 }
             }
 
-            // For virtual status toggle, inverse is toggling back
-            Command::SetShotVirtual {
+            // For reference status toggle, inverse is toggling back
+            Command::SetShotReference {
                 section_id,
                 shot_id,
-                is_virtual,
-            } => UndoData::InverseCommand(Command::SetShotVirtual {
+                is_reference,
+            } => UndoData::InverseCommand(Command::SetShotReference {
                 section_id: *section_id,
                 shot_id: *shot_id,
-                is_virtual: !*is_virtual,
+                is_reference: !*is_reference,
             }),
 
             // For merge, store the info to unmerge + section offsets to restore positions
@@ -1100,11 +1100,11 @@ impl AppState {
                 section_id,
                 shot_id,
             } => self.delete_shot(*section_id, *shot_id),
-            Command::SetShotVirtual {
+            Command::SetShotReference {
                 section_id,
                 shot_id,
-                is_virtual,
-            } => self.set_shot_virtual(*section_id, *shot_id, *is_virtual),
+                is_reference,
+            } => self.set_shot_reference(*section_id, *shot_id, *is_reference),
             Command::MergeStations {
                 station_a,
                 station_b,

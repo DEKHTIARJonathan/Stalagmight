@@ -766,7 +766,7 @@ fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -
                 length,
                 depth_in: depths[i],
                 depth_out: depths[i + 1],
-                is_virtual: true,
+                is_reference: true,
                 ..Default::default()
             }
         })
@@ -1176,7 +1176,7 @@ mod tests {
         let c = &configs[0];
         assert_eq!(c.name.as_deref(), Some("Surface Path"));
         assert_eq!(c.shots.len(), 2);
-        assert!(c.shots[0].is_virtual);
+        assert!(c.shots[0].is_reference);
         assert!(c.shots[0].length > 0.0);
         assert!(c.shots[0].azimuth_in >= 0.0 && c.shots[0].azimuth_in < 360.0);
     }
@@ -1237,7 +1237,7 @@ mod tests {
         );
         assert!((shot.depth_in).abs() < 1e-9);
         assert!((shot.depth_out).abs() < 1e-9);
-        assert!(shot.is_virtual);
+        assert!(shot.is_reference);
     }
 
     #[test]

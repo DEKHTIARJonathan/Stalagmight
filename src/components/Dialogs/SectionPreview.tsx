@@ -62,8 +62,8 @@ function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: number; 
   const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
 
   for (const shot of shots) {
-    // Skip virtual shots for position calculation
-    if (shot.is_virtual) continue;
+    // Skip reference shots for position calculation
+    if (shot.is_reference) continue;
 
     const prev = stations[stations.length - 1];
     if (!prev) continue;
@@ -147,8 +147,8 @@ export default function SectionPreview({
   // Compute stations for the target section (for merge preview)
   const targetStations = useMemo(() => {
     if (!mergePreview) return [];
-    const nonVirtualShots = mergePreview.targetSection.shots.filter((s) => !s.is_virtual);
-    return computeStationsFromShots(nonVirtualShots);
+    const nonReferenceShots = mergePreview.targetSection.shots.filter((s) => !s.is_reference);
+    return computeStationsFromShots(nonReferenceShots);
   }, [mergePreview]);
 
   // Initialize MapLibre instance - container is always mounted
@@ -429,10 +429,10 @@ export default function SectionPreview({
 
     if (mergePreview && targetStations.length > 0) {
       const targetSection = mergePreview.targetSection;
-      const nonVirtualShots = targetSection.shots.filter((s) => !s.is_virtual);
+      const nonReferenceShots = targetSection.shots.filter((s) => !s.is_reference);
 
       // Build target section shots
-      for (let i = 0; i < nonVirtualShots.length; i++) {
+      for (let i = 0; i < nonReferenceShots.length; i++) {
         const from = targetStations[i];
         const to = targetStations[i + 1];
         if (!from || !to) continue;

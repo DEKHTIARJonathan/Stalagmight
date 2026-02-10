@@ -562,7 +562,7 @@ impl DmpShot {
             up: Some(self.up),
             down: Some(self.down),
             comment: self.comment.clone(),
-            is_virtual: false,
+            is_reference: false,
             marker_index: Some(u32::from(self.marker_index)),
             temperature: Some(self.temperature),
         }
@@ -1312,7 +1312,7 @@ mod tests {
         assert_eq!(shot_data.temperature, Some(18.0));
         assert_eq!(shot_data.marker_index, Some(7));
         assert_eq!(shot_data.comment.as_deref(), Some("test"));
-        assert!(!shot_data.is_virtual);
+        assert!(!shot_data.is_reference);
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 fn compress_json(json: &str) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -365,6 +365,28 @@ impl Database {
         Ok(())
     }
 
+    /// Rename `is_virtual` column to `is_reference` in shots table, and
+    /// rename the `showVirtualShots` display-settings key to `showReferenceShots`
+    /// (schema v3→v4).
+    fn migrate_is_virtual_to_is_reference(conn: &Connection) -> Result<()> {
+        tracing::info!("Renaming is_virtual → is_reference in shots table (v3→v4)");
+        // Only rename the column if it still has the old name (earlier migrations
+        // may have already created the table with `is_reference` directly).
+        let needs_rename = conn
+            .prepare("SELECT is_virtual FROM shots LIMIT 0")
+            .is_ok();
+        if needs_rename {
+            conn.execute_batch(
+                "ALTER TABLE shots RENAME COLUMN is_virtual TO is_reference;"
+            )?;
+        }
+        // Always update display_settings key (idempotent UPDATE).
+        conn.execute_batch(
+            "UPDATE display_settings SET key = 'showReferenceShots' WHERE key = 'showVirtualShots';"
+        )?;
+        Ok(())
+    }
+
     /// Migrate undo/redo tables from TEXT to BLOB columns (schema v2→v3).
     /// Existing TEXT data is CAST to BLOB; on read, `decompress_json` detects
     /// whether content is gzip-compressed or plain UTF-8, so old entries remain
@@ -613,7 +635,7 @@ impl Database {
                 up_distance REAL,
                 down_distance REAL,
                 comment TEXT,
-                is_virtual INTEGER NOT NULL DEFAULT 0,
+                is_reference INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
                 UNIQUE(section_id, sequence_order),
@@ -698,19 +720,31 @@ impl Database {
         )?;
 
         if has_shots {
+            // The old table may have `is_virtual` (pre-v4) or `is_reference` (v4+).
+            // Use COALESCE to handle either column name gracefully.
+            let old_has_is_reference = tx
+                .prepare("SELECT is_reference FROM shots_old LIMIT 0")
+                .is_ok();
+            let virtual_col = if old_has_is_reference {
+                "is_reference"
+            } else {
+                "is_virtual"
+            };
             tx.execute(
-                "INSERT INTO shots (
-                    id, section_id, sequence_order,
-                    azimuth_in, azimuth_out, length, depth_in, depth_out,
-                    pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                    comment, is_virtual, marker_index, temperature
-                )
-                SELECT
-                    id, section_id, sequence_order,
-                    azimuth_in, azimuth_out, length, depth_in, depth_out,
-                    pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                    comment, is_virtual, marker_index, temperature
-                FROM shots_old",
+                &format!(
+                    "INSERT INTO shots (
+                        id, section_id, sequence_order,
+                        azimuth_in, azimuth_out, length, depth_in, depth_out,
+                        pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
+                        comment, is_reference, marker_index, temperature
+                    )
+                    SELECT
+                        id, section_id, sequence_order,
+                        azimuth_in, azimuth_out, length, depth_in, depth_out,
+                        pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
+                        comment, {virtual_col}, marker_index, temperature
+                    FROM shots_old"
+                ),
                 [],
             )?;
         }
@@ -843,6 +877,9 @@ impl Database {
             if current < 3 {
                 self.migrate_undo_redo_to_blob()?;
             }
+            if current < 4 {
+                Self::migrate_is_virtual_to_is_reference(&self.conn)?;
+            }
             self.set_user_version(SCHEMA_VERSION)?;
             // Keep project-level schema_version in sync with PRAGMA user_version.
             let _ = self.conn.execute(
@@ -936,7 +973,7 @@ impl Database {
                 up_distance REAL,
                 down_distance REAL,
                 comment TEXT,
-                is_virtual INTEGER NOT NULL DEFAULT 0,
+                is_reference INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
                 UNIQUE(section_id, sequence_order),
@@ -1136,7 +1173,7 @@ impl Database {
                         section_id, sequence_order,
                         azimuth_in, azimuth_out, length, depth_in, depth_out,
                         pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                        comment, is_virtual, marker_index, temperature
+                        comment, is_reference, marker_index, temperature
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                     params![
                         section.id,
@@ -1153,7 +1190,7 @@ impl Database {
                         shot.up,
                         shot.down,
                         shot.comment,
-                        i32::from(shot.is_virtual),
+                        i32::from(shot.is_reference),
                         shot.marker_index,
                         shot.temperature
                     ],
@@ -1438,7 +1475,7 @@ impl Database {
                 let mut shot_stmt = self.conn.prepare(
                     r"SELECT sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                              comment, is_virtual, marker_index, temperature
+                              comment, is_reference, marker_index, temperature
                        FROM shots WHERE section_id = ?1 ORDER BY sequence_order",
                 )?;
 
@@ -1460,7 +1497,7 @@ impl Database {
                         up: row.get(10)?,
                         down: row.get(11)?,
                         comment: row.get(12)?,
-                        is_virtual: row.get::<_, i32>(13)? != 0,
+                        is_reference: row.get::<_, i32>(13)? != 0,
                         marker_index: row.get(14)?,
                         temperature: row.get(15)?,
                     })

@@ -181,7 +181,7 @@ interface UIStore {
   showSectionNames: boolean;
   showStationLabels: boolean;
   showShotData: boolean;
-  showVirtualShots: boolean;
+  showReferenceShots: boolean;
   showZeroDatum: boolean;
   showGrid: boolean;
   showScaleBar: boolean;
@@ -292,7 +292,7 @@ export type DisplayToggleKey =
   | 'showSectionNames'
   | 'showStationLabels'
   | 'showShotData'
-  | 'showVirtualShots'
+  | 'showReferenceShots'
   | 'showZeroDatum'
   | 'showGrid'
   | 'showScaleBar'
@@ -500,7 +500,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
   showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
   showShotData: DISPLAY_DEFAULTS.showShotData,
-  showVirtualShots: DISPLAY_DEFAULTS.showVirtualShots,
+  showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
   showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
   showGrid: DISPLAY_DEFAULTS.showGrid,
   showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
@@ -577,7 +577,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showSectionNames: DISPLAY_DEFAULTS.showSectionNames,
       showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
       showShotData: DISPLAY_DEFAULTS.showShotData,
-      showVirtualShots: DISPLAY_DEFAULTS.showVirtualShots,
+      showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
       showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
       showGrid: DISPLAY_DEFAULTS.showGrid,
       showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
@@ -599,7 +599,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showSectionNames: settings.showSectionNames ?? state.showSectionNames,
       showStationLabels: settings.showStationLabels ?? state.showStationLabels,
       showShotData: settings.showShotData ?? state.showShotData,
-      showVirtualShots: settings.showVirtualShots ?? state.showVirtualShots,
+      showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
       showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,
       showGrid: settings.showGrid ?? state.showGrid,
       showScaleBar: settings.showScaleBar ?? state.showScaleBar,

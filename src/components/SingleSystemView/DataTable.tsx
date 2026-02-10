@@ -704,8 +704,8 @@ export default function DataTable({ sections }: DataTableProps) {
       inputStep: '0.1',
     },
     {
-      key: 'is_virtual',
-      header: t('dataTable.columns.virtualShort'),
+      key: 'is_reference',
+      header: t('dataTable.columns.referenceShort'),
       width: '40px',
       align: 'center' as const,
       render: (shot: Shot) => (
@@ -714,12 +714,12 @@ export default function DataTable({ sections }: DataTableProps) {
           onClick={(e) => {
             e.stopPropagation();
             if (selectedSectionId !== null) {
-              updateShot(selectedSectionId, shot.id, { is_virtual: !shot.is_virtual });
+              updateShot(selectedSectionId, shot.id, { is_reference: !shot.is_reference });
             }
           }}
-          title={shot.is_virtual ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markVirtual')}
+          title={shot.is_reference ? t('detailPanel.shot.markReal') : t('detailPanel.shot.markReference')}
         >
-          {shot.is_virtual ? <DotIcon size={20} /> : <span className="opacity-0 hover:opacity-30"><DotIcon size={20} /></span>}
+          {shot.is_reference ? <DotIcon size={20} /> : <span className="opacity-0 hover:opacity-30"><DotIcon size={20} /></span>}
         </span>
       ),
     },

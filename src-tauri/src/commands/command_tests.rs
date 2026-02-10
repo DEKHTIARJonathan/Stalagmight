@@ -1264,34 +1264,34 @@ fn test_delete_last_shot_and_section_removes_section() {
 }
 
 #[test]
-fn test_set_shot_virtual_fails_missing() {
+fn test_set_shot_reference_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::set_shot_virtual(state(&app), 0, 999, true);
+    let result = shot::set_shot_reference(state(&app), 0, 999, true);
     assert_failure_contains(&result, "not found");
 }
 
 #[test]
-fn test_set_shot_virtual_sets_true() {
+fn test_set_shot_reference_sets_true() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = shot::set_shot_virtual(state(&app), id, 0, true);
+    let result = shot::set_shot_reference(state(&app), id, 0, true);
     assert_success(&result);
     let section = section::get_section(state(&app), id).unwrap();
-    assert!(section.shots[0].is_virtual);
+    assert!(section.shots[0].is_reference);
 }
 
 #[test]
-fn test_set_shot_virtual_sets_false() {
+fn test_set_shot_reference_sets_false() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = shot::set_shot_virtual(state(&app), id, 0, true);
-    let result = shot::set_shot_virtual(state(&app), id, 0, false);
+    let _ = shot::set_shot_reference(state(&app), id, 0, true);
+    let result = shot::set_shot_reference(state(&app), id, 0, false);
     assert_success(&result);
     let section = section::get_section(state(&app), id).unwrap();
-    assert!(!section.shots[0].is_virtual);
+    assert!(!section.shots[0].is_reference);
 }
 
 // === Station commands ===
@@ -1714,7 +1714,7 @@ fn test_export_image_success_creates_file() {
 }
 
 #[test]
-fn test_export_roundtrip_includes_virtual_and_comment() {
+fn test_export_roundtrip_includes_reference_and_comment() {
     let app = app_with_state();
     create_project(&app);
     let shot = ShotData {
@@ -1731,7 +1731,7 @@ fn test_export_roundtrip_includes_virtual_and_comment() {
         ..Default::default()
     };
     let section_id = create_section_with_shots(&app, vec![shot]);
-    assert_success(&shot::set_shot_virtual(state(&app), section_id, 0, true));
+    assert_success(&shot::set_shot_reference(state(&app), section_id, 0, true));
 
     let dir = TempDir::new().unwrap();
     let csv_path = dir.path().join("export.csv");
@@ -1748,7 +1748,7 @@ fn test_export_roundtrip_includes_virtual_and_comment() {
     let json_contents = fs::read_to_string(&json_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_contents).unwrap();
     let shot_json = &parsed["sections"][0]["shots"][0];
-    assert_eq!(shot_json["is_virtual"], true);
+    assert_eq!(shot_json["is_reference"], true);
     assert_eq!(shot_json["comment"], "note,with comma");
     assert!(shot_json["lrud"].is_array());
 }

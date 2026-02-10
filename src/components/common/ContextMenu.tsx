@@ -22,7 +22,7 @@ export default function ContextMenu() {
     setMergeStationA: s.setMergeStationA,
     triggerZoomToSection: s.triggerZoomToSection,
   })));
-  const { project, setShotVirtual } = useProjectStore();
+  const { project, setShotReference } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +57,7 @@ export default function ContextMenu() {
     };
   }, [closeDialog]);
 
-  // Get shot data for toggle virtual
+  // Get shot data for toggle reference
   const shot = target?.type === 'shot'
     ? project?.sections
         .find((s) => s.id === target.sectionId)
@@ -202,9 +202,9 @@ export default function ContextMenu() {
           },
         },
         {
-          label: shot?.is_virtual ? 'Mark as Real' : 'Mark as Virtual',
+          label: shot?.is_reference ? 'Mark as Real' : 'Mark as Reference',
           action: async () => {
-            await setShotVirtual(target.sectionId, target.shotId, !shot?.is_virtual);
+            await setShotReference(target.sectionId, target.shotId, !shot?.is_reference);
             closeDialog();
           },
         },

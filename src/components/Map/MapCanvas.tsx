@@ -7,7 +7,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import {
-  getEffectiveShowVirtualShots,
+  getEffectiveShowReferenceShots,
   getEffectiveShowShotData,
   getEffectiveShowStationComments,
   getEffectiveShowShotComments,
@@ -256,7 +256,7 @@ export default function MapCanvas() {
     showShotComments,
     showStations,
     showShots,
-    showVirtualShots,
+    showReferenceShots,
     showDepthGradient,
     showDevStats,
     selection,
@@ -1565,11 +1565,11 @@ export default function MapCanvas() {
     surveyLayerRef.current.setShowShots(showShots);
   }, [showShots, mapLoaded]);
 
-  // Sync virtual shots visibility with SurveyLayer (gated by showShots)
+  // Sync reference shots visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
     if (!surveyLayerRef.current) return;
-    surveyLayerRef.current.setShowVirtualShots(getEffectiveShowVirtualShots(showShots, showVirtualShots));
-  }, [showVirtualShots, showShots, mapLoaded]);
+    surveyLayerRef.current.setShowReferenceShots(getEffectiveShowReferenceShots(showShots, showReferenceShots));
+  }, [showReferenceShots, showShots, mapLoaded]);
 
   // Sync anchored section IDs with SurveyLayer for fading
   useEffect(() => {
@@ -1614,21 +1614,21 @@ export default function MapCanvas() {
     }
   }, [showShots, clearSelectionByType, setHoveredShot]);
 
-  // Clear virtual shot selection when virtual shots visibility changes to OFF
+  // Clear reference shot selection when reference shots visibility changes to OFF
   // Uses composite identity (file_path or created_at) since Project type has no id field
   const projectIdentity = project?.file_path ?? project?.created_at;
   useEffect(() => {
-    if (!showVirtualShots && project?.sections) {
+    if (!showReferenceShots && project?.sections) {
       filterSelection((s) => {
         if (s.type !== 'shot') return true;
         const section = project.sections.find((sec) => sec.id === s.sectionId);
         const shot = section?.shots.find((sh) => sh.id === s.shotId);
-        return !shot?.is_virtual;
+        return !shot?.is_reference;
       });
       surveyLayerRef.current?.clearShotHover();
       setHoveredShot(null);
     }
-  }, [showVirtualShots, projectIdentity, filterSelection, setHoveredShot]);
+  }, [showReferenceShots, projectIdentity, filterSelection, setHoveredShot]);
 
   // Handle scale bar toggle
   useEffect(() => {

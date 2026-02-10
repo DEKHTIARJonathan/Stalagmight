@@ -957,7 +957,7 @@ fn test_delete_shot_rewires_merges() {
 }
 
 #[test]
-fn test_set_shot_virtual() {
+fn test_set_shot_reference() {
     let state = AppState::new().unwrap();
 
     state.execute(Command::CreateProject {
@@ -978,19 +978,19 @@ fn test_set_shot_virtual() {
     let project = state.get_project_state().unwrap();
     let shot_id = project.sections[0].shots[0].id;
 
-    // Initially not virtual
-    assert!(!project.sections[0].shots[0].is_virtual);
+    // Initially not reference
+    assert!(!project.sections[0].shots[0].is_reference);
 
-    let result = state.execute(Command::SetShotVirtual {
+    let result = state.execute(Command::SetShotReference {
         section_id,
         shot_id,
-        is_virtual: true,
+        is_reference: true,
     });
 
     assert!(result.success);
 
     let project = state.get_project_state().unwrap();
-    assert!(project.sections[0].shots[0].is_virtual);
+    assert!(project.sections[0].shots[0].is_reference);
 }
 
 // === Undo/Redo Tests ===

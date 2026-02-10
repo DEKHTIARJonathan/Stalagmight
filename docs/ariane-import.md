@@ -32,7 +32,7 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Inclination
 - LRUD (left, right, up, down)
 - Comment
-- Shot type (Real, Virtual, Start, Closure)
+- Shot type (Real, Virtual, Start, Closure) — Ariane's "Virtual" type maps to internal `is_reference`
 - Excluded flag
 
 ### Loop closures
@@ -59,7 +59,7 @@ When excluded shots are filtered:
 | Type | Handling |
 |------|----------|
 | **Real** | Imported as regular survey shots |
-| **Virtual** | Imported as virtual shots (dashed display, hidden by "Virtual shots" toggle) |
+| **Virtual** | Imported as reference shots (`is_reference = true`; dashed display, hidden by "Reference shots" toggle). The TML type string remains "VIRTUAL" for Ariane compatibility. |
 | **Start** | Marks the first station; not imported as a shot |
 | **Closure** | Not imported as a shot — used to create loop closures between sections |
 

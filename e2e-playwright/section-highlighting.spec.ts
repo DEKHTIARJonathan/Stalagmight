@@ -12,7 +12,7 @@ import { seedProjectWithSections, type SectionSeed } from './helpers/app';
  * - Priority conflicts (individual hover vs section selection)
  * - Unhover behavior
  * - Keyboard navigation
- * - Edge cases (empty sections, virtual shots)
+ * - Edge cases (empty sections, reference shots)
  */
 
 /**
@@ -77,7 +77,7 @@ const sectionSeeds: SectionSeed[] = [
     shots: [
       { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 },
       { azimuth_in: 90, azimuth_out: 270, length: 12, depth_in: -3, depth_out: -6 },
-      { azimuth_in: 120, azimuth_out: 300, length: 6, depth_in: -6, depth_out: -4, is_virtual: true },
+      { azimuth_in: 120, azimuth_out: 300, length: 6, depth_in: -6, depth_out: -4, is_reference: true },
     ],
   },
   {
@@ -642,34 +642,34 @@ test.describe('Section Highlighting', () => {
       expect(featureCount).toBe(0);
     });
 
-    test('virtual shots are included in section highlighting', async ({ page }) => {
-      await createProject(page, 'Virtual Shot Highlight Test');
+    test('reference shots are included in section highlighting', async ({ page }) => {
+      await createProject(page, 'Reference Shot Highlight Test');
 
-      const virtualSectionId = await page.evaluate(() => {
+      const referenceSectionId = await page.evaluate(() => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
             projectStore: { getState: () => {
-              project: { sections: Array<{ id: number; shots: Array<{ is_virtual?: boolean }> }> } | null
+              project: { sections: Array<{ id: number; shots: Array<{ is_reference?: boolean }> }> } | null
             } };
           };
         }).__E2E_TEST__;
 
         const sections = stores?.projectStore.getState().project?.sections ?? [];
-        const match = sections.find((section) => section.shots?.some((shot) => shot.is_virtual));
+        const match = sections.find((section) => section.shots?.some((shot) => shot.is_reference));
         return match?.id ?? null;
       });
-      expect(virtualSectionId).not.toBeNull();
-      const resolvedVirtualSectionId = virtualSectionId as number;
+      expect(referenceSectionId).not.toBeNull();
+      const resolvedReferenceSectionId = referenceSectionId as number;
 
-      // Verify the section has a virtual shot in the mock data
-      const hasVirtualShot = await page.evaluate((secId) => {
+      // Verify the section has a reference shot in the mock data
+      const hasReferenceShot = await page.evaluate((secId) => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
             projectStore: { getState: () => {
               project: {
                 sections: Array<{
                   id: number;
-                  shots: Array<{ is_virtual?: boolean }>
+                  shots: Array<{ is_reference?: boolean }>
                 }>
               } | null
             } };
@@ -679,44 +679,44 @@ test.describe('Section Highlighting', () => {
         if (!stores) return false;
         const project = stores.projectStore.getState().project;
         const section = project?.sections.find(s => s.id === secId);
-        return section?.shots.some(s => s.is_virtual) ?? false;
-      }, resolvedVirtualSectionId);
+        return section?.shots.some(s => s.is_reference) ?? false;
+      }, resolvedReferenceSectionId);
 
-      expect(hasVirtualShot).toBe(true);
+      expect(hasReferenceShot).toBe(true);
 
       // Hover the section row
-      const sectionRow = page.locator(`[data-testid="section-row-${resolvedVirtualSectionId}"]`);
+      const sectionRow = page.locator(`[data-testid="section-row-${resolvedReferenceSectionId}"]`);
       await sectionRow.hover();
 
       // Verify hover state is set
-      const hoveredId = await pollHoveredSectionId(page, (id) => id === resolvedVirtualSectionId);
-      expect(hoveredId).toBe(resolvedVirtualSectionId);
+      const hoveredId = await pollHoveredSectionId(page, (id) => id === resolvedReferenceSectionId);
+      expect(hoveredId).toBe(resolvedReferenceSectionId);
 
       // Verify the map state includes the section for highlighting
-      // (SurveyLayer.updateVisualState applies to all shots in section, including virtual)
-      const hasMapHover = await hasSectionMapHighlight(page, resolvedVirtualSectionId, 'hover');
+      // (SurveyLayer.updateVisualState applies to all shots in section, including reference)
+      const hasMapHover = await hasSectionMapHighlight(page, resolvedReferenceSectionId, 'hover');
       expect(hasMapHover).toBe(true);
 
-      // Query shot features - should include virtual shot
+      // Query shot features - should include reference shot
       const shotFeatures = await page.evaluate((secId) => {
         const map = (window as unknown as {
           __stalagmight_map__?: {
             queryRenderedFeatures: (options?: { layers?: string[] }) => Array<{
-              properties: { sectionId: number; isVirtual?: boolean };
+              properties: { sectionId: number; isReference?: boolean };
             }>;
           };
         }).__stalagmight_map__;
 
-        if (!map) return { total: 0, virtual: 0 };
+        if (!map) return { total: 0, reference: 0 };
         const features = map.queryRenderedFeatures({ layers: ['survey-shots'] });
         const sectionFeatures = features.filter(f => f.properties.sectionId === secId);
-        const virtualFeatures = sectionFeatures.filter(f => f.properties.isVirtual);
-        return { total: sectionFeatures.length, virtual: virtualFeatures.length };
-      }, resolvedVirtualSectionId);
+        const referenceFeatures = sectionFeatures.filter(f => f.properties.isReference);
+        return { total: sectionFeatures.length, reference: referenceFeatures.length };
+      }, resolvedReferenceSectionId);
 
       expect(shotFeatures.total).toBeGreaterThan(0);
-      // Virtual shot should be rendered (with is_virtual: true in mock data)
-      expect(shotFeatures.virtual).toBeGreaterThanOrEqual(0); // May be 0 if not rendered yet
+      // Reference shot should be rendered (with is_reference: true in mock data)
+      expect(shotFeatures.reference).toBeGreaterThanOrEqual(0); // May be 0 if not rendered yet
     });
   });
 

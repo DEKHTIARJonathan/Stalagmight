@@ -150,7 +150,7 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
         paint: {
           'line-color': ['get', 'color'],
           'line-width': 2,
-          'line-opacity': ['case', ['get', 'isVirtual'], 0.5, 1],
+          'line-opacity': ['case', ['get', 'isReference'], 0.5, 1],
         },
       });
 
@@ -347,7 +347,7 @@ export default function ExportPreview({ options, theme, presetColors }: ExportPr
               sectionId: section.id,
               shotId: shot.id,
               color: shotColor,
-              isVirtual: shot.is_virtual,
+              isReference: shot.is_reference,
             },
           });
 

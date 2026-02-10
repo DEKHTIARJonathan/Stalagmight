@@ -354,10 +354,10 @@ fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Resul
             let to = &section_stations[i + 1];
 
             let shot = section.shots.get(i);
-            let is_virtual = shot.is_some_and(|s| s.is_virtual);
+            let is_reference = shot.is_some_and(|s| s.is_reference);
 
-            // Virtual shots: 4px dash, 2px gap (scaled to viewBox units)
-            let stroke_style = if is_virtual {
+            // Reference shots: 4px dash, 2px gap (scaled to viewBox units)
+            let stroke_style = if is_reference {
                 format!(
                     "stroke-dasharray=\"{},{}\" opacity=\"0.5\"",
                     px(4.0),
@@ -1464,9 +1464,9 @@ mod tests {
     }
 
     #[test]
-    fn test_virtual_shot_dasharray_scaling() {
-        // Create project with virtual shot
-        let mut project = Project::new("VirtualTest".to_string(), None);
+    fn test_reference_shot_dasharray_scaling() {
+        // Create project with reference shot
+        let mut project = Project::new("ReferenceTest".to_string(), None);
         project.add_section(SectionData {
             name: Some("Main".to_string()),
             surveyor: None,
@@ -1480,15 +1480,15 @@ mod tests {
                 length: 10.0,
                 depth_in: 5.0,
                 depth_out: 5.0,
-                is_virtual: true, // Mark as virtual
+                is_reference: true, // Mark as reference
                 ..Default::default()
             }],
         });
 
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
 
-        // Virtual shots should have stroke-dasharray with scaled values
-        assert!(svg.contains("stroke-dasharray=\""), "Virtual shot should have dasharray");
+        // Reference shots should have stroke-dasharray with scaled values
+        assert!(svg.contains("stroke-dasharray=\""), "Reference shot should have dasharray");
         // The dasharray values should be small (scaled from 4,2 pixels)
         if let Some(dash) = extract_attr_value(&svg, "stroke-dasharray=\"") {
             assert!(dash > 0.0 && dash < 1.0, "Dash value should be scaled: {dash}");
@@ -1584,7 +1584,7 @@ mod tests {
                 length: extent_meters,
                 depth_in: 0.0,
                 depth_out: 0.0,
-                is_virtual: true, // Test virtual shot dasharray
+                is_reference: true, // Test reference shot dasharray
                 ..Default::default()
             }],
         });
@@ -1680,27 +1680,27 @@ mod tests {
     }
 
     #[test]
-    fn test_scaling_regression_virtual_shot_dasharray() {
+    fn test_scaling_regression_reference_shot_dasharray() {
         let project = create_scaling_test_project(100.0);
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
 
         let scale = calculate_scale(100.0);
         let tolerance = 0.1;
 
-        // Virtual shot dasharray should have 4px dash, 2px gap
+        // Reference shot dasharray should have 4px dash, 2px gap
         let (dash, gap) = parse_dasharray(&svg)
-            .expect("Could not find/parse stroke-dasharray in SVG (is virtual shot present?)");
+            .expect("Could not find/parse stroke-dasharray in SVG (is reference shot present?)");
 
         let pixel_dash = dash * scale;
         assert!(
             (pixel_dash - 4.0).abs() < tolerance,
-            "Virtual shot dash should be 4px (±{tolerance}px), got {pixel_dash}px"
+            "Reference shot dash should be 4px (±{tolerance}px), got {pixel_dash}px"
         );
 
         let pixel_gap = gap * scale;
         assert!(
             (pixel_gap - 2.0).abs() < tolerance,
-            "Virtual shot gap should be 2px (±{tolerance}px), got {pixel_gap}px"
+            "Reference shot gap should be 2px (±{tolerance}px), got {pixel_gap}px"
         );
     }
 
@@ -1972,7 +1972,7 @@ mod tests {
         assert!(svg.contains("<svg"));
         // Should have rendered all 50 sections
         let section_count = svg.matches("class=\"shot\"").count()
-            + svg.matches("stroke-dasharray").count(); // virtual shots
+            + svg.matches("stroke-dasharray").count(); // reference shots
         assert!(section_count >= 50, "should have at least 50 shot lines, got {section_count}");
     }
 

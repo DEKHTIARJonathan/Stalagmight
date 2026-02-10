@@ -78,7 +78,7 @@ export default class SurveyLayer {
   private stationsHitboxLayerId = 'survey-stations-hitbox';
   private shotsHitboxLayerId = 'survey-shots-hitbox';
 
-  // Base zoom-density filters for label layers (set at init, restored when clearing virtual filter)
+  // Base zoom-density filters for label layers (set at init, restored when clearing reference filter)
   private shotLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
   private stationLabelsBaseFilter: maplibregl.FilterSpecification | null = null;
   private ghostStationsHitboxLayerId = 'survey-ghost-stations-hitbox';
@@ -106,8 +106,8 @@ export default class SurveyLayer {
 
   // Hidden comment during move_comment pickup (visually hides without backend mutation)
   private hiddenComment: { type: 'station' | 'shot'; sectionId: number; id: number } | null = null;
-  // Cached virtual-shots visibility for recomputing comment filters
-  private showVirtualShotsCached = true;
+  // Cached reference-shots visibility for recomputing comment filters
+  private showReferenceShotsCached = true;
 
   // Comment tool override: when comment/move_comment tool is active, force both
   // comment layers visible with text-allow-overlap so comments win over other labels.
@@ -568,7 +568,7 @@ export default class SurveyLayer {
         'line-opacity': [
           'case',
           ['boolean', ['feature-state', 'anchored'], false], 0.25,
-          ['get', 'isVirtual'], 0.5,
+          ['get', 'isReference'], 0.5,
           1,
         ],
       },
@@ -1848,14 +1848,14 @@ export default class SurveyLayer {
     this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
   }
 
-  // Control virtual shots visibility via filter (while keeping regular shots visible)
-  // Also hides virtual-only stations, their labels, virtual shot labels, and
-  // section names whose stations are all virtual.
-  setShowVirtualShots(visible: boolean): void {
+  // Control reference shots visibility via filter (while keeping regular shots visible)
+  // Also hides reference-only stations, their labels, reference shot labels, and
+  // section names whose stations are all reference.
+  setShowReferenceShots(visible: boolean): void {
     if (!this.map) return;
-    this.showVirtualShotsCached = visible;
-    const notVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'isVirtual'], true];
-    const notAllVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
+    this.showReferenceShotsCached = visible;
+    const notReference: maplibregl.FilterSpecification = ['!=', ['get', 'isReference'], true];
+    const notAllReference: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsReference'], true];
     if (visible) {
       // Restore original filters (label layers have zoom-based density filters)
       this.map.setFilter(this.shotsLayerId, null);
@@ -1865,31 +1865,31 @@ export default class SurveyLayer {
       this.map.setFilter(this.stationLabelsLayerId, this.stationLabelsBaseFilter);
       this.map.setFilter(this.labelsLayerId, null);
     } else {
-      // Hide virtual shots and their labels
-      this.map.setFilter(this.shotsLayerId, notVirtual);
+      // Hide reference shots and their labels
+      this.map.setFilter(this.shotsLayerId, notReference);
       this.map.setFilter(this.shotLabelsLayerId,
         this.shotLabelsBaseFilter
-          ? ['all', this.shotLabelsBaseFilter, notVirtual] as maplibregl.FilterSpecification
-          : notVirtual
+          ? ['all', this.shotLabelsBaseFilter, notReference] as maplibregl.FilterSpecification
+          : notReference
       );
-      // Hide stations that only connect to virtual shots (and their labels)
-      this.map.setFilter(this.stationsLayerId, notAllVirtual);
-      this.map.setFilter(this.stationsHitboxLayerId, notAllVirtual);
+      // Hide stations that only connect to reference shots (and their labels)
+      this.map.setFilter(this.stationsLayerId, notAllReference);
+      this.map.setFilter(this.stationsHitboxLayerId, notAllReference);
       this.map.setFilter(this.stationLabelsLayerId,
         this.stationLabelsBaseFilter
-          ? ['all', this.stationLabelsBaseFilter, notAllVirtual] as maplibregl.FilterSpecification
-          : notAllVirtual
+          ? ['all', this.stationLabelsBaseFilter, notAllReference] as maplibregl.FilterSpecification
+          : notAllReference
       );
-      // Hide section names when all stations in the section are virtual
-      this.map.setFilter(this.labelsLayerId, ['!=', ['get', 'allStationsVirtual'], true]);
+      // Hide section names when all stations in the section are reference
+      this.map.setFilter(this.labelsLayerId, ['!=', ['get', 'allStationsReference'], true]);
     }
-    // Recompute comment filters (respects both virtual-shots and hidden-comment)
+    // Recompute comment filters (respects both reference-shots and hidden-comment)
     this._applyCommentFilters();
   }
 
   /**
    * Hide/show the source comment marker during move_comment pickup.
-   * Composes with the virtual-shots filter so both constraints are respected.
+   * Composes with the reference-shots filter so both constraints are respected.
    */
   setHiddenComment(hidden: { type: 'station' | 'shot'; sectionId: number; id: number } | null): void {
     this.hiddenComment = hidden;
@@ -1897,18 +1897,18 @@ export default class SurveyLayer {
   }
 
   /**
-   * Recompute comment layer filters combining base filter, virtual-shot filter,
+   * Recompute comment layer filters combining base filter, reference-shot filter,
    * and hidden-comment filter into one expression.
    */
   private _applyCommentFilters(): void {
     if (!this.map) return;
     const commentBase: maplibregl.FilterSpecification = ['!=', ['get', 'comment'], null];
-    const notVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'isVirtual'], true];
-    const notAllVirtual: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsVirtual'], true];
+    const notReference: maplibregl.FilterSpecification = ['!=', ['get', 'isReference'], true];
+    const notAllReference: maplibregl.FilterSpecification = ['!=', ['get', 'allShotsReference'], true];
 
     // Station comments filter
     const stationParts: maplibregl.FilterSpecification[] = [commentBase];
-    if (!this.showVirtualShotsCached) stationParts.push(notAllVirtual);
+    if (!this.showReferenceShotsCached) stationParts.push(notAllReference);
     if (this.hiddenComment?.type === 'station') {
       stationParts.push(['any',
         ['!=', ['get', 'sectionId'], this.hiddenComment.sectionId],
@@ -1922,7 +1922,7 @@ export default class SurveyLayer {
 
     // Shot comments filter
     const shotParts: maplibregl.FilterSpecification[] = [commentBase];
-    if (!this.showVirtualShotsCached) shotParts.push(notVirtual);
+    if (!this.showReferenceShotsCached) shotParts.push(notReference);
     if (this.hiddenComment?.type === 'shot') {
       shotParts.push(['any',
         ['!=', ['get', 'sectionId'], this.hiddenComment.sectionId],
@@ -2216,7 +2216,7 @@ export default class SurveyLayer {
           'case',
           immovableCheck, 0.25,
           anchoredCheck, 0.25,
-          ['get', 'isVirtual'], 0.5,
+          ['get', 'isReference'], 0.5,
           1,
         ] as maplibregl.ExpressionSpecification);
       } else {
@@ -2224,7 +2224,7 @@ export default class SurveyLayer {
         this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
           'case',
           anchoredCheck, 0.25,
-          ['get', 'isVirtual'], 0.5,
+          ['get', 'isReference'], 0.5,
           1,
         ] as maplibregl.ExpressionSpecification);
       }
@@ -2243,7 +2243,7 @@ export default class SurveyLayer {
       this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
         'case',
         anchoredCheck, 0.25,
-        ['get', 'isVirtual'], 0.5,
+        ['get', 'isReference'], 0.5,
         1,
       ] as maplibregl.ExpressionSpecification);
     }
@@ -2579,7 +2579,7 @@ export default class SurveyLayer {
             sectionId: section.id,
             shotId: shot.id,
             color: section.color,
-            isVirtual: shot.is_virtual,
+            isReference: shot.is_reference,
           },
           fromCoord,
           toCoord,

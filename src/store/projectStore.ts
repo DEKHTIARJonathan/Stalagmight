@@ -198,7 +198,7 @@ interface ProjectStore {
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
-  setShotVirtual: (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => Promise<CommandResult>;
+  setShotReference: (sectionId: SectionId, shotId: ShotId, isReference: boolean) => Promise<CommandResult>;
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
@@ -850,11 +850,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     return result;
   },
 
-  setShotVirtual: async (sectionId: SectionId, shotId: ShotId, isVirtual: boolean) => {
+  setShotReference: async (sectionId: SectionId, shotId: ShotId, isReference: boolean) => {
     const result = await invokeIpc<CommandResult>(
-      'set_shot_virtual',
-      { sectionId, shotId, isVirtual },
-      { purpose: 'toggle virtual shot visibility', fields: { sectionId, shotId, isVirtual } }
+      'set_shot_reference',
+      { sectionId, shotId, isReference },
+      { purpose: 'toggle reference shot visibility', fields: { sectionId, shotId, isReference } }
     );
     if (result.success) {
       await get().refreshProjectState();

@@ -45,8 +45,8 @@ export default {
         grid: 'var(--cc-grid-default)',
         'zero-datum': 'var(--cc-zero-datum)',
         'loop-closure': 'var(--cc-hover-highlight)',
-        // virtual-shot stays as rgba literal (semi-transparent overlay, works on any background)
-        'virtual-shot': 'rgba(255, 255, 255, 0.25)',
+        // reference-shot stays as rgba literal (semi-transparent overlay, works on any background)
+        'reference-shot': 'rgba(255, 255, 255, 0.25)',
 
         // Opacity variant tokens: 25 unique color entries covering all 29
         // slash-style usage patterns in the codebase. Some tokens serve

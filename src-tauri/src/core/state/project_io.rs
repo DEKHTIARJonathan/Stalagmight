@@ -1044,7 +1044,7 @@ impl AppState {
             ("showSectionNames", display_settings.show_section_names.to_string()),
             ("showStationLabels", display_settings.show_station_labels.to_string()),
             ("showShotData", display_settings.show_shot_data.to_string()),
-            ("showVirtualShots", display_settings.show_virtual_shots.to_string()),
+            ("showReferenceShots", display_settings.show_reference_shots.to_string()),
             ("showZeroDatum", display_settings.show_zero_datum.to_string()),
             ("showGrid", display_settings.show_grid.to_string()),
             ("showScaleBar", display_settings.show_scale_bar.to_string()),
