@@ -46,6 +46,7 @@ export const defaultConfig: Config = {
     number_format: 'locale',
     date_format: 'locale',
     splash_screen: false,
+    legacy_dmp_import: false,
   },
   units: {
     length: 'meters',

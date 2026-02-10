@@ -45,6 +45,7 @@ impl Default for GeneralConfig {
             number_format: "locale".to_string(),
             date_format: "locale".to_string(),
             splash_screen: false,
+            legacy_dmp_import: false,
         }
     }
 }

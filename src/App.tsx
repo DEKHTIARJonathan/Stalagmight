@@ -10,7 +10,7 @@ import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, DmpNewImportDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
@@ -472,12 +472,13 @@ function App() {
           dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
           filePath={dialogData.filePath as string}
           onCancel={closeDialog}
-          onContinue={(config) => {
-            // Proceed to Step 2
-            openDialog('dmp-section-config', {
+          onContinue={(selectionCfg) => {
+            // Proceed to Step 2: legacy or new workflow
+            const useLegacy = useProjectStore.getState().config?.general.legacy_dmp_import ?? false;
+            openDialog(useLegacy ? 'dmp-section-config' : 'dmp-import-new', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
-              selectionConfig: config,
+              selectionConfig: selectionCfg,
             });
           }}
         />
@@ -500,6 +501,17 @@ function App() {
             // Capture hash before handleImportSections closes dialog (clears dialogData)
             const hash = (dialogData.selectionConfig as DmpSelectionConfig)?.fileHash;
             await handleImportSections(sections, hash);
+          }}
+        />
+      ) : null}
+      {activeDialog === 'dmp-import-new' && dialogData.dmpFile ? (
+        <DmpNewImportDialog
+          onCancel={closeDialog}
+          onBack={() => {
+            openDialog('dmp-selection', {
+              dmpFile: dialogData.dmpFile,
+              filePath: dialogData.filePath,
+            });
           }}
         />
       ) : null}

@@ -472,9 +472,17 @@
       "sections": {
         "debug": "Debug",
         "logging": "Logging",
+        "import": "Import",
         "closureAdjustment": "Closure Adjustment",
         "panels": "Panel Dimensions",
         "configFile": "Configuration File"
+      },
+      "import": {
+        "legacyDmpImport": {
+          "label": "Use legacy DMP import",
+          "help": "Use the classic per-section configuration dialog when importing DMP files. Disable to use the new streamlined import workflow.",
+          "aria": "Toggle legacy DMP import workflow"
+        }
       },
       "debug": {
         "showHitboxes": {
@@ -793,6 +801,10 @@
       "title": "Reset to Defaults",
       "message": "Reset all {{category}} settings to their default values?",
       "note": "This will only affect the current category. Changes are not saved until you click {{action}}."
+    },
+    "dmpNewImport": {
+      "title": "New DMP Import",
+      "body": "This workflow is under development."
     },
     "about": {
       "title": "About Stalagmight",
