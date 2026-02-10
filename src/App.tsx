@@ -515,10 +515,14 @@ function App() {
           }}
         />
       ) : null}
-      {activeDialog === 'dmp-import-new' && dialogData.dmpFile ? (
+      {activeDialog === 'dmp-import-new' && dialogData.dmpFile && dialogData.selectionConfig ? (
         <DmpNewImportDialog
-          onCancel={closeDialog}
+          dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
+          selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
+          project={project}
+          stations={stations}
           zeroDatumConfig={dialogData.zeroDatumConfig as ZeroDatumConfigResult | undefined}
+          onCancel={closeDialog}
           onBack={() => {
             if (dialogData.zeroDatumConfig) {
               // Came through zero datum flow — go back to zero datum config
@@ -534,6 +538,10 @@ function App() {
                 filePath: dialogData.filePath,
               });
             }
+          }}
+          onImport={async (sections) => {
+            const hash = (dialogData.selectionConfig as DmpSelectionConfig)?.fileHash;
+            await handleImportSections(sections, hash);
           }}
         />
       ) : null}
