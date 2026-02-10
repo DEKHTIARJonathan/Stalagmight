@@ -29,6 +29,9 @@ pnpm-debug.log*
 src-tauri/WixTools/
 src-tauri/target/
 
+# Project files (binary, change frequently)
+*.stalx
+
 # Test artifacts
 playwright-report/
 test-results/
