@@ -49,6 +49,9 @@ export type {
   MatchDirection,
   SuggestionConfidence,
   PlacementSuggestion,
+  TargetType,
+  CrossSectionSuggestion,
+  ImportSectionForSuggestion,
 } from './ipc.generated';
 
 // Batch command types for execute_batch IPC.

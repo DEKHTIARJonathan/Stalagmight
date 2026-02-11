@@ -23,6 +23,20 @@ export interface MergePreviewConfig {
 }
 
 /**
+ * Merge preview for import-to-import connections (target is a DMP section not yet in the project).
+ */
+export interface DmpMergePreviewConfig {
+  /** The target DMP section (not yet imported) */
+  targetDmpSection: DmpSection;
+  /** Color for the target section */
+  targetColor: string;
+  /** Station index in the current (import) section to merge */
+  importStationIndex: number;
+  /** Station index in the target DMP section to merge */
+  targetStationIndex: number;
+}
+
+/**
  * Compute station coordinates from DMP shots.
  * Each station is positioned relative to the previous one based on shot heading and length.
  * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
@@ -98,6 +112,8 @@ interface SectionPreviewProps {
   importStationIndex?: 'first' | 'last' | null;
   /** Merge preview configuration - shows both sections with proper alignment */
   mergePreview?: MergePreviewConfig | null;
+  /** Merge preview for import-to-import connections (DMP section target) */
+  dmpMergePreview?: DmpMergePreviewConfig | null;
   /** Callback when a station dot is clicked */
   onStationClick?: (stationIndex: number) => void;
   /** Index of the currently selected station (shows highlight ring) */
@@ -130,6 +146,7 @@ export default function SectionPreview({
   existingStation,
   importStationIndex,
   mergePreview,
+  dmpMergePreview,
   onStationClick,
   selectedStationIndex,
   size = 250,
@@ -157,10 +174,16 @@ export default function SectionPreview({
 
   // Compute stations for the target section (for merge preview)
   const targetStations = useMemo(() => {
-    if (!mergePreview) return [];
-    const nonReferenceShots = mergePreview.targetSection.shots.filter((s) => !s.is_reference);
-    return computeStationsFromShots(nonReferenceShots);
-  }, [mergePreview]);
+    if (mergePreview) {
+      const nonReferenceShots = mergePreview.targetSection.shots.filter((s) => !s.is_reference);
+      return computeStationsFromShots(nonReferenceShots);
+    }
+    if (dmpMergePreview) {
+      const standardShots = dmpMergePreview.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard');
+      return computeStationsFromDmpShots(standardShots);
+    }
+    return [];
+  }, [mergePreview, dmpMergePreview]);
 
   // Compute offset so the GPS station sits at the GPS origin (local 0,0)
   const gpsStationOffset = useMemo(() => {
@@ -442,10 +465,12 @@ export default function SectionPreview({
     const map = mapRef.current;
 
     // Calculate offset for merge preview - positions the import section so merge stations align
+    // Works for both existing-section mergePreview and DMP dmpMergePreview
+    const activePreview = mergePreview ?? dmpMergePreview;
     let importOffset = { x: 0, y: 0 };
-    if (mergePreview && stations.length > 0 && targetStations.length > 0) {
-      const importMergeStation = stations[mergePreview.importStationIndex];
-      const targetMergeStation = targetStations[mergePreview.targetStationIndex];
+    if (activePreview && stations.length > 0 && targetStations.length > 0) {
+      const importMergeStation = stations[activePreview.importStationIndex];
+      const targetMergeStation = targetStations[activePreview.targetStationIndex];
       if (importMergeStation && targetMergeStation) {
         // Calculate offset to align import station with target station
         importOffset = {
@@ -499,12 +524,14 @@ export default function SectionPreview({
     const mergeHighlightFeatures: GeoJSON.Feature[] = [];
     const connectionFeatures: GeoJSON.Feature[] = [];
 
-    if (mergePreview && targetStations.length > 0) {
-      const targetSection = mergePreview.targetSection;
-      const nonReferenceShots = targetSection.shots.filter((s) => !s.is_reference);
+    if (activePreview && targetStations.length > 0) {
+      // Build target section shot lines
+      // For existing section targets, count non-reference shots; for DMP targets, count standard shots
+      const targetShotCount = mergePreview
+        ? mergePreview.targetSection.shots.filter((s) => !s.is_reference).length
+        : (dmpMergePreview?.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard').length ?? 0);
 
-      // Build target section shots
-      for (let i = 0; i < nonReferenceShots.length; i++) {
+      for (let i = 0; i < targetShotCount; i++) {
         const from = targetStations[i];
         const to = targetStations[i + 1];
         if (!from || !to) continue;
@@ -537,8 +564,8 @@ export default function SectionPreview({
       }
 
       // Highlight the merge stations
-      const importMergeStation = stations[mergePreview.importStationIndex];
-      const targetMergeStation = targetStations[mergePreview.targetStationIndex];
+      const importMergeStation = stations[activePreview.importStationIndex];
+      const targetMergeStation = targetStations[activePreview.targetStationIndex];
 
       if (importMergeStation) {
         mergeHighlightFeatures.push({
@@ -727,7 +754,7 @@ export default function SectionPreview({
         let bounds: { minX: number; maxX: number; minY: number; maxY: number };
 
         // When focusStationIndex is set with mergePreview, zoom to the overlap area
-        if (focusStationIndex != null && mergePreview && targetStations.length > 0) {
+        if (focusStationIndex != null && activePreview && targetStations.length > 0) {
           const focusStation = stations[focusStationIndex];
           if (focusStation) {
             const focusX = focusStation.x + totalOffset.x;
@@ -807,7 +834,7 @@ export default function SectionPreview({
           const b = getBounds(offsetStations);
 
           // Include target section in bounds if merge preview is active
-          if (mergePreview && targetStations.length > 0) {
+          if (activePreview && targetStations.length > 0) {
             const targetBounds = getBounds(targetStations);
             b.minX = Math.min(b.minX, targetBounds.minX);
             b.maxX = Math.max(b.maxX, targetBounds.maxX);
@@ -870,7 +897,7 @@ export default function SectionPreview({
         }
       });
     }
-  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex]);
+  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex]);
 
   // Re-apply theme colors when resolvedTheme changes
   useEffect(() => {

@@ -46,6 +46,153 @@ pub struct PlacementSuggestion {
     pub existing_section_name: String,
 }
 
+/// Whether the target of a cross-section suggestion is an existing project
+/// section or another section being imported in the same batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetType {
+    Existing,
+    Importing,
+}
+
+/// A placement suggestion that includes source/target metadata for cross-section
+/// matching (import-to-existing AND import-to-import).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossSectionSuggestion {
+    /// Station index in the existing/target section to merge with.
+    pub existing_station_index: usize,
+    /// Station index in the import section (0 = first, N = last).
+    pub import_station_index: usize,
+    /// Aggregate match score (higher = better).
+    pub score: f64,
+    /// Number of shots that matched.
+    pub matched_shots: usize,
+    /// Direction of match.
+    pub direction: MatchDirection,
+    /// Whether the last matched shot was a partial (shorter) match.
+    pub is_partial: bool,
+    /// Confidence tier based on score.
+    pub confidence: SuggestionConfidence,
+    /// Human-readable name of the target section.
+    pub existing_section_name: String,
+    /// Index of the import section this suggestion is for.
+    pub import_section_index: u32,
+    /// Name of the import section.
+    pub import_section_name: String,
+    /// Whether the target is an existing project section or another import.
+    pub target_type: TargetType,
+    /// For existing targets: the section ID.
+    pub existing_section_id: Option<SectionId>,
+    /// For importing targets: the index of the target import section.
+    pub target_import_index: Option<u32>,
+}
+
+/// Minimal per-section data needed for the cross-section suggestion algorithm.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSectionForSuggestion {
+    pub index: u32,
+    pub name: String,
+    pub shots: Vec<ShotData>,
+}
+
+/// Suggest placements for ALL import sections against BOTH existing project
+/// sections AND each other. Returns a flat list sorted by score descending.
+pub fn suggest_all_placements(
+    import_sections: &[ImportSectionForSuggestion],
+    existing_sections: &[ExistingSection],
+) -> Vec<CrossSectionSuggestion> {
+    let mut all: Vec<CrossSectionSuggestion> = Vec::new();
+
+    // Use high IDs for import sections so they don't collide with real section IDs.
+    // Map: fake_id = FAKE_ID_BASE + import.index
+    const FAKE_ID_BASE: SectionId = 0x8000_0000;
+
+    let import_as_existing: Vec<ExistingSection> = import_sections
+        .iter()
+        .map(|s| ExistingSection {
+            id: FAKE_ID_BASE + SectionId::from(s.index),
+            name: s.name.clone(),
+            shots: s
+                .shots
+                .iter()
+                .enumerate()
+                .map(|(i, sd)| Shot::new(i as u32, sd.clone()))
+                .collect(),
+        })
+        .collect();
+
+    for import in import_sections {
+        if import.shots.is_empty() {
+            continue;
+        }
+
+        let fake_self_id = FAKE_ID_BASE + SectionId::from(import.index);
+
+        // Match against existing project sections
+        let existing_suggestions = suggest_placements(&import.shots, existing_sections);
+        for s in existing_suggestions {
+            all.push(CrossSectionSuggestion {
+                existing_station_index: s.existing_station_index,
+                import_station_index: s.import_station_index,
+                score: s.score,
+                matched_shots: s.matched_shots,
+                direction: s.direction,
+                is_partial: s.is_partial,
+                confidence: s.confidence,
+                existing_section_name: s.existing_section_name,
+                import_section_index: import.index,
+                import_section_name: import.name.clone(),
+                target_type: TargetType::Existing,
+                existing_section_id: Some(s.existing_section_id),
+                target_import_index: None,
+            });
+        }
+
+        // Match against other import sections (exclude self)
+        let other_imports: Vec<ExistingSection> = import_as_existing
+            .iter()
+            .filter(|e| e.id != fake_self_id)
+            .cloned()
+            .collect();
+
+        if !other_imports.is_empty() {
+            let import_suggestions = suggest_placements(&import.shots, &other_imports);
+            for s in import_suggestions {
+                // Decode the fake ID back to an import index
+                let target_idx = (s.existing_section_id - FAKE_ID_BASE) as u32;
+                let target_name = import_sections
+                    .iter()
+                    .find(|is| is.index == target_idx)
+                    .map(|is| is.name.clone())
+                    .unwrap_or_default();
+
+                all.push(CrossSectionSuggestion {
+                    existing_station_index: s.existing_station_index,
+                    import_station_index: s.import_station_index,
+                    score: s.score,
+                    matched_shots: s.matched_shots,
+                    direction: s.direction,
+                    is_partial: s.is_partial,
+                    confidence: s.confidence,
+                    existing_section_name: target_name,
+                    import_section_index: import.index,
+                    import_section_name: import.name.clone(),
+                    target_type: TargetType::Importing,
+                    existing_section_id: None,
+                    target_import_index: Some(target_idx),
+                });
+            }
+        }
+    }
+
+    // Sort by score descending
+    all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    all
+}
+
 /// Internal configuration for the suggestion algorithm.
 struct SuggestionConfig {
     /// Sigma for azimuth error (degrees).
@@ -390,6 +537,7 @@ fn try_match_sequence(
 }
 
 /// Existing section data needed for matching.
+#[derive(Clone)]
 pub struct ExistingSection {
     pub id: SectionId,
     pub name: String,
