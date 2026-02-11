@@ -69,6 +69,7 @@ Implementation plans are stored in `docs/plans/`.
 | [Architecture](docs/architecture.md) | State flow, command pattern, key files, Rust patterns |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
 | [Configuration](docs/configuration.md) | Config file locations, options, logging |
+| [Saving](docs/saving.md) | Save pipeline, auto-save, undo persistence, atomic writes |
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
 | [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
