@@ -220,7 +220,7 @@ export default function MapCanvas() {
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
   const { t } = useTranslation();
 
-  const { project, stations, stats, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
@@ -232,6 +232,20 @@ export default function MapCanvas() {
     }
     return config?.map.satellite_gps_origin ?? null;
   }, [project?.zero_datums, config?.map.satellite_gps_origin]);
+
+  // Compute depth range from actual station coordinates (absolute, not section-relative)
+  const depthRange = useMemo(() => {
+    if (!stations || stations.length === 0) return { min: 0, max: 50 };
+    let min = Infinity;
+    let max = -Infinity;
+    for (const station of stations) {
+      const z = station.coordinates.z;
+      if (z < min) min = z;
+      if (z > max) max = z;
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 50 };
+    return { min, max };
+  }, [stations]);
 
   // Extract zoom config values for stable dependencies (used by zoom handlers and effects)
   const zoomStep = config?.map.zoom_step ?? 1.0;
@@ -1407,11 +1421,11 @@ export default function MapCanvas() {
         project.loop_closures,
         gpsOrigin,
         showDepthGradient,
-        { min: stats?.min_depth ?? 0, max: stats?.max_depth ?? 50 },
+        depthRange,
         precision
       );
     }
-  }, [project, stations, mapLoaded, gpsOrigin, showDepthGradient, stats?.min_depth, stats?.max_depth, precision]);
+  }, [project, stations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -2737,10 +2751,10 @@ export default function MapCanvas() {
       {mapLoaded && map.current && <GridOverlay map={map.current} />}
 
       {/* Depth legend when depth gradient is enabled */}
-      {showDepthGradient && stats && (
+      {showDepthGradient && (
         <DepthLegend
-          minDepth={stats.min_depth}
-          maxDepth={stats.max_depth}
+          minDepth={depthRange.min}
+          maxDepth={depthRange.max}
           visible={showDepthGradient}
         />
       )}
