@@ -527,7 +527,6 @@ export default function DmpNewImportDialog({
     let targetShots: TargetShotLike[] | null = null;
     if (overlapMode !== 'import_data' && overlapMode !== 'keep_both') {
       const { targetType, existingSectionId, targetImportIndex, existingStationIndex } = currentSuggestion;
-      const mergeExistingStation = selectedMergePair?.existingStation ?? existingStationIndex;
 
       if (targetType === 'existing' && existingSectionId != null) {
         const currentProject = useProjectStore.getState().project;
@@ -545,23 +544,24 @@ export default function DmpNewImportDialog({
         }
       }
 
-      // Build a mapping: import overlap shot ID → target shot
+      // Build a mapping: import overlap shot ID → target shot.
+      // The mapping is anchored by existingStationIndex (the suggestion's base),
+      // NOT the merge-adjusted station — the merge picker only controls which
+      // shots are actionable, not the overlap-to-target correspondence.
       if (targetShots) {
         const targetMap = new Map<number, TargetShotLike>();
         for (const overlapId of allOverlapIds) {
           let targetIdx: number;
           if (importStationIndex === 0) {
-            // Forward: import shot k → target shot mergeExistingStation + k (or - k for reverse)
             targetIdx = direction === 'forward'
-              ? mergeExistingStation + overlapId
-              : mergeExistingStation - 1 - overlapId;
+              ? existingStationIndex + overlapId
+              : existingStationIndex - 1 - overlapId;
           } else {
-            // Backward: import shot offset from overlap start
             const overlapStart = importStationIndex - matchedShots;
             const k = overlapId - overlapStart;
             targetIdx = direction === 'forward'
-              ? (mergeExistingStation - matchedShots) + k
-              : (mergeExistingStation + matchedShots) - 1 - k;
+              ? (existingStationIndex + matchedShots - 1) - k
+              : (existingStationIndex - matchedShots) + k;
           }
           if (targetIdx >= 0 && targetIdx < targetShots.length) {
             targetMap.set(overlapId, targetShots[targetIdx]!);
@@ -1031,7 +1031,6 @@ export default function DmpNewImportDialog({
 
     const { importStationIndex, matchedShots, direction, existingStationIndex } = currentSuggestion;
     const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
-    const mergeExistingStation = selectedMergePair?.existingStation ?? existingStationIndex;
 
     // Recompute actionable overlap IDs (same logic as effectiveShots)
     const allOverlapIds = new Set<number>();
@@ -1056,17 +1055,18 @@ export default function DmpNewImportDialog({
       const resolvedShot = effectiveShots.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
       if (!resolvedShot) continue;
 
+      // Same anchored mapping as effectiveShots (existingStationIndex, not merge-adjusted)
       let targetIdx: number;
       if (importStationIndex === 0) {
         targetIdx = direction === 'forward'
-          ? mergeExistingStation + overlapId
-          : mergeExistingStation - 1 - overlapId;
+          ? existingStationIndex + overlapId
+          : existingStationIndex - 1 - overlapId;
       } else {
         const overlapStart = importStationIndex - matchedShots;
         const k = overlapId - overlapStart;
         targetIdx = direction === 'forward'
-          ? (mergeExistingStation - matchedShots) + k
-          : (mergeExistingStation + matchedShots) - 1 - k;
+          ? (existingStationIndex + matchedShots - 1) - k
+          : (existingStationIndex - matchedShots) + k;
       }
       if (targetIdx >= 0) {
         map.set(targetIdx, resolvedShot);
