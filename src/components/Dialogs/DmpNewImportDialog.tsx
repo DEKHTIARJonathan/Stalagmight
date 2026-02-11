@@ -63,9 +63,19 @@ function computeMergeOptions(suggestion: CrossSectionSuggestion, importShotCount
 
   for (let k = 0; k <= maxOffset; k++) {
     const importStation = importStationIndex === 0 ? k : importStationIndex - k;
-    const existingStation = direction === 'forward'
-      ? existingStationIndex + k
-      : existingStationIndex - k;
+    // For importStationIndex === 0, existingStationIndex is at the overlap start (= anchor).
+    // For importStationIndex > 0, existingStationIndex is at the overlap start, but the
+    // anchor (importStationIndex) is matchedShots stations away at the overlap end.
+    let existingStation: number;
+    if (importStationIndex === 0) {
+      existingStation = direction === 'forward'
+        ? existingStationIndex + k
+        : existingStationIndex - k;
+    } else {
+      existingStation = direction === 'forward'
+        ? (existingStationIndex + matchedShots) - k
+        : (existingStationIndex - matchedShots) + k;
+    }
 
     // Guard: stations must stay within valid ranges
     if (importStation < 0 || importStation > importShotCount) continue;
@@ -566,23 +576,16 @@ export default function DmpNewImportDialog({
       // NOT the merge-adjusted station — the merge picker only controls which
       // shots are actionable, not the overlap-to-target correspondence.
       if (targetShots) {
-        // When import and target traverse the same passage in opposite directions,
+        // 'reverse' direction means import retraces existing shots backwards —
         // target shot measurements must be direction-reversed before use.
-        const needsReversal = (importStationIndex === 0) !== (direction === 'forward');
+        const needsReversal = direction === 'reverse';
+        const overlapStart = importStationIndex === 0 ? 0 : importStationIndex - matchedShots;
         const targetMap = new Map<number, TargetShotLike>();
         for (const overlapId of allOverlapIds) {
-          let targetIdx: number;
-          if (importStationIndex === 0) {
-            targetIdx = direction === 'forward'
-              ? existingStationIndex + overlapId
-              : existingStationIndex - 1 - overlapId;
-          } else {
-            const overlapStart = importStationIndex - matchedShots;
-            const k = overlapId - overlapStart;
-            targetIdx = direction === 'forward'
-              ? (existingStationIndex + matchedShots - 1) - k
-              : (existingStationIndex - matchedShots) + k;
-          }
+          const k = overlapId - overlapStart;
+          const targetIdx = direction === 'forward'
+            ? existingStationIndex + k
+            : (existingStationIndex - 1) - k;
           if (targetIdx >= 0 && targetIdx < targetShots.length) {
             const raw = targetShots[targetIdx]!;
             targetMap.set(overlapId, needsReversal ? reverseTargetShot(raw) : raw);
@@ -1073,7 +1076,8 @@ export default function DmpNewImportDialog({
     }
 
     // Resolved shots are in import direction; reverse back to target direction if needed.
-    const needsReversal = (importStationIndex === 0) !== (direction === 'forward');
+    const needsReversal = direction === 'reverse';
+    const overlapStart = importStationIndex === 0 ? 0 : importStationIndex - matchedShots;
 
     const map = new Map<number, EditableShot>();
     for (const overlapId of actionableIds) {
@@ -1081,19 +1085,11 @@ export default function DmpNewImportDialog({
       const resolvedShot = effectiveShots.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
       if (!resolvedShot) continue;
 
-      // Same anchored mapping as effectiveShots (existingStationIndex, not merge-adjusted)
-      let targetIdx: number;
-      if (importStationIndex === 0) {
-        targetIdx = direction === 'forward'
-          ? existingStationIndex + overlapId
-          : existingStationIndex - 1 - overlapId;
-      } else {
-        const overlapStart = importStationIndex - matchedShots;
-        const k = overlapId - overlapStart;
-        targetIdx = direction === 'forward'
-          ? (existingStationIndex + matchedShots - 1) - k
-          : (existingStationIndex - matchedShots) + k;
-      }
+      // Same anchored mapping as effectiveShots
+      const k = overlapId - overlapStart;
+      const targetIdx = direction === 'forward'
+        ? existingStationIndex + k
+        : (existingStationIndex - 1) - k;
       if (targetIdx >= 0) {
         if (needsReversal) {
           const reversed = reverseTargetShot({
