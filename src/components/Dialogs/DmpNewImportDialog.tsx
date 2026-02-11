@@ -585,8 +585,8 @@ export default function DmpNewImportDialog({
             }
             return shot;
           }
-          // Past merge station: always mark as reference
-          return { ...shot, is_reference: true };
+          // Past merge station: delete (redundant when using target data)
+          return { ...shot, isDeleted: true };
         });
       }
     }
@@ -598,8 +598,11 @@ export default function DmpNewImportDialog({
       if (!isOverlap) return shot;
 
       const isActionable = actionableIds.has(shot.id);
-      if (overlapMode === 'keep_both' || !isActionable) {
+      if (overlapMode === 'keep_both') {
         return { ...shot, is_reference: true };
+      }
+      if (!isActionable) {
+        return { ...shot, isDeleted: true };
       }
       return shot;
     });
