@@ -615,6 +615,477 @@ describe('avgNullable', () => {
   });
 });
 
+// ─── Strict reverse (←) direction regression tests ─────────────────────────
+//
+// The reverse direction was the source of the original bug: incorrect
+// needsReversal logic, wrong target index mapping, and wrong merge option
+// formulas.  These tests pin down exact values for every reverse scenario
+// to prevent regressions.
+
+describe('reverse direction: computeTargetShotIndex exact values', () => {
+  describe('Front + reverse, existingStationIndex=10, matchedShots=3', () => {
+    const params: OverlapParams = {
+      importStationIndex: 0, matchedShots: 3,
+      existingStationIndex: 10, direction: 'reverse',
+    };
+    // Formula: (existingStationIndex - 1) - k  where k = overlapId
+    it.each([
+      [0, 9],
+      [1, 8],
+      [2, 7],
+    ])('overlapId=%i → target %i', (overlapId, expected) => {
+      expect(computeTargetShotIndex(overlapId, params)).toBe(expected);
+    });
+
+    it('target indices are strictly decreasing as overlapId increases', () => {
+      const indices = [0, 1, 2].map(id => computeTargetShotIndex(id, params));
+      for (let i = 1; i < indices.length; i++) {
+        expect(indices[i]!).toBeLessThan(indices[i - 1]!);
+      }
+    });
+  });
+
+  describe('Front + reverse, existingStationIndex=2, matchedShots=3 (near boundary)', () => {
+    const params: OverlapParams = {
+      importStationIndex: 0, matchedShots: 3,
+      existingStationIndex: 2, direction: 'reverse',
+    };
+    it.each([
+      [0, 1],   // k=0 → 2-1-0 = 1
+      [1, 0],   // k=1 → 2-1-1 = 0
+      [2, -1],  // k=2 → 2-1-2 = -1  (out of bounds — caller must check)
+    ])('overlapId=%i → target %i', (overlapId, expected) => {
+      expect(computeTargetShotIndex(overlapId, params)).toBe(expected);
+    });
+  });
+
+  describe('Front + reverse, matchedShots=5 (larger overlap)', () => {
+    const params: OverlapParams = {
+      importStationIndex: 0, matchedShots: 5,
+      existingStationIndex: 8, direction: 'reverse',
+    };
+    it.each([
+      [0, 7],
+      [1, 6],
+      [2, 5],
+      [3, 4],
+      [4, 3],
+    ])('overlapId=%i → target %i', (overlapId, expected) => {
+      expect(computeTargetShotIndex(overlapId, params)).toBe(expected);
+    });
+  });
+
+  describe('Back + reverse, importStationIndex=5, matchedShots=3', () => {
+    const params: OverlapParams = {
+      importStationIndex: 5, matchedShots: 3,
+      existingStationIndex: 10, direction: 'reverse',
+    };
+    // Formula: (existingStationIndex - matchedShots) + k  where k = overlapId - overlapStart
+    // overlapStart = 5 - 3 = 2
+    it.each([
+      [2, 7],   // k=0 → 10-3+0 = 7
+      [3, 8],   // k=1 → 10-3+1 = 8
+      [4, 9],   // k=2 → 10-3+2 = 9
+    ])('overlapId=%i → target %i', (overlapId, expected) => {
+      expect(computeTargetShotIndex(overlapId, params)).toBe(expected);
+    });
+
+    it('target indices are strictly increasing as overlapId increases', () => {
+      const indices = [2, 3, 4].map(id => computeTargetShotIndex(id, params));
+      for (let i = 1; i < indices.length; i++) {
+        expect(indices[i]!).toBeGreaterThan(indices[i - 1]!);
+      }
+    });
+  });
+
+  describe('Back + reverse, importStationIndex=7, matchedShots=5 (larger)', () => {
+    const params: OverlapParams = {
+      importStationIndex: 7, matchedShots: 5,
+      existingStationIndex: 12, direction: 'reverse',
+    };
+    // overlapStart = 7 - 5 = 2, formula = (12 - 5) + k = 7 + k
+    it.each([
+      [2, 7],
+      [3, 8],
+      [4, 9],
+      [5, 10],
+      [6, 11],
+    ])('overlapId=%i → target %i', (overlapId, expected) => {
+      expect(computeTargetShotIndex(overlapId, params)).toBe(expected);
+    });
+  });
+
+  describe('Back + reverse, existingStationIndex=3, matchedShots=3 (near boundary)', () => {
+    const params: OverlapParams = {
+      importStationIndex: 4, matchedShots: 3,
+      existingStationIndex: 3, direction: 'reverse',
+    };
+    // overlapStart = 4 - 3 = 1, formula = (3 - 3) + k = 0 + k
+    it.each([
+      [1, 0],
+      [2, 1],
+      [3, 2],
+    ])('overlapId=%i → target %i', (overlapId, expected) => {
+      expect(computeTargetShotIndex(overlapId, params)).toBe(expected);
+    });
+  });
+});
+
+describe('reverse direction: computeMergeOptions exact values', () => {
+  describe('Front + reverse, all intermediate options', () => {
+    const suggestion = {
+      importStationIndex: 0, existingStationIndex: 10,
+      matchedShots: 4, direction: 'reverse' as const, isPartial: false,
+    };
+    const opts = computeMergeOptions(suggestion, 10);
+
+    it('produces 5 options (k=0..4)', () => {
+      expect(opts).toHaveLength(5);
+    });
+
+    it.each([
+      [0, 0, 10],
+      [1, 1, 9],
+      [2, 2, 8],
+      [3, 3, 7],
+      [4, 4, 6],
+    ])('k=%i → import=%i, existing=%i', (offset, importStation, existingStation) => {
+      expect(opts[offset]).toEqual({ offset, importStation, existingStation });
+    });
+  });
+
+  describe('Back + reverse, all intermediate options', () => {
+    const suggestion = {
+      importStationIndex: 6, existingStationIndex: 10,
+      matchedShots: 4, direction: 'reverse' as const, isPartial: false,
+    };
+    const opts = computeMergeOptions(suggestion, 10);
+
+    it('produces 5 options (k=0..4)', () => {
+      expect(opts).toHaveLength(5);
+    });
+
+    it.each([
+      [0, 6, 10],
+      [1, 5, 9],
+      [2, 4, 8],
+      [3, 3, 7],
+      [4, 2, 6],
+    ])('k=%i → import=%i, existing=%i', (offset, importStation, existingStation) => {
+      expect(opts[offset]).toEqual({ offset, importStation, existingStation });
+    });
+  });
+
+  describe('Front + reverse, partial match', () => {
+    const suggestion = {
+      importStationIndex: 0, existingStationIndex: 5,
+      matchedShots: 3, direction: 'reverse' as const, isPartial: true,
+    };
+    const opts = computeMergeOptions(suggestion, 8);
+
+    it('produces matchedShots options (not matchedShots+1)', () => {
+      expect(opts).toHaveLength(3);
+    });
+
+    it.each([
+      [0, 0, 5],
+      [1, 1, 4],
+      [2, 2, 3],
+    ])('k=%i → import=%i, existing=%i', (offset, importStation, existingStation) => {
+      expect(opts[offset]).toEqual({ offset, importStation, existingStation });
+    });
+  });
+
+  describe('Back + reverse, existing near 0 (boundary clamping)', () => {
+    const suggestion = {
+      importStationIndex: 4, existingStationIndex: 2,
+      matchedShots: 3, direction: 'reverse' as const, isPartial: false,
+    };
+    const opts = computeMergeOptions(suggestion, 8);
+
+    // k=0: import=4, existing=2
+    // k=1: import=3, existing=1
+    // k=2: import=2, existing=0
+    // k=3: import=1, existing=-1 → clamped
+    it('clamps at existing=0', () => {
+      expect(opts).toHaveLength(3);
+      expect(opts[0]).toEqual({ offset: 0, importStation: 4, existingStation: 2 });
+      expect(opts[1]).toEqual({ offset: 1, importStation: 3, existingStation: 1 });
+      expect(opts[2]).toEqual({ offset: 2, importStation: 2, existingStation: 0 });
+    });
+  });
+});
+
+describe('reverse direction: needsDirectionReversal + reverseTargetShot pipeline', () => {
+  // The core invariant: when needsReversal is true, applying reverseTargetShot
+  // to a target heading ~X° must produce a heading ~(X+180)%360.
+  // When needsReversal is false, target data passes through unchanged.
+
+  it('Front + reverse: target ~270° becomes ~90° after reversal', () => {
+    expect(needsDirectionReversal(0, 'reverse')).toBe(true);
+    const target = makeTargetShot({ azimuth_in: 270, azimuth_out: 272 });
+    const reversed = reverseTargetShot(target);
+    expect(reversed.azimuth_in).toBe(92);   // (272+180) % 360
+    expect(reversed.azimuth_out).toBe(90);  // (270+180) % 360
+  });
+
+  it('Front + reverse: target ~0° becomes ~180° after reversal', () => {
+    expect(needsDirectionReversal(0, 'reverse')).toBe(true);
+    const target = makeTargetShot({ azimuth_in: 2, azimuth_out: 358 });
+    const reversed = reverseTargetShot(target);
+    expect(reversed.azimuth_in).toBe(178);  // (358+180) % 360
+    expect(reversed.azimuth_out).toBe(182); // (2+180) % 360
+  });
+
+  it('Back + reverse: NO reversal applied — target passes through', () => {
+    expect(needsDirectionReversal(5, 'reverse')).toBe(false);
+    const target = makeTargetShot({ azimuth_in: 90, azimuth_out: 91 });
+    // No reverseTargetShot applied — values should be identical
+    const result = applyTargetData(makeEditableShot(0), target);
+    expect(result.azimuth_in).toBe(90);
+    expect(result.azimuth_out).toBe(91);
+  });
+
+  it('Front + reverse: depths swap through reversal', () => {
+    expect(needsDirectionReversal(0, 'reverse')).toBe(true);
+    const target = makeTargetShot({ depth_in: 5, depth_out: 15 });
+    const reversed = reverseTargetShot(target);
+    expect(reversed.depth_in).toBe(15);
+    expect(reversed.depth_out).toBe(5);
+  });
+
+  it('Front + reverse: pitches negate and swap through reversal', () => {
+    expect(needsDirectionReversal(0, 'reverse')).toBe(true);
+    const target = makeTargetShot({ pitch_in: -10, pitch_out: 3 });
+    const reversed = reverseTargetShot(target);
+    expect(reversed.pitch_in).toBe(-3);  // -(pitch_out)
+    expect(reversed.pitch_out).toBe(10); // -(pitch_in)
+  });
+
+  it('Front + reverse: left/right swap through reversal', () => {
+    expect(needsDirectionReversal(0, 'reverse')).toBe(true);
+    const target = makeTargetShot({ left: 1.0, right: 4.0 });
+    const reversed = reverseTargetShot(target);
+    expect(reversed.left).toBe(4.0);
+    expect(reversed.right).toBe(1.0);
+  });
+});
+
+describe('reverse direction: computeActionableIds', () => {
+  it('Front + reverse: actionable IDs work identically to Front + forward', () => {
+    // computeActionableIds doesn't depend on direction — only on
+    // importStationIndex and mergeImportStation. Verify this.
+    const actionableFwd = computeActionableIds(0, 4, 2);
+    // Should be same regardless of direction since direction is not a parameter
+    expect(actionableFwd).toEqual(new Set([0, 1]));
+  });
+
+  it('Back + reverse: actionable IDs with various merge stations', () => {
+    // importStationIndex=6, matchedShots=4, overlap={2,3,4,5}
+    // mergeImportStation=4 → actionable = shots 4..5 = {4,5}
+    expect(computeActionableIds(6, 4, 4)).toEqual(new Set([4, 5]));
+    // mergeImportStation=2 → actionable = shots 2..5 = {2,3,4,5}
+    expect(computeActionableIds(6, 4, 2)).toEqual(new Set([2, 3, 4, 5]));
+    // mergeImportStation=5 → actionable = shots 5..5 = {5}
+    expect(computeActionableIds(6, 4, 5)).toEqual(new Set([5]));
+    // mergeImportStation=6 → actionable = shots 6..5 = {} (empty)
+    expect(computeActionableIds(6, 4, 6)).toEqual(new Set());
+  });
+});
+
+describe('reverse direction: full pipeline with concrete data', () => {
+  /**
+   * Concrete scenario for Front + reverse:
+   *
+   * Existing section "Main Passage" has 6 shots heading west (~270°):
+   *   shot[0]: az=268/269  shot[1]: az=270/271  shot[2]: az=272/273
+   *   shot[3]: az=269/270  shot[4]: az=271/272  shot[5]: az=273/274
+   *
+   * Import section "Side Passage" has 5 shots heading east (~90°).
+   * It overlaps 3 shots at the front (importStationIndex=0), reverse direction.
+   * existingStationIndex=4 means the existing anchor is station 4.
+   *
+   * Expected target mapping (Front + reverse):
+   *   overlapId=0 → target=3  (k=0, existingStationIndex-1-0 = 3)
+   *   overlapId=1 → target=2  (k=1, existingStationIndex-1-1 = 2)
+   *   overlapId=2 → target=1  (k=2, existingStationIndex-1-2 = 1)
+   *
+   * Since needsReversal=true (Front+reverse), each target shot's ~270° heading
+   * gets reversed to ~90° to match the import direction.
+   */
+
+  const existingShots: TargetShotLike[] = [
+    makeTargetShot({ azimuth_in: 268, azimuth_out: 269, length: 3.0, depth_in: 0, depth_out: 2, pitch_in: -2, pitch_out: -3, left: 1.0, right: 2.0 }),
+    makeTargetShot({ azimuth_in: 270, azimuth_out: 271, length: 3.5, depth_in: 2, depth_out: 4, pitch_in: -1, pitch_out: -2, left: 1.5, right: 2.5 }),
+    makeTargetShot({ azimuth_in: 272, azimuth_out: 273, length: 4.0, depth_in: 4, depth_out: 6, pitch_in: 0,  pitch_out: -1, left: 2.0, right: 3.0 }),
+    makeTargetShot({ azimuth_in: 269, azimuth_out: 270, length: 3.2, depth_in: 6, depth_out: 8, pitch_in: -3, pitch_out: -4, left: 1.8, right: 2.8 }),
+    makeTargetShot({ azimuth_in: 271, azimuth_out: 272, length: 3.8, depth_in: 8, depth_out: 10, pitch_in: -2, pitch_out: -3, left: 2.2, right: 3.2 }),
+    makeTargetShot({ azimuth_in: 273, azimuth_out: 274, length: 4.2, depth_in: 10, depth_out: 12, pitch_in: -1, pitch_out: -2, left: 2.5, right: 3.5 }),
+  ];
+
+  const importShots: EditableShotLike[] = Array.from({ length: 5 }, (_, i) =>
+    makeEditableShot(i, {
+      azimuth_in: 88 + i, azimuth_out: 89 + i,
+      length: 3.0 + i * 0.2,
+      depth_in: i * 2, depth_out: (i + 1) * 2,
+    }),
+  );
+
+  const params: OverlapParams = {
+    importStationIndex: 0, matchedShots: 3,
+    existingStationIndex: 4, direction: 'reverse',
+  };
+
+  it('maps overlap IDs to correct target indices', () => {
+    expect(computeTargetShotIndex(0, params)).toBe(3);
+    expect(computeTargetShotIndex(1, params)).toBe(2);
+    expect(computeTargetShotIndex(2, params)).toBe(1);
+  });
+
+  it('existing_data mode: each overlap shot gets exact reversed target values', () => {
+    const shouldReverse = needsDirectionReversal(0, 'reverse');
+    expect(shouldReverse).toBe(true);
+
+    // overlapId=0 → target shot[3]
+    const t3 = existingShots[3]!;
+    const r3 = reverseTargetShot(t3);
+    const applied0 = applyTargetData(importShots[0]!, r3);
+    expect(applied0.azimuth_in).toBe((t3.azimuth_out + 180) % 360);  // (270+180)%360 = 90
+    expect(applied0.azimuth_out).toBe((t3.azimuth_in + 180) % 360);  // (269+180)%360 = 89
+    expect(applied0.length).toBe(t3.length);
+    expect(applied0.depth_in).toBe(t3.depth_out);   // swapped: 8
+    expect(applied0.depth_out).toBe(t3.depth_in);   // swapped: 6
+    expect(applied0.pitch_in).toBe(4);               // -(pitch_out of t3) = -(-4)
+    expect(applied0.pitch_out).toBe(3);              // -(pitch_in of t3)  = -(-3)
+    expect(applied0.left).toBe(t3.right);            // swapped: 2.8
+    expect(applied0.right).toBe(t3.left);            // swapped: 1.8
+
+    // overlapId=1 → target shot[2]
+    const t2 = existingShots[2]!;
+    const r2 = reverseTargetShot(t2);
+    const applied1 = applyTargetData(importShots[1]!, r2);
+    expect(applied1.azimuth_in).toBe((t2.azimuth_out + 180) % 360);  // (273+180)%360 = 93
+    expect(applied1.azimuth_out).toBe((t2.azimuth_in + 180) % 360);  // (272+180)%360 = 92
+    expect(applied1.depth_in).toBe(t2.depth_out);   // 6
+    expect(applied1.depth_out).toBe(t2.depth_in);   // 4
+    expect(applied1.pitch_in).toBe(1);               // -(pitch_out) = -(-1)
+    expect(applied1.pitch_out).toBe(-0);             // -(pitch_in)  = -(0) = -0
+    expect(applied1.left).toBe(t2.right);            // 3.0
+    expect(applied1.right).toBe(t2.left);            // 2.0
+
+    // overlapId=2 → target shot[1]
+    const t1 = existingShots[1]!;
+    const r1 = reverseTargetShot(t1);
+    const applied2 = applyTargetData(importShots[2]!, r1);
+    expect(applied2.azimuth_in).toBe((t1.azimuth_out + 180) % 360);  // (271+180)%360 = 91
+    expect(applied2.azimuth_out).toBe((t1.azimuth_in + 180) % 360);  // (270+180)%360 = 90
+    expect(applied2.depth_in).toBe(t1.depth_out);
+    expect(applied2.depth_out).toBe(t1.depth_in);
+  });
+
+  it('interpolate mode: averages import + reversed target', () => {
+    const shouldReverse = needsDirectionReversal(0, 'reverse');
+    expect(shouldReverse).toBe(true);
+
+    // overlapId=0: import shot heading ~88°, reversed target heading ~90°
+    const t3 = existingShots[3]!;
+    const r3 = reverseTargetShot(t3);
+    const interp = interpolateShots(importShots[0]!, r3);
+
+    // azimuth: circular mean of 88 and 90 ≈ 89
+    expect(interp.azimuth_in).toBeCloseTo(89, 0);
+    // length: (3.0 + 3.2) / 2 = 3.1
+    expect(interp.length).toBeCloseTo(3.1, 5);
+    // depth_in: (0 + 8) / 2 = 4   (import=0, reversed target=depth_out of t3=8)
+    expect(interp.depth_in).toBe(4);
+    // id preserved from import
+    expect(interp.id).toBe(0);
+  });
+
+  it('non-overlap shots are unaffected', () => {
+    const overlapIds = computeOverlapIds(0, 3);
+    // Shot IDs 3, 4 are not in overlap
+    expect(overlapIds.has(3)).toBe(false);
+    expect(overlapIds.has(4)).toBe(false);
+  });
+});
+
+describe('reverse direction: full pipeline Back + reverse', () => {
+  /**
+   * Back + reverse scenario:
+   *
+   * Import section has 7 shots, overlap at back (importStationIndex=7).
+   * 3 matched shots: overlap IDs = {4, 5, 6}.
+   * existingStationIndex=8, direction=reverse.
+   *
+   * needsReversal = false (Back + reverse).
+   * Target index = (existingStationIndex - matchedShots) + k = (8 - 3) + k = 5 + k
+   *   overlapId=4 (k=0) → target=5
+   *   overlapId=5 (k=1) → target=6
+   *   overlapId=6 (k=2) → target=7
+   *
+   * Since no reversal: target data is used as-is.
+   */
+
+  const existingShots: TargetShotLike[] = Array.from({ length: 10 }, (_, i) =>
+    makeTargetShot({
+      azimuth_in: 90 + i, azimuth_out: 91 + i,
+      length: 2.5 + i * 0.1,
+      depth_in: i * 3, depth_out: (i + 1) * 3,
+      pitch_in: -(i + 1), pitch_out: -(i + 2),
+      left: 1.0 + i * 0.2, right: 2.0 + i * 0.2,
+    }),
+  );
+
+  const params: OverlapParams = {
+    importStationIndex: 7, matchedShots: 3,
+    existingStationIndex: 8, direction: 'reverse',
+  };
+
+  it('maps overlap IDs to correct target indices', () => {
+    expect(computeTargetShotIndex(4, params)).toBe(5);
+    expect(computeTargetShotIndex(5, params)).toBe(6);
+    expect(computeTargetShotIndex(6, params)).toBe(7);
+  });
+
+  it('needsReversal is false — target data passes through unchanged', () => {
+    expect(needsDirectionReversal(7, 'reverse')).toBe(false);
+
+    const importShot = makeEditableShot(4);
+    const target = existingShots[5]!; // target for overlapId=4
+    const applied = applyTargetData(importShot, target);
+
+    // All values come directly from target, no reversal
+    expect(applied.azimuth_in).toBe(95);    // 90 + 5
+    expect(applied.azimuth_out).toBe(96);   // 91 + 5
+    expect(applied.length).toBe(3.0);       // 2.5 + 5*0.1
+    expect(applied.depth_in).toBe(15);      // 5 * 3
+    expect(applied.depth_out).toBe(18);     // 6 * 3
+    expect(applied.pitch_in).toBe(-6);      // -(5+1)
+    expect(applied.pitch_out).toBe(-7);     // -(5+2)
+    expect(applied.left).toBe(2.0);         // 1.0 + 5*0.2
+    expect(applied.right).toBe(3.0);        // 2.0 + 5*0.2
+  });
+
+  it('merge options all have decreasing existing stations', () => {
+    const suggestion = {
+      importStationIndex: 7, existingStationIndex: 8,
+      matchedShots: 3, direction: 'reverse' as const, isPartial: false,
+    };
+    const opts = computeMergeOptions(suggestion, 10);
+    // k=0: import=7, existing=8
+    // k=1: import=6, existing=7
+    // k=2: import=5, existing=6
+    // k=3: import=4, existing=5
+    expect(opts).toHaveLength(4);
+    expect(opts[0]).toEqual({ offset: 0, importStation: 7, existingStation: 8 });
+    expect(opts[3]).toEqual({ offset: 3, importStation: 4, existingStation: 5 });
+    for (let i = 1; i < opts.length; i++) {
+      expect(opts[i]!.existingStation).toBeLessThan(opts[i - 1]!.existingStation);
+    }
+  });
+});
+
 // ─── Integration: overlap mode does not flip azimuths 180° ─────────────────
 
 describe('integration: overlap mode correctness', () => {
@@ -772,4 +1243,227 @@ describe('integration: overlap mode correctness', () => {
       expect(applied.azimuth_in).toBeLessThan(100);
     }
   });
+});
+
+// ─── Geometric invariant: station coordinates stay close across overlap modes ─
+
+/**
+ * Walk a sequence of shots and return station (x, y, z) coordinates.
+ * Uses the same formula as SectionPreview:
+ *   azimuth = average(azimuth_in, azimuth_out) in degrees
+ *   x += length * sin(azimuthRad)    (east)
+ *   y += length * cos(azimuthRad)    (north)
+ *   z += depth_out - depth_in        (depth)
+ */
+function walkStations(shots: TargetShotLike[]): Array<{ x: number; y: number; z: number }> {
+  const stations = [{ x: 0, y: 0, z: 0 }];
+  for (const s of shots) {
+    const prev = stations[stations.length - 1]!;
+    // Simple average — fine when azimuth_in ≈ azimuth_out (no wrap-around issues)
+    const az = ((s.azimuth_in + s.azimuth_out) / 2) * (Math.PI / 180);
+    stations.push({
+      x: prev.x + s.length * Math.sin(az),
+      y: prev.y + s.length * Math.cos(az),
+      z: prev.z + (s.depth_out - s.depth_in),
+    });
+  }
+  return stations;
+}
+
+function dist3d(
+  a: { x: number; y: number; z: number },
+  b: { x: number; y: number; z: number },
+): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
+}
+
+describe('geometric invariant: station coordinates stay close across overlap modes', () => {
+  /**
+   * Setup: two surveyors measured approximately the same passage.
+   *
+   * "existing" (target) section: 8 shots heading ~45° NE, gently descending.
+   * "import" section: 8 shots heading ~45° NE with small random-ish offsets
+   * (±0.8° azimuth, ±0.15m length, ±0.2m depth) to simulate real survey error.
+   *
+   * For each overlap case (Front/Back × Forward/Reverse):
+   * - Walk the import overlap shots → importCoords
+   * - Walk the target overlap shots (in import direction) → targetCoords
+   * - Apply each overlap mode (existing_data, interpolate, import_data)
+   * - Walk the result → resultCoords
+   * - Assert resultCoords ≈ importCoords and ≈ targetCoords within tolerance
+   *
+   * The tolerance is generous (2m per station) because the point is NOT that
+   * coordinates are identical, but that they don't diverge wildly (which would
+   * happen if azimuths were flipped 180°, making a ~5m shot produce ~10m error).
+   */
+
+  // "Same-direction" existing section: 8 shots heading ~45° NE (same as import).
+  // Used for Forward cases where needsReversal=false.
+  const existingSameDir: TargetShotLike[] = Array.from({ length: 8 }, (_, i) => ({
+    azimuth_in:  44 + i * 0.5,
+    azimuth_out: 46 + i * 0.5,
+    length: 5.0 + i * 0.05,
+    depth_in:  i * 1.0,
+    depth_out: (i + 1) * 1.0,
+    pitch_in: -3, pitch_out: -3,
+    left: 2.0, right: 2.0, up: 1.5, down: 0.5,
+  }));
+
+  // "Opposite-direction" existing section: heading ~225° SW (opposite of import).
+  // Used for cases where needsReversal=true — reverseTargetShot flips ~225° → ~45°.
+  // Created by reversing the same-direction shots, so the round-trip is exact.
+  const existingOppositeDir: TargetShotLike[] = existingSameDir.map(reverseTargetShot);
+
+  // Import section: same passage as existing, heading ~45° with small survey error
+  const importShots: EditableShotLike[] = Array.from({ length: 8 }, (_, i) => ({
+    id: i,
+    azimuth_in:  45 + i * 0.5 + (i % 3 - 1) * 0.8,   // ±0.8° jitter
+    azimuth_out: 47 + i * 0.5 + (i % 3 - 1) * 0.8,
+    length: 5.1 + i * 0.05 + (i % 2 === 0 ? 0.15 : -0.15),  // ±0.15m
+    depth_in:  i * 1.0 + (i % 2) * 0.2,
+    depth_out: (i + 1) * 1.0 + (i % 2) * 0.2,
+    pitch_in: -3, pitch_out: -3,
+    left: 2.0, right: 2.0, up: 1.5, down: 0.5,
+    comment: null, is_reference: false,
+  }));
+
+  // Tolerance: generous enough for survey error, but catches any 180° flip.
+  // A 180° flip on a 5m shot produces ~10m displacement — easily beyond 2m.
+  const TOLERANCE_PER_STATION = 2.0;
+
+  type Case = {
+    label: string;
+    importStationIndex: number;
+    existingStationIndex: number;
+    matchedShots: number;
+    direction: 'forward' | 'reverse';
+    // needsReversal: true → use oppositeDir existing shots (reversal flips them back)
+    //                false → use sameDir existing shots (no reversal needed)
+    existingShots: TargetShotLike[];
+  };
+
+  const cases: Case[] = [
+    // Front+forward: needsReversal=false → existing heads same way (~45°)
+    { label: 'Front + forward', importStationIndex: 0, existingStationIndex: 3, matchedShots: 3, direction: 'forward', existingShots: existingSameDir },
+    // Front+reverse: needsReversal=true → existing heads opposite (~225°), reversal flips to ~45°
+    { label: 'Front + reverse', importStationIndex: 0, existingStationIndex: 5, matchedShots: 3, direction: 'reverse', existingShots: existingOppositeDir },
+    // Back+forward: needsReversal=true → existing heads opposite (~225°), reversal flips to ~45°
+    { label: 'Back + forward',  importStationIndex: 8, existingStationIndex: 3, matchedShots: 3, direction: 'forward', existingShots: existingOppositeDir },
+    // Back+reverse: needsReversal=false → existing heads same way (~45°)
+    { label: 'Back + reverse',  importStationIndex: 8, existingStationIndex: 5, matchedShots: 3, direction: 'reverse', existingShots: existingSameDir },
+  ];
+
+  for (const c of cases) {
+    describe(c.label, () => {
+      const params: OverlapParams = {
+        importStationIndex: c.importStationIndex,
+        matchedShots: c.matchedShots,
+        existingStationIndex: c.existingStationIndex,
+        direction: c.direction,
+      };
+      const shouldReverse = needsDirectionReversal(c.importStationIndex, c.direction);
+      const overlapIds = computeOverlapIds(c.importStationIndex, c.matchedShots);
+      const sortedOverlapIds = [...overlapIds].sort((a, b) => a - b);
+
+      // Extract the overlap shots from import and from target (in import direction)
+      const importOverlapShots = sortedOverlapIds.map(id => importShots[id]!);
+      const targetOverlapInImportDir = sortedOverlapIds.map(id => {
+        const targetIdx = computeTargetShotIndex(id, params);
+        const raw = c.existingShots[targetIdx]!;
+        return shouldReverse ? reverseTargetShot(raw) : raw;
+      });
+
+      // Walk each to get reference coordinates
+      const importCoords = walkStations(importOverlapShots);
+      const targetCoords = walkStations(targetOverlapInImportDir);
+
+      it('import and target overlap coordinates are close (sanity check)', () => {
+        // If the data is set up correctly, import and target coords should be
+        // within a few meters of each other (same passage, small error).
+        for (let i = 0; i < importCoords.length; i++) {
+          const d = dist3d(importCoords[i]!, targetCoords[i]!);
+          expect(d).toBeLessThan(TOLERANCE_PER_STATION * (i + 1));
+        }
+      });
+
+      it('existing_data mode: station coords ≈ target coords', () => {
+        const resultShots = sortedOverlapIds.map(id => {
+          const targetIdx = computeTargetShotIndex(id, params);
+          const raw = c.existingShots[targetIdx]!;
+          const target = shouldReverse ? reverseTargetShot(raw) : raw;
+          return applyTargetData(importShots[id]!, target);
+        });
+        const resultCoords = walkStations(resultShots);
+
+        for (let i = 0; i < resultCoords.length; i++) {
+          // Should be essentially identical to target coords
+          const d = dist3d(resultCoords[i]!, targetCoords[i]!);
+          expect(d).toBeCloseTo(0, 5);
+        }
+      });
+
+      it('existing_data mode: station coords ≈ import coords', () => {
+        const resultShots = sortedOverlapIds.map(id => {
+          const targetIdx = computeTargetShotIndex(id, params);
+          const raw = c.existingShots[targetIdx]!;
+          const target = shouldReverse ? reverseTargetShot(raw) : raw;
+          return applyTargetData(importShots[id]!, target);
+        });
+        const resultCoords = walkStations(resultShots);
+
+        for (let i = 0; i < resultCoords.length; i++) {
+          const d = dist3d(resultCoords[i]!, importCoords[i]!);
+          expect(d).toBeLessThan(TOLERANCE_PER_STATION * (i + 1));
+        }
+      });
+
+      it('interpolate mode: station coords between import and target', () => {
+        const resultShots = sortedOverlapIds.map(id => {
+          const targetIdx = computeTargetShotIndex(id, params);
+          const raw = c.existingShots[targetIdx]!;
+          const target = shouldReverse ? reverseTargetShot(raw) : raw;
+          return interpolateShots(importShots[id]!, target);
+        });
+        const resultCoords = walkStations(resultShots);
+
+        for (let i = 1; i < resultCoords.length; i++) {
+          const dImport = dist3d(resultCoords[i]!, importCoords[i]!);
+          const dTarget = dist3d(resultCoords[i]!, targetCoords[i]!);
+          // Interpolated should be close to both
+          expect(dImport).toBeLessThan(TOLERANCE_PER_STATION * i);
+          expect(dTarget).toBeLessThan(TOLERANCE_PER_STATION * i);
+        }
+      });
+
+      it('import_data mode: station coords = import coords exactly', () => {
+        // import_data keeps import shots as-is — coordinates must be identical
+        const resultCoords = walkStations(importOverlapShots);
+        for (let i = 0; i < resultCoords.length; i++) {
+          expect(resultCoords[i]!.x).toBeCloseTo(importCoords[i]!.x, 10);
+          expect(resultCoords[i]!.y).toBeCloseTo(importCoords[i]!.y, 10);
+          expect(resultCoords[i]!.z).toBeCloseTo(importCoords[i]!.z, 10);
+        }
+      });
+
+      it('NO 180° flip: final station within tolerance (not across the cave)', () => {
+        // The most important check: if azimuth were flipped 180°, the final
+        // station would be ~2*distance away from where it should be.
+        // With matchedShots=3 at ~5m each, a flip would put the final station
+        // ~30m away instead of ~15m from origin.
+        const resultShots = sortedOverlapIds.map(id => {
+          const targetIdx = computeTargetShotIndex(id, params);
+          const raw = c.existingShots[targetIdx]!;
+          const target = shouldReverse ? reverseTargetShot(raw) : raw;
+          return applyTargetData(importShots[id]!, target);
+        });
+        const resultCoords = walkStations(resultShots);
+        const last = resultCoords[resultCoords.length - 1]!;
+        const importLast = importCoords[importCoords.length - 1]!;
+
+        // With ~5m shots and ~1° error, max cumulative drift over 3 shots is < 1m.
+        // A 180° flip would produce ~30m displacement.
+        expect(dist3d(last, importLast)).toBeLessThan(5.0);
+      });
+    });
+  }
 });
