@@ -26,7 +26,7 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | File | Purpose |
 |------|---------|
 | `src-tauri/src/core/command.rs` | Command enum and result types |
-| `src-tauri/src/core/state.rs` | AppState with command execution, auto-save |
+| `src-tauri/src/core/state.rs` | AppState with command execution |
 | `src-tauri/src/persistence/sqlite.rs` | Database schema and operations |
 | `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
 | `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
@@ -56,22 +56,18 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 
 ### Mutex Lock Ordering
 
-**Critical**: Never hold a Mutex lock while calling methods that acquire other locks. This caused a deadlock bug where auto-save held the `config` lock while calling `save_project`, which tried to lock `config` again.
+**Critical**: Never hold a Mutex lock while calling methods that acquire other locks. Release the first lock before calling methods that may acquire others.
 
 **Pattern to avoid**:
 ```rust
 // BAD - holds lock while calling other method
 if let Ok(config) = self.config.lock() {
-    if config.auto_save {
-        self.save_project(None); // save_project also locks config!
-    }
+    self.do_something(); // may try to lock config again → deadlock!
 }
 
 // GOOD - release lock before calling
-let should_save = self.config.lock().map(|c| c.auto_save).unwrap_or(false);
-if should_save {
-    self.save_project(None);
-}
+let value = self.config.lock().map(|c| c.some_field).unwrap_or(default);
+self.do_something_with(value);
 ```
 
 ### Safe File Save
