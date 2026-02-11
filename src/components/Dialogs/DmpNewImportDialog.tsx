@@ -18,7 +18,17 @@ import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotToShotData } from '../../utils/shotConversion';
-import { circularMeanDegrees } from '../../utils/angles';
+import {
+  computeMergeOptions,
+  computeOverlapIds,
+  computeActionableIds,
+  computeTargetShotIndex,
+  needsDirectionReversal,
+  reverseTargetShot,
+  applyTargetData,
+  interpolateShots,
+  type TargetShotLike,
+} from '../../utils/overlapHelpers';
 
 const SECTION_COLORS = [
   '#4ecdc4', '#ff6b6b', '#95a5a6', '#3498db',
@@ -46,44 +56,6 @@ interface DmpNewImportDialogProps {
   onBack: () => void;
   onHandoffToLegacy: (remainingIndices: Set<number>, connections: VirtualConnection[]) => void;
   onComplete: () => void;
-}
-
-// ─── Merge station helpers ────────────────────────────────────────────────────
-
-interface MergeOption {
-  offset: number;
-  importStation: number;
-  existingStation: number;
-}
-
-function computeMergeOptions(suggestion: CrossSectionSuggestion, importShotCount: number): MergeOption[] {
-  const { importStationIndex, existingStationIndex, matchedShots, direction, isPartial } = suggestion;
-  const maxOffset = isPartial ? matchedShots - 1 : matchedShots;
-  const options: MergeOption[] = [];
-
-  for (let k = 0; k <= maxOffset; k++) {
-    const importStation = importStationIndex === 0 ? k : importStationIndex - k;
-    // For importStationIndex === 0, existingStationIndex is at the overlap start (= anchor).
-    // For importStationIndex > 0, existingStationIndex is at the overlap start, but the
-    // anchor (importStationIndex) is matchedShots stations away at the overlap end.
-    let existingStation: number;
-    if (importStationIndex === 0) {
-      existingStation = direction === 'forward'
-        ? existingStationIndex + k
-        : existingStationIndex - k;
-    } else {
-      existingStation = direction === 'forward'
-        ? (existingStationIndex + matchedShots) - k
-        : (existingStationIndex - matchedShots) + k;
-    }
-
-    // Guard: stations must stay within valid ranges
-    if (importStation < 0 || importStation > importShotCount) continue;
-    if (existingStation < 0) continue;
-
-    options.push({ offset: k, importStation, existingStation });
-  }
-  return options;
 }
 
 // ─── Section edit state ──────────────────────────────────────────────────────
@@ -264,84 +236,6 @@ function buildBatchImport(
   return { configs, unreachable };
 }
 
-// ─── Overlap mode helpers ─────────────────────────────────────────────────────
-
-/** Average two nullable numbers; returns null if both are null. */
-function avgNullable(a: number | null, b: number | null): number | null {
-  if (a == null && b == null) return null;
-  if (a == null) return b;
-  if (b == null) return a;
-  return (a + b) / 2;
-}
-
-/** A shot-like shape from a target section (existing project or another import). */
-interface TargetShotLike {
-  azimuth_in: number;
-  azimuth_out: number;
-  length: number;
-  depth_in: number;
-  depth_out: number;
-  pitch_in: number | null;
-  pitch_out: number | null;
-  left: number | null;
-  right: number | null;
-  up: number | null;
-  down: number | null;
-}
-
-/** Replace an editable shot's measurement values with target data. */
-function applyTargetData(shot: EditableShot, target: TargetShotLike): EditableShot {
-  return {
-    ...shot,
-    azimuth_in: target.azimuth_in,
-    azimuth_out: target.azimuth_out,
-    length: target.length,
-    depth_in: target.depth_in,
-    depth_out: target.depth_out,
-    pitch_in: target.pitch_in,
-    pitch_out: target.pitch_out,
-    left: target.left,
-    right: target.right,
-    up: target.up,
-    down: target.down,
-  };
-}
-
-/** Average import and target shot values (circular mean for azimuths). */
-function interpolateShots(importShot: EditableShot, target: TargetShotLike): EditableShot {
-  return {
-    ...importShot,
-    azimuth_in: circularMeanDegrees(importShot.azimuth_in, target.azimuth_in),
-    azimuth_out: circularMeanDegrees(importShot.azimuth_out, target.azimuth_out),
-    length: (importShot.length + target.length) / 2,
-    depth_in: (importShot.depth_in + target.depth_in) / 2,
-    depth_out: (importShot.depth_out + target.depth_out) / 2,
-    pitch_in: avgNullable(importShot.pitch_in, target.pitch_in),
-    pitch_out: avgNullable(importShot.pitch_out, target.pitch_out),
-    left: avgNullable(importShot.left, target.left),
-    right: avgNullable(importShot.right, target.right),
-    up: avgNullable(importShot.up, target.up),
-    down: avgNullable(importShot.down, target.down),
-  };
-}
-
-/** Reverse a target shot's direction so it matches the opposite traversal direction. */
-function reverseTargetShot(shot: TargetShotLike): TargetShotLike {
-  return {
-    azimuth_in: (shot.azimuth_out + 180) % 360,
-    azimuth_out: (shot.azimuth_in + 180) % 360,
-    length: shot.length,
-    depth_in: shot.depth_out,
-    depth_out: shot.depth_in,
-    pitch_in: shot.pitch_out != null ? -shot.pitch_out : null,
-    pitch_out: shot.pitch_in != null ? -shot.pitch_in : null,
-    left: shot.right,
-    right: shot.left,
-    up: shot.up,
-    down: shot.down,
-  };
-}
-
 /**
  * Connection Wizard — pre-calculates all placements at startup, presents
  * suggestions sorted by score, records virtual connections on confirm,
@@ -496,17 +390,7 @@ export default function DmpNewImportDialog({
     if (!currentSuggestion || !editState) return new Set<number>();
 
     const { importStationIndex, matchedShots } = currentSuggestion;
-    // Compute original shot IDs in the overlap
-    const frozenIds = new Set<number>();
-    if (importStationIndex === 0) {
-      // Forward from station 0: shots 0..matchedShots-1
-      for (let i = 0; i < matchedShots; i++) frozenIds.add(i);
-    } else {
-      // Backward from end: shots (importStationIndex-matchedShots)..(importStationIndex-1)
-      for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
-        if (i >= 0) frozenIds.add(i);
-      }
-    }
+    const frozenIds = computeOverlapIds(importStationIndex, matchedShots);
 
     // Map original IDs to current indices in editState.shots
     const indices = new Set<number>();
@@ -526,29 +410,8 @@ export default function DmpNewImportDialog({
     const { importStationIndex, matchedShots, direction } = currentSuggestion;
     const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
 
-    // Compute all overlap shot IDs (same logic as frozenShotIndices)
-    const allOverlapIds = new Set<number>();
-    if (importStationIndex === 0) {
-      for (let i = 0; i < matchedShots; i++) allOverlapIds.add(i);
-    } else {
-      for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
-        if (i >= 0) allOverlapIds.add(i);
-      }
-    }
-
-    // Actionable = overlap shots up to (but not past) merge station
-    const actionableIds = new Set<number>();
-    if (importStationIndex === 0) {
-      // Forward: shots 0..mergeImportStation-1 are actionable
-      for (let i = 0; i < mergeImportStation; i++) {
-        if (allOverlapIds.has(i)) actionableIds.add(i);
-      }
-    } else {
-      // Backward: shots mergeImportStation..(importStationIndex-1) are actionable
-      for (let i = mergeImportStation; i < importStationIndex; i++) {
-        if (allOverlapIds.has(i)) actionableIds.add(i);
-      }
-    }
+    const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
+    const actionableIds = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
 
     // Get target shots for data replacement
     let targetShots: TargetShotLike[] | null = null;
@@ -576,19 +439,14 @@ export default function DmpNewImportDialog({
       // NOT the merge-adjusted station — the merge picker only controls which
       // shots are actionable, not the overlap-to-target correspondence.
       if (targetShots) {
-        // 'reverse' direction means import retraces existing shots backwards —
-        // target shot measurements must be direction-reversed before use.
-        const needsReversal = direction === 'reverse';
-        const overlapStart = importStationIndex === 0 ? 0 : importStationIndex - matchedShots;
+        const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+        const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
         const targetMap = new Map<number, TargetShotLike>();
         for (const overlapId of allOverlapIds) {
-          const k = overlapId - overlapStart;
-          const targetIdx = direction === 'forward'
-            ? existingStationIndex + k
-            : (existingStationIndex - 1) - k;
+          const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
           if (targetIdx >= 0 && targetIdx < targetShots.length) {
             const raw = targetShots[targetIdx]!;
-            targetMap.set(overlapId, needsReversal ? reverseTargetShot(raw) : raw);
+            targetMap.set(overlapId, shouldReverse ? reverseTargetShot(raw) : raw);
           }
         }
         // Replace targetShots reference with the map for efficient lookup
@@ -1058,40 +916,20 @@ export default function DmpNewImportDialog({
     const { importStationIndex, matchedShots, direction, existingStationIndex } = currentSuggestion;
     const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
 
-    // Recompute actionable overlap IDs (same logic as effectiveShots)
-    const allOverlapIds = new Set<number>();
-    const actionableIds = new Set<number>();
-    if (importStationIndex === 0) {
-      for (let i = 0; i < matchedShots; i++) allOverlapIds.add(i);
-      for (let i = 0; i < mergeImportStation; i++) {
-        if (allOverlapIds.has(i)) actionableIds.add(i);
-      }
-    } else {
-      for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
-        if (i >= 0) allOverlapIds.add(i);
-      }
-      for (let i = mergeImportStation; i < importStationIndex; i++) {
-        if (allOverlapIds.has(i)) actionableIds.add(i);
-      }
-    }
+    const actionableIds = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
 
     // Resolved shots are in import direction; reverse back to target direction if needed.
-    const needsReversal = direction === 'reverse';
-    const overlapStart = importStationIndex === 0 ? 0 : importStationIndex - matchedShots;
+    const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+    const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
 
     const map = new Map<number, EditableShot>();
     for (const overlapId of actionableIds) {
-      // Find the resolved shot in effectiveShots (reference shots with resolved data)
       const resolvedShot = effectiveShots.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
       if (!resolvedShot) continue;
 
-      // Same anchored mapping as effectiveShots
-      const k = overlapId - overlapStart;
-      const targetIdx = direction === 'forward'
-        ? existingStationIndex + k
-        : (existingStationIndex - 1) - k;
+      const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
       if (targetIdx >= 0) {
-        if (needsReversal) {
+        if (shouldReverse) {
           const reversed = reverseTargetShot({
             azimuth_in: resolvedShot.azimuth_in,
             azimuth_out: resolvedShot.azimuth_out,
@@ -1190,14 +1028,7 @@ export default function DmpNewImportDialog({
         importShots = effectiveShots;
       } else {
         const { importStationIndex, matchedShots } = currentSuggestion;
-        const allOverlapIds = new Set<number>();
-        if (importStationIndex === 0) {
-          for (let i = 0; i < matchedShots; i++) allOverlapIds.add(i);
-        } else {
-          for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
-            if (i >= 0) allOverlapIds.add(i);
-          }
-        }
+        const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
         importShots = effectiveShots.map(shot =>
           (shot.is_reference || (!shot.isNew && allOverlapIds.has(shot.id)))
             ? { ...shot, isDeleted: true, is_reference: false }
