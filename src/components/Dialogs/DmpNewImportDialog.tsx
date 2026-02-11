@@ -120,6 +120,26 @@ function buildAdjacency(
   return adj;
 }
 
+/**
+ * Adjust a station index for deleted shots.
+ *
+ * When overlap shots are deleted from an import section, station indices
+ * shift. This counts non-deleted shots before the original station position
+ * to compute the adjusted index in the filtered shot array.
+ */
+function adjustStationForDeletedShots(
+  shots: EditableShot[],
+  originalStation: number,
+): number {
+  let adjusted = 0;
+  for (const s of shots) {
+    if (s.isDeleted) continue;
+    if (!s.isNew && s.id >= originalStation) break;
+    adjusted++;
+  }
+  return adjusted;
+}
+
 /** Build batch import configs from virtual connections + BFS order. */
 function buildBatchImport(
   connections: VirtualConnection[],
@@ -174,11 +194,16 @@ function buildBatchImport(
     const conn = connections.find((c) => c.importSectionIndex === idx);
     if (!conn) continue;
 
+    // Adjust import station index for deleted shots (overlap removal shifts stations)
+    const adjustedImportStation = edits
+      ? adjustStationForDeletedShots(edits.shots, conn.importStationIndex)
+      : conn.importStationIndex;
+
     let placement: ImportPlacement;
     if (conn.targetType === 'existing' && conn.existingSectionId != null && conn.existingStationIndex != null) {
       placement = {
         type: 'from_existing',
-        import_station: conn.importStationIndex,
+        import_station: adjustedImportStation,
         existing_station: {
           section_id: conn.existingSectionId,
           station_index: conn.existingStationIndex,
@@ -191,11 +216,16 @@ function buildBatchImport(
         // Target not yet placed — shouldn't happen with BFS order, but skip gracefully
         continue;
       }
+      // Adjust target station index for deleted shots in the target section
+      const targetEdits = sectionEdits?.get(conn.targetImportIndex);
+      const adjustedTargetStation = targetEdits
+        ? adjustStationForDeletedShots(targetEdits.shots, conn.targetImportStationIndex)
+        : conn.targetImportStationIndex;
       placement = {
         type: 'from_importing',
-        import_station: conn.importStationIndex,
+        import_station: adjustedImportStation,
         target_section_index: targetPos,
-        target_station_index: conn.targetImportStationIndex,
+        target_station_index: adjustedTargetStation,
       };
     } else {
       continue;
