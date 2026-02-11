@@ -6,7 +6,10 @@ use tauri::State;
 
 use crate::core::state::AppState;
 use crate::core::CommandResult;
-use crate::models::placement_suggest::{ExistingSection, PlacementSuggestion, suggest_placements};
+use crate::models::placement_suggest::{
+    CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion, PlacementSuggestion,
+    suggest_all_placements, suggest_placements,
+};
 use crate::models::ShotData;
 use crate::parsers::DmpFile;
 use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
@@ -280,4 +283,27 @@ pub fn suggest_import_placement(
         .collect();
 
     Ok(suggest_placements(&shots, &existing_sections))
+}
+
+/// Suggest placements for ALL import sections against BOTH existing project
+/// sections AND each other (import-to-import). Returns a flat list sorted by score.
+#[tauri::command]
+pub fn suggest_all_import_placements(
+    state: State<'_, AppState>,
+    import_sections: Vec<ImportSectionForSuggestion>,
+) -> Result<Vec<CrossSectionSuggestion>, String> {
+    let existing_sections: Vec<ExistingSection> = match state.get_project_state() {
+        Some(project) => project
+            .sections
+            .iter()
+            .map(|s| ExistingSection {
+                id: s.id,
+                name: s.name.clone().unwrap_or_else(|| format!("Section {}", s.id)),
+                shots: s.shots.clone(),
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+
+    Ok(suggest_all_placements(&import_sections, &existing_sections))
 }
