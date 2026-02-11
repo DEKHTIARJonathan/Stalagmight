@@ -831,7 +831,12 @@
       "mergeStation": "Merge at",
       "sectionSettings": "Section Settings",
       "backWizard": "Go Back?",
-      "backWizardMessage": "Going back will not undo sections already imported."
+      "backWizardMessage": "Going back will not undo sections already imported.",
+      "overlapMode": "Overlap",
+      "overlapMode_importData": "Use import data",
+      "overlapMode_existingData": "Use existing data",
+      "overlapMode_interpolate": "Interpolate",
+      "overlapMode_keepBoth": "Keep both (reference)"
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Section",

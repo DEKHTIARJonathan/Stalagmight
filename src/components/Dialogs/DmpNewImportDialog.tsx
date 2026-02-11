@@ -9,6 +9,7 @@ import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
+import type { OverlapMode } from '../../types/config';
 import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig } from './SectionPreview';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
@@ -17,6 +18,7 @@ import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotToShotData } from '../../utils/shotConversion';
+import { circularMeanDegrees } from '../../utils/angles';
 
 const SECTION_COLORS = [
   '#4ecdc4', '#ff6b6b', '#95a5a6', '#3498db',
@@ -252,6 +254,67 @@ function buildBatchImport(
   return { configs, unreachable };
 }
 
+// ─── Overlap mode helpers ─────────────────────────────────────────────────────
+
+/** Average two nullable numbers; returns null if both are null. */
+function avgNullable(a: number | null, b: number | null): number | null {
+  if (a == null && b == null) return null;
+  if (a == null) return b;
+  if (b == null) return a;
+  return (a + b) / 2;
+}
+
+/** A shot-like shape from a target section (existing project or another import). */
+interface TargetShotLike {
+  azimuth_in: number;
+  azimuth_out: number;
+  length: number;
+  depth_in: number;
+  depth_out: number;
+  pitch_in: number | null;
+  pitch_out: number | null;
+  left: number | null;
+  right: number | null;
+  up: number | null;
+  down: number | null;
+}
+
+/** Replace an editable shot's measurement values with target data. */
+function applyTargetData(shot: EditableShot, target: TargetShotLike): EditableShot {
+  return {
+    ...shot,
+    azimuth_in: target.azimuth_in,
+    azimuth_out: target.azimuth_out,
+    length: target.length,
+    depth_in: target.depth_in,
+    depth_out: target.depth_out,
+    pitch_in: target.pitch_in,
+    pitch_out: target.pitch_out,
+    left: target.left,
+    right: target.right,
+    up: target.up,
+    down: target.down,
+  };
+}
+
+/** Average import and target shot values (circular mean for azimuths). */
+function interpolateShots(importShot: EditableShot, target: TargetShotLike): EditableShot {
+  return {
+    ...importShot,
+    azimuth_in: circularMeanDegrees(importShot.azimuth_in, target.azimuth_in),
+    azimuth_out: circularMeanDegrees(importShot.azimuth_out, target.azimuth_out),
+    length: (importShot.length + target.length) / 2,
+    depth_in: (importShot.depth_in + target.depth_in) / 2,
+    depth_out: (importShot.depth_out + target.depth_out) / 2,
+    pitch_in: avgNullable(importShot.pitch_in, target.pitch_in),
+    pitch_out: avgNullable(importShot.pitch_out, target.pitch_out),
+    left: avgNullable(importShot.left, target.left),
+    right: avgNullable(importShot.right, target.right),
+    up: avgNullable(importShot.up, target.up),
+    down: avgNullable(importShot.down, target.down),
+  };
+}
+
 /**
  * Connection Wizard — pre-calculates all placements at startup, presents
  * suggestions sorted by score, records virtual connections on confirm,
@@ -273,6 +336,8 @@ export default function DmpNewImportDialog({
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
+  const config = useProjectStore((s) => s.config);
+  const updateConfig = useProjectStore((s) => s.updateConfig);
 
   // Core state — virtual connections instead of imported indices
   const [connections, setConnections] = useState<VirtualConnection[]>([]);
@@ -289,6 +354,11 @@ export default function DmpNewImportDialog({
 
   // Merge station selection
   const [selectedMergeOffset, setSelectedMergeOffset] = useState(0);
+
+  // Overlap handling mode (persisted to config)
+  const [overlapMode, setOverlapMode] = useState<OverlapMode>(
+    config?.import?.overlap_mode ?? 'import_data'
+  );
 
   // Section editing state
   const [editState, setEditState] = useState<SectionEditState | null>(null);
@@ -419,6 +489,122 @@ export default function DmpNewImportDialog({
     return indices;
   }, [currentSuggestion, editState]);
 
+  // Compute effective shots: applies overlap mode transformations as a derived view.
+  // Raw editState is never mutated by overlap settings — effectiveShots is computed.
+  const effectiveShots = useMemo(() => {
+    if (!editState || !currentSuggestion || currentSuggestion.matchedShots === 0) {
+      return editState?.shots ?? [];
+    }
+
+    const { importStationIndex, matchedShots, direction } = currentSuggestion;
+    const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
+
+    // Compute all overlap shot IDs (same logic as frozenShotIndices)
+    const allOverlapIds = new Set<number>();
+    if (importStationIndex === 0) {
+      for (let i = 0; i < matchedShots; i++) allOverlapIds.add(i);
+    } else {
+      for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
+        if (i >= 0) allOverlapIds.add(i);
+      }
+    }
+
+    // Actionable = overlap shots up to (but not past) merge station
+    const actionableIds = new Set<number>();
+    if (importStationIndex === 0) {
+      // Forward: shots 0..mergeImportStation-1 are actionable
+      for (let i = 0; i < mergeImportStation; i++) {
+        if (allOverlapIds.has(i)) actionableIds.add(i);
+      }
+    } else {
+      // Backward: shots mergeImportStation..(importStationIndex-1) are actionable
+      for (let i = mergeImportStation; i < importStationIndex; i++) {
+        if (allOverlapIds.has(i)) actionableIds.add(i);
+      }
+    }
+
+    // Get target shots for data replacement
+    let targetShots: TargetShotLike[] | null = null;
+    if (overlapMode !== 'import_data' && overlapMode !== 'keep_both') {
+      const { targetType, existingSectionId, targetImportIndex, existingStationIndex } = currentSuggestion;
+      const mergeExistingStation = selectedMergePair?.existingStation ?? existingStationIndex;
+
+      if (targetType === 'existing' && existingSectionId != null) {
+        const currentProject = useProjectStore.getState().project;
+        const targetSection = currentProject?.sections.find((s) => s.id === existingSectionId);
+        if (targetSection) targetShots = targetSection.shots;
+      } else if (targetType === 'importing' && targetImportIndex != null) {
+        const targetEdits = sectionEditsRef.current.get(targetImportIndex);
+        if (targetEdits) {
+          targetShots = targetEdits.shots.filter((s) => !s.isDeleted);
+        } else {
+          const targetDmpSection = dmpFile.sections[targetImportIndex];
+          if (targetDmpSection) {
+            targetShots = convertToEditableShots(targetDmpSection.shots);
+          }
+        }
+      }
+
+      // Build a mapping: import overlap shot ID → target shot
+      if (targetShots) {
+        const targetMap = new Map<number, TargetShotLike>();
+        for (const overlapId of allOverlapIds) {
+          let targetIdx: number;
+          if (importStationIndex === 0) {
+            // Forward: import shot k → target shot mergeExistingStation + k (or - k for reverse)
+            targetIdx = direction === 'forward'
+              ? mergeExistingStation + overlapId
+              : mergeExistingStation - 1 - overlapId;
+          } else {
+            // Backward: import shot offset from overlap start
+            const overlapStart = importStationIndex - matchedShots;
+            const k = overlapId - overlapStart;
+            targetIdx = direction === 'forward'
+              ? (mergeExistingStation - matchedShots) + k
+              : (mergeExistingStation + matchedShots) - 1 - k;
+          }
+          if (targetIdx >= 0 && targetIdx < targetShots.length) {
+            targetMap.set(overlapId, targetShots[targetIdx]!);
+          }
+        }
+        // Replace targetShots reference with the map for efficient lookup
+        return editState.shots.map((shot) => {
+          if (shot.isNew || shot.isDeleted) return shot;
+          const isOverlap = !shot.isNew && allOverlapIds.has(shot.id);
+          if (!isOverlap) return shot;
+
+          const isActionable = actionableIds.has(shot.id);
+          if (isActionable) {
+            const target = targetMap.get(shot.id);
+            if (target) {
+              if (overlapMode === 'existing_data') {
+                return applyTargetData(shot, target);
+              } else if (overlapMode === 'interpolate') {
+                return interpolateShots(shot, target);
+              }
+            }
+            return shot;
+          }
+          // Past merge station: always mark as reference
+          return { ...shot, is_reference: true };
+        });
+      }
+    }
+
+    // For import_data / keep_both / no target data available:
+    return editState.shots.map((shot) => {
+      if (shot.isNew || shot.isDeleted) return shot;
+      const isOverlap = !shot.isNew && allOverlapIds.has(shot.id);
+      if (!isOverlap) return shot;
+
+      const isActionable = actionableIds.has(shot.id);
+      if (overlapMode === 'keep_both' || !isActionable) {
+        return { ...shot, is_reference: true };
+      }
+      return shot;
+    });
+  }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
+
   // Section edit callbacks
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
@@ -536,6 +722,14 @@ export default function DmpNewImportDialog({
       return { ...prev, shots: newShots };
     });
   }, []);
+
+  // Persist overlap mode to config on change
+  const handleOverlapModeChange = useCallback((value: OverlapMode) => {
+    setOverlapMode(value);
+    if (config) {
+      updateConfig({ ...config, import: { ...config.import, overlap_mode: value } });
+    }
+  }, [config, updateConfig]);
 
   // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
   const pickFromPool = useCallback(() => {
@@ -741,15 +935,15 @@ export default function DmpNewImportDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
-  // Build preview section for import side (live from editState when available)
+  // Build preview section for import side (live from effectiveShots when available)
   const importPreviewSection = useMemo<DmpSection | null>(() => {
     if (!currentSuggestion) return null;
     const section = dmpFile.sections[currentSuggestion.importSectionIndex];
     if (!section) return null;
     if (!editState) return section;
 
-    // Build synthetic DmpSection from editState for live preview
-    const syntheticShots: DmpShot[] = editState.shots
+    // Build synthetic DmpSection from effectiveShots for live preview
+    const syntheticShots: DmpShot[] = effectiveShots
       .filter((s) => !s.isDeleted)
       .map((s) => ({
         shot_type: 'Standard' as const,
@@ -774,7 +968,7 @@ export default function DmpNewImportDialog({
       direction: editState.direction,
       shots: syntheticShots,
     };
-  }, [currentSuggestion, dmpFile.sections, editState]);
+  }, [currentSuggestion, dmpFile.sections, editState, effectiveShots]);
 
   // Build merge preview config for SectionPreview (existing target)
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
@@ -830,9 +1024,9 @@ export default function DmpNewImportDialog({
     if (!currentSuggestion) return;
     setError(null);
 
-    // Save edit state to ref before moving on
+    // Save edit state with effectiveShots applied to ref before moving on
     if (editState) {
-      sectionEditsRef.current.set(currentSuggestion.importSectionIndex, editState);
+      sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: effectiveShots });
     }
 
     // Use selected merge pair for station indices (falls back to suggestion's original)
@@ -871,7 +1065,7 @@ export default function DmpNewImportDialog({
       // Pool exhausted — transition to placing with whatever we have
       setPhase('placing');
     }
-  }, [currentSuggestion, selectedMergePair, editState, zeroDatumConfig, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, selectedMergePair, editState, effectiveShots, zeroDatumConfig, selectedIndices, pickFromPool]);
 
   // Skip handler
   const handleSkip = useCallback(() => {
@@ -1033,6 +1227,26 @@ export default function DmpNewImportDialog({
                 </div>
               )}
 
+              {/* Overlap mode picker */}
+              {currentSuggestion && currentSuggestion.matchedShots > 0 && (
+                <div className="flex items-center gap-2" data-testid="overlap-mode-picker">
+                  <label className="text-xs text-text-secondary whitespace-nowrap">
+                    {t('dialogs.dmpNewImport.overlapMode')}
+                  </label>
+                  <select
+                    value={overlapMode}
+                    onChange={(e) => handleOverlapModeChange(e.target.value as OverlapMode)}
+                    className="px-2 py-1 bg-background border border-border rounded text-xs"
+                    data-testid="overlap-mode-select"
+                  >
+                    <option value="import_data">{t('dialogs.dmpNewImport.overlapMode_importData')}</option>
+                    <option value="existing_data">{t('dialogs.dmpNewImport.overlapMode_existingData')}</option>
+                    <option value="interpolate">{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
+                    <option value="keep_both">{t('dialogs.dmpNewImport.overlapMode_keepBoth')}</option>
+                  </select>
+                </div>
+              )}
+
               {/* Confidence badge */}
               <div className="flex items-center gap-2" data-testid="wizard-confidence">
                 <span className={`px-2 py-1 rounded border text-xs font-medium ${confidenceColors[currentSuggestion!.confidence] ?? ''}`}>
@@ -1128,7 +1342,7 @@ export default function DmpNewImportDialog({
                   />
                   <div className="border-t border-border" />
                   <ShotTableEditor
-                    shots={editState.shots}
+                    shots={effectiveShots}
                     onShotChange={handleShotChange}
                     onAddShot={handleAddShot}
                     onDeleteShot={handleDeleteShot}

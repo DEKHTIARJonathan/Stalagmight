@@ -1,9 +1,9 @@
 use super::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
-    GlobalViewConfig, GpsOrigin, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig,
-    MapControlsConfig, MapSnapConfig, PanelsConfig, SectionColorsConfig, ShortcutFeedback,
-    ShortcutsConfig, ShotConfig, StationConfig, UnitsConfig, ValidationConfig,
+    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
+    MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, SectionColorsConfig,
+    ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig, UnitsConfig, ValidationConfig,
 };
 use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
 
@@ -26,6 +26,7 @@ impl Default for Config {
             debug: DebugConfig::default(),
             global_view: GlobalViewConfig::default(),
             appearance: AppearanceConfig::default(),
+            import: ImportConfig::default(),
             legacy_snap: None,
         }
     }

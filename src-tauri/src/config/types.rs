@@ -28,6 +28,8 @@ pub struct Config {
     pub global_view: GlobalViewConfig,
     #[serde(default)]
     pub appearance: AppearanceConfig,
+    #[serde(default)]
+    pub import: ImportConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
@@ -390,6 +392,25 @@ impl AppearanceConfig {
     }
 }
 
+/// How overlap shots are handled during import connection
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum OverlapMode {
+    #[default]
+    ImportData,
+    ExistingData,
+    Interpolate,
+    KeepBoth,
+}
+
+/// Import-related configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
+#[ts(export)]
+pub struct ImportConfig {
+    #[serde(default)]
+    pub overlap_mode: OverlapMode,
+}
 
 fn default_fps_threshold() -> u32 {
     30

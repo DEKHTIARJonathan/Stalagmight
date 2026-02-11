@@ -8,6 +8,8 @@ export type {
   ShortcutFeedback,
   ThemeMode,
   AppearanceConfig,
+  ImportConfig,
+  OverlapMode,
   Config,
   GeneralConfig,
   UnitsConfig,
@@ -208,6 +210,9 @@ export const defaultConfig: Config = {
   },
   appearance: {
     theme: 'dark',
+  },
+  import: {
+    overlap_mode: 'import_data' as const,
   },
 };
 
