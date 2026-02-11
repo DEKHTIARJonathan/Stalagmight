@@ -1988,46 +1988,17 @@ impl Project {
             return Ok(());
         }
 
-        let mut ata_x = vec![0.0; n * n];
+        // Sparse assembly for the symmetric positive-definite normal matrix A^T A.
+        // The matrix is a weighted graph Laplacian — extremely sparse (≤3 non-zeros
+        // per row).  We store diagonal entries and off-diagonal adjacency, then solve
+        // via Jacobi-preconditioned Conjugate Gradient which is O(nnz * iterations)
+        // instead of O(n³) for dense LU.
         let mut atb_x = vec![0.0; n];
-        let mut ata_y = vec![0.0; n * n];
         let mut atb_y = vec![0.0; n];
-
-        let add_row = |ata: &mut [f64],
-                           atb: &mut [f64],
-                           i: Option<usize>,
-                           j: Option<usize>,
-                           b: f64,
-                           w: f64| {
-            if !w.is_finite() || w <= 0.0 {
-                return;
-            }
-            match (i, j) {
-                (Some(i_idx), Some(j_idx)) => {
-                    let ii = i_idx * n + i_idx;
-                    let jj = j_idx * n + j_idx;
-                    let ij = i_idx * n + j_idx;
-                    let ji = j_idx * n + i_idx;
-                    ata[ii] += w;
-                    ata[jj] += w;
-                    ata[ij] -= w;
-                    ata[ji] -= w;
-                    atb[i_idx] += -w * b;
-                    atb[j_idx] += w * b;
-                }
-                (Some(i_idx), None) => {
-                    let ii = i_idx * n + i_idx;
-                    ata[ii] += w;
-                    atb[i_idx] += -w * b;
-                }
-                (None, Some(j_idx)) => {
-                    let jj = j_idx * n + j_idx;
-                    ata[jj] += w;
-                    atb[j_idx] += w * b;
-                }
-                (None, None) => {}
-            }
-        };
+        let mut diag_x = vec![0.0; n];
+        let mut diag_y = vec![0.0; n];
+        // Adjacency list: for each node, list of (neighbor, weight_x, weight_y)
+        let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
 
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
             let quality = if section.quality.is_finite() && section.quality > 0.0 {
@@ -2090,20 +2061,135 @@ impl Project {
                     }
                     (None, None) => 0.0,
                 };
-                add_row(&mut ata_x, &mut atb_x, i_idx, j_idx, b_x, w_x);
-                add_row(&mut ata_y, &mut atb_y, i_idx, j_idx, b_y, w_y);
+
+                // Accumulate into sparse structure
+                macro_rules! add_sparse {
+                    ($w:expr, $b_val:expr, $diag:expr, $atb:expr, $axis:literal) => {
+                        if $w.is_finite() && $w > 0.0 {
+                            match (i_idx, j_idx) {
+                                (Some(ii), Some(jj)) => {
+                                    $diag[ii] += $w;
+                                    $diag[jj] += $w;
+                                    $atb[ii] += -$w * $b_val;
+                                    $atb[jj] += $w * $b_val;
+                                }
+                                (Some(ii), None) => {
+                                    $diag[ii] += $w;
+                                    $atb[ii] += -$w * $b_val;
+                                }
+                                (None, Some(jj)) => {
+                                    $diag[jj] += $w;
+                                    $atb[jj] += $w * $b_val;
+                                }
+                                (None, None) => {}
+                            }
+                        }
+                    };
+                }
+                add_sparse!(w_x, b_x, diag_x, atb_x, 0);
+                add_sparse!(w_y, b_y, diag_y, atb_y, 1);
+
+                // Record adjacency for off-diagonal entries (edge weight = -w)
+                if let (Some(ii), Some(jj)) = (i_idx, j_idx) {
+                    // Check if edge already exists and accumulate
+                    let mut found = false;
+                    for entry in adj[ii].iter_mut() {
+                        if entry.0 == jj {
+                            entry.1 -= w_x;
+                            entry.2 -= w_y;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        adj[ii].push((jj, -w_x, -w_y));
+                    }
+                    let mut found = false;
+                    for entry in adj[jj].iter_mut() {
+                        if entry.0 == ii {
+                            entry.1 -= w_x;
+                            entry.2 -= w_y;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        adj[jj].push((ii, -w_x, -w_y));
+                    }
+                }
             }
         }
 
-        let solve_axis = |ata: Vec<f64>, atb: Vec<f64>| -> Result<Vec<f64>, String> {
-            let m = nalgebra::DMatrix::from_row_slice(n, n, &ata);
-            let b = nalgebra::DVector::from_row_slice(&atb);
-            let sol = m.lu().solve(&b).ok_or_else(|| "Least squares solve failed".to_string())?;
-            Ok(sol.as_slice().to_vec())
+        // Sparse matrix-vector product: y = A*x, where A is the graph Laplacian
+        // stored as diagonal + adjacency list.  axis=0 for X, axis=1 for Y.
+        let spmv = |x: &[f64], diag: &[f64], axis: usize| -> Vec<f64> {
+            let mut y = vec![0.0; n];
+            for i in 0..n {
+                y[i] += diag[i] * x[i];
+                for &(j, wx, wy) in &adj[i] {
+                    let w = if axis == 0 { wx } else { wy };
+                    y[i] += w * x[j];
+                }
+            }
+            y
         };
 
-        let sol_x = solve_axis(ata_x, atb_x)?;
-        let sol_y = solve_axis(ata_y, atb_y)?;
+        // Jacobi-preconditioned Conjugate Gradient solver.
+        // Converges in O(diameter) iterations for graph Laplacians.
+        let pcg_solve = |diag: &[f64], rhs: &[f64], axis: usize| -> Result<Vec<f64>, String> {
+            let max_iter = n.min(10_000);
+            let tol = 1e-12;
+
+            // Jacobi preconditioner: M = diag(A)
+            let inv_diag: Vec<f64> = diag.iter().map(|&d| {
+                if d.abs() > 1e-30 { 1.0 / d } else { 1.0 }
+            }).collect();
+
+            let mut x = vec![0.0; n];
+            let mut r = rhs.to_vec(); // r = b - A*x = b (since x=0)
+            let mut z: Vec<f64> = r.iter().zip(inv_diag.iter()).map(|(&ri, &mi)| ri * mi).collect();
+            let mut p = z.clone();
+            let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
+
+            let rhs_norm_sq: f64 = rhs.iter().map(|&v| v * v).sum();
+            if rhs_norm_sq < tol * tol {
+                return Ok(x);
+            }
+
+            for _iter in 0..max_iter {
+                let ap = spmv(&p, diag, axis);
+                let pap: f64 = p.iter().zip(ap.iter()).map(|(&pi, &api)| pi * api).sum();
+                if pap.abs() < 1e-30 {
+                    break;
+                }
+                let alpha = rz / pap;
+
+                for i in 0..n {
+                    x[i] += alpha * p[i];
+                    r[i] -= alpha * ap[i];
+                }
+
+                let r_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
+                if r_norm_sq < tol * tol * rhs_norm_sq {
+                    break;
+                }
+
+                for i in 0..n {
+                    z[i] = r[i] * inv_diag[i];
+                }
+                let rz_new: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
+                let beta = rz_new / rz;
+                for i in 0..n {
+                    p[i] = z[i] + beta * p[i];
+                }
+                rz = rz_new;
+            }
+
+            Ok(x)
+        };
+
+        let sol_x = pcg_solve(&diag_x, &atb_x, 0)?;
+        let sol_y = pcg_solve(&diag_y, &atb_y, 1)?;
 
         // Collect original Z coordinates for each group root (depths are not adjusted)
         let mut group_raw_z: HashMap<StationRef, f64> = HashMap::new();
