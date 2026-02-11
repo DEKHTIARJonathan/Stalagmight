@@ -216,6 +216,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     debug: { map: { ...base.debug.map } },
     global_view: { ...base.global_view },
     appearance: { ...base.appearance },
+    import: { ...base.import },
   };
 
   // Apply updates with deep merge for each key

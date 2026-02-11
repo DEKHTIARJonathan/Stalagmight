@@ -14,10 +14,10 @@ use stalagmight_lib::persistence::{BackupInfo, RepairResult, SalvagedData};
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
-    GlobalViewConfig, GpsOrigin, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig,
-    MapControlsConfig, MapDebugConfig, MapSnapConfig, PanelsConfig, SectionColorsConfig,
-    ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig, ThemeMode, UnitsConfig,
-    ValidationConfig,
+    GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
+    MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
+    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig, ThemeMode,
+    UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{CommandResult, CommentHolder, ValidationWarning, WarningSeverity};
 use stalagmight_lib::core::loading::{
@@ -196,6 +196,8 @@ fn main() {
     export::<CacheConfig>(&out_dir);
     export::<GlobalViewConfig>(&out_dir);
     export::<AppearanceConfig>(&out_dir);
+    export::<ImportConfig>(&out_dir);
+    export::<OverlapMode>(&out_dir);
     export::<DecimalPrecision>(&out_dir);
     export::<LengthUnit>(&out_dir);
     export::<AngleUnit>(&out_dir);
@@ -314,6 +316,8 @@ fn main() {
         "CacheConfig",
         "GlobalViewConfig",
         "AppearanceConfig",
+        "ImportConfig",
+        "OverlapMode",
         "DecimalPrecision",
         "LengthUnit",
         "AngleUnit",
