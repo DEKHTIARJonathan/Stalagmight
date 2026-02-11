@@ -12,16 +12,83 @@ pub mod test_helpers;
 pub mod tile_providers;
 pub mod tilemap_cache;
 
+use std::collections::HashMap as StdHashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use image::{ImageFormat, GenericImageView};
+use image::{DynamicImage, ImageFormat, GenericImageView};
 use image::imageops::FilterType;
 use tauri::{Emitter, Manager};
 
 use cache::TileCache;
 use tilemap_cache::TilemapCache;
+
+/// LRU cache for decoded parent tile images.
+///
+/// When deriving overzoom tiles, multiple child tiles crop from the same parent.
+/// Without this cache, each child independently decodes the parent JPEG (~5ms each).
+/// With 16 children (2 zoom levels of overzoom), that's 16 redundant decodes.
+///
+/// The cache is keyed by (provider, z, y, x) and stores the decoded `DynamicImage`.
+/// A small capacity (4-8 entries) is sufficient since children of the same parent
+/// are requested in bursts.
+struct DecodedImageCache {
+    entries: StdHashMap<(String, u32, u32, u32), Arc<DynamicImage>>,
+    order: Vec<(String, u32, u32, u32)>,
+    capacity: usize,
+}
+
+impl DecodedImageCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: StdHashMap::with_capacity(capacity + 1),
+            order: Vec::with_capacity(capacity + 1),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, provider: &str, z: u32, y: u32, x: u32) -> Option<Arc<DynamicImage>> {
+        let key = (provider.to_string(), z, y, x);
+        if let Some(img) = self.entries.get(&key) {
+            // Move to end (most recently used)
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                self.order.remove(pos);
+                self.order.push(key);
+            }
+            Some(Arc::clone(img))
+        } else {
+            None
+        }
+    }
+
+    fn put(&mut self, provider: &str, z: u32, y: u32, x: u32, img: Arc<DynamicImage>) {
+        let key = (provider.to_string(), z, y, x);
+        if self.entries.contains_key(&key) {
+            // Update existing
+            self.entries.insert(key.clone(), img);
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                self.order.remove(pos);
+                self.order.push(key);
+            }
+        } else {
+            // Evict oldest if at capacity
+            if self.entries.len() >= self.capacity {
+                if let Some(oldest) = self.order.first().cloned() {
+                    self.entries.remove(&oldest);
+                    self.order.remove(0);
+                }
+            }
+            self.entries.insert(key.clone(), img);
+            self.order.push(key);
+        }
+    }
+}
+
+/// Global decoded image cache, shared across all tile request threads.
+/// Small capacity (8 entries) since parent tiles are requested in bursts.
+static DECODED_IMAGE_CACHE: std::sync::LazyLock<Mutex<DecodedImageCache>> =
+    std::sync::LazyLock::new(|| Mutex::new(DecodedImageCache::new(8)));
 
 /// Lock-free tile fetch statistics using atomic counters.
 ///
@@ -584,6 +651,7 @@ where
 }
 
 fn derive_tile_from_parent(
+    provider: &str,
     provider_info: &tile_providers::TileProvider,
     parent_z: u32,
     parent_x: u32,
@@ -605,8 +673,22 @@ fn derive_tile_from_parent(
         .checked_shl(delta)
         .ok_or_else(|| "Overzoom scale overflow".to_string())?;
 
-    let img = image::load_from_memory(&parent_tile.data)
-        .map_err(|e| format!("Failed to decode parent tile: {e}"))?;
+    // Use decoded image cache to avoid redundant JPEG decoding.
+    // When overzooming 2 levels, 16 child tiles share the same parent — caching
+    // the decoded DynamicImage saves ~15 redundant decodes (~5ms each).
+    let img = {
+        let mut cache = DECODED_IMAGE_CACHE.lock().map_err(|e| format!("Cache lock poisoned: {e}"))?;
+        if let Some(cached) = cache.get(provider, parent_z, parent_y, parent_x) {
+            cached
+        } else {
+            let decoded = image::load_from_memory(&parent_tile.data)
+                .map_err(|e| format!("Failed to decode parent tile: {e}"))?;
+            let arc = Arc::new(decoded);
+            cache.put(provider, parent_z, parent_y, parent_x, Arc::clone(&arc));
+            arc
+        }
+    };
+
     let (img_w, img_h) = img.dimensions();
     let base_size = img_w.min(img_h);
     if base_size == 0 {
@@ -645,12 +727,16 @@ fn derive_tile_from_parent(
         base_size
     };
 
-    let resized = cropped.resize_exact(output_size, output_size, FilterType::CatmullRom);
+    let final_img = if sub_size == output_size {
+        cropped
+    } else {
+        cropped.resize_exact(output_size, output_size, FilterType::CatmullRom)
+    };
     let format = output_format_from_hint(&provider_info.content_type_hint);
     let mut buffer = Vec::new();
     {
         let mut cursor = Cursor::new(&mut buffer);
-        resized
+        final_img
             .write_to(&mut cursor, format)
             .map_err(|e| format!("Failed to encode derived tile: {e}"))?;
     }
@@ -739,6 +825,7 @@ where
                 }
 
                 let derived = derive_tile_from_parent(
+                    provider,
                     provider_info,
                     current_z,
                     current_x,
@@ -1862,9 +1949,15 @@ mod tests {
 
     #[test]
     fn test_handle_tile_request_valid_provider_uses_registry() {
-        // With a mock fetcher, verify that a valid provider passes registry validation
+        // With a mock fetcher, verify that a valid provider passes registry validation.
+        // Pre-seed tilemap cache so the test doesn't hit the network.
         let cache = make_test_cache();
         let tilemap_cache = make_test_tilemap_cache();
+        {
+            let (base_y, base_x) = TilemapCache::get_region_origin(2, 3);
+            let mut tc = tilemap_cache.lock().unwrap();
+            tc.insert("esri", 1, base_y, base_x, vec![true; (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize]);
+        }
         let mock_fetch = |_: &str, _: u32, _: u32, _: u32| -> Result<FetchedTile, String> {
             Ok(FetchedTile {
                 data: b"tile_data".to_vec(),

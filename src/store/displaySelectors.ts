@@ -48,10 +48,10 @@ export function getEffectiveShowShotData(showShots: boolean, showShotData: boole
 
 /**
  * Compute effective visibility of station comments.
- * Station comments are only visible when both showStations AND showStationComments are true.
+ * Station comments are visible when showStationComments is true, regardless of station visibility.
  */
-export function getEffectiveShowStationComments(showStations: boolean, showStationComments: boolean): boolean {
-  return showStations && showStationComments;
+export function getEffectiveShowStationComments(_showStations: boolean, showStationComments: boolean): boolean {
+  return showStationComments;
 }
 
 /**
