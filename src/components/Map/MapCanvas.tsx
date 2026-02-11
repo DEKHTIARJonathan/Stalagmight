@@ -185,6 +185,9 @@ export default function MapCanvas() {
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
   // Current map scale in pixels per meter (for to-scale placement preview)
   const [pixelsPerMeter, setPixelsPerMeter] = useState(1);
+  // RAF batching for snap-to-station checks (prevents event queue buildup on mousemove)
+  const snapRafId = useRef<number | null>(null);
+  const pendingSnapPosition = useRef<{ x: number; y: number } | null>(null);
   // Pending section zoom request (stored when map not loaded, processed when it loads)
   const pendingZoomToSectionRef = useRef<number | null>(null);
   // Pending pan-to-shot request (stored when map not loaded, processed when it loads)
@@ -1354,6 +1357,10 @@ export default function MapCanvas() {
     });
 
     return () => {
+      if (snapRafId.current !== null) {
+        cancelAnimationFrame(snapRafId.current);
+        snapRafId.current = null;
+      }
       map.current?.remove();
       map.current = null;
     };
@@ -2598,11 +2605,21 @@ export default function MapCanvas() {
 
       // Always check snap when moving (snap logic internally checks if tool requires snap).
       // During active drag, segment drag has its own snap logic in handleMoveDragMove.
+      // RAF-batched: only processes the latest mouse position per animation frame,
+      // preventing event queue buildup (same pattern as SurveyLayer hover).
       if (mapContainer.current && !moveDrag) {
         const rect = mapContainer.current.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        checkSnapToStation(x, y);
+        pendingSnapPosition.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        if (snapRafId.current === null) {
+          snapRafId.current = requestAnimationFrame(() => {
+            snapRafId.current = null;
+            if (pendingSnapPosition.current) {
+              const pos = pendingSnapPosition.current;
+              pendingSnapPosition.current = null;
+              checkSnapToStation(pos.x, pos.y);
+            }
+          });
+        }
       }
     },
     [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragMove, handleZoomBoxMove, handleBoxSelectMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
