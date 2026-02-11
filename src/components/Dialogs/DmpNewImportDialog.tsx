@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, PlacementSuggestion, CommandResult } from '../../types/commands';
+import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
-import SectionPreview, { type MergePreviewConfig } from './SectionPreview';
+import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig } from './SectionPreview';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { useProjectStore } from '../../store/projectStore';
@@ -21,9 +21,15 @@ const SECTION_COLORS = [
   '#9b59b6', '#1abc9c', '#e67e22', '#f39c12',
 ];
 
-type RankedSuggestion = PlacementSuggestion & {
+/** A virtual connection recorded by the user — no backend import yet. */
+type VirtualConnection = {
   importSectionIndex: number;
-  importSectionName: string;
+  importStationIndex: number;
+  targetType: 'existing' | 'importing';
+  existingSectionId?: number;
+  existingStationIndex?: number;
+  targetImportIndex?: number;
+  targetImportStationIndex?: number;
 };
 
 interface DmpNewImportDialogProps {
@@ -34,14 +40,163 @@ interface DmpNewImportDialogProps {
   zeroDatumConfig?: ZeroDatumConfigResult | undefined;
   onCancel: () => void;
   onBack: () => void;
-  onHandoffToLegacy: (remainingIndices: Set<number>) => void;
+  onHandoffToLegacy: (remainingIndices: Set<number>, connections: VirtualConnection[]) => void;
   onComplete: () => void;
 }
 
+// ─── Graph helpers ───────────────────────────────────────────────────────────
+
+/** BFS from a set of seed nodes, returning reachable nodes in traversal order. */
+function bfsReachable(
+  seeds: Set<number>,
+  adjacency: Map<number, Array<{ neighbor: number; connection: VirtualConnection }>>,
+): number[] {
+  const visited = new Set<number>();
+  const queue: number[] = [];
+  const order: number[] = [];
+
+  for (const seed of seeds) {
+    if (!visited.has(seed)) {
+      visited.add(seed);
+      queue.push(seed);
+    }
+  }
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    order.push(node);
+    for (const edge of adjacency.get(node) ?? []) {
+      if (!visited.has(edge.neighbor)) {
+        visited.add(edge.neighbor);
+        queue.push(edge.neighbor);
+      }
+    }
+  }
+  return order;
+}
+
+/** Build adjacency map from virtual connections. */
+function buildAdjacency(
+  connections: VirtualConnection[],
+): Map<number, Array<{ neighbor: number; connection: VirtualConnection }>> {
+  const adj = new Map<number, Array<{ neighbor: number; connection: VirtualConnection }>>();
+  const ensure = (k: number) => { if (!adj.has(k)) adj.set(k, []); };
+
+  for (const c of connections) {
+    ensure(c.importSectionIndex);
+    if (c.targetType === 'importing' && c.targetImportIndex != null) {
+      ensure(c.targetImportIndex);
+      adj.get(c.importSectionIndex)!.push({ neighbor: c.targetImportIndex, connection: c });
+      adj.get(c.targetImportIndex)!.push({ neighbor: c.importSectionIndex, connection: c });
+    }
+    // 'existing' connections anchor this node to the project graph — no import neighbor
+  }
+  return adj;
+}
+
+/** Build batch import configs from virtual connections + BFS order. */
+function buildBatchImport(
+  connections: VirtualConnection[],
+  zeroDatumIndex: number | null,
+  dmpFile: DmpFile,
+  selectionConfig: DmpSelectionConfig,
+): { configs: BackendImportSectionConfig[]; unreachable: number[] } {
+  const adjacency = buildAdjacency(connections);
+
+  // Sections connected to existing project sections (anchors)
+  const anchored = new Set<number>();
+  if (zeroDatumIndex != null) anchored.add(zeroDatumIndex);
+  for (const c of connections) {
+    if (c.targetType === 'existing') {
+      anchored.add(c.importSectionIndex);
+    }
+  }
+
+  // BFS from anchored sections
+  const reachableOrder = bfsReachable(anchored, adjacency);
+  const reachableSet = new Set(reachableOrder);
+
+  // Track which sections are already emitted (by section_index) and their position in configs[]
+  const emittedPosition = new Map<number, number>();
+
+  const configs: BackendImportSectionConfig[] = [];
+  let colorIdx = 0;
+
+  for (const idx of reachableOrder) {
+    // Skip zero datum — already imported
+    if (idx === zeroDatumIndex) continue;
+
+    const section = dmpFile.sections[idx];
+    if (!section) continue;
+
+    const editableShots = convertToEditableShots(section.shots);
+    const backendShots: ShotData[] = editableShots.map(editableShotToShotData);
+    if (backendShots.length === 0) continue;
+
+    // Find the connection that placed this section
+    const conn = connections.find((c) => c.importSectionIndex === idx);
+    if (!conn) continue;
+
+    let placement: ImportPlacement;
+    if (conn.targetType === 'existing' && conn.existingSectionId != null && conn.existingStationIndex != null) {
+      placement = {
+        type: 'from_existing',
+        import_station: conn.importStationIndex,
+        existing_station: {
+          section_id: conn.existingSectionId,
+          station_index: conn.existingStationIndex,
+        },
+      };
+    } else if (conn.targetType === 'importing' && conn.targetImportIndex != null && conn.targetImportStationIndex != null) {
+      // The target must already be emitted in configs[]
+      const targetPos = emittedPosition.get(conn.targetImportIndex);
+      if (targetPos == null) {
+        // Target not yet placed — shouldn't happen with BFS order, but skip gracefully
+        continue;
+      }
+      placement = {
+        type: 'from_importing',
+        import_station: conn.importStationIndex,
+        target_section_index: targetPos,
+        target_station_index: conn.targetImportStationIndex,
+      };
+    } else {
+      continue;
+    }
+
+    const dateStr = selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
+
+    const config: BackendImportSectionConfig = {
+      section_index: configs.length,
+      name: section.name,
+      surveyor: selectionConfig.defaultSurveyor || null,
+      date: dateStr,
+      color: SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4',
+      direction: section.direction,
+      quality: 1.0,
+      shots: backendShots,
+      placement,
+      station_comments: [],
+    };
+
+    emittedPosition.set(idx, configs.length);
+    configs.push(config);
+    colorIdx++;
+  }
+
+  // Unreachable = connected sections not in reachableSet + sections with no connection at all
+  const allSelected = Array.from(selectionConfig.selectedIndices);
+  const unreachable = allSelected.filter(
+    (idx) => idx !== zeroDatumIndex && !reachableSet.has(idx),
+  );
+
+  return { configs, unreachable };
+}
+
 /**
- * Connection Wizard — auto-detects connections between import sections and
- * existing project sections, imports one-at-a-time as user confirms.
- * Hands off remaining sections to the legacy DmpSectionConfigDialog.
+ * Connection Wizard — pre-calculates all placements at startup, presents
+ * suggestions sorted by score, records virtual connections on confirm,
+ * then batch-places everything when suggestions are exhausted.
  */
 export default function DmpNewImportDialog({
   dmpFile,
@@ -59,38 +214,29 @@ export default function DmpNewImportDialog({
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
-  const suggestImportPlacement = useProjectStore((s) => s.suggestImportPlacement);
 
-  // Core state
-  const [importedIndices, setImportedIndices] = useState<Set<number>>(new Set());
+  // Core state — virtual connections instead of imported indices
+  const [connections, setConnections] = useState<VirtualConnection[]>([]);
   const [skippedIndices, setSkippedIndices] = useState<Set<number>>(new Set());
-  const [currentSuggestion, setCurrentSuggestion] = useState<RankedSuggestion | null>(null);
-  const [alternatives, setAlternatives] = useState<RankedSuggestion[]>([]);
+  const [currentSuggestion, setCurrentSuggestion] = useState<CrossSectionSuggestion | null>(null);
+  const [alternatives, setAlternatives] = useState<CrossSectionSuggestion[]>([]);
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [phase, setPhase] = useState<'init' | 'suggesting' | 'done'>('init');
+  const [phase, setPhase] = useState<'init' | 'suggesting' | 'placing' | 'done'>('init');
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Track suggestion recalculation trigger
-  const [recalcTrigger, setRecalcTrigger] = useState(0);
+  // Cache all cross-section suggestions from startup calculation
+  const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
 
-  // Cache all ranked suggestions from the last full calculation.
-  // After confirm/skip we filter this instead of recalculating.
-  const suggestionPoolRef = useRef<RankedSuggestion[]>([]);
-
-  // Ref-based guard against double-click — state alone is stale in the closure
-  const isImportingRef = useRef(false);
-
-  // Guard against React StrictMode double-firing the mount effect.
-  // Refs survive the cleanup→re-run cycle, preventing duplicate IPC calls.
+  // Guard against React StrictMode double-firing the mount effect
   const importStartedRef = useRef(false);
 
   // Refs to avoid stale closures
-  const importedIndicesRef = useRef(importedIndices);
-  importedIndicesRef.current = importedIndices;
+  const connectionsRef = useRef(connections);
+  connectionsRef.current = connections;
   const skippedIndicesRef = useRef(skippedIndices);
   skippedIndicesRef.current = skippedIndices;
 
@@ -101,15 +247,19 @@ export default function DmpNewImportDialog({
 
   const totalSelected = selectedIndices.length;
 
-  // Pick the next suggestion from the cached pool, filtering out imported/skipped sections.
-  // Returns true if a suggestion was found, false if pool is empty.
+  // Set of section indices that already have a connection
+  const connectedIndices = useMemo(() => {
+    return new Set(connections.map((c) => c.importSectionIndex));
+  }, [connections]);
+
+  // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
   const pickFromPool = useCallback(() => {
-    const imported = importedIndicesRef.current;
+    const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
     const skipped = skippedIndicesRef.current;
 
     // Filter pool to only remaining sections
     const pool = suggestionPoolRef.current.filter(
-      (s) => !imported.has(s.importSectionIndex) && !skipped.has(s.importSectionIndex)
+      (s) => !connected.has(s.importSectionIndex) && !skipped.has(s.importSectionIndex)
     );
     suggestionPoolRef.current = pool;
 
@@ -126,187 +276,180 @@ export default function DmpNewImportDialog({
     return true;
   }, []);
 
-  // On mount: import zero datum section if provided
+  // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
     if (importStartedRef.current) return;
     importStartedRef.current = true;
 
-    const importZeroDatum = async () => {
-      if (!zeroDatumConfig) {
-        // No zero datum to import — check if we can suggest
+    const init = async () => {
+      // 1. Import zero datum section if provided (this is the anchor)
+      if (zeroDatumConfig) {
+        setIsImporting(true);
+        const { sectionIndex, stationIndex, gps, metadata, shots } = zeroDatumConfig;
+
+        const backendShots: ShotData[] = shots
+          .filter((s) => !s.isDeleted)
+          .map(editableShotToShotData);
+
+        const placement: ImportPlacement = {
+          type: 'zero_datum',
+          coordinates: gps,
+          station_index: stationIndex,
+        };
+
+        const config: BackendImportSectionConfig = {
+          section_index: sectionIndex,
+          name: metadata.name,
+          surveyor: metadata.surveyor,
+          date: metadata.date,
+          color: metadata.color,
+          direction: metadata.direction,
+          quality: metadata.quality,
+          shots: backendShots,
+          placement,
+          station_comments: [],
+        };
+
+        const result = await importSections([config], selectionConfig.fileHash);
+        setIsImporting(false);
+
+        if (!result.success) {
+          setError(result.error ?? 'Failed to import zero datum section');
+          return;
+        }
+
+        // Check if only 1 section was selected — we're done
+        if (selectedIndices.length === 1 && selectedIndices[0] === sectionIndex) {
+          setPhase('done');
+          return;
+        }
+      } else {
+        // No zero datum — check if we can suggest
         const existingProject = useProjectStore.getState().project;
         const hasExistingSections = (existingProject?.sections.length ?? 0) > 0;
 
         if (!hasExistingSections && selectedIndices.length <= 1) {
-          // No existing sections, 0 or 1 selected — nothing to connect
           setPhase('done');
           return;
         }
-
-        setPhase('suggesting');
-        return;
       }
 
-      setIsImporting(true);
-      const { sectionIndex, stationIndex, gps, metadata, shots } = zeroDatumConfig;
+      // 2. Fire suggest_all_import_placements with all remaining sections
+      setIsCalculating(true);
+      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
 
-      const backendShots: ShotData[] = shots
-        .filter((s) => !s.isDeleted)
-        .map(editableShotToShotData);
+      const remainingSections: ImportSectionForSuggestion[] = [];
+      for (const idx of selectedIndices) {
+        if (idx === zeroDatumIdx) continue;
+        const section = dmpFile.sections[idx];
+        if (!section) continue;
 
-      const placement: ImportPlacement = {
-        type: 'zero_datum',
-        coordinates: gps,
-        station_index: stationIndex,
-      };
+        const editableShots = convertToEditableShots(section.shots);
+        const shotData: ShotData[] = editableShots.map(editableShotToShotData);
+        if (shotData.length === 0) continue;
 
-      const config: BackendImportSectionConfig = {
-        section_index: sectionIndex,
-        name: metadata.name,
-        surveyor: metadata.surveyor,
-        date: metadata.date,
-        color: metadata.color,
-        direction: metadata.direction,
-        quality: metadata.quality,
-        shots: backendShots,
-        placement,
-        station_comments: [],
-      };
-
-      const result = await importSections([config], selectionConfig.fileHash);
-
-      setIsImporting(false);
-
-      if (!result.success) {
-        setError(result.error ?? 'Failed to import zero datum section');
-        return;
+        remainingSections.push({
+          index: idx,
+          name: section.name,
+          shots: shotData,
+        });
       }
 
-      setImportedIndices(new Set([sectionIndex]));
-
-      // Check if only 1 section was selected — we're done
-      if (selectedIndices.length === 1 && selectedIndices[0] === sectionIndex) {
+      if (remainingSections.length === 0) {
+        setIsCalculating(false);
         setPhase('done');
+        return;
+      }
+
+      try {
+        const suggestions = await invoke<CrossSectionSuggestion[]>(
+          'suggest_all_import_placements',
+          { importSections: remainingSections },
+        );
+
+        suggestionPoolRef.current = suggestions;
+      } catch {
+        // Suggestion failure is non-fatal
+        suggestionPoolRef.current = [];
+      }
+
+      setIsCalculating(false);
+
+      if (!pickFromPool()) {
+        // No suggestions at all — go straight to placing
+        setPhase('placing');
         return;
       }
 
       setPhase('suggesting');
     };
 
-    importZeroDatum();
+    init();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Calculate suggestions when phase is 'suggesting' and importedIndices/skippedIndices change
+  // Handle 'placing' phase — build batch import and execute
   useEffect(() => {
-    if (phase !== 'suggesting') return;
+    if (phase !== 'placing') return;
+    if (isImporting) return;
 
-    let cancelled = false;
+    const doBatchImport = async () => {
+      setIsImporting(true);
+      setError(null);
 
-    const calculate = async () => {
-      setIsCalculating(true);
-      setCurrentSuggestion(null);
-      setAlternatives([]);
-      setShowAlternatives(false);
-
-      const currentImported = importedIndicesRef.current;
-      const remaining = selectedIndices.filter(
-        (idx) => !currentImported.has(idx) && !skippedIndices.has(idx)
+      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+      const { configs, unreachable } = buildBatchImport(
+        connectionsRef.current,
+        zeroDatumIdx,
+        dmpFile,
+        selectionConfig,
       );
 
-      if (remaining.length === 0) {
-        setIsCalculating(false);
-        setPhase('done');
-        return;
-      }
-
-      // Check if there are any existing sections to match against
-      const currentProject = useProjectStore.getState().project;
-      const hasExistingSections = (currentProject?.sections.length ?? 0) > 0;
-
-      if (!hasExistingSections) {
-        // No existing sections — can't suggest placements
-        setIsCalculating(false);
-        setPhase('done');
-        return;
-      }
-
-      // For each remaining section, get placement suggestions
-      const allSuggestions: RankedSuggestion[] = [];
-
-      const promises = remaining.map(async (sectionIdx) => {
-        const section = dmpFile.sections[sectionIdx];
-        if (!section) return;
-
-        const editableShots = convertToEditableShots(section.shots);
-        const shotData: ShotData[] = editableShots.map((s) => ({
-          azimuth_in: s.azimuth_in,
-          azimuth_out: s.azimuth_out,
-          length: s.length,
-          depth_in: s.depth_in,
-          depth_out: s.depth_out,
-          pitch_in: s.pitch_in ?? null,
-          pitch_out: s.pitch_out ?? null,
-          left: s.left ?? null,
-          right: s.right ?? null,
-          up: s.up ?? null,
-          down: s.down ?? null,
-          comment: s.comment ?? null,
-          is_reference: s.is_reference ?? false,
-          marker_index: null,
-          temperature: null,
-        }));
-
-        if (shotData.length === 0) return;
-
+      if (configs.length > 0) {
         try {
-          const suggestions = await suggestImportPlacement(shotData);
-          for (const suggestion of suggestions) {
-            allSuggestions.push({
-              ...suggestion,
-              importSectionIndex: sectionIdx,
-              importSectionName: section.name,
-            });
+          const result = await invoke<CommandResult>('import_sections', {
+            sections: configs,
+            fileHash: selectionConfig.fileHash ?? null,
+          });
+
+          if (!result.success) {
+            setError(result.error ?? 'Batch import failed');
+            setIsImporting(false);
+            return;
           }
-        } catch {
-          // Silently ignore — suggestions are non-critical
+
+          await refreshProjectState();
+        } catch (e) {
+          setError(String(e));
+          setIsImporting(false);
+          return;
         }
-      });
-
-      await Promise.all(promises);
-
-      if (cancelled) return;
-
-      // Sort by score descending and cache the full pool
-      allSuggestions.sort((a, b) => b.score - a.score);
-      suggestionPoolRef.current = allSuggestions;
-
-      if (!pickFromPool()) {
-        setIsCalculating(false);
-        setPhase('done');
-        return;
       }
 
-      setIsCalculating(false);
+      setIsImporting(false);
+
+      if (unreachable.length > 0) {
+        onHandoffToLegacy(new Set(unreachable), connectionsRef.current);
+      } else {
+        onComplete();
+      }
     };
 
-    calculate();
-    return () => { cancelled = true; };
+    doBatchImport();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, recalcTrigger]);
+  }, [phase]);
 
-  // Handle 'done' phase
+  // Handle 'done' phase (only reached when no sections to place)
   useEffect(() => {
     if (phase !== 'done') return;
-    // Don't act while still importing or calculating
     if (isImporting || isCalculating) return;
 
     const remaining = new Set(
-      selectedIndices.filter((idx) => !importedIndices.has(idx))
+      selectedIndices.filter((idx) => !connectedIndices.has(idx) && idx !== zeroDatumConfig?.sectionIndex)
     );
 
     if (remaining.size > 0) {
-      onHandoffToLegacy(remaining);
+      onHandoffToLegacy(remaining, connectionsRef.current);
     } else {
       onComplete();
     }
@@ -321,9 +464,10 @@ export default function DmpNewImportDialog({
     return section;
   }, [currentSuggestion, dmpFile.sections]);
 
-  // Build merge preview config for SectionPreview
+  // Build merge preview config for SectionPreview (existing target)
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
-    if (!currentSuggestion) return null;
+    if (!currentSuggestion || currentSuggestion.targetType !== 'existing') return null;
+    if (!currentSuggestion.existingSectionId) return null;
 
     const currentProject = useProjectStore.getState().project;
     if (!currentProject) return null;
@@ -340,119 +484,73 @@ export default function DmpNewImportDialog({
     };
   }, [currentSuggestion]);
 
+  // Build DMP merge preview config for import-to-import targets
+  const dmpMergePreviewConfig = useMemo((): DmpMergePreviewConfig | null => {
+    if (!currentSuggestion || currentSuggestion.targetType !== 'importing') return null;
+    if (currentSuggestion.targetImportIndex == null) return null;
+
+    const targetSection = dmpFile.sections[currentSuggestion.targetImportIndex];
+    if (!targetSection) return null;
+
+    const targetColorIdx = (currentSuggestion.targetImportIndex ?? 0) % SECTION_COLORS.length;
+
+    return {
+      targetDmpSection: targetSection,
+      targetColor: SECTION_COLORS[targetColorIdx] ?? '#95a5a6',
+      importStationIndex: currentSuggestion.importStationIndex,
+      targetStationIndex: currentSuggestion.existingStationIndex,
+    };
+  }, [currentSuggestion, dmpFile.sections]);
+
   // Import color for the current section
   const importColor = useMemo(() => {
-    return SECTION_COLORS[importedIndices.size % SECTION_COLORS.length] ?? '#4ecdc4';
-  }, [importedIndices.size]);
+    return SECTION_COLORS[connectedIndices.size % SECTION_COLORS.length] ?? '#4ecdc4';
+  }, [connectedIndices.size]);
 
-  // Confirm handler — fires backend import optimistically and advances the
-  // wizard immediately. Only blocks when fresh backend state is needed
-  // (last section or pool exhausted for recalculation).
-  const handleConfirm = useCallback(async () => {
-    if (!currentSuggestion || isImportingRef.current) return;
+  // Target section name for display
+  const targetSectionName = useMemo(() => {
+    if (!currentSuggestion) return '';
+    return currentSuggestion.existingSectionName;
+  }, [currentSuggestion]);
 
-    isImportingRef.current = true;
-    setIsImporting(true);
+  // Confirm handler — records a virtual connection (instant, no backend call)
+  const handleConfirm = useCallback(() => {
+    if (!currentSuggestion) return;
     setError(null);
 
-    const section = dmpFile.sections[currentSuggestion.importSectionIndex];
-    if (!section) {
-      isImportingRef.current = false;
-      setIsImporting(false);
-      return;
-    }
-
-    const editableShots = convertToEditableShots(section.shots);
-    const backendShots: ShotData[] = editableShots.map(editableShotToShotData);
-
-    const placement: ImportPlacement = {
-      type: 'from_existing',
-      import_station: currentSuggestion.importStationIndex,
-      existing_station: {
-        section_id: currentSuggestion.existingSectionId,
-        station_index: currentSuggestion.existingStationIndex,
-      },
+    const newConn: VirtualConnection = {
+      importSectionIndex: currentSuggestion.importSectionIndex,
+      importStationIndex: currentSuggestion.importStationIndex,
+      targetType: currentSuggestion.targetType,
+      ...(currentSuggestion.existingSectionId != null && { existingSectionId: currentSuggestion.existingSectionId }),
+      ...(currentSuggestion.targetType === 'existing' && currentSuggestion.existingStationIndex != null && { existingStationIndex: currentSuggestion.existingStationIndex }),
+      ...(currentSuggestion.targetImportIndex != null && { targetImportIndex: currentSuggestion.targetImportIndex }),
+      ...(currentSuggestion.targetType === 'importing' && currentSuggestion.existingStationIndex != null && { targetImportStationIndex: currentSuggestion.existingStationIndex }),
     };
 
-    // Determine color based on how many already imported
-    const colorIdx = importedIndices.size % SECTION_COLORS.length;
+    setConnections((prev) => [...prev, newConn]);
+    // Update ref eagerly
+    connectionsRef.current = [...connectionsRef.current, newConn];
 
-    // Use default date from DMP section or selectionConfig
-    const dateStr = selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
-
-    const config: BackendImportSectionConfig = {
-      section_index: currentSuggestion.importSectionIndex,
-      name: section.name,
-      surveyor: selectionConfig.defaultSurveyor || null,
-      date: dateStr,
-      color: SECTION_COLORS[colorIdx] ?? '#4ecdc4',
-      direction: section.direction,
-      quality: 1.0,
-      shots: backendShots,
-      placement,
-      station_comments: [],
-    };
-
-    // Fire backend import — don't await yet. The backend does two full
-    // project serializations (undo snapshots) + autosave, which takes ~1s.
-    // We advance the wizard immediately and only block when we need
-    // fresh backend state. Store refresh is deferred to avoid cascading
-    // re-renders of all subscribed components (map, sidebar, etc.) while
-    // the wizard is active.
-    const importPromise = invoke<CommandResult>('import_sections', {
-      sections: [config],
-      fileHash: selectionConfig.fileHash ?? null,
-    }).catch((e) => {
-      const result: CommandResult = { success: false, error: String(e), warnings: [], section_ids: [] };
-      setError(result.error ?? 'Import failed');
-      return result;
-    });
-
-    isImportingRef.current = false;
-    setIsImporting(false);
-
-    // Add to imported
-    const importedIdx = currentSuggestion.importSectionIndex;
-    setImportedIndices((prev) => {
-      const next = new Set(prev);
-      next.add(importedIdx);
-      return next;
-    });
-
-    // Update ref eagerly so pickFromPool sees the just-imported section
-    const newImported = new Set(importedIndicesRef.current);
-    newImported.add(importedIdx);
-    importedIndicesRef.current = newImported;
-
+    // Check if all sections are now connected or skipped
+    const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
+    const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
     const remaining = selectedIndices.filter(
-      (idx) => !newImported.has(idx) && !skippedIndicesRef.current.has(idx)
+      (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !skippedIndicesRef.current.has(idx)
     );
 
     if (remaining.length === 0) {
-      // Last section — wait for backend, refresh store, then transition
-      const result = await importPromise;
-      if (!result.success) {
-        setError(result.error ?? 'Import failed');
-        return;
-      }
-      await refreshProjectState();
-      setPhase('done');
+      // All handled — transition to placing
+      setPhase('placing');
       return;
     }
 
-    // Try to pick next suggestion from cached pool (instant)
+    // Pick next from pool
     if (!pickFromPool()) {
-      // Pool exhausted — wait for backend + refresh store (need fresh
-      // project state for recalculation), then recalculate
-      const result = await importPromise;
-      if (!result.success) {
-        setError(result.error ?? 'Import failed');
-        return;
-      }
-      await refreshProjectState();
-      setRecalcTrigger((n) => n + 1);
+      // Pool exhausted — transition to placing with whatever we have
+      setPhase('placing');
     }
-  }, [currentSuggestion, dmpFile.sections, refreshProjectState, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, zeroDatumConfig, selectedIndices, pickFromPool]);
 
   // Skip handler
   const handleSkip = useCallback(() => {
@@ -465,29 +563,29 @@ export default function DmpNewImportDialog({
       return next;
     });
 
-    // Update ref eagerly so pickFromPool sees the just-skipped section
+    // Update ref eagerly
     const newSkipped = new Set(skippedIndicesRef.current);
     newSkipped.add(skippedIdx);
     skippedIndicesRef.current = newSkipped;
 
+    const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+    const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
     const remaining = selectedIndices.filter(
-      (idx) => !importedIndicesRef.current.has(idx) && !newSkipped.has(idx)
+      (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !newSkipped.has(idx)
     );
 
     if (remaining.length === 0) {
-      setPhase('done');
+      setPhase('placing');
       return;
     }
 
-    // Try to pick next from cached pool (instant)
     if (!pickFromPool()) {
-      // Pool exhausted — full recalculation needed
-      setRecalcTrigger((n) => n + 1);
+      setPhase('placing');
     }
-  }, [currentSuggestion, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, zeroDatumConfig, selectedIndices, pickFromPool]);
 
   // Alternative click handler
-  const handleAlternativeClick = useCallback((alt: RankedSuggestion) => {
+  const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
     setCurrentSuggestion(alt);
     setAlternatives((prev) => {
       const newAlts = prev.filter((a) => a !== alt);
@@ -502,20 +600,20 @@ export default function DmpNewImportDialog({
 
   // Cancel/Back
   const handleCancel = useCallback(() => {
-    if (importedIndices.size > 0) {
+    if (connections.length > 0) {
       setShowCancelConfirm(true);
     } else {
       onCancel();
     }
-  }, [importedIndices.size, onCancel]);
+  }, [connections.length, onCancel]);
 
   const handleBack = useCallback(() => {
-    if (importedIndices.size > 0) {
+    if (connections.length > 0) {
       setShowBackConfirm(true);
     } else {
       onBack();
     }
-  }, [importedIndices.size, onBack]);
+  }, [connections.length, onBack]);
 
   // Confidence helpers
   const confidenceColors: Record<string, string> = {
@@ -528,11 +626,14 @@ export default function DmpNewImportDialog({
     direction === 'forward' ? '\u2192' : '\u2190';
 
   // Progress
-  const placedCount = importedIndices.size;
+  const placedCount = connectedIndices.size + (zeroDatumConfig ? 1 : 0);
   const skippedCount = skippedIndices.size;
 
   // Whether we're in the suggestion view with a current suggestion (side-by-side layout)
   const showSideBySide = phase === 'suggesting' && !isCalculating && currentSuggestion != null;
+
+  // Target type label for import-to-import connections
+  const isImportTarget = currentSuggestion?.targetType === 'importing';
 
   return (
     <DialogWrapper
@@ -566,6 +667,7 @@ export default function DmpNewImportDialog({
                 color={importColor}
                 size={340}
                 mergePreview={mergePreviewConfig}
+                dmpMergePreview={dmpMergePreviewConfig}
                 focusStationIndex={currentSuggestion!.importStationIndex}
               />
             </div>
@@ -582,8 +684,11 @@ export default function DmpNewImportDialog({
                   {t('dialogs.dmpNewImport.connectsTo')}
                 </div>
                 <div className="text-sm">
-                  <span className="font-medium">&ldquo;{currentSuggestion!.existingSectionName}&rdquo;</span>
+                  <span className="font-medium">&ldquo;{targetSectionName}&rdquo;</span>
                   {' '}{t('dialogs.dmpNewImport.station', { index: currentSuggestion!.existingStationIndex })}
+                  {isImportTarget && (
+                    <span className="ml-1 text-xs text-text-secondary">(importing)</span>
+                  )}
                 </div>
               </div>
 
@@ -629,7 +734,7 @@ export default function DmpNewImportDialog({
                     <div className="mt-2 space-y-1" data-testid="alternatives-list">
                       {alternatives.map((alt, idx) => (
                         <button
-                          key={`${alt.importSectionIndex}-${alt.existingSectionId}-${alt.existingStationIndex}-${alt.importStationIndex}-${alt.direction}`}
+                          key={`${alt.importSectionIndex}-${alt.existingSectionId ?? alt.targetImportIndex}-${alt.existingStationIndex}-${alt.importStationIndex}-${alt.direction}`}
                           type="button"
                           className={`w-full p-2 rounded border text-left text-xs flex items-center gap-2 hover:bg-accent-5 transition-colors ${confidenceColors[alt.confidence] ?? ''}`}
                           onClick={() => handleAlternativeClick(alt)}
@@ -643,6 +748,9 @@ export default function DmpNewImportDialog({
                             <span className="text-text-secondary"> → </span>
                             <span className="font-medium">{alt.existingSectionName}</span>
                             <span className="text-text-secondary"> stn {alt.existingStationIndex}</span>
+                            {alt.targetType === 'importing' && (
+                              <span className="text-text-secondary text-[10px] ml-0.5">(imp)</span>
+                            )}
                           </span>
                           <span className="text-text-secondary">
                             {alt.matchedShots} {directionLabel(alt.direction)}
@@ -654,13 +762,6 @@ export default function DmpNewImportDialog({
                 </div>
               )}
             </div>
-
-            {/* Importing overlay */}
-            {isImporting && (
-              <div className="absolute inset-0 bg-background/50 flex items-center justify-center z-10">
-                <div className="text-sm animate-pulse">Importing...</div>
-              </div>
-            )}
           </div>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
@@ -673,9 +774,17 @@ export default function DmpNewImportDialog({
             )}
 
             {/* Calculating suggestions */}
-            {phase === 'suggesting' && isCalculating && (
+            {(phase === 'init' || phase === 'suggesting') && isCalculating && (
               <div className="text-center" data-testid="wizard-calculating">
                 <div className="text-lg mb-2">{t('dialogs.dmpNewImport.calculating')}</div>
+                <div className="animate-pulse text-text-secondary">...</div>
+              </div>
+            )}
+
+            {/* Placing — batch import in progress */}
+            {phase === 'placing' && isImporting && (
+              <div className="text-center" data-testid="wizard-placing">
+                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.placing', { count: connectedIndices.size })}</div>
                 <div className="animate-pulse text-text-secondary">...</div>
               </div>
             )}
@@ -684,10 +793,10 @@ export default function DmpNewImportDialog({
             {phase === 'suggesting' && !isCalculating && !currentSuggestion && (
               <div className="text-center" data-testid="wizard-no-suggestions">
                 <div className="text-lg mb-2">{t('dialogs.dmpNewImport.noSuggestions')}</div>
-                {selectedIndices.filter((idx) => !importedIndices.has(idx)).length > 0 && (
+                {selectedIndices.filter((idx) => !connectedIndices.has(idx)).length > 0 && (
                   <div className="text-sm text-text-secondary">
                     {t('dialogs.dmpNewImport.handoffMessage', {
-                      count: selectedIndices.filter((idx) => !importedIndices.has(idx)).length,
+                      count: selectedIndices.filter((idx) => !connectedIndices.has(idx)).length,
                     })}
                   </div>
                 )}
@@ -695,7 +804,7 @@ export default function DmpNewImportDialog({
             )}
 
             {/* Done — all placed */}
-            {phase === 'done' && importedIndices.size === totalSelected && (
+            {phase === 'done' && connectedIndices.size + (zeroDatumConfig ? 1 : 0) === totalSelected && (
               <div className="text-center" data-testid="wizard-all-placed">
                 <CheckCircleIcon size={32} className="text-success mx-auto mb-2" />
                 <div className="text-lg">{t('dialogs.dmpNewImport.allPlaced')}</div>
@@ -756,7 +865,7 @@ export default function DmpNewImportDialog({
         }
       >
         <p>
-          {importedIndices.size > 0
+          {connections.length > 0
             ? t('dialogs.dmpNewImport.cancelWizardMessage')
             : t('dialogs.dmpNewImport.cancelWizardNoImports')}
         </p>
