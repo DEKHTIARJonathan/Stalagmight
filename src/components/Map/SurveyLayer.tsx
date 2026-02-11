@@ -209,6 +209,7 @@ export default class SurveyLayer {
   private prevHoveredShotFeatureId: number | null = null;
   private prevSelectedStationFeatureId: number | null = null;
   private prevSelectedShotFeatureId: number | null = null;
+  private prevSnappedStationFeatureId: number | null = null;
 
   // Previous section-level feature IDs for setFeatureState (to clear state when section hover/selection changes)
   private prevHoveredSectionShotIds: Set<number> = new Set();
@@ -632,18 +633,18 @@ export default class SurveyLayer {
       id: this.stationsHighlightLayerId,
       type: 'circle',
       source: this.sourceId + '-stations',
-      filter: ['==', ['get', 'sectionId'], -9999], // Filter to nothing initially
       paint: {
         'circle-radius': this.getStationRadius() + 3, // Snapped state: radius + 3
         'circle-color': this.themeColors.snapColor,
         'circle-stroke-width': 4,
         'circle-stroke-color': this.themeColors.snapColor,
+        // Visibility driven by feature-state — same instant mechanism as hover.
+        // setFeatureState is a per-feature GPU update, unlike setFilter which
+        // forces filter re-evaluation across all features.
+        'circle-opacity': ['case', ['boolean', ['feature-state', 'snapped'], false], 1, 0],
+        'circle-stroke-opacity': ['case', ['boolean', ['feature-state', 'snapped'], false], 1, 0],
         // Disable default 300ms paint transitions — snap indicator must appear/disappear instantly
-        'circle-radius-transition': { duration: 0, delay: 0 },
-        'circle-color-transition': { duration: 0, delay: 0 },
         'circle-opacity-transition': { duration: 0, delay: 0 },
-        'circle-stroke-width-transition': { duration: 0, delay: 0 },
-        'circle-stroke-color-transition': { duration: 0, delay: 0 },
         'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
       },
     });
@@ -1644,6 +1645,7 @@ export default class SurveyLayer {
   }
 
   // Set snapped station (called from outside for snap indicator)
+  // Uses setFeatureState for instant GPU-side update (same mechanism as hover).
   setSnappedStation(ref: StationRef | null) {
     const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
     if (this.snappedStationId === newId) return;
@@ -1653,18 +1655,25 @@ export default class SurveyLayer {
       to: newId,
     });
     this.snappedStationId = newId;
-    if (this.shouldLogInteraction()) {
-      console.debug('[Highlight] Snapped station changed', {
-        next: newId,
-      });
+
+    // Update snap indicator via setFeatureState (instant per-feature GPU update)
+    const stationsSource = this.sourceId + '-stations';
+    const newFeatureId = this.parseFeatureId(newId);
+    if (newFeatureId !== this.prevSnappedStationFeatureId) {
+      if (this.prevSnappedStationFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: stationsSource, id: this.prevSnappedStationFeatureId },
+          { snapped: false }
+        );
+      }
+      if (newFeatureId !== null) {
+        this.map.setFeatureState(
+          { source: stationsSource, id: newFeatureId },
+          { snapped: true }
+        );
+      }
+      this.prevSnappedStationFeatureId = newFeatureId;
     }
-    // Update highlight layer for snapped station
-    if (newId !== null) {
-      this.setHighlightedStations([newId]);
-    } else {
-      this.setHighlightedStations([]);
-    }
-    this.updateVisualState();
   }
 
   /**
@@ -1883,7 +1892,7 @@ export default class SurveyLayer {
     this.map.setLayoutProperty(this.stationsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.stationsHitboxLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.loopClosuresLayerId, 'visibility', visibility);
-    // Note: stationsHighlightLayerId intentionally NOT hidden - it uses filter
+    // Note: stationsHighlightLayerId intentionally NOT hidden - it uses feature-state
     // to show only snapped/origin stations even when main stations layer is hidden
   }
 
@@ -2034,18 +2043,37 @@ export default class SurveyLayer {
         next: stationIds,
       });
     }
+    const prevIds = this.highlightedStationIds;
     this.highlightedStationIds = stationIds;
-    // Build filter expression to match stations in the highlight set
-    // Uses compound expression matching the internal ID format used elsewhere (sectionId:stationIndex)
-    const idExpr = ['concat', ['to-string', ['get', 'sectionId']], ':', ['to-string', ['get', 'stationIndex']]];
-    if (stationIds.length > 0) {
-      this.map.setFilter(
-        this.stationsHighlightLayerId,
-        ['in', idExpr, ['literal', stationIds]] as unknown as maplibregl.FilterSpecification
-      );
-    } else {
-      // Filter to nothing when no stations highlighted
-      this.map.setFilter(this.stationsHighlightLayerId, ['==', ['get', 'sectionId'], -9999]);
+
+    // Update highlight via setFeatureState (instant per-feature GPU update)
+    const stationsSource = this.sourceId + '-stations';
+    const prevSet = new Set(prevIds);
+    const nextSet = new Set(stationIds);
+
+    // Clear snapped state on stations no longer highlighted
+    for (const id of prevIds) {
+      if (!nextSet.has(id)) {
+        const featureId = this.parseFeatureId(id);
+        if (featureId !== null) {
+          this.map.setFeatureState(
+            { source: stationsSource, id: featureId },
+            { snapped: false }
+          );
+        }
+      }
+    }
+    // Set snapped state on newly highlighted stations
+    for (const id of stationIds) {
+      if (!prevSet.has(id)) {
+        const featureId = this.parseFeatureId(id);
+        if (featureId !== null) {
+          this.map.setFeatureState(
+            { source: stationsSource, id: featureId },
+            { snapped: true }
+          );
+        }
+      }
     }
   }
 
@@ -2093,6 +2121,7 @@ export default class SurveyLayer {
     this.hoveredSectionId = null;
     this.hoveredSegmentSectionIds = [];
     this.snappedStationId = null;
+    this.prevSnappedStationFeatureId = null;
     this.selectedStationId = null;
     this.selectedShotId = null;
     this.selectedSectionId = null;
