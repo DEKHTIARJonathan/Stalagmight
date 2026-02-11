@@ -441,7 +441,7 @@ export function ShotTableEditor({
               const geoDisabled = readOnly || (frozenShotIndices?.has(actualIndex) ?? false);
               const rowClassName = `hover:bg-background-50 ${
                 isSelected ? 'bg-accent-10' : hasErrors ? 'bg-error-5' : ''
-              } ${shot.isNew && !hasErrors ? 'bg-success-5' : ''}`;
+              } ${shot.isNew && !hasErrors ? 'bg-success-5' : ''} ${shot.is_reference ? 'opacity-50' : ''}`;
 
               return (
                 <tr

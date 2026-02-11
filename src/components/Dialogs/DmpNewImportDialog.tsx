@@ -605,6 +605,18 @@ export default function DmpNewImportDialog({
     });
   }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
 
+  // Compute reference shot indices for SectionPreview (0-based among visible shots)
+  const referenceIndices = useMemo(() => {
+    const indices = new Set<number>();
+    let visibleIdx = 0;
+    for (const shot of effectiveShots) {
+      if (shot.isDeleted) continue;
+      if (shot.is_reference) indices.add(visibleIdx);
+      visibleIdx++;
+    }
+    return indices;
+  }, [effectiveShots]);
+
   // Section edit callbacks
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
@@ -1183,6 +1195,7 @@ export default function DmpNewImportDialog({
                 mergePreview={mergePreviewConfig}
                 dmpMergePreview={dmpMergePreviewConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
+                referenceIndices={referenceIndices}
               />
             </div>
 
@@ -1239,9 +1252,9 @@ export default function DmpNewImportDialog({
                     className="px-2 py-1 bg-background border border-border rounded text-xs"
                     data-testid="overlap-mode-select"
                   >
+                    <option value="interpolate">{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
                     <option value="import_data">{t('dialogs.dmpNewImport.overlapMode_importData')}</option>
                     <option value="existing_data">{t('dialogs.dmpNewImport.overlapMode_existingData')}</option>
-                    <option value="interpolate">{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
                     <option value="keep_both">{t('dialogs.dmpNewImport.overlapMode_keepBoth')}</option>
                   </select>
                 </div>
