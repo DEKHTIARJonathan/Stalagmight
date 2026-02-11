@@ -188,6 +188,9 @@ export default function MapCanvas() {
   // RAF batching for snap-to-station checks (prevents event queue buildup on mousemove)
   const snapRafId = useRef<number | null>(null);
   const pendingSnapPosition = useRef<{ x: number; y: number } | null>(null);
+  // Ref mirror of snappedStation — used for same-value comparison in the snap hot path
+  // so checkSnapToStation doesn't depend on React state (avoids re-render in the loop)
+  const snappedStationRef = useRef<StationRef | null>(null);
   // Pending section zoom request (stored when map not loaded, processed when it loads)
   const pendingZoomToSectionRef = useRef<number | null>(null);
   // Pending pan-to-shot request (stored when map not loaded, processed when it loads)
@@ -409,10 +412,16 @@ export default function MapCanvas() {
   // Snap-to-station detection
   // Note: Snap detection works even when stations are hidden - the highlight layer
   // will show the snapped station. Merge tool is an exception (blocked when hidden).
+  // Visual update goes directly to SurveyLayer (bypassing React re-render) so the
+  // indicator tracks the cursor at frame rate — same strategy as hover detection.
   const checkSnapToStation = useCallback(
     (screenX: number, screenY: number) => {
       if (!map.current || !config || !surveyLayerRef.current) {
-        if (snappedStation) setSnappedStation(null);
+        if (snappedStationRef.current) {
+          snappedStationRef.current = null;
+          surveyLayerRef.current?.setSnappedStation(null);
+          setSnappedStation(null);
+        }
         return;
       }
 
@@ -425,7 +434,11 @@ export default function MapCanvas() {
         (activeTool === 'measure' && snapConfig.enabled_measure);
 
       if (!shouldSnap) {
-        if (snappedStation) setSnappedStation(null);
+        if (snappedStationRef.current) {
+          snappedStationRef.current = null;
+          surveyLayerRef.current.setSnappedStation(null);
+          setSnappedStation(null);
+        }
         return;
       }
 
@@ -433,21 +446,27 @@ export default function MapCanvas() {
         screenX, screenY, snapConfig.threshold
       );
 
-      // Update snapped station state
+      // Update snapped station — compare via ref (no React state dependency)
+      const prev = snappedStationRef.current;
       if (nearestStation) {
-        // Only update if different from current
         if (
-          !snappedStation ||
-          snappedStation.section_id !== nearestStation.section_id ||
-          snappedStation.station_index !== nearestStation.station_index
+          !prev ||
+          prev.section_id !== nearestStation.section_id ||
+          prev.station_index !== nearestStation.station_index
         ) {
+          snappedStationRef.current = nearestStation;
+          // Direct visual update — no React re-render needed
+          surveyLayerRef.current.setSnappedStation(nearestStation);
+          // Store update for click handling (triggers re-render, but visual is already shown)
           setSnappedStation(nearestStation);
         }
-      } else if (snappedStation) {
+      } else if (prev) {
+        snappedStationRef.current = null;
+        surveyLayerRef.current.setSnappedStation(null);
         setSnappedStation(null);
       }
     },
-    [activeTool, config, snappedStation, setSnappedStation, showStations]
+    [activeTool, config, setSnappedStation, showStations]
   );
 
   // Check snap for placement mode
@@ -499,6 +518,7 @@ export default function MapCanvas() {
   useEffect(() => {
     const isSnapTool = activeTool === 'draw' || activeTool === 'merge' || activeTool === 'measure' || activeTool === 'move_segment';
     if (!isSnapTool && snappedStation) {
+      snappedStationRef.current = null;
       setSnappedStation(null);
     }
   }, [activeTool, snappedStation, setSnappedStation]);
