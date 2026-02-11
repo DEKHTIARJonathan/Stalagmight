@@ -531,21 +531,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   saveProject: async (path?: string) => {
-    console.log('[projectStore] saveProject called, current isDirty:', get().isDirty);
     const result = await invokeIpc<CommandResult>(
       'save_project',
       { path },
       { purpose: 'persist project changes', fields: { path } }
     );
-    console.log('[projectStore] save_project result:', result);
     if (result.success) {
-      // Refresh project state to get updated file_path first
-      console.log('[projectStore] Before refresh, isDirty:', get().isDirty);
-      await get().refreshProjectState();
-      console.log('[projectStore] After refresh, isDirty:', get().isDirty);
-      // Set isDirty: false AFTER refresh completes to avoid race conditions
+      // Update file_path if the backend returned it (first save / save-as)
+      if (result.saved_path) {
+        const project = get().project;
+        if (project) {
+          set({ project: { ...project, file_path: result.saved_path } });
+        }
+      }
+      // Lightweight: just refresh undo/redo availability
+      await get().refreshUndoState();
       set({ isDirty: false });
-      console.log('[projectStore] After set false, isDirty:', get().isDirty);
     } else {
       set({ error: result.error ?? 'Failed to save project' });
     }

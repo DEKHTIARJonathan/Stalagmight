@@ -1446,30 +1446,6 @@ fn test_is_undoable_commands() {
     }));
 }
 
-#[test]
-fn test_is_modifying_commands() {
-    // Non-modifying commands
-    assert!(!AppState::is_modifying(&Command::OpenProject {
-        path: PathBuf::from("/test.stalx"),
-    }));
-    assert!(!AppState::is_modifying(&Command::SaveProject { path: None }));
-    assert!(!AppState::is_modifying(&Command::CloseProject));
-
-    // Modifying commands
-    assert!(AppState::is_modifying(&Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    }));
-    assert!(AppState::is_modifying(&Command::CreateSection {
-        name: None,
-        surveyor: None,
-        date: None,
-        color: "#000000".to_string(),
-        direction: None,
-        shots: vec![],
-    }));
-}
-
 // === Config Tests ===
 
 #[test]
@@ -9092,39 +9068,8 @@ fn test_update_shot_rejects_zero_resulting_length() {
 // Coverage gap tests: commands.rs — auto-save
 // ============================================================================
 
-#[test]
-fn test_auto_save_triggers_on_modifying_command() {
-    let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-
-    // Create and save project so it has a file_path
-    state.execute(Command::CreateProject {
-        name: "AutoSave".to_string(),
-        location: None,
-    });
-    let save_path = temp_dir.path().join("autosave.stalx");
-    state.save_project(Some(save_path.clone()));
-
-    // Enable auto-save
-    if let Ok(mut config) = state.config.lock() {
-        config.general.auto_save = true;
-    }
-
-    // Execute a modifying command
-    state.execute(Command::CreateSection {
-        name: Some("NewSec".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#ff0000".to_string(),
-        direction: None,
-        shots: vec![test_shot_data(5.0)],
-    });
-
-    // Verify that auto-save updated the file
-    let db = Database::open_readonly(&save_path).unwrap();
-    let loaded = db.load_project().unwrap();
-    assert_eq!(loaded.sections.len(), 1, "auto-save should persist the new section");
-}
+// test_auto_save_triggers_on_modifying_command was removed:
+// per-command auto-save was removed in favor of frontend debounced auto-save
 
 // ============================================================================
 // Coverage gap tests: commands.rs — move_station edge cases
