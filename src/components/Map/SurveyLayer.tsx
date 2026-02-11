@@ -638,6 +638,13 @@ export default class SurveyLayer {
         'circle-color': this.themeColors.snapColor,
         'circle-stroke-width': 4,
         'circle-stroke-color': this.themeColors.snapColor,
+        // Disable default 300ms paint transitions — snap indicator must appear/disappear instantly
+        'circle-radius-transition': { duration: 0, delay: 0 },
+        'circle-color-transition': { duration: 0, delay: 0 },
+        'circle-opacity-transition': { duration: 0, delay: 0 },
+        'circle-stroke-width-transition': { duration: 0, delay: 0 },
+        'circle-stroke-color-transition': { duration: 0, delay: 0 },
+        'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
       },
     });
 

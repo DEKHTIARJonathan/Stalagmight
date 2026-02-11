@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef } from '../../types/project';
@@ -420,7 +420,7 @@ export default function MapCanvas() {
         if (snappedStationRef.current) {
           snappedStationRef.current = null;
           surveyLayerRef.current?.setSnappedStation(null);
-          setSnappedStation(null);
+          startTransition(() => setSnappedStation(null));
         }
         return;
       }
@@ -437,7 +437,7 @@ export default function MapCanvas() {
         if (snappedStationRef.current) {
           snappedStationRef.current = null;
           surveyLayerRef.current.setSnappedStation(null);
-          setSnappedStation(null);
+          startTransition(() => setSnappedStation(null));
         }
         return;
       }
@@ -466,8 +466,9 @@ export default function MapCanvas() {
           // Direct visual update — no React re-render needed
           surveyLayerRef.current.setSnappedStation(nearestStation);
           console.debug('[SnapDebug] Direct setSnappedStation done', { t: performance.now().toFixed(1) });
-          // Store update for click handling (triggers re-render, but visual is already shown)
-          setSnappedStation(nearestStation);
+          // Deferred store update for click handling — startTransition prevents
+          // the ~15ms synchronous React re-render from blocking the current frame's paint
+          startTransition(() => setSnappedStation(nearestStation));
         }
       } else if (prev) {
         snappedStationRef.current = null;
@@ -477,7 +478,7 @@ export default function MapCanvas() {
           from: `${prev.section_id}:${prev.station_index}`,
         });
         surveyLayerRef.current.setSnappedStation(null);
-        setSnappedStation(null);
+        startTransition(() => setSnappedStation(null));
       }
     },
     [activeTool, config, setSnappedStation, showStations]
