@@ -606,8 +606,9 @@ export default function DmpNewImportDialog({
             }
             return { ...shot, is_reference: true };
           }
-          // Past merge station: delete (redundant when using target data)
-          return { ...shot, isDeleted: true };
+          // Past merge station: leave unchanged to keep geometry continuous in preview.
+          // Deletion happens at import time in handleConfirm.
+          return shot;
         });
       }
     }
@@ -623,7 +624,8 @@ export default function DmpNewImportDialog({
         return { ...shot, is_reference: true };
       }
       if (!isActionable) {
-        return { ...shot, isDeleted: true };
+        // Past merge station: leave unchanged to keep geometry continuous in preview.
+        return shot;
       }
       // import_data: keep import values but mark as reference for preview
       return { ...shot, is_reference: true };
@@ -1184,13 +1186,28 @@ export default function DmpNewImportDialog({
     setError(null);
 
     // Save edit state with effectiveShots applied to ref before moving on.
-    // For non-keep_both modes, delete the reference overlap shots (they only exist for preview).
+    // For non-keep_both modes, delete ALL overlap shots (both actionable/reference
+    // and past-merge) — they're redundant with the target section.
     if (editState) {
-      const importShots = overlapMode === 'keep_both'
-        ? effectiveShots
-        : effectiveShots.map(shot =>
-            shot.is_reference ? { ...shot, isDeleted: true, is_reference: false } : shot
-          );
+      let importShots: EditableShot[];
+      if (overlapMode === 'keep_both') {
+        importShots = effectiveShots;
+      } else {
+        const { importStationIndex, matchedShots } = currentSuggestion;
+        const allOverlapIds = new Set<number>();
+        if (importStationIndex === 0) {
+          for (let i = 0; i < matchedShots; i++) allOverlapIds.add(i);
+        } else {
+          for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
+            if (i >= 0) allOverlapIds.add(i);
+          }
+        }
+        importShots = effectiveShots.map(shot =>
+          (shot.is_reference || (!shot.isNew && allOverlapIds.has(shot.id)))
+            ? { ...shot, isDeleted: true, is_reference: false }
+            : shot
+        );
+      }
       sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: importShots });
     }
 
