@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, PlacementSuggestion } from '../../types/commands';
+import type { DmpFile, PlacementSuggestion, CommandResult } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
@@ -57,6 +58,7 @@ export default function DmpNewImportDialog({
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
+  const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const suggestImportPlacement = useProjectStore((s) => s.suggestImportPlacement);
 
   // Core state
@@ -389,7 +391,19 @@ export default function DmpNewImportDialog({
       station_comments: [],
     };
 
-    const result = await importSections([config], selectionConfig.fileHash);
+    // Call backend directly to avoid the serial refresh chain in the store.
+    // The store's importSections awaits refreshProjectState (3 serial IPCs)
+    // before returning, adding ~1s latency. Instead we import, advance the
+    // wizard immediately, and let the store catch up in the background.
+    let result: CommandResult;
+    try {
+      result = await invoke<CommandResult>('import_sections', {
+        sections: [config],
+        fileHash: selectionConfig.fileHash ?? null,
+      });
+    } catch (e) {
+      result = { success: false, error: String(e), warnings: [], section_ids: [] };
+    }
 
     isImportingRef.current = false;
     setIsImporting(false);
@@ -398,6 +412,9 @@ export default function DmpNewImportDialog({
       setError(result.error ?? 'Import failed');
       return;
     }
+
+    // Refresh store in the background — don't block the wizard
+    refreshProjectState();
 
     // Add to imported
     const importedIdx = currentSuggestion.importSectionIndex;
@@ -427,7 +444,7 @@ export default function DmpNewImportDialog({
       // newly imported sections
       setRecalcTrigger((n) => n + 1);
     }
-  }, [currentSuggestion, dmpFile.sections, importSections, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, dmpFile.sections, refreshProjectState, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
 
   // Skip handler
   const handleSkip = useCallback(() => {
@@ -465,10 +482,10 @@ export default function DmpNewImportDialog({
   const handleAlternativeClick = useCallback((alt: RankedSuggestion) => {
     setCurrentSuggestion(alt);
     setAlternatives((prev) => {
-      // Replace the clicked one with the current top suggestion
       const newAlts = prev.filter((a) => a !== alt);
       if (currentSuggestion) {
-        newAlts.unshift(currentSuggestion);
+        newAlts.push(currentSuggestion);
+        newAlts.sort((a, b) => b.score - a.score);
       }
       return newAlts.slice(0, 4);
     });
