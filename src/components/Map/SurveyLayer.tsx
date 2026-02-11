@@ -1656,6 +1656,37 @@ export default class SurveyLayer {
   }
 
   /**
+   * Query the nearest station to a screen point using MapLibre's spatial index.
+   * O(log N) via queryRenderedFeatures instead of iterating all stations.
+   */
+  queryNearestStation(
+    screenX: number,
+    screenY: number,
+    threshold: number
+  ): StationRef | null {
+    const bbox: [[number, number], [number, number]] = [
+      [screenX - threshold, screenY - threshold],
+      [screenX + threshold, screenY + threshold],
+    ];
+    const features = this.map.queryRenderedFeatures(bbox, {
+      layers: [this.stationsHitboxLayerId],
+    });
+    if (features.length === 0) return null;
+
+    const fakeEvent = { point: { x: screenX, y: screenY } } as MapMouseEvent;
+    const nearest = resolveNearestStation(this.map, fakeEvent, features, threshold);
+    if (!nearest) return null;
+
+    const { sectionId, stationIndex } = nearest.properties ?? {};
+    if (sectionId === undefined || stationIndex === undefined) return null;
+
+    return {
+      section_id: sectionId as number,
+      station_index: stationIndex as number,
+    };
+  }
+
+  /**
    * Set the hovered section for visual highlighting.
    * Stores the section ID for use by updateVisualState() to apply hover styling
    * to all shots and stations in this section.

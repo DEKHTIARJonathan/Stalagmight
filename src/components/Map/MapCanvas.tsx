@@ -408,7 +408,7 @@ export default function MapCanvas() {
   // will show the snapped station. Merge tool is an exception (blocked when hidden).
   const checkSnapToStation = useCallback(
     (screenX: number, screenY: number) => {
-      if (!map.current || !config) {
+      if (!map.current || !config || !surveyLayerRef.current) {
         if (snappedStation) setSnappedStation(null);
         return;
       }
@@ -426,24 +426,9 @@ export default function MapCanvas() {
         return;
       }
 
-      const threshold = snapConfig.threshold;
-      let nearestStation = null;
-      let nearestDistance = Infinity;
-
-      // Check each station's screen position
-      for (const station of stations) {
-        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
-        const screenPos = map.current.project(mapCoords as [number, number]);
-
-        const dx = screenPos.x - screenX;
-        const dy = screenPos.y - screenY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance < threshold && distance < nearestDistance) {
-          nearestDistance = distance;
-          nearestStation = station.station_ref;
-        }
-      }
+      const nearestStation = surveyLayerRef.current.queryNearestStation(
+        screenX, screenY, snapConfig.threshold
+      );
 
       // Update snapped station state
       if (nearestStation) {
@@ -459,38 +444,21 @@ export default function MapCanvas() {
         setSnappedStation(null);
       }
     },
-    [activeTool, config, stations, snappedStation, setSnappedStation, showStations]
+    [activeTool, config, snappedStation, setSnappedStation, showStations]
   );
 
   // Check snap for placement mode
   const checkPlacementSnap = useCallback(
     (screenX: number, screenY: number) => {
-      if (!map.current || !config || !placementMode) {
+      if (!map.current || !config || !placementMode || !surveyLayerRef.current) {
         return null;
       }
 
-      const threshold = config.map.snap.threshold;
-      let nearestStation = null;
-      let nearestDistance = Infinity;
-
-      // Check each existing station's screen position
-      for (const station of stations) {
-        const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
-        const screenPos = map.current.project(mapCoords as [number, number]);
-
-        const dx = screenPos.x - screenX;
-        const dy = screenPos.y - screenY;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance < threshold && distance < nearestDistance) {
-          nearestDistance = distance;
-          nearestStation = station.station_ref;
-        }
-      }
-
-      return nearestStation;
+      return surveyLayerRef.current.queryNearestStation(
+        screenX, screenY, config.map.snap.threshold
+      );
     },
-    [config, stations, placementMode]
+    [config, placementMode]
   );
 
   // Handle placement confirmation
