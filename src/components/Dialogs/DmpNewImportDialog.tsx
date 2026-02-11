@@ -578,12 +578,12 @@ export default function DmpNewImportDialog({
             const target = targetMap.get(shot.id);
             if (target) {
               if (overlapMode === 'existing_data') {
-                return applyTargetData(shot, target);
+                return { ...applyTargetData(shot, target), is_reference: true };
               } else if (overlapMode === 'interpolate') {
-                return interpolateShots(shot, target);
+                return { ...interpolateShots(shot, target), is_reference: true };
               }
             }
-            return shot;
+            return { ...shot, is_reference: true };
           }
           // Past merge station: delete (redundant when using target data)
           return { ...shot, isDeleted: true };
@@ -604,7 +604,8 @@ export default function DmpNewImportDialog({
       if (!isActionable) {
         return { ...shot, isDeleted: true };
       }
-      return shot;
+      // import_data: keep import values but mark as reference for preview
+      return { ...shot, is_reference: true };
     });
   }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
 
@@ -1023,6 +1024,108 @@ export default function DmpNewImportDialog({
     };
   }, [currentSuggestion, selectedMergePair, dmpFile.sections]);
 
+  // Map target shot indices → resolved data for preview overlay (interpolate/import_data only)
+  const resolvedTargetShotMap = useMemo((): Map<number, EditableShot> | null => {
+    if (!currentSuggestion || currentSuggestion.matchedShots === 0) return null;
+    if (overlapMode === 'existing_data' || overlapMode === 'keep_both') return null;
+
+    const { importStationIndex, matchedShots, direction, existingStationIndex } = currentSuggestion;
+    const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
+    const mergeExistingStation = selectedMergePair?.existingStation ?? existingStationIndex;
+
+    // Recompute actionable overlap IDs (same logic as effectiveShots)
+    const allOverlapIds = new Set<number>();
+    const actionableIds = new Set<number>();
+    if (importStationIndex === 0) {
+      for (let i = 0; i < matchedShots; i++) allOverlapIds.add(i);
+      for (let i = 0; i < mergeImportStation; i++) {
+        if (allOverlapIds.has(i)) actionableIds.add(i);
+      }
+    } else {
+      for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
+        if (i >= 0) allOverlapIds.add(i);
+      }
+      for (let i = mergeImportStation; i < importStationIndex; i++) {
+        if (allOverlapIds.has(i)) actionableIds.add(i);
+      }
+    }
+
+    const map = new Map<number, EditableShot>();
+    for (const overlapId of actionableIds) {
+      // Find the resolved shot in effectiveShots (reference shots with resolved data)
+      const resolvedShot = effectiveShots.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
+      if (!resolvedShot) continue;
+
+      let targetIdx: number;
+      if (importStationIndex === 0) {
+        targetIdx = direction === 'forward'
+          ? mergeExistingStation + overlapId
+          : mergeExistingStation - 1 - overlapId;
+      } else {
+        const overlapStart = importStationIndex - matchedShots;
+        const k = overlapId - overlapStart;
+        targetIdx = direction === 'forward'
+          ? (mergeExistingStation - matchedShots) + k
+          : (mergeExistingStation + matchedShots) - 1 - k;
+      }
+      if (targetIdx >= 0) {
+        map.set(targetIdx, resolvedShot);
+      }
+    }
+    return map.size > 0 ? map : null;
+  }, [currentSuggestion, selectedMergePair, overlapMode, effectiveShots]);
+
+  // Modified merge preview config — replaces target overlap shots with resolved data
+  const previewMergeConfig = useMemo((): MergePreviewConfig | null => {
+    if (!mergePreviewConfig) return null;
+    if (!resolvedTargetShotMap) return mergePreviewConfig;
+
+    const modifiedShots = mergePreviewConfig.targetSection.shots.map((shot, idx) => {
+      const resolved = resolvedTargetShotMap.get(idx);
+      if (!resolved) return shot;
+      return {
+        ...shot,
+        azimuth_in: resolved.azimuth_in,
+        azimuth_out: resolved.azimuth_out,
+        length: resolved.length,
+        depth_in: resolved.depth_in,
+        depth_out: resolved.depth_out,
+      };
+    });
+
+    return {
+      ...mergePreviewConfig,
+      targetSection: { ...mergePreviewConfig.targetSection, shots: modifiedShots },
+    };
+  }, [mergePreviewConfig, resolvedTargetShotMap]);
+
+  // Modified DMP merge preview config — replaces target overlap shots with resolved data
+  const previewDmpMergeConfig = useMemo((): DmpMergePreviewConfig | null => {
+    if (!dmpMergePreviewConfig) return null;
+    if (!resolvedTargetShotMap) return dmpMergePreviewConfig;
+
+    let standardIdx = 0;
+    const modifiedShots = dmpMergePreviewConfig.targetDmpSection.shots.map((shot) => {
+      if (shot.shot_type !== 'Standard') return shot;
+      const resolved = resolvedTargetShotMap.get(standardIdx);
+      standardIdx++;
+      if (!resolved) return shot;
+      return {
+        ...shot,
+        heading_in: resolved.azimuth_in,
+        heading_out: resolved.azimuth_out,
+        length: resolved.length,
+        depth_in: resolved.depth_in,
+        depth_out: resolved.depth_out,
+      };
+    });
+
+    return {
+      ...dmpMergePreviewConfig,
+      targetDmpSection: { ...dmpMergePreviewConfig.targetDmpSection, shots: modifiedShots },
+    };
+  }, [dmpMergePreviewConfig, resolvedTargetShotMap]);
+
   // Import color for the current section
   const importColor = useMemo(() => {
     return SECTION_COLORS[connectedIndices.size % SECTION_COLORS.length] ?? '#4ecdc4';
@@ -1039,9 +1142,15 @@ export default function DmpNewImportDialog({
     if (!currentSuggestion) return;
     setError(null);
 
-    // Save edit state with effectiveShots applied to ref before moving on
+    // Save edit state with effectiveShots applied to ref before moving on.
+    // For non-keep_both modes, delete the reference overlap shots (they only exist for preview).
     if (editState) {
-      sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: effectiveShots });
+      const importShots = overlapMode === 'keep_both'
+        ? effectiveShots
+        : effectiveShots.map(shot =>
+            shot.is_reference ? { ...shot, isDeleted: true, is_reference: false } : shot
+          );
+      sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: importShots });
     }
 
     // Use selected merge pair for station indices (falls back to suggestion's original)
@@ -1080,7 +1189,7 @@ export default function DmpNewImportDialog({
       // Pool exhausted — transition to placing with whatever we have
       setPhase('placing');
     }
-  }, [currentSuggestion, selectedMergePair, editState, effectiveShots, zeroDatumConfig, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, selectedMergePair, editState, effectiveShots, overlapMode, zeroDatumConfig, selectedIndices, pickFromPool]);
 
   // Skip handler
   const handleSkip = useCallback(() => {
@@ -1195,8 +1304,8 @@ export default function DmpNewImportDialog({
                 section={importPreviewSection}
                 color={importColor}
                 size={340}
-                mergePreview={mergePreviewConfig}
-                dmpMergePreview={dmpMergePreviewConfig}
+                mergePreview={previewMergeConfig}
+                dmpMergePreview={previewDmpMergeConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
                 referenceIndices={referenceIndices}
               />
