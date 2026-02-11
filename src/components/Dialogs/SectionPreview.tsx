@@ -126,6 +126,8 @@ interface SectionPreviewProps {
   gpsStationIndex?: number;
   /** When set with mergePreview, fit bounds focus around this station index in the import section rather than fitting all stations. */
   focusStationIndex?: number | null;
+  /** Set of visible-shot indices (0-based among non-deleted shots) that should render at reduced opacity (reference shots). */
+  referenceIndices?: Set<number>;
 }
 
 /**
@@ -153,6 +155,7 @@ export default function SectionPreview({
   gpsOrigin,
   gpsStationIndex = 0,
   focusStationIndex,
+  referenceIndices,
 }: SectionPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -314,6 +317,7 @@ export default function SectionPreview({
         paint: {
           'line-color': ['get', 'color'],
           'line-width': 2,
+          'line-opacity': ['get', 'opacity'],
         },
       });
 
@@ -504,7 +508,7 @@ export default function SectionPreview({
             metersToMapCoords(to.x + totalOffset.x, to.y + totalOffset.y, gpsOrigin),
           ],
         },
-        properties: { color },
+        properties: { color, opacity: referenceIndices?.has(i) ? 0.3 : 1.0 },
       });
     }
 
@@ -897,7 +901,7 @@ export default function SectionPreview({
         }
       });
     }
-  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex]);
+  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex, referenceIndices]);
 
   // Re-apply theme colors when resolvedTheme changes
   useEffect(() => {
