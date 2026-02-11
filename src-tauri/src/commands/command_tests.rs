@@ -655,6 +655,9 @@ fn test_project_lifecycle_persists_undo_and_state() {
         let dir = TempDir::new().unwrap();
         let saved_path = save_project_to_temp(&app, &dir);
 
+        // Wait for background undo persistence thread to complete
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
         assert_success(&project::close_project(state(&app)));
         let open_result = project::open_project(state(&app), saved_path);
         assert_success(&open_result);

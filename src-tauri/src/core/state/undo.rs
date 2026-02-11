@@ -503,17 +503,6 @@ impl AppState {
         )
     }
 
-    /// Check if a command modifies project state
-    pub(super) fn is_modifying(cmd: &Command) -> bool {
-        !matches!(
-            cmd,
-            Command::OpenProject { .. }
-                | Command::SaveProject { .. }
-                | Command::CloseProject
-                | Command::MergeProjects { .. }
-        )
-    }
-
     // === Project operations ===
 
     /// Perform undo - restore previous state based on undo data

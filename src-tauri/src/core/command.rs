@@ -172,6 +172,9 @@ pub struct CommandResult {
     /// ID of the created shot (for CreateShot command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shot_id: Option<u32>,
+    /// Path the project was saved to (for SaveProject command)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_path: Option<String>,
 }
 
 /// Validation warning from command execution
@@ -199,6 +202,20 @@ impl CommandResult {
             section_id: None,
             section_ids: Vec::new(),
             shot_id: None,
+            saved_path: None,
+        }
+    }
+
+    /// Create a success result with the saved file path
+    pub fn success_with_path(path: String) -> Self {
+        Self {
+            success: true,
+            warnings: Vec::new(),
+            error: None,
+            section_id: None,
+            section_ids: Vec::new(),
+            shot_id: None,
+            saved_path: Some(path),
         }
     }
 
@@ -210,6 +227,7 @@ impl CommandResult {
             section_id: None,
             section_ids: Vec::new(),
             shot_id: None,
+            saved_path: None,
         }
     }
 
@@ -222,6 +240,7 @@ impl CommandResult {
             section_id: Some(section_id),
             section_ids: Vec::new(),
             shot_id: None,
+            saved_path: None,
         }
     }
 
@@ -234,6 +253,7 @@ impl CommandResult {
             section_id: Some(section_id),
             section_ids: Vec::new(),
             shot_id: None,
+            saved_path: None,
         }
     }
 
@@ -246,6 +266,7 @@ impl CommandResult {
             section_id: None,
             section_ids,
             shot_id: None,
+            saved_path: None,
         }
     }
 
@@ -258,6 +279,7 @@ impl CommandResult {
             section_id: None,
             section_ids,
             shot_id: None,
+            saved_path: None,
         }
     }
 
@@ -270,6 +292,7 @@ impl CommandResult {
             section_id: None,
             section_ids: Vec::new(),
             shot_id: Some(shot_id),
+            saved_path: None,
         }
     }
 
@@ -282,6 +305,7 @@ impl CommandResult {
             section_id: None,
             section_ids: Vec::new(),
             shot_id: Some(shot_id),
+            saved_path: None,
         }
     }
 
@@ -293,6 +317,7 @@ impl CommandResult {
             section_id: None,
             section_ids: Vec::new(),
             shot_id: None,
+            saved_path: None,
         }
     }
 }
@@ -435,6 +460,11 @@ mod tests {
         assert!(success.section_id.is_none());
         assert!(success.section_ids.is_empty());
         assert!(success.shot_id.is_none());
+        assert!(success.saved_path.is_none());
+
+        let success_with_path = CommandResult::success_with_path("/tmp/test.stalx".to_string());
+        assert!(success_with_path.success);
+        assert_eq!(success_with_path.saved_path.as_deref(), Some("/tmp/test.stalx"));
 
         let success_with_warnings = CommandResult::success_with_warnings(vec![warning.clone()]);
         assert!(success_with_warnings.success);
