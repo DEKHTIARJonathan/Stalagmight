@@ -3287,6 +3287,87 @@ fn distribute_closure_fallback_separate_datums() {
         "Endpoints should align via fallback datums, residual = {residual}");
 }
 
+/// Stress test: 50-section ring network with closure.
+/// Verifies the sparse PCG solver produces correct results for a
+/// non-trivial graph (all endpoints align, zero datums preserved).
+#[test]
+fn distribute_closure_large_ring_network() {
+    let mut project = Project::new("LargeRingNetwork".to_string(), None);
+
+    // Create 50 sections, each with 5 shots going at slightly different azimuths.
+    // This creates a network where the union-find produces many distinct groups,
+    // exercising the sparse solver with a matrix larger than trivial test cases.
+    let num_sections = 50;
+    let mut section_ids = Vec::new();
+    for i in 0..num_sections {
+        // Each section goes at a slightly different heading to create a ring
+        let azimuth = (i as f64 * 360.0 / num_sections as f64) % 360.0;
+        let id = project.add_section(SectionData {
+            shots: vec![
+                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+                shot(azimuth, azimuth, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        }).id;
+        section_ids.push(id);
+    }
+
+    // Chain sections: merge end of section i with start of section i+1
+    for i in 0..(num_sections - 1) {
+        project.merge_stations(
+            StationRef::new(section_ids[i], 5),   // end of section i
+            StationRef::new(section_ids[i + 1], 0), // start of section i+1
+        ).unwrap();
+    }
+
+    // Set zero datum on the first station
+    project.set_zero_datum(
+        StationRef::new(section_ids[0], 0),
+        GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    ).unwrap();
+
+    // Record positions before closure
+    let first_station = StationRef::new(section_ids[0], 0);
+    let last_station = StationRef::new(section_ids[num_sections - 1], 5);
+    let coords_first_before = project.compute_station_raw_coords(first_station).unwrap();
+
+    // Create a closure between last station and first station (closing the ring)
+    project.test_distribute_closure_error(
+        last_station,
+        first_station,
+        ClosureStrategy::ProportionalByLength,
+    ).unwrap();
+
+    // Zero datum should not have moved
+    let coords_first_after = project.compute_station_raw_coords(first_station).unwrap();
+    assert!(coords_first_before.distance_to(&coords_first_after) < 1e-6,
+        "Zero datum should not move, delta = {}",
+        coords_first_before.distance_to(&coords_first_after));
+
+    // Endpoints should align (closure should be resolved)
+    let coords_last_after = project.compute_station_raw_coords(last_station).unwrap();
+    let coords_first_after2 = project.compute_station_raw_coords(first_station).unwrap();
+    let residual = coords_last_after.distance_to(&coords_first_after2);
+    assert!(residual < 0.01,
+        "Ring endpoints should align after distribution, residual = {residual}");
+
+    // All merge points should remain consistent (merged stations should coincide)
+    for i in 0..(num_sections - 1) {
+        let end_i = project.compute_station_raw_coords(
+            StationRef::new(section_ids[i], 5)
+        ).unwrap();
+        let start_next = project.compute_station_raw_coords(
+            StationRef::new(section_ids[i + 1], 0)
+        ).unwrap();
+        let merge_residual = end_i.distance_to(&start_next);
+        assert!(merge_residual < 0.01,
+            "Merge point {i} should be consistent, residual = {merge_residual}");
+    }
+}
+
 // Group D: apply_station_move_internal (tested indirectly)
 
 #[test]
