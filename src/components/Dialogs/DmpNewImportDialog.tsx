@@ -12,6 +12,8 @@ import type { DmpSection } from '../../types/commands';
 import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig } from './SectionPreview';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
+import { SectionMetadataForm } from '../common/SectionMetadataForm';
+import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { editableShotToShotData } from '../../utils/shotConversion';
@@ -42,6 +44,46 @@ interface DmpNewImportDialogProps {
   onBack: () => void;
   onHandoffToLegacy: (remainingIndices: Set<number>, connections: VirtualConnection[]) => void;
   onComplete: () => void;
+}
+
+// ─── Merge station helpers ────────────────────────────────────────────────────
+
+interface MergeOption {
+  offset: number;
+  importStation: number;
+  existingStation: number;
+}
+
+function computeMergeOptions(suggestion: CrossSectionSuggestion, importShotCount: number): MergeOption[] {
+  const { importStationIndex, existingStationIndex, matchedShots, direction, isPartial } = suggestion;
+  const maxOffset = isPartial ? matchedShots - 1 : matchedShots;
+  const options: MergeOption[] = [];
+
+  for (let k = 0; k <= maxOffset; k++) {
+    const importStation = importStationIndex === 0 ? k : importStationIndex - k;
+    const existingStation = direction === 'forward'
+      ? existingStationIndex + k
+      : existingStationIndex - k;
+
+    // Guard: stations must stay within valid ranges
+    if (importStation < 0 || importStation > importShotCount) continue;
+    if (existingStation < 0) continue;
+
+    options.push({ offset: k, importStation, existingStation });
+  }
+  return options;
+}
+
+// ─── Section edit state ──────────────────────────────────────────────────────
+
+interface SectionEditState {
+  name: string;
+  surveyor: string;
+  date: string;
+  color: string;
+  direction: 'in' | 'out';
+  quality: number;
+  shots: EditableShot[];
 }
 
 // ─── Graph helpers ───────────────────────────────────────────────────────────
@@ -100,6 +142,7 @@ function buildBatchImport(
   zeroDatumIndex: number | null,
   dmpFile: DmpFile,
   selectionConfig: DmpSelectionConfig,
+  sectionEdits?: Map<number, SectionEditState>,
 ): { configs: BackendImportSectionConfig[]; unreachable: number[] } {
   const adjacency = buildAdjacency(connections);
 
@@ -129,8 +172,18 @@ function buildBatchImport(
     const section = dmpFile.sections[idx];
     if (!section) continue;
 
-    const editableShots = convertToEditableShots(section.shots);
-    const backendShots: ShotData[] = editableShots.map(editableShotToShotData);
+    const edits = sectionEdits?.get(idx);
+
+    // Use edited shots if available, otherwise fall back to DMP data
+    let backendShots: ShotData[];
+    if (edits) {
+      backendShots = edits.shots
+        .filter((s) => !s.isDeleted)
+        .map(editableShotToShotData);
+    } else {
+      const editableShots = convertToEditableShots(section.shots);
+      backendShots = editableShots.map(editableShotToShotData);
+    }
     if (backendShots.length === 0) continue;
 
     // Find the connection that placed this section
@@ -164,16 +217,22 @@ function buildBatchImport(
       continue;
     }
 
-    const dateStr = selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
+    // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
+    const sectionName = edits?.name ?? section.name;
+    const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
+    const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
+    const colorValue = edits?.color ?? SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4';
+    const directionValue = edits?.direction ?? section.direction;
+    const qualityValue = edits?.quality ?? 1.0;
 
     const config: BackendImportSectionConfig = {
       section_index: configs.length,
-      name: section.name,
-      surveyor: selectionConfig.defaultSurveyor || null,
+      name: sectionName,
+      surveyor: surveyorValue || null,
       date: dateStr,
-      color: SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4',
-      direction: section.direction,
-      quality: 1.0,
+      color: colorValue,
+      direction: directionValue,
+      quality: qualityValue,
       shots: backendShots,
       placement,
       station_comments: [],
@@ -220,13 +279,21 @@ export default function DmpNewImportDialog({
   const [skippedIndices, setSkippedIndices] = useState<Set<number>>(new Set());
   const [currentSuggestion, setCurrentSuggestion] = useState<CrossSectionSuggestion | null>(null);
   const [alternatives, setAlternatives] = useState<CrossSectionSuggestion[]>([]);
-  const [showAlternatives, setShowAlternatives] = useState(false);
+  const [showAlternatives, setShowAlternatives] = useState(true);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [phase, setPhase] = useState<'init' | 'suggesting' | 'placing' | 'done'>('init');
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Merge station selection
+  const [selectedMergeOffset, setSelectedMergeOffset] = useState(0);
+
+  // Section editing state
+  const [editState, setEditState] = useState<SectionEditState | null>(null);
+  const sectionEditsRef = useRef<Map<number, SectionEditState>>(new Map());
+  const nextTempIdRef = useRef(1);
 
   // Cache all cross-section suggestions from startup calculation
   const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
@@ -252,6 +319,198 @@ export default function DmpNewImportDialog({
     return new Set(connections.map((c) => c.importSectionIndex));
   }, [connections]);
 
+  // Compute import shot count for current suggestion
+  const importShotCount = useMemo(() => {
+    if (!currentSuggestion) return 0;
+    const section = dmpFile.sections[currentSuggestion.importSectionIndex];
+    if (!section) return 0;
+    return section.shots.filter((s) => s.shot_type === 'Standard').length;
+  }, [currentSuggestion, dmpFile.sections]);
+
+  // Compute merge options for the current suggestion
+  const mergeOptions = useMemo(() => {
+    if (!currentSuggestion) return [];
+    return computeMergeOptions(currentSuggestion, importShotCount);
+  }, [currentSuggestion, importShotCount]);
+
+  // Selected merge pair
+  const selectedMergePair = useMemo(() => {
+    if (mergeOptions.length === 0) return null;
+    return mergeOptions.find((o) => o.offset === selectedMergeOffset) ?? mergeOptions[mergeOptions.length - 1]!;
+  }, [mergeOptions, selectedMergeOffset]);
+
+  // Reset merge offset to last option (deepest overlap) when suggestion changes
+  useEffect(() => {
+    if (mergeOptions.length > 0) {
+      setSelectedMergeOffset(mergeOptions[mergeOptions.length - 1]!.offset);
+    }
+  }, [currentSuggestion, mergeOptions]);
+
+  // Initialize / restore section edit state when currentSuggestion changes
+  useEffect(() => {
+    if (!currentSuggestion) {
+      setEditState(null);
+      return;
+    }
+
+    const idx = currentSuggestion.importSectionIndex;
+
+    // Restore from ref if previously edited
+    const existing = sectionEditsRef.current.get(idx);
+    if (existing) {
+      setEditState(existing);
+      return;
+    }
+
+    // Initialize from DMP data + selectionConfig defaults
+    const section = dmpFile.sections[idx];
+    if (!section) {
+      setEditState(null);
+      return;
+    }
+
+    const shots = convertToEditableShots(section.shots);
+    nextTempIdRef.current = shots.length + 1;
+
+    const colorIdx = connectedIndices.size % SECTION_COLORS.length;
+    const newState: SectionEditState = {
+      name: section.name,
+      surveyor: selectionConfig.defaultSurveyor || '',
+      date: selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? '',
+      color: SECTION_COLORS[colorIdx] ?? '#4ecdc4',
+      direction: section.direction === 'out' ? 'out' : 'in',
+      quality: 1.0,
+      shots,
+    };
+
+    sectionEditsRef.current.set(idx, newState);
+    setEditState(newState);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSuggestion]);
+
+  // Keep sectionEditsRef in sync with editState changes
+  useEffect(() => {
+    if (!editState || !currentSuggestion) return;
+    sectionEditsRef.current.set(currentSuggestion.importSectionIndex, editState);
+  }, [editState, currentSuggestion]);
+
+  // Section edit callbacks
+  const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
+    setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
+  }, []);
+
+  const handleShotChange = useCallback(
+    (index: number, field: keyof EditableShot, value: number | string | boolean | null) => {
+      setEditState((prev) => {
+        if (!prev) return prev;
+        const newShots = [...prev.shots];
+        const shot = newShots[index];
+        if (shot) {
+          newShots[index] = { ...shot, [field]: value };
+        }
+        return { ...prev, shots: newShots };
+      });
+    },
+    []
+  );
+
+  const handleAddShot = useCallback(() => {
+    const tempId = nextTempIdRef.current++;
+    setEditState((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        shots: [
+          ...prev.shots,
+          {
+            id: -tempId,
+            azimuth_in: 0,
+            azimuth_out: 0,
+            length: 0,
+            depth_in: 0,
+            depth_out: 0,
+            pitch_in: null,
+            pitch_out: null,
+            left: null,
+            right: null,
+            up: null,
+            down: null,
+            comment: null,
+            is_reference: false,
+            isNew: true,
+            tempId,
+          },
+        ],
+      };
+    });
+  }, []);
+
+  const handleDeleteShot = useCallback((index: number) => {
+    setEditState((prev) => {
+      if (!prev) return prev;
+      const newShots = [...prev.shots];
+      const shot = newShots[index];
+      if (shot) {
+        newShots[index] = { ...shot, isDeleted: true };
+      }
+      return { ...prev, shots: newShots };
+    });
+  }, []);
+
+  const handleInsertBefore = useCallback((index: number) => {
+    const tempId = nextTempIdRef.current++;
+    setEditState((prev) => {
+      if (!prev) return prev;
+      const newShots = [...prev.shots];
+      newShots.splice(index, 0, {
+        id: -tempId,
+        azimuth_in: 0,
+        azimuth_out: 0,
+        length: 0,
+        depth_in: 0,
+        depth_out: 0,
+        pitch_in: null,
+        pitch_out: null,
+        left: null,
+        right: null,
+        up: null,
+        down: null,
+        comment: null,
+        is_reference: false,
+        isNew: true,
+        tempId,
+      });
+      return { ...prev, shots: newShots };
+    });
+  }, []);
+
+  const handleInsertAfter = useCallback((index: number) => {
+    const tempId = nextTempIdRef.current++;
+    setEditState((prev) => {
+      if (!prev) return prev;
+      const newShots = [...prev.shots];
+      newShots.splice(index + 1, 0, {
+        id: -tempId,
+        azimuth_in: 0,
+        azimuth_out: 0,
+        length: 0,
+        depth_in: 0,
+        depth_out: 0,
+        pitch_in: null,
+        pitch_out: null,
+        left: null,
+        right: null,
+        up: null,
+        down: null,
+        comment: null,
+        is_reference: false,
+        isNew: true,
+        tempId,
+      });
+      return { ...prev, shots: newShots };
+    });
+  }, []);
+
   // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
   const pickFromPool = useCallback(() => {
     const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
@@ -272,7 +531,6 @@ export default function DmpNewImportDialog({
         .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
         .slice(0, 4)
     );
-    setShowAlternatives(false);
     return true;
   }, []);
 
@@ -403,6 +661,7 @@ export default function DmpNewImportDialog({
         zeroDatumIdx,
         dmpFile,
         selectionConfig,
+        sectionEditsRef.current,
       );
 
       if (configs.length > 0) {
@@ -479,10 +738,10 @@ export default function DmpNewImportDialog({
 
     return {
       targetSection,
-      importStationIndex: currentSuggestion.importStationIndex,
-      targetStationIndex: currentSuggestion.existingStationIndex,
+      importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
+      targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
     };
-  }, [currentSuggestion]);
+  }, [currentSuggestion, selectedMergePair]);
 
   // Build DMP merge preview config for import-to-import targets
   const dmpMergePreviewConfig = useMemo((): DmpMergePreviewConfig | null => {
@@ -497,10 +756,10 @@ export default function DmpNewImportDialog({
     return {
       targetDmpSection: targetSection,
       targetColor: SECTION_COLORS[targetColorIdx] ?? '#95a5a6',
-      importStationIndex: currentSuggestion.importStationIndex,
-      targetStationIndex: currentSuggestion.existingStationIndex,
+      importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
+      targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
     };
-  }, [currentSuggestion, dmpFile.sections]);
+  }, [currentSuggestion, selectedMergePair, dmpFile.sections]);
 
   // Import color for the current section
   const importColor = useMemo(() => {
@@ -518,14 +777,23 @@ export default function DmpNewImportDialog({
     if (!currentSuggestion) return;
     setError(null);
 
+    // Save edit state to ref before moving on
+    if (editState) {
+      sectionEditsRef.current.set(currentSuggestion.importSectionIndex, editState);
+    }
+
+    // Use selected merge pair for station indices (falls back to suggestion's original)
+    const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
+    const mergeExistingStation = selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex;
+
     const newConn: VirtualConnection = {
       importSectionIndex: currentSuggestion.importSectionIndex,
-      importStationIndex: currentSuggestion.importStationIndex,
+      importStationIndex: mergeImportStation,
       targetType: currentSuggestion.targetType,
       ...(currentSuggestion.existingSectionId != null && { existingSectionId: currentSuggestion.existingSectionId }),
-      ...(currentSuggestion.targetType === 'existing' && currentSuggestion.existingStationIndex != null && { existingStationIndex: currentSuggestion.existingStationIndex }),
+      ...(currentSuggestion.targetType === 'existing' && { existingStationIndex: mergeExistingStation }),
       ...(currentSuggestion.targetImportIndex != null && { targetImportIndex: currentSuggestion.targetImportIndex }),
-      ...(currentSuggestion.targetType === 'importing' && currentSuggestion.existingStationIndex != null && { targetImportStationIndex: currentSuggestion.existingStationIndex }),
+      ...(currentSuggestion.targetType === 'importing' && { targetImportStationIndex: mergeExistingStation }),
     };
 
     setConnections((prev) => [...prev, newConn]);
@@ -550,7 +818,7 @@ export default function DmpNewImportDialog({
       // Pool exhausted — transition to placing with whatever we have
       setPhase('placing');
     }
-  }, [currentSuggestion, zeroDatumConfig, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, selectedMergePair, editState, zeroDatumConfig, selectedIndices, pickFromPool]);
 
   // Skip handler
   const handleSkip = useCallback(() => {
@@ -595,7 +863,6 @@ export default function DmpNewImportDialog({
       }
       return newAlts.slice(0, 4);
     });
-    setShowAlternatives(false);
   }, [currentSuggestion]);
 
   // Cancel/Back
@@ -668,7 +935,7 @@ export default function DmpNewImportDialog({
                 size={340}
                 mergePreview={mergePreviewConfig}
                 dmpMergePreview={dmpMergePreviewConfig}
-                focusStationIndex={currentSuggestion!.importStationIndex}
+                focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
               />
             </div>
 
@@ -678,19 +945,40 @@ export default function DmpNewImportDialog({
               <div data-testid="wizard-connection-description">
                 <div className="text-sm">
                   <span className="font-medium">&ldquo;{currentSuggestion!.importSectionName}&rdquo;</span>
-                  {' '}{t('dialogs.dmpNewImport.station', { index: currentSuggestion!.importStationIndex })}
+                  {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex })}
                 </div>
                 <div className="text-text-secondary text-sm my-1">
                   {t('dialogs.dmpNewImport.connectsTo')}
                 </div>
                 <div className="text-sm">
                   <span className="font-medium">&ldquo;{targetSectionName}&rdquo;</span>
-                  {' '}{t('dialogs.dmpNewImport.station', { index: currentSuggestion!.existingStationIndex })}
+                  {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex })}
                   {isImportTarget && (
                     <span className="ml-1 text-xs text-text-secondary">(importing)</span>
                   )}
                 </div>
               </div>
+
+              {/* Merge station dropdown */}
+              {mergeOptions.length > 1 && (
+                <div className="flex items-center gap-2" data-testid="merge-station-picker">
+                  <label className="text-xs text-text-secondary whitespace-nowrap">
+                    {t('dialogs.dmpNewImport.mergeStation')}
+                  </label>
+                  <select
+                    value={selectedMergeOffset}
+                    onChange={(e) => setSelectedMergeOffset(Number(e.target.value))}
+                    className="px-2 py-1 bg-background border border-border rounded text-xs"
+                    data-testid="merge-station-select"
+                  >
+                    {mergeOptions.map((opt) => (
+                      <option key={opt.offset} value={opt.offset}>
+                        stn {opt.importStation} → {targetSectionName} stn {opt.existingStation}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Confidence badge */}
               <div className="flex items-center gap-2" data-testid="wizard-confidence">
@@ -760,6 +1048,42 @@ export default function DmpNewImportDialog({
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Section Settings */}
+              {editState && (
+                <>
+                  <div className="border-t border-border" />
+                  <div className="text-sm font-medium">
+                    {t('dialogs.dmpNewImport.sectionSettings')}
+                  </div>
+                  <SectionMetadataForm
+                    name={editState.name}
+                    surveyor={editState.surveyor}
+                    date={editState.date}
+                    color={editState.color}
+                    direction={editState.direction}
+                    quality={editState.quality}
+                    onNameChange={(v) => handleMetadataChange('name', v)}
+                    onSurveyorChange={(v) => handleMetadataChange('surveyor', v)}
+                    onDateChange={(v) => handleMetadataChange('date', v)}
+                    onColorChange={(v) => handleMetadataChange('color', v)}
+                    onDirectionChange={(v) => handleMetadataChange('direction', v)}
+                    onQualityChange={(v) => handleMetadataChange('quality', v)}
+                    showDirection
+                    showQuality
+                  />
+                  <div className="border-t border-border" />
+                  <ShotTableEditor
+                    shots={editState.shots}
+                    onShotChange={handleShotChange}
+                    onAddShot={handleAddShot}
+                    onDeleteShot={handleDeleteShot}
+                    onInsertBefore={handleInsertBefore}
+                    onInsertAfter={handleInsertAfter}
+                    maxHeight="12rem"
+                  />
+                </>
               )}
             </div>
           </div>

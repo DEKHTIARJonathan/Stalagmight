@@ -828,6 +828,8 @@
       "cancelWizard": "Cancel Import?",
       "cancelWizardMessage": "Some sections have already been imported and cannot be undone from this wizard.",
       "cancelWizardNoImports": "Are you sure you want to cancel the import?",
+      "mergeStation": "Merge at",
+      "sectionSettings": "Section Settings",
       "backWizard": "Go Back?",
       "backWizardMessage": "Going back will not undo sections already imported."
     },
