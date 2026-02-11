@@ -785,7 +785,7 @@ export function ShotTableEditor({
 
                   {/* Actions (delete) */}
                   <td className="p-0 text-center">
-                    {!readOnly && (
+                    {!readOnly && !frozenShotIndices?.has(actualIndex) && (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -855,14 +855,28 @@ export function ShotTableEditor({
             {(onInsertBefore || onInsertAfter) && (
               <div className="border-t border-border my-1" />
             )}
-            <button
-              type="button"
-              onClick={() => handleContextMenuAction('delete')}
-              className="w-full px-3 py-2 text-left text-sm text-error hover:bg-error-10"
-              data-testid="context-menu-delete"
-            >
-              {t('shotTable.contextMenu.delete')}
-            </button>
+            {(() => {
+              const ctxShot = visibleShots[contextMenu.rowIndex];
+              const ctxActualIndex = ctxShot ? shots.findIndex(
+                (s) => s === ctxShot || (s.id === ctxShot.id && s.tempId === ctxShot.tempId)
+              ) : -1;
+              const isFrozen = frozenShotIndices?.has(ctxActualIndex) ?? false;
+              return (
+                <button
+                  type="button"
+                  onClick={() => !isFrozen && handleContextMenuAction('delete')}
+                  className={`w-full px-3 py-2 text-left text-sm ${
+                    isFrozen
+                      ? 'text-text-secondary opacity-50 cursor-not-allowed'
+                      : 'text-error hover:bg-error-10'
+                  }`}
+                  disabled={isFrozen}
+                  data-testid="context-menu-delete"
+                >
+                  {t('shotTable.contextMenu.delete')}
+                </button>
+              );
+            })()}
           </div>
         </div>
       )}

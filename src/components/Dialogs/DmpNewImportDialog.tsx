@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult } from '../../types/commands';
+import type { DmpFile, DmpShot, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
@@ -394,6 +394,31 @@ export default function DmpNewImportDialog({
     sectionEditsRef.current.set(currentSuggestion.importSectionIndex, editState);
   }, [editState, currentSuggestion]);
 
+  // Compute frozen shot indices — matched overlap shots that must not be deleted
+  const frozenShotIndices = useMemo(() => {
+    if (!currentSuggestion || !editState) return new Set<number>();
+
+    const { importStationIndex, matchedShots } = currentSuggestion;
+    // Compute original shot IDs in the overlap
+    const frozenIds = new Set<number>();
+    if (importStationIndex === 0) {
+      // Forward from station 0: shots 0..matchedShots-1
+      for (let i = 0; i < matchedShots; i++) frozenIds.add(i);
+    } else {
+      // Backward from end: shots (importStationIndex-matchedShots)..(importStationIndex-1)
+      for (let i = importStationIndex - matchedShots; i < importStationIndex; i++) {
+        if (i >= 0) frozenIds.add(i);
+      }
+    }
+
+    // Map original IDs to current indices in editState.shots
+    const indices = new Set<number>();
+    editState.shots.forEach((shot, idx) => {
+      if (!shot.isNew && frozenIds.has(shot.id)) indices.add(idx);
+    });
+    return indices;
+  }, [currentSuggestion, editState]);
+
   // Section edit callbacks
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
@@ -446,6 +471,7 @@ export default function DmpNewImportDialog({
   }, []);
 
   const handleDeleteShot = useCallback((index: number) => {
+    if (frozenShotIndices.has(index)) return;
     setEditState((prev) => {
       if (!prev) return prev;
       const newShots = [...prev.shots];
@@ -455,7 +481,7 @@ export default function DmpNewImportDialog({
       }
       return { ...prev, shots: newShots };
     });
-  }, []);
+  }, [frozenShotIndices]);
 
   const handleInsertBefore = useCallback((index: number) => {
     const tempId = nextTempIdRef.current++;
@@ -715,13 +741,40 @@ export default function DmpNewImportDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
-  // Build preview section for import side
+  // Build preview section for import side (live from editState when available)
   const importPreviewSection = useMemo<DmpSection | null>(() => {
     if (!currentSuggestion) return null;
     const section = dmpFile.sections[currentSuggestion.importSectionIndex];
     if (!section) return null;
-    return section;
-  }, [currentSuggestion, dmpFile.sections]);
+    if (!editState) return section;
+
+    // Build synthetic DmpSection from editState for live preview
+    const syntheticShots: DmpShot[] = editState.shots
+      .filter((s) => !s.isDeleted)
+      .map((s) => ({
+        shot_type: 'Standard' as const,
+        heading_in: s.azimuth_in,
+        heading_out: s.azimuth_out,
+        length: s.length,
+        depth_in: s.depth_in,
+        depth_out: s.depth_out,
+        pitch_in: s.pitch_in ?? 0,
+        pitch_out: s.pitch_out ?? 0,
+        left: s.left ?? 0,
+        right: s.right ?? 0,
+        up: s.up ?? 0,
+        down: s.down ?? 0,
+        temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
+        ...(s.comment != null ? { comment: s.comment } : {}),
+      }));
+
+    return {
+      ...section,
+      name: editState.name,
+      direction: editState.direction,
+      shots: syntheticShots,
+    };
+  }, [currentSuggestion, dmpFile.sections, editState]);
 
   // Build merge preview config for SectionPreview (existing target)
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
@@ -1081,6 +1134,7 @@ export default function DmpNewImportDialog({
                     onDeleteShot={handleDeleteShot}
                     onInsertBefore={handleInsertBefore}
                     onInsertAfter={handleInsertAfter}
+                    frozenShotIndices={frozenShotIndices}
                     maxHeight="12rem"
                   />
                 </>
