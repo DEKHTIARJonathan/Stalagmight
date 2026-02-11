@@ -345,7 +345,9 @@ export default function DmpNewImportDialog({
     return SECTION_COLORS[importedIndices.size % SECTION_COLORS.length] ?? '#4ecdc4';
   }, [importedIndices.size]);
 
-  // Confirm handler
+  // Confirm handler — fires backend import optimistically and advances the
+  // wizard immediately. Only blocks when fresh backend state is needed
+  // (last section or pool exhausted for recalculation).
   const handleConfirm = useCallback(async () => {
     if (!currentSuggestion || isImportingRef.current) return;
 
@@ -391,30 +393,23 @@ export default function DmpNewImportDialog({
       station_comments: [],
     };
 
-    // Call backend directly to avoid the serial refresh chain in the store.
-    // The store's importSections awaits refreshProjectState (3 serial IPCs)
-    // before returning, adding ~1s latency. Instead we import, advance the
-    // wizard immediately, and let the store catch up in the background.
-    let result: CommandResult;
-    try {
-      result = await invoke<CommandResult>('import_sections', {
-        sections: [config],
-        fileHash: selectionConfig.fileHash ?? null,
-      });
-    } catch (e) {
-      result = { success: false, error: String(e), warnings: [], section_ids: [] };
-    }
+    // Fire backend import — don't await yet. The backend does two full
+    // project serializations (undo snapshots) + autosave, which takes ~1s.
+    // We advance the wizard immediately and only block when we need
+    // fresh backend state. Store refresh is deferred to avoid cascading
+    // re-renders of all subscribed components (map, sidebar, etc.) while
+    // the wizard is active.
+    const importPromise = invoke<CommandResult>('import_sections', {
+      sections: [config],
+      fileHash: selectionConfig.fileHash ?? null,
+    }).catch((e) => {
+      const result: CommandResult = { success: false, error: String(e), warnings: [], section_ids: [] };
+      setError(result.error ?? 'Import failed');
+      return result;
+    });
 
     isImportingRef.current = false;
     setIsImporting(false);
-
-    if (!result.success) {
-      setError(result.error ?? 'Import failed');
-      return;
-    }
-
-    // Refresh store in the background — don't block the wizard
-    refreshProjectState();
 
     // Add to imported
     const importedIdx = currentSuggestion.importSectionIndex;
@@ -434,14 +429,27 @@ export default function DmpNewImportDialog({
     );
 
     if (remaining.length === 0) {
+      // Last section — wait for backend, refresh store, then transition
+      const result = await importPromise;
+      if (!result.success) {
+        setError(result.error ?? 'Import failed');
+        return;
+      }
+      await refreshProjectState();
       setPhase('done');
       return;
     }
 
     // Try to pick next suggestion from cached pool (instant)
     if (!pickFromPool()) {
-      // Pool exhausted — do a full recalculation to find matches against
-      // newly imported sections
+      // Pool exhausted — wait for backend + refresh store (need fresh
+      // project state for recalculation), then recalculate
+      const result = await importPromise;
+      if (!result.success) {
+        setError(result.error ?? 'Import failed');
+        return;
+      }
+      await refreshProjectState();
       setRecalcTrigger((n) => n + 1);
     }
   }, [currentSuggestion, dmpFile.sections, refreshProjectState, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
