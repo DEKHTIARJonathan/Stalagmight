@@ -396,16 +396,12 @@ export default function DmpNewImportDialog({
     // Fire backend import — don't await yet. The backend does two full
     // project serializations (undo snapshots) + autosave, which takes ~1s.
     // We advance the wizard immediately and only block when we need
-    // fresh backend state.
+    // fresh backend state. Store refresh is deferred to avoid cascading
+    // re-renders of all subscribed components (map, sidebar, etc.) while
+    // the wizard is active.
     const importPromise = invoke<CommandResult>('import_sections', {
       sections: [config],
       fileHash: selectionConfig.fileHash ?? null,
-    }).then((result) => {
-      if (!result.success) {
-        setError(result.error ?? 'Import failed');
-      }
-      refreshProjectState();
-      return result;
     }).catch((e) => {
       const result: CommandResult = { success: false, error: String(e), warnings: [], section_ids: [] };
       setError(result.error ?? 'Import failed');
@@ -433,17 +429,27 @@ export default function DmpNewImportDialog({
     );
 
     if (remaining.length === 0) {
-      // Last section — wait for backend before transitioning
-      await importPromise;
+      // Last section — wait for backend, refresh store, then transition
+      const result = await importPromise;
+      if (!result.success) {
+        setError(result.error ?? 'Import failed');
+        return;
+      }
+      await refreshProjectState();
       setPhase('done');
       return;
     }
 
     // Try to pick next suggestion from cached pool (instant)
     if (!pickFromPool()) {
-      // Pool exhausted — wait for backend, then recalculate against
-      // newly imported sections
-      await importPromise;
+      // Pool exhausted — wait for backend + refresh store (need fresh
+      // project state for recalculation), then recalculate
+      const result = await importPromise;
+      if (!result.success) {
+        setError(result.error ?? 'Import failed');
+        return;
+      }
+      await refreshProjectState();
       setRecalcTrigger((n) => n + 1);
     }
   }, [currentSuggestion, dmpFile.sections, refreshProjectState, selectionConfig, importedIndices.size, selectedIndices, pickFromPool]);
