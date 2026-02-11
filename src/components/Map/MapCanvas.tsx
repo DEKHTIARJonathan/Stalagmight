@@ -442,9 +442,11 @@ export default function MapCanvas() {
         return;
       }
 
+      const t0 = performance.now();
       const nearestStation = surveyLayerRef.current.queryNearestStation(
         screenX, screenY, snapConfig.threshold
       );
+      const t1 = performance.now();
 
       // Update snapped station — compare via ref (no React state dependency)
       const prev = snappedStationRef.current;
@@ -455,13 +457,25 @@ export default function MapCanvas() {
           prev.station_index !== nearestStation.station_index
         ) {
           snappedStationRef.current = nearestStation;
+          console.debug('[SnapDebug] Station changed', {
+            t: performance.now().toFixed(1),
+            queryMs: (t1 - t0).toFixed(2),
+            from: prev ? `${prev.section_id}:${prev.station_index}` : null,
+            to: `${nearestStation.section_id}:${nearestStation.station_index}`,
+          });
           // Direct visual update — no React re-render needed
           surveyLayerRef.current.setSnappedStation(nearestStation);
+          console.debug('[SnapDebug] Direct setSnappedStation done', { t: performance.now().toFixed(1) });
           // Store update for click handling (triggers re-render, but visual is already shown)
           setSnappedStation(nearestStation);
         }
       } else if (prev) {
         snappedStationRef.current = null;
+        console.debug('[SnapDebug] Station cleared', {
+          t: performance.now().toFixed(1),
+          queryMs: (t1 - t0).toFixed(2),
+          from: `${prev.section_id}:${prev.station_index}`,
+        });
         surveyLayerRef.current.setSnappedStation(null);
         setSnappedStation(null);
       }
@@ -1474,8 +1488,14 @@ export default function MapCanvas() {
   }, [selection]);
 
   // Sync snapped station with SurveyLayer for snap indicator
+  // (Also called directly from checkSnapToStation for immediate visual response;
+  // this effect is the fallback for store-driven changes like tool-change clears.)
   useEffect(() => {
     if (!surveyLayerRef.current) return;
+    console.debug('[SnapDebug] useEffect setSnappedStation', {
+      t: performance.now().toFixed(1),
+      station: snappedStation ? `${snappedStation.section_id}:${snappedStation.station_index}` : null,
+    });
     surveyLayerRef.current.setSnappedStation(snappedStation);
   }, [snappedStation]);
 
@@ -1501,6 +1521,14 @@ export default function MapCanvas() {
     const mergeBId = stationRefToId(mergeStationB);
     if (mergeBId && !highlightIds.includes(mergeBId)) highlightIds.push(mergeBId);
 
+    console.debug('[SnapDebug] useEffect setHighlightedStations', {
+      t: performance.now().toFixed(1),
+      highlightIds,
+      snappedId,
+      drawId,
+      mergeAId,
+      mergeBId,
+    });
     if (logMapInteractions) {
       console.debug('[Highlight] Station highlight set', {
         count: highlightIds.length,
@@ -2629,6 +2657,7 @@ export default function MapCanvas() {
       // preventing event queue buildup (same pattern as SurveyLayer hover).
       if (mapContainer.current && !moveDrag) {
         const rect = mapContainer.current.getBoundingClientRect();
+        const moveT = performance.now();
         pendingSnapPosition.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
         if (snapRafId.current === null) {
           snapRafId.current = requestAnimationFrame(() => {
@@ -2636,6 +2665,11 @@ export default function MapCanvas() {
             if (pendingSnapPosition.current) {
               const pos = pendingSnapPosition.current;
               pendingSnapPosition.current = null;
+              console.debug('[SnapDebug] RAF fire', {
+                t: performance.now().toFixed(1),
+                delayMs: (performance.now() - moveT).toFixed(1),
+                pos,
+              });
               checkSnapToStation(pos.x, pos.y);
             }
           });
