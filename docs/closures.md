@@ -83,7 +83,8 @@ Algorithm overview:
   - `base_sigma_length_m`
   - `base_sigma_azimuth_deg`
   - `base_sigma_depth_m`
-- Solve independent least-squares systems for X/Y/Z.
+- Solve independent least-squares systems for X/Y/Z using a sparse Jacobi-preconditioned
+  Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
 - Update shot vectors from solved group coordinates and apply section-level translations to keep merged stations aligned.
 - After adjustment, zero datum positions are verified to remain fixed; any movement is an error.
 
