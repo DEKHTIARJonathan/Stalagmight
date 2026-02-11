@@ -221,6 +221,16 @@ struct SuggestionConfig {
     min_partial_ratio: f64,
     /// Short shot threshold (meters) — shots below this get reduced weight.
     short_shot_threshold: f64,
+    /// Hard cutoff: max azimuth error for full shots (degrees).
+    max_azimuth_error_full: f64,
+    /// Hard cutoff: max azimuth error for partial shots (degrees).
+    max_azimuth_error_partial: f64,
+    /// Hard cutoff: max depth error per measurement point (meters).
+    max_depth_error: f64,
+    /// Length error fraction for dynamic cutoff.
+    max_length_error_fraction: f64,
+    /// Length error floor for dynamic cutoff (meters).
+    max_length_error_floor: f64,
 }
 
 impl Default for SuggestionConfig {
@@ -239,6 +249,11 @@ impl Default for SuggestionConfig {
             max_suggestions: 10,
             min_partial_ratio: 0.15,
             short_shot_threshold: 0.5,
+            max_azimuth_error_full: 20.0,
+            max_azimuth_error_partial: 35.0,
+            max_depth_error: 0.30,
+            max_length_error_fraction: 0.05,
+            max_length_error_floor: 0.6,
         }
     }
 }
@@ -302,6 +317,11 @@ fn gaussian(error: f64, sigma: f64) -> f64 {
     (-((error / sigma).powi(2))).exp()
 }
 
+/// Dynamic length cutoff: 5% of existing length, floored at 0.6m.
+fn max_length_error(existing_length: f64, config: &SuggestionConfig) -> f64 {
+    (config.max_length_error_fraction * existing_length).max(config.max_length_error_floor)
+}
+
 /// Compute score comparing two shots in a given direction.
 fn compute_shot_score(
     import: &MatchShot,
@@ -322,6 +342,15 @@ fn compute_shot_score(
     let len_error = (import.length - existing.length).abs();
     let depth_in_error = (import.depth_in - existing_depth_in).abs();
     let depth_out_error = (import.depth_out - existing_depth_out).abs();
+
+    // Hard cutoffs — reject physically implausible matches outright
+    if az_error > config.max_azimuth_error_full
+        || depth_in_error > config.max_depth_error
+        || depth_out_error > config.max_depth_error
+        || len_error > max_length_error(existing.length, config)
+    {
+        return 0.0;
+    }
 
     let az_score = gaussian(az_error, config.azimuth_sigma);
     let len_score = gaussian(len_error, config.length_sigma);
@@ -409,23 +438,32 @@ fn try_partial_one_direction(
     config: &SuggestionConfig,
 ) -> f64 {
     let az_error = angular_difference(import.avg_azimuth, eff_az);
-    let az_score = gaussian(az_error, config.azimuth_sigma);
 
-    // Length: compare import length to expected partial length
-    let expected_partial_length = eff_length * length_ratio;
-    let len_error = (import.length - expected_partial_length).abs();
-    let len_score = gaussian(len_error, config.length_sigma);
+    // Depth_in should match the start of the existing shot
+    let depth_in_error = (import.depth_in - eff_depth_in).abs();
 
     // Depth proportionality check
     let eff_dz = eff_depth_out - eff_depth_in;
     let import_dz = import.depth_change();
     let expected_dz = eff_dz * length_ratio;
     let dz_error = (import_dz - expected_dz).abs();
+
+    // Hard cutoffs — relaxed azimuth threshold for partial matches,
+    // no length cutoff (surveyor's stopping point is arbitrary)
+    if az_error > config.max_azimuth_error_partial
+        || depth_in_error > config.max_depth_error
+        || dz_error > config.max_depth_error
+    {
+        return 0.0;
+    }
+
+    let az_score = gaussian(az_error, config.azimuth_sigma);
+    let depth_in_score = gaussian(depth_in_error, config.depth_sigma);
     let dz_score = gaussian(dz_error, config.depth_sigma);
 
-    // Depth_in should match the start of the existing shot
-    let depth_in_error = (import.depth_in - eff_depth_in).abs();
-    let depth_in_score = gaussian(depth_in_error, config.depth_sigma);
+    // Length doesn't carry signal for partial matches — the surveyor stopped at
+    // an arbitrary point, so length_ratio is definitional, not diagnostic.
+    let len_score = 1.0;
 
     config.azimuth_weight * az_score
         + config.length_weight * len_score
@@ -779,7 +817,7 @@ mod tests {
             depth_out: 55.0,
         };
         let score = compute_shot_score(&import, &existing, MatchDirection::Forward, &config);
-        assert!(score < 0.1, "very different shots should score low, got {score}");
+        assert!(score == 0.0, "very different shots should be hard-rejected, got {score}");
     }
 
     #[test]
@@ -1176,6 +1214,108 @@ mod tests {
         let best = &suggestions[0];
         assert!(best.is_partial, "should detect partial match");
         assert_eq!(best.matched_shots, 2);
+    }
+
+    // ========================================================================
+    // Hard cutoff boundary tests
+    // ========================================================================
+
+    #[test]
+    fn full_shot_azimuth_cutoff_boundary() {
+        let config = SuggestionConfig::default();
+        let base = MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 };
+
+        // 19.9° — just under cutoff, should pass
+        let import_pass = MatchShot { avg_azimuth: 90.0 + 19.9, ..base };
+        let score = compute_shot_score(&import_pass, &base, MatchDirection::Forward, &config);
+        assert!(score > 0.0, "19.9° azimuth error should pass cutoff, got {score}");
+
+        // 20.1° — just over cutoff, should be rejected
+        let import_fail = MatchShot { avg_azimuth: 90.0 + 20.1, ..base };
+        let score = compute_shot_score(&import_fail, &base, MatchDirection::Forward, &config);
+        assert!(score == 0.0, "20.1° azimuth error should be hard-rejected, got {score}");
+    }
+
+    #[test]
+    fn partial_shot_azimuth_cutoff_boundary() {
+        let config = SuggestionConfig::default();
+        let existing_az = 90.0;
+        let eff_length = 10.0;
+        let length_ratio = 0.5;
+
+        // 34.9° — just under partial cutoff
+        let import_pass = MatchShot {
+            avg_azimuth: existing_az + 34.9,
+            length: eff_length * length_ratio,
+            depth_in: 3.0,
+            depth_out: 3.5,
+        };
+        let score = try_partial_one_direction(
+            &import_pass, existing_az, eff_length, 3.0, 4.0, length_ratio, &config,
+        );
+        assert!(score > 0.0, "34.9° partial azimuth error should pass cutoff, got {score}");
+
+        // 35.1° — just over partial cutoff
+        let import_fail = MatchShot {
+            avg_azimuth: existing_az + 35.1,
+            length: eff_length * length_ratio,
+            depth_in: 3.0,
+            depth_out: 3.5,
+        };
+        let score = try_partial_one_direction(
+            &import_fail, existing_az, eff_length, 3.0, 4.0, length_ratio, &config,
+        );
+        assert!(score == 0.0, "35.1° partial azimuth error should be hard-rejected, got {score}");
+    }
+
+    #[test]
+    fn depth_cutoff_boundary() {
+        let config = SuggestionConfig::default();
+        let base = MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 };
+
+        // 0.29m depth_in error — just under cutoff
+        let import_pass = MatchShot { depth_in: 3.29, ..base };
+        let score = compute_shot_score(&import_pass, &base, MatchDirection::Forward, &config);
+        assert!(score > 0.0, "0.29m depth error should pass cutoff, got {score}");
+
+        // 0.31m depth_in error — just over cutoff
+        let import_fail = MatchShot { depth_in: 3.31, ..base };
+        let score = compute_shot_score(&import_fail, &base, MatchDirection::Forward, &config);
+        assert!(score == 0.0, "0.31m depth error should be hard-rejected, got {score}");
+    }
+
+    #[test]
+    fn length_cutoff_uses_floor_for_short_shots() {
+        let config = SuggestionConfig::default();
+        // Short existing shot (2.0m): 5% = 0.1m, but floor is 0.6m
+        let existing = MatchShot { avg_azimuth: 90.0, length: 2.0, depth_in: 3.0, depth_out: 4.0 };
+
+        // 0.59m error — under the 0.6m floor
+        let import_pass = MatchShot { length: 2.59, ..existing };
+        let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
+        assert!(score > 0.0, "0.59m length error should pass floor cutoff, got {score}");
+
+        // 0.61m error — over the 0.6m floor
+        let import_fail = MatchShot { length: 2.61, ..existing };
+        let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
+        assert!(score == 0.0, "0.61m length error should be hard-rejected by floor, got {score}");
+    }
+
+    #[test]
+    fn length_cutoff_scales_for_long_shots() {
+        let config = SuggestionConfig::default();
+        // Long existing shot (20.0m): 5% = 1.0m > 0.6m floor
+        let existing = MatchShot { avg_azimuth: 90.0, length: 20.0, depth_in: 3.0, depth_out: 4.0 };
+
+        // 0.99m error — under the 1.0m (5%) cutoff
+        let import_pass = MatchShot { length: 20.99, ..existing };
+        let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
+        assert!(score > 0.0, "0.99m length error should pass 5% cutoff for 20m shot, got {score}");
+
+        // 1.01m error — over the 1.0m (5%) cutoff
+        let import_fail = MatchShot { length: 21.01, ..existing };
+        let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
+        assert!(score == 0.0, "1.01m length error should be hard-rejected by 5% cutoff, got {score}");
     }
 
     #[test]
