@@ -315,6 +315,23 @@ function interpolateShots(importShot: EditableShot, target: TargetShotLike): Edi
   };
 }
 
+/** Reverse a target shot's direction so it matches the opposite traversal direction. */
+function reverseTargetShot(shot: TargetShotLike): TargetShotLike {
+  return {
+    azimuth_in: (shot.azimuth_out + 180) % 360,
+    azimuth_out: (shot.azimuth_in + 180) % 360,
+    length: shot.length,
+    depth_in: shot.depth_out,
+    depth_out: shot.depth_in,
+    pitch_in: shot.pitch_out != null ? -shot.pitch_out : null,
+    pitch_out: shot.pitch_in != null ? -shot.pitch_in : null,
+    left: shot.right,
+    right: shot.left,
+    up: shot.up,
+    down: shot.down,
+  };
+}
+
 /**
  * Connection Wizard — pre-calculates all placements at startup, presents
  * suggestions sorted by score, records virtual connections on confirm,
@@ -549,6 +566,9 @@ export default function DmpNewImportDialog({
       // NOT the merge-adjusted station — the merge picker only controls which
       // shots are actionable, not the overlap-to-target correspondence.
       if (targetShots) {
+        // When import and target traverse the same passage in opposite directions,
+        // target shot measurements must be direction-reversed before use.
+        const needsReversal = (importStationIndex === 0) !== (direction === 'forward');
         const targetMap = new Map<number, TargetShotLike>();
         for (const overlapId of allOverlapIds) {
           let targetIdx: number;
@@ -564,7 +584,8 @@ export default function DmpNewImportDialog({
               : (existingStationIndex - matchedShots) + k;
           }
           if (targetIdx >= 0 && targetIdx < targetShots.length) {
-            targetMap.set(overlapId, targetShots[targetIdx]!);
+            const raw = targetShots[targetIdx]!;
+            targetMap.set(overlapId, needsReversal ? reverseTargetShot(raw) : raw);
           }
         }
         // Replace targetShots reference with the map for efficient lookup
@@ -1049,6 +1070,9 @@ export default function DmpNewImportDialog({
       }
     }
 
+    // Resolved shots are in import direction; reverse back to target direction if needed.
+    const needsReversal = (importStationIndex === 0) !== (direction === 'forward');
+
     const map = new Map<number, EditableShot>();
     for (const overlapId of actionableIds) {
       // Find the resolved shot in effectiveShots (reference shots with resolved data)
@@ -1069,7 +1093,24 @@ export default function DmpNewImportDialog({
           : (existingStationIndex - matchedShots) + k;
       }
       if (targetIdx >= 0) {
-        map.set(targetIdx, resolvedShot);
+        if (needsReversal) {
+          const reversed = reverseTargetShot({
+            azimuth_in: resolvedShot.azimuth_in,
+            azimuth_out: resolvedShot.azimuth_out,
+            length: resolvedShot.length,
+            depth_in: resolvedShot.depth_in,
+            depth_out: resolvedShot.depth_out,
+            pitch_in: resolvedShot.pitch_in,
+            pitch_out: resolvedShot.pitch_out,
+            left: resolvedShot.left,
+            right: resolvedShot.right,
+            up: resolvedShot.up,
+            down: resolvedShot.down,
+          });
+          map.set(targetIdx, { ...resolvedShot, ...reversed });
+        } else {
+          map.set(targetIdx, resolvedShot);
+        }
       }
     }
     return map.size > 0 ? map : null;
