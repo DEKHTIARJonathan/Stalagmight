@@ -817,6 +817,7 @@
       "skip": "Skip",
       "noSuggestions": "No more automatic connections found.",
       "handoffMessage": "{{count}} sections will be configured manually.",
+      "placing": "Placing {{count}} sections...",
       "allPlaced": "All sections placed!",
       "confidence": {
         "high": "High confidence",
