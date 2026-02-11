@@ -4612,6 +4612,12 @@ impl Project {
     }
 
     /// Compute all frozen shots for the project.
+    ///
+    /// A shot is frozen when both its endpoints can reach a zero datum station
+    /// (excluding the shot itself) via shots, merges, and aligned closures.
+    ///
+    /// Uses Tarjan's bridge-finding algorithm for O(V+E) total complexity instead
+    /// of the naive O(shots × BFS) approach.
     pub fn compute_frozen_shots(&self) -> Vec<FrozenShotRef> {
         if self.zero_datums.is_empty() {
             return Vec::new();
@@ -4623,17 +4629,185 @@ impl Project {
         let datum_stations: HashSet<StationRef> =
             self.zero_datums.iter().map(|d| d.station_ref).collect();
 
+        // Assign each station a compact integer index
+        let mut station_to_idx: HashMap<StationRef, usize> = HashMap::new();
+        let mut idx_to_station: Vec<StationRef> = Vec::new();
+        for section in &self.sections {
+            for i in 0..=section.shots.len() {
+                let sr = StationRef::new(section.id, i as u32);
+                let idx = idx_to_station.len();
+                station_to_idx.insert(sr, idx);
+                idx_to_station.push(sr);
+            }
+        }
+        let v = idx_to_station.len();
+        if v == 0 {
+            return Vec::new();
+        }
+
+        // Edge descriptor: (neighbor_idx, is_shot, section_id, shot_index)
+        // is_shot=true means this edge corresponds to a shot that could be frozen.
+        let mut adj: Vec<Vec<(usize, bool, SectionId, u32)>> = vec![Vec::new(); v];
+
+        // Add shot edges
+        for section in &self.sections {
+            for shot_index in 0..section.shots.len() {
+                let a = StationRef::new(section.id, shot_index as u32);
+                let b = StationRef::new(section.id, (shot_index + 1) as u32);
+                if let (Some(&ai), Some(&bi)) = (station_to_idx.get(&a), station_to_idx.get(&b)) {
+                    adj[ai].push((bi, true, section.id, shot_index as u32));
+                    adj[bi].push((ai, true, section.id, shot_index as u32));
+                }
+            }
+        }
+
+        // Add merge edges
+        for (station, neighbors) in &merge_adj {
+            if let Some(&si) = station_to_idx.get(station) {
+                for neighbor in neighbors {
+                    if let Some(&ni) = station_to_idx.get(neighbor) {
+                        adj[si].push((ni, false, 0, 0));
+                    }
+                }
+            }
+        }
+
+        // Add aligned closure edges
+        for (station, neighbors) in &closure_adj {
+            if let Some(&si) = station_to_idx.get(station) {
+                for neighbor in neighbors {
+                    if let Some(&ni) = station_to_idx.get(neighbor) {
+                        adj[si].push((ni, false, 0, 0));
+                    }
+                }
+            }
+        }
+
+        // Tarjan's bridge-finding + datum counting in subtrees.
+        // disc[u] = discovery time, low[u] = lowest disc reachable via back-edges.
+        // An edge (u, v) with disc[u] < disc[v] is a bridge iff low[v] > disc[u].
+        // We also count datums in each DFS subtree to decide bridge-frozen status.
+        let mut disc = vec![0u32; v];
+        let mut low = vec![0u32; v];
+        let mut visited = vec![false; v];
+        let mut subtree_datums = vec![0u32; v]; // datums in DFS subtree rooted at node
+        let mut dfs_parent = vec![usize::MAX; v];
+        let mut is_bridge = vec![false; v]; // indexed by child node of the bridge edge
+        let mut component_datums = vec![0u32; v]; // total datums in the component
+        let mut component_root = vec![usize::MAX; v];
+
+        let is_datum: Vec<bool> = idx_to_station
+            .iter()
+            .map(|sr| datum_stations.contains(sr))
+            .collect();
+
+        let mut timer: u32 = 1;
+
+        // Iterative Tarjan's DFS to avoid stack overflow on large graphs.
+        // We track whether the tree edge to the parent has been skipped
+        // (parent_edge_skipped) to handle multigraph edges correctly:
+        // if A-B are connected by both a shot and a merge, only one edge
+        // is the tree edge; the others are back edges that prevent bridging.
+        for start in 0..v {
+            if visited[start] {
+                continue;
+            }
+
+            // DFS stack: (node, adj_index, parent_edge_skipped)
+            let mut stack: Vec<(usize, usize, bool)> = Vec::new();
+            visited[start] = true;
+            disc[start] = timer;
+            low[start] = timer;
+            timer += 1;
+            subtree_datums[start] = if is_datum[start] { 1 } else { 0 };
+            component_root[start] = start;
+            stack.push((start, 0, true)); // root has no parent edge to skip
+
+            while let Some((u, ei, parent_skipped)) = stack.last_mut() {
+                let u = *u;
+                if *ei < adj[u].len() {
+                    let (w, _, _, _) = adj[u][*ei];
+                    *ei += 1;
+                    if !visited[w] {
+                        visited[w] = true;
+                        disc[w] = timer;
+                        low[w] = timer;
+                        timer += 1;
+                        subtree_datums[w] = if is_datum[w] { 1 } else { 0 };
+                        dfs_parent[w] = u;
+                        component_root[w] = start;
+                        stack.push((w, 0, false));
+                    } else if w == dfs_parent[u] && !*parent_skipped {
+                        // First edge back to parent = tree edge, skip it once
+                        *parent_skipped = true;
+                    } else {
+                        // Back/cross edge (or second+ edge to parent): update low
+                        low[u] = low[u].min(disc[w]);
+                    }
+                } else {
+                    // Done with u, propagate to parent
+                    let u_low = low[u];
+                    let u_datums = subtree_datums[u];
+                    stack.pop();
+                    if let Some((parent, _, _)) = stack.last() {
+                        let parent = *parent;
+                        low[parent] = low[parent].min(u_low);
+                        subtree_datums[parent] += u_datums;
+                        // Check if edge (parent, u) is a bridge
+                        if u_low > disc[parent] {
+                            is_bridge[u] = true;
+                        }
+                    }
+                }
+            }
+
+            // Record total datums for this component
+            component_datums[start] = subtree_datums[start];
+        }
+
+        // Now determine which shots are frozen:
+        // - Non-bridge shot: frozen if its component has ≥1 datum
+        // - Bridge shot (parent→child): frozen if both sides have datums.
+        //   child-side has subtree_datums[child], other side has
+        //   component_datums[root] - subtree_datums[child].
         let mut frozen = Vec::new();
         for section in &self.sections {
             for shot_index in 0..section.shots.len() {
-                if self.is_shot_frozen(
-                    section.id,
-                    shot_index,
-                    &section_lookup,
-                    &merge_adj,
-                    &closure_adj,
-                    &datum_stations,
-                ) {
+                let a = StationRef::new(section.id, shot_index as u32);
+                let b = StationRef::new(section.id, (shot_index + 1) as u32);
+                let (Some(&ai), Some(&bi)) =
+                    (station_to_idx.get(&a), station_to_idx.get(&b))
+                else {
+                    continue;
+                };
+
+                let root = component_root[ai];
+                let total = component_datums[root];
+                if total == 0 {
+                    continue;
+                }
+
+                // Determine if this shot edge is a bridge
+                let (child, is_bridge_edge) = if dfs_parent[bi] == ai && is_bridge[bi] {
+                    (bi, true)
+                } else if dfs_parent[ai] == bi && is_bridge[ai] {
+                    (ai, true)
+                } else {
+                    (0, false)
+                };
+
+                if is_bridge_edge {
+                    // Bridge: frozen only if both sides have datums
+                    let child_datums = subtree_datums[child];
+                    let other_datums = total - child_datums;
+                    if child_datums > 0 && other_datums > 0 {
+                        frozen.push(FrozenShotRef {
+                            section_id: section.id,
+                            shot_index: shot_index as u32,
+                        });
+                    }
+                } else {
+                    // Non-bridge in a component with datums: frozen
                     frozen.push(FrozenShotRef {
                         section_id: section.id,
                         shot_index: shot_index as u32,
