@@ -1,7 +1,7 @@
 # Performance
 
-This document covers key algorithmic decisions in the Rust backend and their
-performance characteristics.
+This document covers key algorithmic decisions and their performance
+characteristics, for both the Rust backend and the MapLibre frontend.
 
 ## Loop Closure Adjustment — Sparse PCG Solver
 
@@ -188,3 +188,126 @@ perf annotate -i /tmp/perf.data --symbol=<function_name>
 Never profile a debug build for performance analysis. `nalgebra` and other
 numerical code runs 20-50x slower without optimizations due to bounds checks
 and lack of inlining/SIMD. Always use the `profiling` profile.
+
+---
+
+## Frontend — MapLibre Rendering Performance
+
+**Files:** `src/components/Map/SurveyLayer.tsx`, `src/components/Map/MapCanvas.tsx`
+
+### Feature interaction pipeline
+
+SurveyLayer manages visual feedback (hover, selection, snap indicators) for
+survey stations and shots rendered on a MapLibre GL map. On large surveys
+(2000+ stations), naive approaches cause visible lag. The patterns below keep
+all interactions at 60fps.
+
+### Pattern 1: `queryRenderedFeatures` for spatial queries
+
+**Never** iterate all stations/shots to find what's near the cursor. MapLibre
+maintains a GPU-backed spatial index over rendered features.
+
+```typescript
+// BAD — O(N) per mousemove
+for (const station of allStations) {
+  const screenPos = map.project(metersToMapCoords(station, gpsOrigin));
+  if (distance(screenPos, cursor) < threshold) { ... }
+}
+
+// GOOD — O(log N) via spatial index
+const bbox = [[x - t, y - t], [x + t, y + t]];
+const features = map.queryRenderedFeatures(bbox, { layers: [hitboxLayer] });
+const nearest = resolveNearestStation(map, event, features, threshold);
+```
+
+The hitbox layer (`survey-stations-hitbox`) carries `sectionId`/`stationIndex`
+properties. `resolveNearestStation()` in `surveyLayer/hitTest.ts` handles
+tie-breaking by screen distance when multiple features fall in the bbox.
+
+### Pattern 2: `setFeatureState` for visual updates
+
+**Never** use `setFilter` to toggle feature visibility on mousemove. `setFilter`
+re-evaluates the filter expression across **all** features in the layer.
+`setFeatureState` is an instant per-feature GPU-side update.
+
+```typescript
+// BAD — O(N) filter re-evaluation
+map.setFilter(highlightLayer, ['in', idExpr, ['literal', activeIds]]);
+
+// GOOD — O(1) per feature
+map.setFeatureState({ source, id: prevFeatureId }, { snapped: false });
+map.setFeatureState({ source, id: newFeatureId }, { snapped: true });
+```
+
+The layer paint uses `feature-state` expressions for opacity:
+
+```typescript
+'circle-opacity': ['case', ['boolean', ['feature-state', 'snapped'], false], 1, 0]
+```
+
+All interactive visual states (hover, selected, snapped, anchored) use this
+pattern. Feature IDs are encoded as `sectionId * FEATURE_ID_STRIDE + index`.
+
+### Pattern 3: Disable paint transitions
+
+MapLibre applies **300ms default transitions** to paint properties when features
+enter or exit a filtered/visible state. For interactive feedback (hover, snap),
+this creates visible lag. Disable transitions on interactive layers:
+
+```typescript
+'circle-opacity-transition': { duration: 0, delay: 0 },
+'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
+```
+
+This applies to all layers that respond to mousemove — station hover, shot
+hover, station highlight/snap, etc.
+
+### Pattern 4: RAF batching for mousemove
+
+Mouse events fire faster than the browser can paint frames. Batch snap detection
+into `requestAnimationFrame` callbacks so only the latest cursor position is
+processed per frame:
+
+```typescript
+pendingPosition.current = { x, y };
+if (rafId.current === null) {
+  rafId.current = requestAnimationFrame(() => {
+    rafId.current = null;
+    const pos = pendingPosition.current;
+    pendingPosition.current = null;
+    checkSnapToStation(pos.x, pos.y);
+  });
+}
+```
+
+SurveyLayer's hover handler uses the same pattern internally.
+
+### Pattern 5: Direct SurveyLayer updates, deferred React state
+
+Zustand state updates trigger synchronous React re-renders. On a large
+component like MapCanvas (~2700 lines), this takes ~15ms — enough to block the
+current frame's paint and cause a visible stutter.
+
+For visual feedback that must track the cursor at frame rate:
+
+1. **Update SurveyLayer directly** (bypasses React entirely)
+2. **Use a ref** (`snappedStationRef`) for hot-path comparison
+3. **Defer the Zustand update** via `startTransition()` so click handlers still
+   get the correct state
+
+```typescript
+// Direct visual update — instant
+surveyLayerRef.current.setSnappedStation(nearestStation);
+// Deferred store update — doesn't block paint
+startTransition(() => setSnappedStation(nearestStation));
+```
+
+### Summary of snap indicator pipeline
+
+| Step | Mechanism | Complexity |
+|------|-----------|------------|
+| Mouse event | RAF-batched | 1 per frame |
+| Spatial query | `queryRenderedFeatures` | O(log N) |
+| Nearest station | `resolveNearestStation` | O(k) where k = features in bbox |
+| Visual update | `setFeatureState` | O(1) |
+| React state | `startTransition` | Deferred |
