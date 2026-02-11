@@ -272,6 +272,7 @@ export default function DmpNewImportDialog({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [placingRetry, setPlacingRetry] = useState(0);
 
   // Merge station selection
   const [selectedMergeOffset, setSelectedMergeOffset] = useState(0);
@@ -816,7 +817,7 @@ export default function DmpNewImportDialog({
 
     doBatchImport();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [phase, placingRetry]);
 
   // Handle 'done' phase (only reached when no sections to place)
   useEffect(() => {
@@ -1383,11 +1384,19 @@ export default function DmpNewImportDialog({
               </div>
             )}
 
-            {/* Placing — batch import in progress */}
-            {phase === 'placing' && isImporting && (
+            {/* Placing — batch import in progress or failed */}
+            {phase === 'placing' && (
               <div className="text-center" data-testid="wizard-placing">
-                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.placing', { count: connectedIndices.size })}</div>
-                <div className="animate-pulse text-text-secondary">...</div>
+                {error && !isImporting ? (
+                  <>
+                    <div className="text-lg mb-2 text-error">{error}</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-lg mb-2">{t('dialogs.dmpNewImport.placing', { count: connectedIndices.size })}</div>
+                    <div className="animate-pulse text-text-secondary">...</div>
+                  </>
+                )}
               </div>
             )}
 
@@ -1444,6 +1453,15 @@ export default function DmpNewImportDialog({
                   {t('dialogs.dmpNewImport.confirm')}
                 </Button>
               </>
+            )}
+            {phase === 'placing' && error && !isImporting && (
+              <Button
+                variant="primary"
+                onClick={() => setPlacingRetry((n) => n + 1)}
+                data-testid="retry-button"
+              >
+                {t('common.actions.retry')}
+              </Button>
             )}
           </div>
         </div>
