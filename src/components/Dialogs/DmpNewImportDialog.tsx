@@ -467,7 +467,7 @@ export default function DmpNewImportDialog({
   // Build merge preview config for SectionPreview (existing target)
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
     if (!currentSuggestion || currentSuggestion.targetType !== 'existing') return null;
-    if (!currentSuggestion.existingSectionId) return null;
+    if (currentSuggestion.existingSectionId == null) return null;
 
     const currentProject = useProjectStore.getState().project;
     if (!currentProject) return null;
