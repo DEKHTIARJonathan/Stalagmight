@@ -139,15 +139,6 @@ impl AppState {
             }
         }
 
-        // Auto-save if enabled - check config first, then release lock before saving
-        let should_auto_save = result.success
-            && Self::is_modifying(&cmd)
-            && self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
-
-        if should_auto_save {
-            let _ = self.save_project(None);
-        }
-
         result
     }
 
@@ -339,12 +330,6 @@ impl AppState {
         // Combine warnings from both operations
         let mut all_warnings = create_result.warnings;
         all_warnings.extend(merge_result.warnings);
-
-        // Auto-save if enabled
-        let should_auto_save = self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
-        if should_auto_save {
-            let _ = self.save_project(None);
-        }
 
         // Return success with the new section ID
         if all_warnings.is_empty() {
@@ -680,12 +665,6 @@ impl AppState {
                     after: after_snapshot,
                 },
             );
-        }
-
-        // Auto-save if enabled
-        let should_auto_save = self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
-        if should_auto_save {
-            let _ = self.save_project(None);
         }
 
         if all_warnings.is_empty() {
@@ -1427,16 +1406,6 @@ impl AppState {
                     after: after_snapshot,
                 },
             );
-        }
-
-        // Auto-save if enabled
-        let should_auto_save = self
-            .config
-            .lock()
-            .map(|c| c.general.auto_save)
-            .unwrap_or(false);
-        if should_auto_save {
-            let _ = self.save_project(None);
         }
 
         tracing::info!(
@@ -2187,12 +2156,6 @@ impl AppState {
             });
         }
 
-        // Auto-save if enabled
-        let should_auto_save = self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
-        if should_auto_save {
-            let _ = self.save_project(None);
-        }
-
         tracing::info!(
             section_id,
             shot_id,
@@ -2415,12 +2378,6 @@ impl AppState {
                 ),
             }
             return CommandResult::failure("Failed to lock undo stack".to_string());
-        }
-
-        // Auto-save if enabled
-        let should_auto_save = self.config.lock().map(|c| c.general.auto_save).unwrap_or(false);
-        if should_auto_save {
-            let _ = self.save_project(None);
         }
 
         CommandResult::success()
