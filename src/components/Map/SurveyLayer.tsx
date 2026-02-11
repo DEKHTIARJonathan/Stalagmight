@@ -1649,11 +1649,6 @@ export default class SurveyLayer {
   setSnappedStation(ref: StationRef | null) {
     const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
     if (this.snappedStationId === newId) return;
-    console.debug('[SnapDebug] SurveyLayer.setSnappedStation', {
-      t: performance.now().toFixed(1),
-      from: this.snappedStationId,
-      to: newId,
-    });
     this.snappedStationId = newId;
 
     // Update snap indicator via setFeatureState (instant per-feature GPU update)
@@ -1689,11 +1684,9 @@ export default class SurveyLayer {
       [screenX - threshold, screenY - threshold],
       [screenX + threshold, screenY + threshold],
     ];
-    const t0 = performance.now();
     const features = this.map.queryRenderedFeatures(bbox, {
       layers: [this.stationsHitboxLayerId],
     });
-    const t1 = performance.now();
     if (features.length === 0) return null;
 
     const fakeEvent = { point: { x: screenX, y: screenY } } as MapMouseEvent;
@@ -1702,13 +1695,6 @@ export default class SurveyLayer {
 
     const { sectionId, stationIndex } = nearest.properties ?? {};
     if (sectionId === undefined || stationIndex === undefined) return null;
-
-    console.debug('[SnapDebug] queryNearestStation', {
-      t: t1.toFixed(1),
-      queryMs: (t1 - t0).toFixed(2),
-      featuresInBbox: features.length,
-      result: `${sectionId}:${stationIndex}`,
-    });
 
     return {
       section_id: sectionId as number,
@@ -2027,22 +2013,6 @@ export default class SurveyLayer {
   // Set highlighted stations by their string IDs (format: "sectionId:stationIndex")
   setHighlightedStations(stationIds: string[]): void {
     if (!this.map) return;
-    const changed = stationIds.length !== this.highlightedStationIds.length ||
-      stationIds.some((id, i) => id !== this.highlightedStationIds[i]);
-    if (changed) {
-      console.debug('[SnapDebug] SurveyLayer.setHighlightedStations', {
-        t: performance.now().toFixed(1),
-        from: [...this.highlightedStationIds],
-        to: [...stationIds],
-        caller: new Error().stack?.split('\n')[2]?.trim(),
-      });
-    }
-    if (this.shouldLogInteraction() && changed) {
-      console.debug('[Highlight] Highlighted stations changed', {
-        previous: this.highlightedStationIds,
-        next: stationIds,
-      });
-    }
     const prevIds = this.highlightedStationIds;
     this.highlightedStationIds = stationIds;
 
