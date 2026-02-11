@@ -221,6 +221,8 @@ struct SuggestionConfig {
     min_partial_ratio: f64,
     /// Short shot threshold (meters) — shots below this get reduced weight.
     short_shot_threshold: f64,
+    /// Penalty multiplier for single-shot matches (0.0–1.0).
+    single_shot_penalty: f64,
     /// Hard cutoff: max azimuth error for full shots (degrees).
     max_azimuth_error_full: f64,
     /// Hard cutoff: max azimuth error for partial shots (degrees).
@@ -249,6 +251,7 @@ impl Default for SuggestionConfig {
             max_suggestions: 10,
             min_partial_ratio: 0.15,
             short_shot_threshold: 0.5,
+            single_shot_penalty: 0.6,
             max_azimuth_error_full: 20.0,
             max_azimuth_error_partial: 35.0,
             max_depth_error: 0.30,
@@ -565,7 +568,8 @@ fn try_match_sequence(
 
     let raw_score = weighted_score / total_weight;
     let match_bonus = 1.0 + 0.15 * total_weight.ln();
-    let final_score = raw_score * match_bonus.max(1.0);
+    let single_penalty = if matched == 1 { config.single_shot_penalty } else { 1.0 };
+    let final_score = raw_score * match_bonus.max(1.0) * single_penalty;
 
     SequenceMatch {
         score: final_score,
@@ -1001,6 +1005,27 @@ mod tests {
         assert_eq!(result.matched_count, 0);
     }
 
+    #[test]
+    fn single_shot_match_penalized() {
+        let config = SuggestionConfig::default();
+        let import = vec![
+            MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+        ];
+        let existing = vec![
+            MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+        let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
+        assert_eq!(result.matched_count, 1);
+        // Perfect single shot: raw_score=1.0, match_bonus=1.0, penalty=0.6 → 0.6
+        assert!(
+            (result.score - config.single_shot_penalty).abs() < 1e-6,
+            "single shot should be penalized to {}, got {}",
+            config.single_shot_penalty,
+            result.score,
+        );
+    }
+
     // ========================================================================
     // suggest_placements integration tests
     // ========================================================================
@@ -1190,8 +1215,9 @@ mod tests {
         ];
 
         let suggestions = suggest_placements(&import_shots, &existing);
-        // A single matching shot should produce a suggestion (but with lower bonus)
+        // A single matching shot should still produce a suggestion, but penalized
         assert!(!suggestions.is_empty(), "single shot should still match");
+        assert!(suggestions[0].score < 0.7, "single shot should be penalized, got {}", suggestions[0].score);
     }
 
     #[test]
