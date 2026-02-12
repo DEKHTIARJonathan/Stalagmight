@@ -183,6 +183,11 @@ function applyAllOverlapTreatments(
   dmpFile: DmpFile,
   overlapMode: OverlapMode,
 ): void {
+  // Track shots already treated by a previous suggestion to prevent double-treatment.
+  // Key: "sectionIndex:shotId".  This replaced the old is_reference guard which was
+  // removed so that is_reference only has user-facing semantics (keep_both mode).
+  const treatedShots = new Set<string>();
+
   for (const suggestion of fullPool) {
     const {
       importSectionIndex,
@@ -240,7 +245,8 @@ function applyAllOverlapTreatments(
 
     if (importEdits) {
       const hasUntreated = importEdits.shots.some(
-        shot => !shot.isNew && !shot.isDeleted && actionableIds.has(shot.id) && !shot.is_reference
+        shot => !shot.isNew && !shot.isDeleted && actionableIds.has(shot.id)
+          && !treatedShots.has(`${importSectionIndex}:${shot.id}`)
       );
 
       if (hasUntreated) {
@@ -249,7 +255,8 @@ function applyAllOverlapTreatments(
           const newShots = importEdits.shots.map(shot => {
             if (shot.isNew || shot.isDeleted) return shot;
             if (!actionableIds.has(shot.id)) return shot;
-            if (shot.is_reference) return shot;
+            if (treatedShots.has(`${importSectionIndex}:${shot.id}`)) return shot;
+            treatedShots.add(`${importSectionIndex}:${shot.id}`);
             return { ...shot, is_reference: true };
           });
           if (import.meta.env.DEV) {
@@ -317,11 +324,12 @@ function applyAllOverlapTreatments(
             );
           }
 
-          let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyRef = 0, diagDeleted = 0;
+          let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyTreated = 0, diagDeleted = 0;
           const newShots = importEdits.shots.map(shot => {
             if (shot.isNew || shot.isDeleted) return shot;
             if (!actionableIds.has(shot.id)) return shot;
-            if (shot.is_reference) { diagAlreadyRef++; return shot; }
+            const treatKey = `${importSectionIndex}:${shot.id}`;
+            if (treatedShots.has(treatKey)) { diagAlreadyTreated++; return shot; }
 
             // For import-to-import overlaps, delete the import's overlap shots.
             // The target section keeps the overlap representation (treated below).
@@ -329,10 +337,12 @@ function applyAllOverlapTreatments(
             // import keeps its shots with transformed values.
             if (targetType === 'importing') {
               diagDeleted++;
+              treatedShots.add(treatKey);
               return { ...shot, isDeleted: true };
             }
 
             const target = targetMap?.get(shot.id);
+            treatedShots.add(treatKey);
             if (overlapMode === 'interpolate' && target) {
               diagInterpolated++;
               return interpolateShots(shot, target);
@@ -348,7 +358,7 @@ function applyAllOverlapTreatments(
           if (import.meta.env.DEV) {
             console.warn(
               `[applyAllOverlaps]   import ${importSectionIndex} RESULT:`,
-              `interpolated=${diagInterpolated} deleted=${diagDeleted} refOnly=${diagRefOnly} alreadyRef=${diagAlreadyRef}`,
+              `interpolated=${diagInterpolated} deleted=${diagDeleted} refOnly=${diagRefOnly} alreadyTreated=${diagAlreadyTreated}`,
             );
             if (diagRefOnly > 0 && overlapMode !== 'import_data') {
               console.warn(
@@ -400,7 +410,7 @@ function applyAllOverlapTreatments(
           const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
           if (targetShotIdx >= 0 && targetShotIdx < targetEdits.shots.length) {
             const shot = targetEdits.shots[targetShotIdx];
-            if (shot && !shot.isDeleted && !shot.is_reference) {
+            if (shot && !shot.isDeleted && !treatedShots.has(`${targetImportIndex}:${shot.id}`)) {
               hasUntreatedTarget = true;
               break;
             }
@@ -414,14 +424,16 @@ function applyAllOverlapTreatments(
           const importShotsForInterp = rawImportShots ?? [];
           const targetShots = targetEdits.shots.map(s => ({ ...s }));
           let treated = 0;
-          let skippedOutOfRange = 0, skippedAlreadyRef = 0, skippedNoImport = 0;
+          let skippedOutOfRange = 0, skippedAlreadyTreated = 0, skippedNoImport = 0;
 
           for (const overlapId of actionableIds) {
             const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
             if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) { skippedOutOfRange++; continue; }
 
             const targetShot = targetShots[targetShotIdx];
-            if (!targetShot || targetShot.isDeleted || targetShot.is_reference) { skippedAlreadyRef++; continue; }
+            if (!targetShot || targetShot.isDeleted) { skippedAlreadyTreated++; continue; }
+            const targetTreatKey = `${targetImportIndex}:${targetShot.id}`;
+            if (treatedShots.has(targetTreatKey)) { skippedAlreadyTreated++; continue; }
 
             const importShot = importShotsForInterp.find(
               s => !s.isNew && !s.isDeleted && s.id === overlapId
@@ -434,11 +446,14 @@ function applyAllOverlapTreatments(
 
             if (overlapMode === 'interpolate') {
               targetShots[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+              treatedShots.add(targetTreatKey);
               treated++;
             } else if (overlapMode === 'existing_data') {
               // existing_data: target keeps its own values — nothing to change
+              treatedShots.add(targetTreatKey);
             } else {
               targetShots[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
+              treatedShots.add(targetTreatKey);
               treated++;
             }
           }
@@ -446,7 +461,7 @@ function applyAllOverlapTreatments(
           if (import.meta.env.DEV) {
             console.warn(
               `[applyAllOverlaps]   target ${targetImportIndex} RESULT: treated=${treated}`,
-              `skippedOutOfRange=${skippedOutOfRange} skippedAlreadyRef=${skippedAlreadyRef} skippedNoImport=${skippedNoImport}`,
+              `skippedOutOfRange=${skippedOutOfRange} skippedAlreadyTreated=${skippedAlreadyTreated} skippedNoImport=${skippedNoImport}`,
             );
           }
 
