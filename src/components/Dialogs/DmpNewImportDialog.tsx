@@ -360,6 +360,14 @@ function applyAllOverlapTreatments(
           }
 
           sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
+          if (import.meta.env.DEV) {
+            const alive = newShots.filter(s => !s.isDeleted).length;
+            const deleted = newShots.filter(s => s.isDeleted).length;
+            const refs = newShots.filter(s => s.is_reference && !s.isDeleted).length;
+            console.warn(
+              `[applyAllOverlaps]   import ${importSectionIndex} AFTER: ${newShots.length} total, ${alive} alive, ${deleted} deleted, ${refs} reference`,
+            );
+          }
         }
       }
     }
@@ -446,6 +454,27 @@ function applyAllOverlapTreatments(
             sectionEdits.set(targetImportIndex, { ...targetEdits, shots: targetShots });
           }
         }
+      }
+    }
+  }
+
+  // Post-pass: if a section would lose ALL shots to deletion (overlaps at both
+  // ends where the section is the "import" side for both), convert the deletions
+  // to is_reference instead.  This prevents sections from disappearing while
+  // still avoiding un-marked duplication — adjacent target sections keep the
+  // overlap shots with treated values, and this section keeps reference copies.
+  for (const [sectionIdx, edits] of sectionEdits.entries()) {
+    const aliveCount = edits.shots.filter(s => !s.isDeleted).length;
+    const deletedCount = edits.shots.filter(s => s.isDeleted).length;
+    if (aliveCount === 0 && deletedCount > 0) {
+      const newShots = edits.shots.map(s =>
+        s.isDeleted ? { ...s, isDeleted: false, is_reference: true } : s,
+      );
+      sectionEdits.set(sectionIdx, { ...edits, shots: newShots });
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[applyAllOverlaps] Section ${sectionIdx} would have 0 shots — converted ${deletedCount} deletions to reference`,
+        );
       }
     }
   }
@@ -627,12 +656,22 @@ function buildBatchImport(
           console.warn(`[buildBatchImport] Section ${idx} "${section.name}": no edits, using ${backendShots.length} DMP shots`);
         }
       }
-      if (backendShots.length === 0) continue;
+      if (backendShots.length === 0) {
+        if (import.meta.env.DEV) {
+          console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED — 0 shots after filtering deleted`);
+        }
+        continue;
+      }
 
       // Check for direct placement first (from manual_placing phase)
       const directPlacement = directPlacementMap.get(idx);
       const conn = connectionMap.get(idx);
-      if (!directPlacement && !conn) continue;
+      if (!directPlacement && !conn) {
+        if (import.meta.env.DEV) {
+          console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED — no connection or direct placement`);
+        }
+        continue;
+      }
 
       let placement: ImportPlacement;
       if (directPlacement) {
@@ -658,6 +697,11 @@ function buildBatchImport(
           const targetPos = emittedPosition.get(conn!.targetImportIndex);
           if (targetPos == null) {
             // Target not yet placed — will retry in next pass
+            if (import.meta.env.DEV) {
+              console.warn(
+                `[buildBatchImport] Section ${idx} "${section.name}": DEFERRED — target import ${conn!.targetImportIndex} not yet emitted`,
+              );
+            }
             continue;
           }
           // Adjust target station index for deleted shots in the target section
@@ -725,6 +769,22 @@ function buildBatchImport(
       `connections: ${existingCount} existing + ${importingCount} importing + ${directCount} direct,`,
       `sectionEdits has ${editedSections} entries`,
     );
+    // Flag reachable sections that were never emitted (stuck in DEFERRED loop or skipped)
+    for (const idx of reachableOrder) {
+      if (idx === zeroDatumIndex) continue;
+      if (!emittedPosition.has(idx)) {
+        const s = dmpFile.sections[idx];
+        const ed = sectionEdits?.get(idx);
+        const alive = ed ? ed.shots.filter(sh => !sh.isDeleted).length : s?.shots.length ?? 0;
+        const hasConn = connectionMap.has(idx);
+        const hasDirect = directPlacementMap.has(idx);
+        console.warn(
+          `[buildBatchImport] ⚠ Section ${idx} "${s?.name}" REACHABLE but NOT EMITTED:`,
+          `alive=${alive} hasConn=${hasConn} hasDirect=${hasDirect}`,
+          hasConn ? `conn=${JSON.stringify(connectionMap.get(idx))}` : '',
+        );
+      }
+    }
   }
 
   return { configs, unreachable };
