@@ -97,6 +97,8 @@ interface DialogWrapperProps {
   fixedSize?: FixedSize;
   /** Additional keydown handler for dialog-level shortcuts. */
   onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  /** Hide the dialog visually while keeping it mounted (preserves state). */
+  hidden?: boolean;
 }
 
 export function DialogWrapper({
@@ -112,6 +114,7 @@ export function DialogWrapper({
   bodyClassName = 'p-4',
   fixedSize,
   onKeyDown,
+  hidden = false,
 }: DialogWrapperProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -322,6 +325,7 @@ export function DialogWrapper({
     <div
       ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center"
+      style={hidden ? { display: 'none' } : undefined}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
