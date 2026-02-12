@@ -110,9 +110,18 @@ export function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: n
   return stations;
 }
 
+/** Segment section for multi-section display in manual_placing phase. */
+export interface SegmentSectionEntry {
+  section: DmpSection;
+  color: string;
+  sectionIndex: number;     // DMP file index
+  offsetX: number;          // meters from segment root station 0
+  offsetY: number;
+}
+
 interface SectionPreviewProps {
-  /** The section to preview. When null, shows empty state. */
-  section: DmpSection | null;
+  /** The section to preview. When null (and no segmentSections), shows empty state. */
+  section?: DmpSection | null;
   /** Color for the section lines and stations */
   color?: string;
   /** Existing station to connect to (for "From Existing Station" placement mode) - legacy prop */
@@ -124,7 +133,7 @@ interface SectionPreviewProps {
   /** Merge preview for import-to-import connections (DMP section target) */
   dmpMergePreview?: DmpMergePreviewConfig | null;
   /** Callback when a station dot is clicked */
-  onStationClick?: (stationIndex: number) => void;
+  onStationClick?: (stationIndex: number, sectionIndex?: number) => void;
   /** Index of the currently selected station (shows highlight ring) */
   selectedStationIndex?: number | null;
   /** Size of the preview container in pixels (default 250) */
@@ -139,6 +148,10 @@ interface SectionPreviewProps {
   referenceIndices?: Set<number>;
   /** Context sections from the same segment, rendered as dimmed lines behind the main preview. */
   contextSections?: ContextSectionGeometry[] | null;
+  /** Multiple sections for segment display (mutually exclusive with section prop). */
+  segmentSections?: SegmentSectionEntry[] | null;
+  /** Section index of the currently selected anchor station (for segment display). */
+  selectedSectionIndex?: number | null;
 }
 
 /**
@@ -168,7 +181,12 @@ export default function SectionPreview({
   focusStationIndex,
   referenceIndices,
   contextSections,
+  segmentSections,
+  selectedSectionIndex,
 }: SectionPreviewProps) {
+  // When segmentSections is provided, use the first section as the primary
+  const effectiveSection = section ?? (segmentSections?.[0]?.section ?? null);
+  const effectiveColor = section ? color : (segmentSections?.[0]?.color ?? color);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -182,10 +200,11 @@ export default function SectionPreview({
 
   // Compute stations from shots for the current (import) section
   const stations = useMemo(() => {
-    if (!section) return [];
-    const standardShots = section.shots.filter((s) => s.shot_type === 'Standard');
+    const sec = effectiveSection;
+    if (!sec) return [];
+    const standardShots = sec.shots.filter((s) => s.shot_type === 'Standard');
     return computeStationsFromDmpShots(standardShots);
-  }, [section]);
+  }, [effectiveSection]);
 
   // Compute stations for the target section (for merge preview)
   const targetStations = useMemo(() => {
@@ -429,8 +448,12 @@ export default function SectionPreview({
         const feature = e.features?.[0];
         if (feature) {
           const stationIndex = feature.properties?.stationIndex;
+          const sectionIndex = feature.properties?.sectionIndex;
           if (typeof stationIndex === 'number' && onStationClickRef.current) {
-            onStationClickRef.current(stationIndex);
+            onStationClickRef.current(
+              stationIndex,
+              typeof sectionIndex === 'number' ? sectionIndex : undefined,
+            );
           }
         }
       });
@@ -522,35 +545,82 @@ export default function SectionPreview({
 
     // Build shot features for the current (import) section with offset
     const shotFeatures: GeoJSON.Feature[] = [];
-    const standardShots = section?.shots.filter((s) => s.shot_type === 'Standard') ?? [];
+    const effectiveSec = effectiveSection;
+    const standardShots = effectiveSec?.shots.filter((s) => s.shot_type === 'Standard') ?? [];
 
-    for (let i = 0; i < standardShots.length; i++) {
-      const from = stations[i];
-      const to = stations[i + 1];
-      if (!from || !to) continue;
-
-      shotFeatures.push({
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: [
-            metersToMapCoords(from.x + totalOffset.x, from.y + totalOffset.y, gpsOrigin),
-            metersToMapCoords(to.x + totalOffset.x, to.y + totalOffset.y, gpsOrigin),
-          ],
-        },
-        properties: { color, opacity: referenceIndices?.has(i) ? 0.3 : 1.0 },
-      });
+    // When using segmentSections, render all sections; otherwise just the primary
+    if (segmentSections && segmentSections.length > 0) {
+      for (const segEntry of segmentSections) {
+        const segStations = computeStationsFromDmpShots(
+          segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+        );
+        const segStandardShots = segEntry.section.shots.filter((s) => s.shot_type === 'Standard');
+        for (let i = 0; i < segStandardShots.length; i++) {
+          const from = segStations[i];
+          const to = segStations[i + 1];
+          if (!from || !to) continue;
+          shotFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                metersToMapCoords(from.x + segEntry.offsetX, from.y + segEntry.offsetY, gpsOrigin),
+                metersToMapCoords(to.x + segEntry.offsetX, to.y + segEntry.offsetY, gpsOrigin),
+              ],
+            },
+            properties: { color: segEntry.color, opacity: 1.0 },
+          });
+        }
+      }
+    } else {
+      for (let i = 0; i < standardShots.length; i++) {
+        const from = stations[i];
+        const to = stations[i + 1];
+        if (!from || !to) continue;
+        shotFeatures.push({
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: [
+              metersToMapCoords(from.x + totalOffset.x, from.y + totalOffset.y, gpsOrigin),
+              metersToMapCoords(to.x + totalOffset.x, to.y + totalOffset.y, gpsOrigin),
+            ],
+          },
+          properties: { color: effectiveColor, opacity: referenceIndices?.has(i) ? 0.3 : 1.0 },
+        });
+      }
     }
 
     // Build station features with offset for click handling
-    const stationFeatures: GeoJSON.Feature[] = stations.map((station, index) => ({
-      type: 'Feature',
-      geometry: {
-        type: 'Point',
-        coordinates: metersToMapCoords(station.x + totalOffset.x, station.y + totalOffset.y, gpsOrigin),
-      },
-      properties: { color, stationIndex: index },
-    }));
+    let stationFeatures: GeoJSON.Feature[];
+    if (segmentSections && segmentSections.length > 0) {
+      stationFeatures = [];
+      for (const segEntry of segmentSections) {
+        const segStations = computeStationsFromDmpShots(
+          segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+        );
+        for (let i = 0; i < segStations.length; i++) {
+          const stn = segStations[i]!;
+          stationFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: metersToMapCoords(stn.x + segEntry.offsetX, stn.y + segEntry.offsetY, gpsOrigin),
+            },
+            properties: { color: segEntry.color, stationIndex: i, sectionIndex: segEntry.sectionIndex },
+          });
+        }
+      }
+    } else {
+      stationFeatures = stations.map((station, index) => ({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: metersToMapCoords(station.x + totalOffset.x, station.y + totalOffset.y, gpsOrigin),
+        },
+        properties: { color: effectiveColor, stationIndex: index },
+      }));
+    }
 
     // Build target section features (for merge preview)
     const targetShotFeatures: GeoJSON.Feature[] = [];
@@ -781,23 +851,43 @@ export default function SectionPreview({
     if (
       selectedStationIndex !== null &&
       selectedStationIndex !== undefined &&
-      selectedStationIndex >= 0 &&
-      selectedStationIndex < stations.length
+      selectedStationIndex >= 0
     ) {
-      const selectedStation = stations[selectedStationIndex];
-      if (selectedStation) {
-        selectedStationFeatures.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: metersToMapCoords(
-              selectedStation.x + totalOffset.x,
-              selectedStation.y + totalOffset.y,
-              gpsOrigin
-            ),
-          },
-          properties: {},
-        });
+      if (segmentSections && selectedSectionIndex != null) {
+        // Segment mode: find the station in the segment section
+        const segEntry = segmentSections.find(s => s.sectionIndex === selectedSectionIndex);
+        if (segEntry) {
+          const segStations = computeStationsFromDmpShots(
+            segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+          );
+          const stn = segStations[selectedStationIndex];
+          if (stn) {
+            selectedStationFeatures.push({
+              type: 'Feature',
+              geometry: {
+                type: 'Point',
+                coordinates: metersToMapCoords(stn.x + segEntry.offsetX, stn.y + segEntry.offsetY, gpsOrigin),
+              },
+              properties: {},
+            });
+          }
+        }
+      } else if (selectedStationIndex < stations.length) {
+        const selectedStation = stations[selectedStationIndex];
+        if (selectedStation) {
+          selectedStationFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: metersToMapCoords(
+                selectedStation.x + totalOffset.x,
+                selectedStation.y + totalOffset.y,
+                gpsOrigin
+              ),
+            },
+            properties: {},
+          });
+        }
       }
     }
 
@@ -811,7 +901,8 @@ export default function SectionPreview({
 
     // Fit bounds if we have stations - do this after a small delay to ensure
     // the container has proper dimensions and the map is fully rendered
-    if (stations.length > 0) {
+    const hasStations = stations.length > 0 || (segmentSections && segmentSections.length > 0);
+    if (hasStations) {
       const doFitBounds = () => {
         let bounds: { minX: number; maxX: number; minY: number; maxY: number };
 
@@ -887,13 +978,29 @@ export default function SectionPreview({
         }
 
         function computeDefaultBounds() {
-          // Get bounds for import section (with combined offset applied)
-          const offsetStations = stations.map((s) => ({
-            x: s.x + totalOffset.x,
-            y: s.y + totalOffset.y,
-            z: s.z,
-          }));
-          const b = getBounds(offsetStations);
+          let b: { minX: number; maxX: number; minY: number; maxY: number };
+
+          // When segment sections are provided, compute bounds from all sections
+          if (segmentSections && segmentSections.length > 0) {
+            const allPoints: Array<{ x: number; y: number; z: number }> = [];
+            for (const segEntry of segmentSections) {
+              const segStations = computeStationsFromDmpShots(
+                segEntry.section.shots.filter((s) => s.shot_type === 'Standard')
+              );
+              for (const stn of segStations) {
+                allPoints.push({ x: stn.x + segEntry.offsetX, y: stn.y + segEntry.offsetY, z: stn.z });
+              }
+            }
+            b = allPoints.length > 0 ? getBounds(allPoints) : { minX: -10, maxX: 10, minY: -10, maxY: 10 };
+          } else {
+            // Get bounds for import section (with combined offset applied)
+            const offsetStations = stations.map((s) => ({
+              x: s.x + totalOffset.x,
+              y: s.y + totalOffset.y,
+              z: s.z,
+            }));
+            b = getBounds(offsetStations);
+          }
 
           // Include target section in bounds if merge preview is active
           if (activePreview && targetStations.length > 0) {
@@ -971,7 +1078,7 @@ export default function SectionPreview({
         }
       });
     }
-  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex, referenceIndices, contextSections]);
+  }, [effectiveSection, effectiveColor, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, selectedSectionIndex, gpsOrigin, gpsStationOffset, focusStationIndex, referenceIndices, contextSections, segmentSections]);
 
   // Re-apply theme colors when resolvedTheme changes
   useEffect(() => {
@@ -1027,7 +1134,7 @@ export default function SectionPreview({
       <div ref={containerRef} className="w-full h-full" data-testid="section-preview-map" />
 
       {/* Overlay placeholder when no section selected */}
-      {!section && (
+      {!effectiveSection && !(segmentSections && segmentSections.length > 0) && (
         <div className="absolute inset-0 flex items-center justify-center bg-background text-text-secondary text-sm">
           Select a section to preview
         </div>

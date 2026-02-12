@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { SectionData, Coordinates, ShotData } from '../../types/project';
 import { getThemeColor } from '../../utils/themeColors';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, type AdditionalPlacementSection } from '../../store/uiStore';
 
 interface PlacementOverlayProps {
   /** Section data to preview */
@@ -14,6 +14,8 @@ interface PlacementOverlayProps {
   isSnapped: boolean;
   /** Pixels per meter at current map zoom (for to-scale rendering) */
   pixelsPerMeter: number;
+  /** Additional sections to render alongside primary (for segment placement) */
+  additionalSections?: AdditionalPlacementSection[] | undefined;
 }
 
 /**
@@ -54,6 +56,7 @@ export default function PlacementOverlay({
   cursorPosition,
   isSnapped,
   pixelsPerMeter,
+  additionalSections,
 }: PlacementOverlayProps) {
   // Calculate station positions relative to first station
   const stationPositions = useMemo(
@@ -131,6 +134,55 @@ export default function PlacementOverlay({
             stroke={isSnapped && isAnchor ? snapColor : stationStrokeColor}
             strokeWidth={isAnchor ? 2 : 1}
           />
+        );
+      })}
+
+      {/* Additional sections (segment context) */}
+      {additionalSections?.map((addSection, secIdx) => {
+        const addPositions = calculateStationPositions(addSection.sectionData.shots);
+        // Transform with offset relative to primary section's anchor station
+        const toScreenAdd = (station: Coordinates): { x: number; y: number } => {
+          const relX = (station.x + addSection.offsetX - anchorStation.x) * scale;
+          const relY = -(station.y + addSection.offsetY - anchorStation.y) * scale;
+          return {
+            x: cursorPosition.x + relX,
+            y: cursorPosition.y + relY,
+          };
+        };
+
+        const addPathData = addPositions
+          .map((station, i) => {
+            const screen = toScreenAdd(station);
+            return i === 0 ? `M ${screen.x} ${screen.y}` : `L ${screen.x} ${screen.y}`;
+          })
+          .join(' ');
+
+        return (
+          <g key={secIdx}>
+            <path
+              d={addPathData}
+              fill="none"
+              stroke={addSection.color}
+              strokeWidth={1.5}
+              strokeOpacity={0.6}
+              strokeDasharray="4 2"
+            />
+            {addPositions.map((station, i) => {
+              const screen = toScreenAdd(station);
+              return (
+                <circle
+                  key={i}
+                  cx={screen.x}
+                  cy={screen.y}
+                  r={3}
+                  fill={addSection.color}
+                  fillOpacity={0.6}
+                  stroke={stationStrokeColor}
+                  strokeWidth={0.5}
+                />
+              );
+            })}
+          </g>
         );
       })}
 

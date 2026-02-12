@@ -200,6 +200,152 @@ export function stationPositionFromShotLines(
  * When previewing C→X, A and B should appear as context even though they
  * are not reachable from C via importing-type BFS.
  */
+/**
+ * Group unreachable DMP section indices into connected components
+ * via importing-type virtual connections restricted to the unreachable set.
+ * Returns array of segments (each sorted by index), ordered by first index.
+ */
+export function computeUnreachableSegments(
+  unreachableIndices: number[],
+  connections: VirtualConnection[],
+): number[][] {
+  if (unreachableIndices.length === 0) return [];
+
+  const unreachableSet = new Set(unreachableIndices);
+
+  // Build adjacency restricted to unreachable indices
+  const adj = new Map<number, number[]>();
+  for (const idx of unreachableIndices) adj.set(idx, []);
+
+  for (const c of connections) {
+    if (c.targetType !== 'importing' || c.targetImportIndex == null) continue;
+    const a = c.importSectionIndex;
+    const b = c.targetImportIndex;
+    if (!unreachableSet.has(a) || !unreachableSet.has(b)) continue;
+    adj.get(a)!.push(b);
+    adj.get(b)!.push(a);
+  }
+
+  // BFS to find connected components
+  const visited = new Set<number>();
+  const segments: number[][] = [];
+
+  for (const seed of unreachableIndices) {
+    if (visited.has(seed)) continue;
+    visited.add(seed);
+    const component: number[] = [seed];
+    const queue = [seed];
+
+    while (queue.length > 0) {
+      const node = queue.shift()!;
+      for (const neighbor of adj.get(node) ?? []) {
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        component.push(neighbor);
+        queue.push(neighbor);
+      }
+    }
+
+    component.sort((a, b) => a - b);
+    segments.push(component);
+  }
+
+  segments.sort((a, b) => a[0]! - b[0]!);
+  return segments;
+}
+
+/**
+ * Compute XY offsets for each section in a segment relative to the first
+ * section's station 0. Uses BFS through importing-type connections within
+ * the segment, aligning merge stations to compute offsets.
+ */
+export function computeSegmentLayout(
+  segmentIndices: number[],
+  connections: VirtualConnection[],
+  dmpSections: DmpSection[],
+): Array<{ sectionIndex: number; offsetX: number; offsetY: number }> {
+  if (segmentIndices.length === 0) return [];
+
+  const segmentSet = new Set(segmentIndices);
+  const root = segmentIndices[0]!;
+
+  // Build adjacency restricted to this segment
+  const adj = new Map<number, Array<{ neighbor: number; connection: VirtualConnection }>>();
+  for (const idx of segmentIndices) adj.set(idx, []);
+
+  for (const c of connections) {
+    if (c.targetType !== 'importing' || c.targetImportIndex == null) continue;
+    const a = c.importSectionIndex;
+    const b = c.targetImportIndex;
+    if (!segmentSet.has(a) || !segmentSet.has(b)) continue;
+    adj.get(a)!.push({ neighbor: b, connection: c });
+    adj.get(b)!.push({ neighbor: a, connection: c });
+  }
+
+  const result: Array<{ sectionIndex: number; offsetX: number; offsetY: number }> = [];
+  const visited = new Set<number>();
+  const queue: Array<{ idx: number; offsetX: number; offsetY: number }> = [];
+
+  visited.add(root);
+  queue.push({ idx: root, offsetX: 0, offsetY: 0 });
+
+  while (queue.length > 0) {
+    const { idx, offsetX, offsetY } = queue.shift()!;
+    result.push({ sectionIndex: idx, offsetX, offsetY });
+
+    for (const edge of adj.get(idx) ?? []) {
+      if (visited.has(edge.neighbor)) continue;
+      visited.add(edge.neighbor);
+
+      const conn = edge.connection;
+      let stationInA: number;
+      let stationInB: number;
+      let sectionA: number;
+
+      if (conn.importSectionIndex === idx && conn.targetImportIndex === edge.neighbor) {
+        sectionA = idx;
+        stationInA = conn.importStationIndex;
+        stationInB = conn.targetImportStationIndex ?? 0;
+      } else if (conn.targetImportIndex === idx && conn.importSectionIndex === edge.neighbor) {
+        sectionA = conn.targetImportIndex;
+        stationInA = conn.targetImportStationIndex ?? 0;
+        stationInB = conn.importStationIndex;
+      } else {
+        continue;
+      }
+
+      const sectionAData = dmpSections[sectionA];
+      const neighborData = dmpSections[edge.neighbor];
+      if (!sectionAData || !neighborData) continue;
+
+      const stationsA = computeStationsFromDmpShots(
+        sectionAData.shots.filter((s) => s.shot_type === 'Standard')
+      );
+      const stationsB = computeStationsFromDmpShots(
+        neighborData.shots.filter((s) => s.shot_type === 'Standard')
+      );
+
+      const posA = stationsA[stationInA];
+      const posB = stationsB[stationInB];
+      if (!posA || !posB) continue;
+
+      const neighborOffsetX = offsetX + posA.x - posB.x;
+      const neighborOffsetY = offsetY + posA.y - posB.y;
+
+      queue.push({ idx: edge.neighbor, offsetX: neighborOffsetX, offsetY: neighborOffsetY });
+    }
+  }
+
+  // Include any unreachable sections within the segment (disconnected from root)
+  for (const idx of segmentIndices) {
+    if (!visited.has(idx)) {
+      result.push({ sectionIndex: idx, offsetX: 0, offsetY: 0 });
+    }
+  }
+
+  return result;
+}
+
 export function discoverBridgedDmpSections(
   connections: VirtualConnection[],
   initialShownIndices: Set<number>,

@@ -37,7 +37,10 @@ import {
   computeDmpBfsContext,
   stationPositionFromShotLines,
   discoverBridgedDmpSections,
+  computeUnreachableSegments,
+  computeSegmentLayout,
 } from '../../utils/segmentContext';
+import { useUIStore, type PlacementResult } from '../../store/uiStore';
 
 interface DmpNewImportDialogProps {
   dmpFile: DmpFile;
@@ -62,6 +65,15 @@ interface SectionEditState {
   quality: number;
   shots: EditableShot[];
 }
+
+// ─── Direct placement (manual_placing phase) ─────────────────────────────────
+
+/** A placement decision made during the manual_placing phase for a segment. */
+export type DirectPlacement = {
+  anchorSectionIndex: number;   // DMP file section index (anchor within segment)
+  anchorStationIndex: number;   // station within that section
+  placement: ImportPlacement;   // origin, zero_datum, manual, manual_snap, or from_existing
+};
 
 // ─── Graph helpers ───────────────────────────────────────────────────────────
 
@@ -122,10 +134,19 @@ function buildBatchImport(
   selectionConfig: DmpSelectionConfig,
   sectionEdits?: Map<number, SectionEditState>,
   fullPool?: CrossSectionSuggestion[],
+  directPlacements?: DirectPlacement[],
 ): { configs: BackendImportSectionConfig[]; unreachable: number[] } {
   // Build adjacency + connections including any fallback anchors for disconnected components
   const allConnections = [...connections];
   const adjacency = buildAdjacency(allConnections);
+
+  // Direct placement map: section index → ImportPlacement (for manual_placing phase)
+  const directPlacementMap = new Map<number, ImportPlacement>();
+  if (directPlacements) {
+    for (const dp of directPlacements) {
+      directPlacementMap.set(dp.anchorSectionIndex, dp.placement);
+    }
+  }
 
   // Sections connected to existing project sections (anchors)
   const anchored = new Set<number>();
@@ -134,6 +155,10 @@ function buildBatchImport(
     if (c.targetType === 'existing') {
       anchored.add(c.importSectionIndex);
     }
+  }
+  // Direct placements also anchor their sections
+  for (const dp of directPlacements ?? []) {
+    anchored.add(dp.anchorSectionIndex);
   }
 
   // BFS from anchored sections
@@ -243,44 +268,51 @@ function buildBatchImport(
       }
       if (backendShots.length === 0) continue;
 
+      // Check for direct placement first (from manual_placing phase)
+      const directPlacement = directPlacementMap.get(idx);
       const conn = connectionMap.get(idx);
-      if (!conn) continue;
-
-      // Adjust import station index for deleted shots (overlap removal shifts stations)
-      const adjustedImportStation = edits
-        ? adjustStationForDeletedShots(edits.shots, conn.importStationIndex)
-        : conn.importStationIndex;
+      if (!directPlacement && !conn) continue;
 
       let placement: ImportPlacement;
-      if (conn.targetType === 'existing' && conn.existingSectionId != null && conn.existingStationIndex != null) {
-        placement = {
-          type: 'from_existing',
-          import_station: adjustedImportStation,
-          existing_station: {
-            section_id: conn.existingSectionId,
-            station_index: conn.existingStationIndex,
-          },
-        };
-      } else if (conn.targetType === 'importing' && conn.targetImportIndex != null && conn.targetImportStationIndex != null) {
-        // The target must already be emitted in configs[]
-        const targetPos = emittedPosition.get(conn.targetImportIndex);
-        if (targetPos == null) {
-          // Target not yet placed — will retry in next pass
+      if (directPlacement) {
+        placement = directPlacement;
+      } else {
+        // Derive placement from virtual connection
+        // Adjust import station index for deleted shots (overlap removal shifts stations)
+        const adjustedImportStation = edits
+          ? adjustStationForDeletedShots(edits.shots, conn!.importStationIndex)
+          : conn!.importStationIndex;
+
+        if (conn!.targetType === 'existing' && conn!.existingSectionId != null && conn!.existingStationIndex != null) {
+          placement = {
+            type: 'from_existing',
+            import_station: adjustedImportStation,
+            existing_station: {
+              section_id: conn!.existingSectionId,
+              station_index: conn!.existingStationIndex,
+            },
+          };
+        } else if (conn!.targetType === 'importing' && conn!.targetImportIndex != null && conn!.targetImportStationIndex != null) {
+          // The target must already be emitted in configs[]
+          const targetPos = emittedPosition.get(conn!.targetImportIndex);
+          if (targetPos == null) {
+            // Target not yet placed — will retry in next pass
+            continue;
+          }
+          // Adjust target station index for deleted shots in the target section
+          const targetEdits = sectionEdits?.get(conn!.targetImportIndex);
+          const adjustedTargetStation = targetEdits
+            ? adjustStationForDeletedShots(targetEdits.shots, conn!.targetImportStationIndex)
+            : conn!.targetImportStationIndex;
+          placement = {
+            type: 'from_importing',
+            import_station: adjustedImportStation,
+            target_section_index: targetPos,
+            target_station_index: adjustedTargetStation,
+          };
+        } else {
           continue;
         }
-        // Adjust target station index for deleted shots in the target section
-        const targetEdits = sectionEdits?.get(conn.targetImportIndex);
-        const adjustedTargetStation = targetEdits
-          ? adjustStationForDeletedShots(targetEdits.shots, conn.targetImportStationIndex)
-          : conn.targetImportStationIndex;
-        placement = {
-          type: 'from_importing',
-          import_station: adjustedImportStation,
-          target_section_index: targetPos,
-          target_station_index: adjustedTargetStation,
-        };
-      } else {
-        continue;
       }
 
       // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
@@ -351,7 +383,7 @@ export default function DmpNewImportDialog({
   const [showAlternatives, setShowAlternatives] = useState(true);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [phase, setPhase] = useState<'init' | 'suggesting' | 'placing' | 'done'>('init');
+  const [phase, setPhase] = useState<'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done'>('init');
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -380,6 +412,30 @@ export default function DmpNewImportDialog({
   const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
   // Keep full pool (unfiltered) so buildBatchImport can find existing-target anchors
   const fullPoolRef = useRef<CrossSectionSuggestion[]>([]);
+
+  // ─── Manual placing phase state ────────────────────────────────────────────
+  const [segmentQueue, setSegmentQueue] = useState<number[][]>([]);
+  const currentSegment = segmentQueue[0] ?? null;
+
+  const [segmentPlacementMode, setSegmentPlacementMode] = useState<
+    'suggestion' | 'origin' | 'fromExisting' | 'manual'
+  >('origin');
+  const [segmentAnchor, setSegmentAnchor] = useState<{
+    sectionIndex: number; stationIndex: number;
+  } | null>(null);
+
+  // Per-mode state for manual_placing
+  const [fromExistingSectionId, setFromExistingSectionId] = useState<number | null>(null);
+  const [fromExistingStationIdx, setFromExistingStationIdx] = useState<number>(0);
+
+  // Track original suggestions for sections skipped during suggesting phase
+  const skippedSuggestionsRef = useRef<Map<number, CrossSectionSuggestion>>(new Map());
+
+  // Accumulated direct placements for manual_placing phase
+  const directPlacementsRef = useRef<DirectPlacement[]>([]);
+
+  // Skip counter per segment (prevent infinite loops)
+  const segmentSkipCountRef = useRef<Map<string, number>>(new Map());
 
   // Guard against React StrictMode double-firing the mount effect
   const importStartedRef = useRef(false);
@@ -926,6 +982,42 @@ export default function DmpNewImportDialog({
     return true;
   }, []);
 
+  // Decide whether to enter manual_placing or go straight to placing.
+  // Called when the suggesting phase is done (pool exhausted or all confirmed/skipped).
+  const transitionToPlacingOrManual = useCallback(() => {
+    const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+    const { unreachable } = buildBatchImport(
+      connectionsRef.current,
+      zeroDatumIdx,
+      dmpFile,
+      selectionConfig,
+      sectionEditsRef.current,
+      fullPoolRef.current,
+      directPlacementsRef.current,
+    );
+
+    if (unreachable.length > 0) {
+      const segments = computeUnreachableSegments(unreachable, connectionsRef.current);
+      if (segments.length > 0) {
+        setSegmentQueue(segments);
+        segmentSkipCountRef.current = new Map();
+
+        // Initialize anchor to first section's station 0
+        const firstSegment = segments[0]!;
+        setSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+
+        // Check if the first section has a skipped suggestion
+        const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
+        setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
+
+        setPhase('manual_placing');
+        return;
+      }
+    }
+
+    setPhase('placing');
+  }, [zeroDatumConfig, dmpFile, selectionConfig]);
+
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
     if (importStartedRef.current) return;
@@ -1027,8 +1119,8 @@ export default function DmpNewImportDialog({
       setIsCalculating(false);
 
       if (!pickFromPool()) {
-        // No suggestions at all — go straight to placing
-        setPhase('placing');
+        // No suggestions at all — check for unreachable sections
+        transitionToPlacingOrManual();
         return;
       }
 
@@ -1056,6 +1148,7 @@ export default function DmpNewImportDialog({
         selectionConfig,
         sectionEditsRef.current,
         fullPoolRef.current,
+        directPlacementsRef.current,
       );
 
       if (configs.length > 0) {
@@ -1381,23 +1474,27 @@ export default function DmpNewImportDialog({
     );
 
     if (remaining.length === 0) {
-      // All handled — transition to placing
-      setPhase('placing');
+      // All handled — transition to placing (or manual_placing if unreachable)
+      transitionToPlacingOrManual();
       return;
     }
 
     // Pick next from pool
     if (!pickFromPool()) {
-      // Pool exhausted — transition to placing with whatever we have
-      setPhase('placing');
+      // Pool exhausted — check for unreachable sections
+      transitionToPlacingOrManual();
     }
-  }, [currentSuggestion, selectedMergePair, editState, effectiveShots, overlapMode, zeroDatumConfig, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, selectedMergePair, editState, effectiveShots, overlapMode, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
 
-  // Skip handler
+  // Skip handler (suggesting phase)
   const handleSkip = useCallback(() => {
     if (!currentSuggestion) return;
 
     const skippedIdx = currentSuggestion.importSectionIndex;
+
+    // Record the suggestion so it can be re-shown in manual_placing
+    skippedSuggestionsRef.current.set(skippedIdx, currentSuggestion);
+
     setSkippedIndices((prev) => {
       const next = new Set(prev);
       next.add(skippedIdx);
@@ -1416,14 +1513,14 @@ export default function DmpNewImportDialog({
     );
 
     if (remaining.length === 0) {
-      setPhase('placing');
+      transitionToPlacingOrManual();
       return;
     }
 
     if (!pickFromPool()) {
-      setPhase('placing');
+      transitionToPlacingOrManual();
     }
-  }, [currentSuggestion, zeroDatumConfig, selectedIndices, pickFromPool]);
+  }, [currentSuggestion, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
@@ -1437,6 +1534,285 @@ export default function DmpNewImportDialog({
       return newAlts.slice(0, 4);
     });
   }, [currentSuggestion]);
+
+  // ─── Manual placing phase handlers ────────────────────────────────────────
+
+  // Access UI store for map placement
+  const { startPlacementMode, closeDialog, openDialog, getMapViewportCenter } = useUIStore();
+
+  // Project sections for "From Existing" dropdown
+  const projectSections = useProjectStore((s) => s.project?.sections ?? []);
+
+  // Get target section stations for "From Existing" mode
+  const fromExistingTargetSection = useMemo(() => {
+    if (fromExistingSectionId == null) return null;
+    return projectSections.find(s => s.id === fromExistingSectionId) ?? null;
+  }, [fromExistingSectionId, projectSections]);
+
+  const fromExistingStationCount = useMemo(() => {
+    if (!fromExistingTargetSection) return 0;
+    return fromExistingTargetSection.shots.filter(s => !s.is_reference).length + 1;
+  }, [fromExistingTargetSection]);
+
+  // Compute segment preview for manual_placing
+  const segmentPreviewSections = useMemo(() => {
+    if (!currentSegment) return null;
+    const layout = computeSegmentLayout(currentSegment, connections, dmpFile.sections);
+    return layout.map((entry) => {
+      const section = dmpFile.sections[entry.sectionIndex];
+      if (!section) return null;
+      const colorIdx = entry.sectionIndex % SECTION_COLORS.length;
+      return {
+        section,
+        color: SECTION_COLORS[colorIdx] ?? '#95a5a6',
+        sectionIndex: entry.sectionIndex,
+        offsetX: entry.offsetX,
+        offsetY: entry.offsetY,
+      };
+    }).filter((x): x is NonNullable<typeof x> => x !== null);
+  }, [currentSegment, connections, dmpFile.sections]);
+
+  // Current segment's skipped suggestion (if any section in the segment had one)
+  const segmentSkippedSuggestion = useMemo(() => {
+    if (!currentSegment) return null;
+    for (const idx of currentSegment) {
+      const suggestion = skippedSuggestionsRef.current.get(idx);
+      if (suggestion) return suggestion;
+    }
+    return null;
+  }, [currentSegment]);
+
+  // Advance to next segment or transition to placing
+  const advanceSegmentQueue = useCallback(() => {
+    setSegmentQueue((prev) => {
+      const next = prev.slice(1);
+      if (next.length === 0) {
+        // Queue empty — transition to placing
+        setPhase('placing');
+        return [];
+      }
+      // Initialize anchor for next segment
+      const firstSegment = next[0]!;
+      setSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+      const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
+      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
+      setFromExistingSectionId(null);
+      setFromExistingStationIdx(0);
+      return next;
+    });
+  }, []);
+
+  // Place segment handler
+  const handleSegmentPlace = useCallback(() => {
+    if (!currentSegment || !segmentAnchor) return;
+
+    let placement: ImportPlacement;
+    if (segmentPlacementMode === 'suggestion' && segmentSkippedSuggestion) {
+      // Use the skipped suggestion as a from_existing connection
+      const suggestion = segmentSkippedSuggestion;
+      if (suggestion.targetType === 'existing' && suggestion.existingSectionId != null) {
+        // Add as a virtual connection instead
+        const newConn: VirtualConnection = {
+          importSectionIndex: suggestion.importSectionIndex,
+          importStationIndex: suggestion.importStationIndex,
+          targetType: 'existing',
+          existingSectionId: suggestion.existingSectionId,
+          existingStationIndex: suggestion.existingStationIndex,
+        };
+        setConnections((prev) => [...prev, newConn]);
+        connectionsRef.current = [...connectionsRef.current, newConn];
+        advanceSegmentQueue();
+        return;
+      } else if (suggestion.targetType === 'importing' && suggestion.targetImportIndex != null) {
+        const newConn: VirtualConnection = {
+          importSectionIndex: suggestion.importSectionIndex,
+          importStationIndex: suggestion.importStationIndex,
+          targetType: 'importing',
+          targetImportIndex: suggestion.targetImportIndex,
+          targetImportStationIndex: suggestion.existingStationIndex,
+        };
+        setConnections((prev) => [...prev, newConn]);
+        connectionsRef.current = [...connectionsRef.current, newConn];
+        advanceSegmentQueue();
+        return;
+      }
+      return;
+    } else if (segmentPlacementMode === 'origin') {
+      const viewportCenter = getMapViewportCenter();
+      placement = {
+        type: 'manual',
+        align_station_index: segmentAnchor.stationIndex,
+        offset: { x: viewportCenter.x, y: viewportCenter.y, z: 0 },
+      };
+    } else if (segmentPlacementMode === 'fromExisting') {
+      if (fromExistingSectionId == null) return;
+      placement = {
+        type: 'from_existing',
+        import_station: segmentAnchor.stationIndex,
+        existing_station: {
+          section_id: fromExistingSectionId,
+          station_index: fromExistingStationIdx,
+        },
+      };
+    } else if (segmentPlacementMode === 'manual') {
+      // Manual mode is handled by handleStartSegmentPlacement
+      return;
+    } else {
+      return;
+    }
+
+    const dp: DirectPlacement = {
+      anchorSectionIndex: segmentAnchor.sectionIndex,
+      anchorStationIndex: segmentAnchor.stationIndex,
+      placement,
+    };
+    directPlacementsRef.current = [...directPlacementsRef.current, dp];
+    advanceSegmentQueue();
+  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, getMapViewportCenter, advanceSegmentQueue]);
+
+  // Skip segment handler — appends to end of queue
+  const handleSegmentSkip = useCallback(() => {
+    if (!currentSegment) return;
+    const key = currentSegment.join(',');
+    const count = (segmentSkipCountRef.current.get(key) ?? 0) + 1;
+    segmentSkipCountRef.current.set(key, count);
+
+    setSegmentQueue((prev) => {
+      if (prev.length <= 1) {
+        // Only one segment left — can't skip, it stays
+        return prev;
+      }
+      const [first, ...rest] = prev;
+      const next = [...rest, first!];
+      // Initialize anchor for next segment
+      const nextSeg = next[0]!;
+      setSegmentAnchor({ sectionIndex: nextSeg[0]!, stationIndex: 0 });
+      const hasSuggestion = nextSeg.some(idx => skippedSuggestionsRef.current.has(idx));
+      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
+      setFromExistingSectionId(null);
+      setFromExistingStationIdx(0);
+      return next;
+    });
+  }, [currentSegment]);
+
+  // Station click handler for segment preview
+  const handleSegmentStationClick = useCallback((stationIndex: number, sectionIndex?: number) => {
+    if (sectionIndex != null) {
+      setSegmentAnchor({ sectionIndex, stationIndex });
+    } else if (currentSegment && currentSegment.length > 0) {
+      setSegmentAnchor({ sectionIndex: currentSegment[0]!, stationIndex });
+    }
+  }, [currentSegment]);
+
+  // Manual map placement for a segment
+  const handleStartSegmentPlacement = useCallback(() => {
+    if (!currentSegment || !segmentAnchor) return;
+
+    // Build SectionData for anchor section
+    const anchorDmpSection = dmpFile.sections[segmentAnchor.sectionIndex];
+    if (!anchorDmpSection) return;
+
+    const edits = sectionEditsRef.current.get(segmentAnchor.sectionIndex);
+    const shots: ShotData[] = edits
+      ? edits.shots.filter(s => !s.isDeleted).map(editableShotToShotData)
+      : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
+
+    const colorIdx = segmentAnchor.sectionIndex % SECTION_COLORS.length;
+    const sectionData = {
+      name: edits?.name ?? anchorDmpSection.name,
+      surveyor: edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null,
+      date: edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null,
+      color: edits?.color ?? SECTION_COLORS[colorIdx] ?? '#4ecdc4',
+      direction: edits?.direction ?? anchorDmpSection.direction,
+      quality: edits?.quality ?? 1.0,
+      shots,
+    };
+
+    // Build additional sections for segment shadow
+    const layout = computeSegmentLayout(currentSegment, connections, dmpFile.sections);
+    const additionalSections = layout
+      .filter(entry => entry.sectionIndex !== segmentAnchor.sectionIndex)
+      .map(entry => {
+        const sec = dmpFile.sections[entry.sectionIndex];
+        if (!sec) return null;
+        const secColorIdx = entry.sectionIndex % SECTION_COLORS.length;
+        const secShots = convertToEditableShots(sec.shots).map(editableShotToShotData);
+        return {
+          sectionData: {
+            name: sec.name,
+            surveyor: null,
+            date: null,
+            color: SECTION_COLORS[secColorIdx] ?? '#95a5a6',
+            direction: sec.direction,
+            quality: 1.0,
+            shots: secShots,
+          },
+          color: SECTION_COLORS[secColorIdx] ?? '#95a5a6',
+          offsetX: entry.offsetX,
+          offsetY: entry.offsetY,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    // Save state for restore
+    const savedQueue = [...segmentQueue];
+    const savedDirectPlacements = [...directPlacementsRef.current];
+
+    startPlacementMode(
+      sectionData,
+      segmentAnchor.stationIndex,
+      // onComplete
+      (result: PlacementResult) => {
+        let placement: ImportPlacement;
+        if (result.snappedToStation) {
+          placement = {
+            type: 'manual_snap',
+            align_station_index: segmentAnchor.stationIndex,
+            snapped_to_station: result.snappedToStation,
+          };
+        } else {
+          placement = {
+            type: 'manual',
+            align_station_index: segmentAnchor.stationIndex,
+            offset: result.position,
+          };
+        }
+
+        const dp: DirectPlacement = {
+          anchorSectionIndex: segmentAnchor.sectionIndex,
+          anchorStationIndex: segmentAnchor.stationIndex,
+          placement,
+        };
+        directPlacementsRef.current = [...savedDirectPlacements, dp];
+
+        // Re-open dialog and advance queue
+        openDialog('dmpNewImport');
+        setSegmentQueue((prev) => {
+          const next = prev.slice(1);
+          if (next.length === 0) {
+            setPhase('placing');
+            return [];
+          }
+          const firstSeg = next[0]!;
+          setSegmentAnchor({ sectionIndex: firstSeg[0]!, stationIndex: 0 });
+          const hasSuggestion = firstSeg.some(idx => skippedSuggestionsRef.current.has(idx));
+          setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
+          return next;
+        });
+      },
+      // onCancel
+      () => {
+        // Restore state and re-open dialog
+        directPlacementsRef.current = savedDirectPlacements;
+        setSegmentQueue(savedQueue);
+        openDialog('dmpNewImport');
+      },
+      additionalSections.length > 0 ? additionalSections : undefined,
+    );
+
+    // Hide dialog
+    closeDialog();
+  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, segmentQueue, startPlacementMode, openDialog, closeDialog]);
 
   // Cancel/Back
   const handleCancel = useCallback(() => {
@@ -1472,8 +1848,27 @@ export default function DmpNewImportDialog({
   // Whether we're in the suggestion view with a current suggestion (side-by-side layout)
   const showSideBySide = phase === 'suggesting' && !isCalculating && currentSuggestion != null;
 
+  // Whether we're in the manual_placing phase
+  const showManualPlacing = phase === 'manual_placing' && currentSegment != null;
+
   // Target type label for import-to-import connections
   const isImportTarget = currentSuggestion?.targetType === 'importing';
+
+  // Section names in current segment (for display)
+  const segmentSectionNames = useMemo(() => {
+    if (!currentSegment) return [];
+    return currentSegment.map(idx => dmpFile.sections[idx]?.name ?? `Section ${idx}`);
+  }, [currentSegment, dmpFile.sections]);
+
+  // Whether current placement mode is valid for submission
+  const isSegmentPlacementValid = useMemo(() => {
+    if (!segmentAnchor) return false;
+    if (segmentPlacementMode === 'suggestion') return segmentSkippedSuggestion != null;
+    if (segmentPlacementMode === 'origin') return true;
+    if (segmentPlacementMode === 'fromExisting') return fromExistingSectionId != null;
+    if (segmentPlacementMode === 'manual') return false; // must use "Place on Map" button
+    return false;
+  }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId]);
 
   return (
     <DialogWrapper
@@ -1683,6 +2078,181 @@ export default function DmpNewImportDialog({
               )}
             </div>
           </div>
+        ) : showManualPlacing ? (
+          <div className="flex-1 flex min-h-0 overflow-hidden relative">
+            {/* Left column: Segment Preview */}
+            <div className="shrink-0 flex flex-col items-center p-4 border-r border-border" style={{ width: 380 }}>
+              <SectionPreview
+                segmentSections={segmentPreviewSections}
+                size={340}
+                onStationClick={handleSegmentStationClick}
+                selectedStationIndex={segmentAnchor?.stationIndex ?? null}
+                selectedSectionIndex={segmentAnchor?.sectionIndex ?? null}
+              />
+            </div>
+
+            {/* Right column: Placement configuration */}
+            <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4" data-testid="wizard-manual-placing">
+              {/* Segment header */}
+              <div>
+                <div className="text-sm font-medium">
+                  {t('dialogs.dmpNewImport.manualPlacing.segmentHeader', {
+                    current: segmentQueue.length > 0 ? 1 : 0,
+                    total: segmentQueue.length,
+                  })}
+                </div>
+                <div className="text-xs text-text-secondary mt-0.5">
+                  {t('dialogs.dmpNewImport.manualPlacing.sections')}: {segmentSectionNames.join(', ')}
+                </div>
+              </div>
+
+              {/* Anchor station display */}
+              <div className="text-xs text-text-secondary">
+                {segmentAnchor ? (
+                  t('dialogs.dmpNewImport.manualPlacing.anchorStation', {
+                    section: dmpFile.sections[segmentAnchor.sectionIndex]?.name ?? `Section ${segmentAnchor.sectionIndex}`,
+                    station: segmentAnchor.stationIndex,
+                  })
+                ) : (
+                  t('dialogs.dmpNewImport.manualPlacing.selectAnchor')
+                )}
+              </div>
+
+              {/* Placement mode radio group */}
+              <div className="space-y-2">
+                <div className="text-xs font-medium text-text-secondary">
+                  {t('dialogs.dmpNewImport.manualPlacing.placementMode')}
+                </div>
+
+                {/* Suggestion option (only if available) */}
+                {segmentSkippedSuggestion && (
+                  <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="segmentPlacementMode"
+                      checked={segmentPlacementMode === 'suggestion'}
+                      onChange={() => setSegmentPlacementMode('suggestion')}
+                      className="mt-0.5"
+                    />
+                    <div className="text-sm">
+                      <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
+                      <div className="text-xs text-text-secondary">
+                        → {segmentSkippedSuggestion.existingSectionName} stn {segmentSkippedSuggestion.existingStationIndex}
+                        {' · '}{segmentSkippedSuggestion.matchedShots} shots matched
+                      </div>
+                    </div>
+                  </label>
+                )}
+
+                {/* Origin */}
+                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="segmentPlacementMode"
+                    checked={segmentPlacementMode === 'origin'}
+                    onChange={() => setSegmentPlacementMode('origin')}
+                    className="mt-0.5"
+                  />
+                  <div className="text-sm">{t('dialogs.dmpNewImport.manualPlacing.origin')}</div>
+                </label>
+
+                {/* From existing station */}
+                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="segmentPlacementMode"
+                    checked={segmentPlacementMode === 'fromExisting'}
+                    onChange={() => setSegmentPlacementMode('fromExisting')}
+                    className="mt-0.5"
+                  />
+                  <div className="text-sm flex-1">
+                    <div>{t('dialogs.dmpNewImport.manualPlacing.fromExisting')}</div>
+                    {segmentPlacementMode === 'fromExisting' && (
+                      <div className="mt-2 space-y-2">
+                        {projectSections.length > 0 ? (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-text-secondary whitespace-nowrap">
+                                {t('dialogs.dmpNewImport.manualPlacing.targetSection')}
+                              </label>
+                              <select
+                                value={fromExistingSectionId ?? ''}
+                                onChange={(e) => {
+                                  const val = e.target.value ? Number(e.target.value) : null;
+                                  setFromExistingSectionId(val);
+                                  setFromExistingStationIdx(0);
+                                }}
+                                className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                                data-testid="from-existing-section-select"
+                              >
+                                <option value="">—</option>
+                                {projectSections.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            {fromExistingSectionId != null && (
+                              <div className="flex items-center gap-2">
+                                <label className="text-xs text-text-secondary whitespace-nowrap">
+                                  {t('dialogs.dmpNewImport.manualPlacing.targetStation')}
+                                </label>
+                                <select
+                                  value={fromExistingStationIdx}
+                                  onChange={(e) => setFromExistingStationIdx(Number(e.target.value))}
+                                  className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                                  data-testid="from-existing-station-select"
+                                >
+                                  {Array.from({ length: fromExistingStationCount }, (_, i) => (
+                                    <option key={i} value={i}>Station {i}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="text-xs text-text-secondary italic">
+                            {t('dialogs.dmpNewImport.manualPlacing.noSections')}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </label>
+
+                {/* Manual placement */}
+                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="segmentPlacementMode"
+                    checked={segmentPlacementMode === 'manual'}
+                    onChange={() => setSegmentPlacementMode('manual')}
+                    className="mt-0.5"
+                  />
+                  <div className="text-sm flex-1">
+                    <div>{t('dialogs.dmpNewImport.manualPlacing.manual')}</div>
+                    {segmentPlacementMode === 'manual' && (
+                      <div className="mt-2">
+                        <Button
+                          size="sm"
+                          onClick={handleStartSegmentPlacement}
+                          data-testid="segment-place-on-map-button"
+                        >
+                          {t('dialogs.dmpNewImport.manualPlacing.placeOnMap')}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </label>
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div className="text-sm text-error" data-testid="wizard-error">
+                  {error}
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
             {/* Init/Importing zero datum */}
@@ -1768,6 +2338,26 @@ export default function DmpNewImportDialog({
                   data-testid="confirm-button"
                 >
                   {t('dialogs.dmpNewImport.confirm')}
+                </Button>
+              </>
+            )}
+            {phase === 'manual_placing' && currentSegment && (
+              <>
+                {segmentQueue.length > 1 && (
+                  <Button
+                    onClick={handleSegmentSkip}
+                    data-testid="segment-skip-button"
+                  >
+                    {t('dialogs.dmpNewImport.manualPlacing.skip')}
+                  </Button>
+                )}
+                <Button
+                  variant="primary"
+                  onClick={handleSegmentPlace}
+                  disabled={!isSegmentPlacementValid}
+                  data-testid="segment-place-button"
+                >
+                  {t('dialogs.dmpNewImport.manualPlacing.placeSegment')}
                 </Button>
               </>
             )}
