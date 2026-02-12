@@ -1539,8 +1539,14 @@ export default function DmpNewImportDialog({
             const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
             if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) continue;
 
-            const targetShot = targetShots[targetShotIdx]!;
-            if (targetShot.isDeleted) continue;
+            let targetShot = targetShots[targetShotIdx]!;
+            if (targetShot.isDeleted) {
+              // Un-delete: this shot was deleted by a previous connection's overlap,
+              // but the current connection also overlaps here. The shot must survive
+              // as the representative for this new overlap region.
+              targetShot = { ...targetShot, isDeleted: false };
+              targetShots[targetShotIdx] = targetShot;
+            }
 
             // The import shot needs direction reversal to match the target's frame
             const importAsTarget: TargetShotLike = shouldReverse
