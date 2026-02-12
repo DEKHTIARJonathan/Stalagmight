@@ -1501,14 +1501,16 @@ export default function DmpNewImportDialog({
       }
       sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: importShots });
 
-      // For 'interpolate' mode with import-to-import connections, apply the
-      // interpolated values to the TARGET section's corresponding overlap shots.
-      // The import's overlap shots are deleted (above) to preserve station index
-      // compatibility, so the averaged values must live on the target side.
-      if (overlapMode === 'interpolate' && currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
+      // For import-to-import connections, propagate the overlap mode to the
+      // TARGET section's corresponding shots. The import's overlap shots are
+      // deleted (above) to preserve station index compatibility, so the chosen
+      // data treatment must live on the target side.
+      //  - import_data:  copy import values → target overlap shots
+      //  - interpolate:  average import + target values → target overlap shots
+      //  - existing_data: no-op (target already has its own values)
+      if (overlapMode !== 'keep_both' && overlapMode !== 'existing_data' && currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
         const { importStationIndex, matchedShots, existingStationIndex, direction } = currentSuggestion;
-        const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
-        const actionableIds = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
+        const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
         const shouldReverse = needsDirectionReversal(importStationIndex, direction);
         const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
 
@@ -1528,10 +1530,9 @@ export default function DmpNewImportDialog({
         }
 
         if (targetShots.length > 0) {
-          // Apply interpolated values from import shots to corresponding target shots
           const importShotsForInterp = editState.shots;
           let modified = false;
-          for (const overlapId of actionableIds) {
+          for (const overlapId of allOverlap) {
             const importShot = importShotsForInterp.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
             if (!importShot) continue;
 
@@ -1546,7 +1547,12 @@ export default function DmpNewImportDialog({
               ? reverseTargetShot(importShot)
               : importShot;
 
-            targetShots[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+            if (overlapMode === 'interpolate') {
+              targetShots[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+            } else {
+              // import_data: replace target values with import values
+              targetShots[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
+            }
             modified = true;
           }
 
