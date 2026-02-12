@@ -437,6 +437,9 @@ export default function DmpNewImportDialog({
   // Skip counter per segment (prevent infinite loops)
   const segmentSkipCountRef = useRef<Map<string, number>>(new Map());
 
+  // Whether the dialog is temporarily hidden for map placement
+  const [isPlacingOnMap, setIsPlacingOnMap] = useState(false);
+
   // Guard against React StrictMode double-firing the mount effect
   const importStartedRef = useRef(false);
 
@@ -1538,7 +1541,7 @@ export default function DmpNewImportDialog({
   // ─── Manual placing phase handlers ────────────────────────────────────────
 
   // Access UI store for map placement
-  const { startPlacementMode, closeDialog, openDialog, getMapViewportCenter } = useUIStore();
+  const { startPlacementMode, getMapViewportCenter } = useUIStore();
 
   // Project sections for "From Existing" dropdown
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
@@ -1754,9 +1757,11 @@ export default function DmpNewImportDialog({
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
-    // Save state for restore
-    const savedQueue = [...segmentQueue];
+    // Save state for restore on cancel
     const savedDirectPlacements = [...directPlacementsRef.current];
+
+    // Hide dialog (keep mounted to preserve state)
+    setIsPlacingOnMap(true);
 
     startPlacementMode(
       sectionData,
@@ -1785,8 +1790,8 @@ export default function DmpNewImportDialog({
         };
         directPlacementsRef.current = [...savedDirectPlacements, dp];
 
-        // Re-open dialog and advance queue
-        openDialog('dmpNewImport');
+        // Show dialog again and advance queue
+        setIsPlacingOnMap(false);
         setSegmentQueue((prev) => {
           const next = prev.slice(1);
           if (next.length === 0) {
@@ -1802,17 +1807,13 @@ export default function DmpNewImportDialog({
       },
       // onCancel
       () => {
-        // Restore state and re-open dialog
+        // Restore state and show dialog again
         directPlacementsRef.current = savedDirectPlacements;
-        setSegmentQueue(savedQueue);
-        openDialog('dmpNewImport');
+        setIsPlacingOnMap(false);
       },
       additionalSections.length > 0 ? additionalSections : undefined,
     );
-
-    // Hide dialog
-    closeDialog();
-  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, segmentQueue, startPlacementMode, openDialog, closeDialog]);
+  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, startPlacementMode]);
 
   // Cancel/Back
   const handleCancel = useCallback(() => {
@@ -1878,6 +1879,7 @@ export default function DmpNewImportDialog({
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       data-testid="dmp-new-import-dialog"
+      hidden={isPlacingOnMap}
     >
       <div className="flex-1 flex flex-col min-h-0">
         {/* Progress header */}
