@@ -183,8 +183,6 @@ function applyAllOverlapTreatments(
   dmpFile: DmpFile,
   overlapMode: OverlapMode,
 ): void {
-  if (overlapMode === 'keep_both') return;
-
   for (const suggestion of fullPool) {
     const {
       importSectionIndex,
@@ -246,113 +244,129 @@ function applyAllOverlapTreatments(
       );
 
       if (hasUntreated) {
-        // Build target map for interpolate/existing_data modes
-        let targetMap: Map<number, TargetShotLike> | null = null;
-        let targetMapDiag = '';
-        if (overlapMode !== 'import_data') {
-          let targetShotArray: TargetShotLike[] | null = null;
-          if (targetType === 'existing' && existingSectionId != null) {
-            const currentProject = useProjectStore.getState().project;
-            const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
-            if (targetSection) {
-              targetShotArray = targetSection.shots;
-              targetMapDiag = `existing section ${existingSectionId} (${targetSection.shots.length} shots)`;
-            } else {
-              targetMapDiag = `MISS: existing section ${existingSectionId} not found in project`;
-            }
-          } else if (targetType === 'importing' && targetImportIndex != null) {
-            const targetEdits = sectionEdits.get(targetImportIndex);
-            if (targetEdits) {
-              targetShotArray = targetEdits.shots.filter(s => !s.isDeleted);
-              targetMapDiag = `importing section ${targetImportIndex} from edits (${targetEdits.shots.length} total, ${targetShotArray.length} alive)`;
-            } else {
-              const targetDmpSection = dmpFile.sections[targetImportIndex];
-              if (targetDmpSection) {
-                targetShotArray = convertToEditableShots(targetDmpSection.shots);
-                targetMapDiag = `importing section ${targetImportIndex} from DMP (${targetShotArray.length} shots)`;
-              } else {
-                targetMapDiag = `MISS: importing section ${targetImportIndex} not in edits or DMP`;
-              }
-            }
-          } else {
-            targetMapDiag = `MISS: targetType=${targetType} existingSectionId=${existingSectionId} targetImportIndex=${targetImportIndex}`;
-          }
-
-          if (targetShotArray) {
-            const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-            const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
-            targetMap = new Map<number, TargetShotLike>();
-            for (const overlapId of actionableIds) {
-              const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
-              if (targetIdx >= 0 && targetIdx < targetShotArray.length) {
-                const raw = targetShotArray[targetIdx]!;
-                targetMap.set(overlapId, shouldReverse ? reverseTargetShot(raw) : raw);
-              } else if (import.meta.env.DEV) {
-                console.warn(
-                  `[applyAllOverlaps]   targetIdx OUT OF RANGE: overlapId=${overlapId} → targetIdx=${targetIdx} (array len=${targetShotArray.length})`,
-                );
-              }
-            }
-          }
-        } else {
-          targetMapDiag = 'SKIPPED (import_data mode)';
-        }
-
-        if (import.meta.env.DEV) {
-          console.warn(
-            `[applyAllOverlaps]   import ${importSectionIndex}: targetMap=${targetMap ? targetMap.size : 'null'}`,
-            `source: ${targetMapDiag}`,
-          );
-        }
-
-        let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyRef = 0, diagDeleted = 0;
-        const newShots = importEdits.shots.map(shot => {
-          if (shot.isNew || shot.isDeleted) return shot;
-          if (!actionableIds.has(shot.id)) return shot;
-          if (shot.is_reference) { diagAlreadyRef++; return shot; }
-
-          // For import-to-import overlaps, delete the import's overlap shots.
-          // The target section keeps the overlap representation (treated below).
-          // For import-to-existing, we can't modify the existing section, so the
-          // import keeps its shots with transformed values as reference.
-          if (targetType === 'importing') {
-            diagDeleted++;
-            return { ...shot, isDeleted: true };
-          }
-
-          const target = targetMap?.get(shot.id);
-          if (overlapMode === 'interpolate' && target) {
-            diagInterpolated++;
-            return { ...interpolateShots(shot, target), is_reference: true };
-          } else if (overlapMode === 'existing_data' && target) {
-            diagInterpolated++;
-            return { ...applyTargetData(shot, target), is_reference: true };
-          } else {
-            diagRefOnly++;
+        if (overlapMode === 'keep_both') {
+          // keep_both: mark import overlap shots as reference (no deletion, no value change)
+          const newShots = importEdits.shots.map(shot => {
+            if (shot.isNew || shot.isDeleted) return shot;
+            if (!actionableIds.has(shot.id)) return shot;
+            if (shot.is_reference) return shot;
             return { ...shot, is_reference: true };
+          });
+          if (import.meta.env.DEV) {
+            const marked = newShots.filter(s => s.is_reference).length - importEdits.shots.filter(s => s.is_reference).length;
+            console.warn(`[applyAllOverlaps]   import ${importSectionIndex}: keep_both marked ${marked} shots as reference`);
           }
-        });
+          sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
+        } else {
+          // Build target map for interpolate/existing_data modes
+          let targetMap: Map<number, TargetShotLike> | null = null;
+          let targetMapDiag = '';
+          if (overlapMode !== 'import_data') {
+            let targetShotArray: TargetShotLike[] | null = null;
+            if (targetType === 'existing' && existingSectionId != null) {
+              const currentProject = useProjectStore.getState().project;
+              const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
+              if (targetSection) {
+                targetShotArray = targetSection.shots;
+                targetMapDiag = `existing section ${existingSectionId} (${targetSection.shots.length} shots)`;
+              } else {
+                targetMapDiag = `MISS: existing section ${existingSectionId} not found in project`;
+              }
+            } else if (targetType === 'importing' && targetImportIndex != null) {
+              const targetEdits = sectionEdits.get(targetImportIndex);
+              if (targetEdits) {
+                targetShotArray = targetEdits.shots.filter(s => !s.isDeleted);
+                targetMapDiag = `importing section ${targetImportIndex} from edits (${targetEdits.shots.length} total, ${targetShotArray.length} alive)`;
+              } else {
+                const targetDmpSection = dmpFile.sections[targetImportIndex];
+                if (targetDmpSection) {
+                  targetShotArray = convertToEditableShots(targetDmpSection.shots);
+                  targetMapDiag = `importing section ${targetImportIndex} from DMP (${targetShotArray.length} shots)`;
+                } else {
+                  targetMapDiag = `MISS: importing section ${targetImportIndex} not in edits or DMP`;
+                }
+              }
+            } else {
+              targetMapDiag = `MISS: targetType=${targetType} existingSectionId=${existingSectionId} targetImportIndex=${targetImportIndex}`;
+            }
 
-        if (import.meta.env.DEV) {
-          console.warn(
-            `[applyAllOverlaps]   import ${importSectionIndex} RESULT:`,
-            `interpolated=${diagInterpolated} deleted=${diagDeleted} refOnly=${diagRefOnly} alreadyRef=${diagAlreadyRef}`,
-          );
-          if (diagRefOnly > 0 && overlapMode !== 'import_data') {
+            if (targetShotArray) {
+              const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+              const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+              targetMap = new Map<number, TargetShotLike>();
+              for (const overlapId of actionableIds) {
+                const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
+                if (targetIdx >= 0 && targetIdx < targetShotArray.length) {
+                  const raw = targetShotArray[targetIdx]!;
+                  targetMap.set(overlapId, shouldReverse ? reverseTargetShot(raw) : raw);
+                } else if (import.meta.env.DEV) {
+                  console.warn(
+                    `[applyAllOverlaps]   targetIdx OUT OF RANGE: overlapId=${overlapId} → targetIdx=${targetIdx} (array len=${targetShotArray.length})`,
+                  );
+                }
+              }
+            }
+          } else {
+            targetMapDiag = 'SKIPPED (import_data mode)';
+          }
+
+          if (import.meta.env.DEV) {
             console.warn(
-              `[applyAllOverlaps]   ⚠ ${diagRefOnly} shots marked reference WITHOUT target data!`,
-              `targetMap=${targetMap ? `size=${targetMap.size} keys=[${[...targetMap.keys()].join(',')}]` : 'null'}`,
-              `actionableIds=[${[...actionableIds].join(',')}]`,
+              `[applyAllOverlaps]   import ${importSectionIndex}: targetMap=${targetMap ? targetMap.size : 'null'}`,
+              `source: ${targetMapDiag}`,
             );
           }
-        }
 
-        sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
+          let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyRef = 0, diagDeleted = 0;
+          const newShots = importEdits.shots.map(shot => {
+            if (shot.isNew || shot.isDeleted) return shot;
+            if (!actionableIds.has(shot.id)) return shot;
+            if (shot.is_reference) { diagAlreadyRef++; return shot; }
+
+            // For import-to-import overlaps, delete the import's overlap shots.
+            // The target section keeps the overlap representation (treated below).
+            // For import-to-existing, we can't modify the existing section, so the
+            // import keeps its shots with transformed values.
+            if (targetType === 'importing') {
+              diagDeleted++;
+              return { ...shot, isDeleted: true };
+            }
+
+            const target = targetMap?.get(shot.id);
+            if (overlapMode === 'interpolate' && target) {
+              diagInterpolated++;
+              return interpolateShots(shot, target);
+            } else if (overlapMode === 'existing_data' && target) {
+              diagInterpolated++;
+              return applyTargetData(shot, target);
+            } else {
+              diagRefOnly++;
+              return shot;
+            }
+          });
+
+          if (import.meta.env.DEV) {
+            console.warn(
+              `[applyAllOverlaps]   import ${importSectionIndex} RESULT:`,
+              `interpolated=${diagInterpolated} deleted=${diagDeleted} refOnly=${diagRefOnly} alreadyRef=${diagAlreadyRef}`,
+            );
+            if (diagRefOnly > 0 && overlapMode !== 'import_data') {
+              console.warn(
+                `[applyAllOverlaps]   ⚠ ${diagRefOnly} shots WITHOUT target data (kept original values)`,
+                `targetMap=${targetMap ? `size=${targetMap.size} keys=[${[...targetMap.keys()].join(',')}]` : 'null'}`,
+                `actionableIds=[${[...actionableIds].join(',')}]`,
+              );
+            }
+          }
+
+          sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
+        }
       }
     }
 
     // --- Target side (import-to-import only): treat untreated overlap shots on the target section ---
-    if (targetType === 'importing' && targetImportIndex != null) {
+    // keep_both: no target modification — both sections retain their original values.
+    if (overlapMode !== 'keep_both' && targetType === 'importing' && targetImportIndex != null) {
       let targetEdits = sectionEdits.get(targetImportIndex);
       if (!targetEdits) {
         const section = dmpFile.sections[targetImportIndex];
@@ -411,13 +425,14 @@ function applyAllOverlapTreatments(
               : importShot;
 
             if (overlapMode === 'interpolate') {
-              targetShots[targetShotIdx] = { ...interpolateShots(targetShot, importAsTarget), is_reference: true };
+              targetShots[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+              treated++;
             } else if (overlapMode === 'existing_data') {
-              targetShots[targetShotIdx] = { ...targetShot, is_reference: true };
+              // existing_data: target keeps its own values — nothing to change
             } else {
-              targetShots[targetShotIdx] = { ...applyTargetData(targetShot, importAsTarget), is_reference: true };
+              targetShots[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
+              treated++;
             }
-            treated++;
           }
 
           if (import.meta.env.DEV) {
@@ -1210,12 +1225,12 @@ export default function DmpNewImportDialog({
             const target = targetMap.get(shot.id);
             if (target) {
               if (overlapMode === 'existing_data') {
-                return { ...applyTargetData(shot, target), is_reference: true };
+                return applyTargetData(shot, target);
               } else if (overlapMode === 'interpolate') {
-                return { ...interpolateShots(shot, target), is_reference: true };
+                return interpolateShots(shot, target);
               }
             }
-            return { ...shot, is_reference: true };
+            return shot;
           }
           // Past merge station: leave unchanged to keep geometry continuous in preview.
           // Deletion happens at import time in handleConfirm.
@@ -1238,8 +1253,8 @@ export default function DmpNewImportDialog({
         // Past merge station: leave unchanged to keep geometry continuous in preview.
         return shot;
       }
-      // import_data: keep import values but mark as reference for preview
-      return { ...shot, is_reference: true };
+      // import_data: keep import values as-is
+      return shot;
     });
   }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
 
