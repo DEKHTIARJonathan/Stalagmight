@@ -1605,18 +1605,71 @@ export default function DmpNewImportDialog({
       if (overlapMode === 'keep_both') {
         importShots = freshEditState.shots;
       } else {
-        const { importStationIndex, matchedShots } = currentSuggestion;
+        // Apply overlap treatment to import shots — matching the effectiveShots
+        // preview behavior: keep overlap shots with transformed values and
+        // is_reference=true instead of deleting them.
+        const { importStationIndex, matchedShots, direction, existingStationIndex } = currentSuggestion;
         const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
-        importShots = freshEditState.shots.map(shot =>
-          (shot.is_reference || (!shot.isNew && allOverlapIds.has(shot.id)))
-            ? { ...shot, isDeleted: true, is_reference: false }
-            : shot
-        );
+        const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
+        const actionableIds = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
+
+        // Build target shot map for interpolate/existing_data modes
+        let targetMap: Map<number, TargetShotLike> | null = null;
+        if (overlapMode !== 'import_data') {
+          const { targetType, existingSectionId, targetImportIndex } = currentSuggestion;
+          let targetShotArray: TargetShotLike[] | null = null;
+
+          if (targetType === 'existing' && existingSectionId != null) {
+            const currentProject = useProjectStore.getState().project;
+            const targetSection = currentProject?.sections.find((s) => s.id === existingSectionId);
+            if (targetSection) targetShotArray = targetSection.shots;
+          } else if (targetType === 'importing' && targetImportIndex != null) {
+            const targetEdits = sectionEditsRef.current.get(targetImportIndex);
+            if (targetEdits) {
+              targetShotArray = targetEdits.shots.filter((s) => !s.isDeleted);
+            } else {
+              const targetDmpSection = dmpFile.sections[targetImportIndex];
+              if (targetDmpSection) {
+                targetShotArray = convertToEditableShots(targetDmpSection.shots);
+              }
+            }
+          }
+
+          if (targetShotArray) {
+            const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+            const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+            targetMap = new Map<number, TargetShotLike>();
+            for (const overlapId of allOverlapIds) {
+              const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
+              if (targetIdx >= 0 && targetIdx < targetShotArray.length) {
+                const raw = targetShotArray[targetIdx]!;
+                targetMap.set(overlapId, shouldReverse ? reverseTargetShot(raw) : raw);
+              }
+            }
+          }
+        }
+
+        importShots = freshEditState.shots.map(shot => {
+          if (shot.isNew || shot.isDeleted) return shot;
+          if (!allOverlapIds.has(shot.id)) return shot;
+          if (!actionableIds.has(shot.id)) return shot; // Past merge station: leave unchanged
+
+          const target = targetMap?.get(shot.id);
+          if (overlapMode === 'interpolate' && target) {
+            return { ...interpolateShots(shot, target), is_reference: true };
+          } else if (overlapMode === 'existing_data' && target) {
+            return { ...applyTargetData(shot, target), is_reference: true };
+          } else {
+            // import_data or no target available: keep import values
+            return { ...shot, is_reference: true };
+          }
+        });
       }
       if (import.meta.env.DEV) {
         console.warn(
           `[handleConfirm import-save] writing sectionEditsRef[${importIdx}]`,
           `importShots.length=${importShots.length}`,
+          `reference=${importShots.filter(s => s.is_reference).length}`,
           `deleted=${importShots.filter(s => s.isDeleted).length}`,
           `alive=${importShots.filter(s => !s.isDeleted).length}`,
         );
@@ -1624,13 +1677,11 @@ export default function DmpNewImportDialog({
       sectionEditsRef.current.set(importIdx, { ...freshEditState, shots: importShots });
 
       // For import-to-import connections, propagate the overlap mode to the
-      // TARGET section's corresponding shots. The import's overlap shots are
-      // deleted (above) to preserve station index compatibility, so the chosen
-      // data treatment must live on the target side.
+      // TARGET section's corresponding shots and mark them as reference.
       //  - import_data:  copy import values → target overlap shots
       //  - interpolate:  average import + target values → target overlap shots
-      //  - existing_data: no-op (target already has its own values)
-      if (overlapMode !== 'keep_both' && overlapMode !== 'existing_data' && currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
+      //  - existing_data: mark target overlap shots as reference (keep target values)
+      if (overlapMode !== 'keep_both' && currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
         // Target-side fix block entered
         const { importStationIndex, matchedShots, existingStationIndex, direction } = currentSuggestion;
         const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
@@ -1705,10 +1756,13 @@ export default function DmpNewImportDialog({
             }
 
             if (overlapMode === 'interpolate') {
-              targetShots[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+              targetShots[targetShotIdx] = { ...interpolateShots(targetShot, importAsTarget), is_reference: true };
+            } else if (overlapMode === 'existing_data') {
+              // existing_data: keep target values but mark as reference
+              targetShots[targetShotIdx] = { ...targetShot, is_reference: true };
             } else {
               // import_data: replace target values with import values
-              targetShots[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
+              targetShots[targetShotIdx] = { ...applyTargetData(targetShot, importAsTarget), is_reference: true };
             }
             modified = true;
           }
