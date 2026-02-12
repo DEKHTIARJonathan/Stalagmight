@@ -437,6 +437,9 @@ export default function DmpNewImportDialog({
   // Skip counter per segment (prevent infinite loops)
   const segmentSkipCountRef = useRef<Map<string, number>>(new Map());
 
+  // Whether the dialog is temporarily hidden for map placement
+  const [isPlacingOnMap, setIsPlacingOnMap] = useState(false);
+
   // Guard against React StrictMode double-firing the mount effect
   const importStartedRef = useRef(false);
 
@@ -1537,8 +1540,9 @@ export default function DmpNewImportDialog({
 
   // ─── Manual placing phase handlers ────────────────────────────────────────
 
-  // Access UI store for map placement
-  const { startPlacementMode, closeDialog, openDialog, getMapViewportCenter } = useUIStore();
+  // Access UI store for map placement (use selectors to avoid full-store subscription)
+  const startPlacementMode = useUIStore((s) => s.startPlacementMode);
+  const getMapViewportCenter = useUIStore((s) => s.getMapViewportCenter);
 
   // Project sections for "From Existing" dropdown
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
@@ -1754,9 +1758,11 @@ export default function DmpNewImportDialog({
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
-    // Save state for restore
-    const savedQueue = [...segmentQueue];
+    // Save state for restore on cancel
     const savedDirectPlacements = [...directPlacementsRef.current];
+
+    // Hide dialog (keep mounted to preserve state)
+    setIsPlacingOnMap(true);
 
     startPlacementMode(
       sectionData,
@@ -1785,8 +1791,8 @@ export default function DmpNewImportDialog({
         };
         directPlacementsRef.current = [...savedDirectPlacements, dp];
 
-        // Re-open dialog and advance queue
-        openDialog('dmpNewImport');
+        // Show dialog again and advance queue
+        setIsPlacingOnMap(false);
         setSegmentQueue((prev) => {
           const next = prev.slice(1);
           if (next.length === 0) {
@@ -1802,17 +1808,13 @@ export default function DmpNewImportDialog({
       },
       // onCancel
       () => {
-        // Restore state and re-open dialog
+        // Restore state and show dialog again
         directPlacementsRef.current = savedDirectPlacements;
-        setSegmentQueue(savedQueue);
-        openDialog('dmpNewImport');
+        setIsPlacingOnMap(false);
       },
       additionalSections.length > 0 ? additionalSections : undefined,
     );
-
-    // Hide dialog
-    closeDialog();
-  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, segmentQueue, startPlacementMode, openDialog, closeDialog]);
+  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, startPlacementMode]);
 
   // Cancel/Back
   const handleCancel = useCallback(() => {
@@ -1869,6 +1871,13 @@ export default function DmpNewImportDialog({
     if (segmentPlacementMode === 'manual') return false; // must use "Place on Map" button
     return false;
   }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId]);
+
+  // When placing on map, return null to hide the dialog while keeping the
+  // component mounted (preserving all React state). The DialogWrapper portal
+  // and backdrop are fully removed so the user can interact with the map.
+  if (isPlacingOnMap) {
+    return null;
+  }
 
   return (
     <DialogWrapper
