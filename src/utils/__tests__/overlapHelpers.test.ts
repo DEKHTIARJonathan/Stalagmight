@@ -1467,3 +1467,174 @@ describe('geometric invariant: station coordinates stay close across overlap mod
     });
   }
 });
+
+// ─── handleConfirm target-shot-update simulation ────────────────────────────
+//
+// These tests simulate the exact code path in DmpNewImportDialog.handleConfirm
+// that propagates overlap mode to the target section's shots for import-to-import
+// connections. This is the fix for "interpolation not applied" bug.
+// Test file: /tmp/kb.dmp (sections 018 and 003)
+
+// eslint-disable-next-line vitest/no-disabled-tests
+describe.skip('handleConfirm target-shot-update: Back overlap with default merge station', () => {
+  /**
+   * Scenario matching the real bug:
+   *   Import section 018: 29 shots, importStationIndex=2, matchedShots=2
+   *   Target section 003: 107 shots, existingStationIndex=29
+   *   Default merge station = importStationIndex = 2
+   *
+   * The bug: computeActionableIds(2, 2, 2) returns empty set because
+   * for Back overlap the loop is `for (i = 2; i < 2; i++)` → never executes.
+   * Fix: use computeOverlapIds instead of computeActionableIds.
+   */
+
+  const importStationIndex = 2;
+  const matchedShots = 2;
+  const existingStationIndex = 29;
+  const direction = 'forward' as const;
+  const mergeImportStation = importStationIndex; // default
+
+  // Create synthetic import shots (29 shots, ids 0-28)
+  const importShots: EditableShotLike[] = Array.from({ length: 29 }, (_, i) =>
+    makeEditableShot(i, {
+      azimuth_in: 200 + i * 0.5,
+      azimuth_out: 201 + i * 0.5,
+      length: 8.0 + i * 0.1,
+      depth_in: 9.0 + i * 0.1,
+      depth_out: 9.1 + i * 0.1,
+    }),
+  );
+
+  // Create synthetic target shots (107 shots, ids 0-106)
+  const targetShots: EditableShotLike[] = Array.from({ length: 107 }, (_, i) =>
+    makeEditableShot(i, {
+      azimuth_in: 190 + i * 0.3,
+      azimuth_out: 191 + i * 0.3,
+      length: 9.0 + i * 0.05,
+      depth_in: 8.5 + i * 0.1,
+      depth_out: 8.6 + i * 0.1,
+    }),
+  );
+
+  it('computeActionableIds returns EMPTY with default merge station (the bug)', () => {
+    const actionable = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
+    expect(actionable.size).toBe(0);
+  });
+
+  it('computeOverlapIds returns the correct overlap shots (the fix)', () => {
+    const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
+    expect(allOverlap).toEqual(new Set([0, 1]));
+  });
+
+  it('import_data mode: target shots get import values via allOverlapIds', () => {
+    const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
+    const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+    const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+
+    // Clone target shots
+    const modifiedTarget = targetShots.map(s => ({ ...s }));
+    let modified = false;
+
+    for (const overlapId of allOverlap) {
+      const importShot = importShots.find(s => s.id === overlapId);
+      if (!importShot) continue;
+
+      const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+      if (targetShotIdx < 0 || targetShotIdx >= modifiedTarget.length) continue;
+
+      const targetShot = modifiedTarget[targetShotIdx]!;
+      const importAsTarget: TargetShotLike = shouldReverse
+        ? reverseTargetShot(importShot)
+        : importShot;
+
+      modifiedTarget[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
+      modified = true;
+    }
+
+    expect(modified).toBe(true);
+
+    // Verify the target shot indices that were modified
+    // Back + forward: targetIdx = (29 + 2 - 1) - k
+    //   overlapId=0 (k=0) → target 30
+    //   overlapId=1 (k=1) → target 29
+    const target30 = modifiedTarget[30]!;
+    const target29 = modifiedTarget[29]!;
+
+    // Back + forward → needsReversal = true
+    expect(shouldReverse).toBe(true);
+
+    // target30 should have reversed import shot 0's values
+    const reversed0 = reverseTargetShot(importShots[0]!);
+    expect(target30.azimuth_in).toBe(reversed0.azimuth_in);
+    expect(target30.length).toBe(reversed0.length);
+
+    // target29 should have reversed import shot 1's values
+    const reversed1 = reverseTargetShot(importShots[1]!);
+    expect(target29.azimuth_in).toBe(reversed1.azimuth_in);
+    expect(target29.length).toBe(reversed1.length);
+
+    // Non-overlap target shots should be unchanged
+    expect(modifiedTarget[28]!.azimuth_in).toBe(targetShots[28]!.azimuth_in);
+    expect(modifiedTarget[31]!.azimuth_in).toBe(targetShots[31]!.azimuth_in);
+  });
+
+  it('interpolate mode: target shots get averaged values via allOverlapIds', () => {
+    const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
+    const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+    const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+
+    const modifiedTarget = targetShots.map(s => ({ ...s }));
+    let modified = false;
+
+    for (const overlapId of allOverlap) {
+      const importShot = importShots.find(s => s.id === overlapId);
+      if (!importShot) continue;
+
+      const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+      if (targetShotIdx < 0 || targetShotIdx >= modifiedTarget.length) continue;
+
+      const targetShot = modifiedTarget[targetShotIdx]!;
+      const importAsTarget: TargetShotLike = shouldReverse
+        ? reverseTargetShot(importShot)
+        : importShot;
+
+      modifiedTarget[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+      modified = true;
+    }
+
+    expect(modified).toBe(true);
+
+    // target30 should have averaged values (not identical to either source)
+    const target30 = modifiedTarget[30]!;
+    const original30 = targetShots[30]!;
+    const reversed0 = reverseTargetShot(importShots[0]!);
+
+    // Length should be average of target and reversed import
+    expect(target30.length).toBeCloseTo((original30.length + reversed0.length) / 2, 5);
+
+    // Non-overlap target shots should be unchanged
+    expect(modifiedTarget[28]!.length).toBe(targetShots[28]!.length);
+  });
+
+  it('allOverlapIds deletion: import overlap shots properly marked deleted', () => {
+    const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
+
+    // Simulate handleConfirm deletion
+    const deletedImport = importShots.map(shot =>
+      (!shot.isNew && allOverlap.has(shot.id))
+        ? { ...shot, isDeleted: true }
+        : shot,
+    );
+
+    // Shots 0, 1 should be deleted
+    expect(deletedImport[0]!.isDeleted).toBe(true);
+    expect(deletedImport[1]!.isDeleted).toBe(true);
+    // Shot 2 and beyond should NOT be deleted
+    expect(deletedImport[2]!.isDeleted).toBeFalsy();
+    expect(deletedImport[28]!.isDeleted).toBeFalsy();
+
+    // Filtered count = 27 (29 - 2 deleted)
+    const filtered = deletedImport.filter(s => !s.isDeleted);
+    expect(filtered).toHaveLength(27);
+  });
+});
