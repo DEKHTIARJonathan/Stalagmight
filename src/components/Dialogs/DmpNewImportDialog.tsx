@@ -1542,24 +1542,27 @@ export default function DmpNewImportDialog({
     }
     setError(null);
 
-    // Save edit state with effectiveShots applied to ref before moving on.
-    // For non-keep_both modes, delete ALL overlap shots (both actionable/reference
-    // and past-merge) — they're redundant with the target section.
-    if (editState) {
-      if (import.meta.env.DEV) {
+    // Read fresh edit state from the ref (synchronously up-to-date) instead of
+    // the editState React state which may be one render behind when the user
+    // confirms quickly after a suggestion change.
+    const importIdx = currentSuggestion.importSectionIndex;
+    const freshEditState = sectionEditsRef.current.get(importIdx);
+    if (!freshEditState) return; // shouldn't happen — init-effect always populates
+
+    if (import.meta.env.DEV) {
         console.warn(
-          `[handleConfirm import-save] section=${currentSuggestion.importSectionIndex}`,
-          `editState.shots.length=${editState.shots.length}`,
-          `effectiveShots.length=${effectiveShots.length}`,
+          `[handleConfirm import-save] section=${importIdx}`,
+          `freshEditState.shots.length=${freshEditState.shots.length}`,
+          `reactEditState.shots.length=${editState?.shots.length ?? 'null'}`,
         );
       }
       let importShots: EditableShot[];
       if (overlapMode === 'keep_both') {
-        importShots = effectiveShots;
+        importShots = freshEditState.shots;
       } else {
         const { importStationIndex, matchedShots } = currentSuggestion;
         const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
-        importShots = effectiveShots.map(shot =>
+        importShots = freshEditState.shots.map(shot =>
           (shot.is_reference || (!shot.isNew && allOverlapIds.has(shot.id)))
             ? { ...shot, isDeleted: true, is_reference: false }
             : shot
@@ -1567,13 +1570,13 @@ export default function DmpNewImportDialog({
       }
       if (import.meta.env.DEV) {
         console.warn(
-          `[handleConfirm import-save] writing sectionEditsRef[${currentSuggestion.importSectionIndex}]`,
+          `[handleConfirm import-save] writing sectionEditsRef[${importIdx}]`,
           `importShots.length=${importShots.length}`,
           `deleted=${importShots.filter(s => s.isDeleted).length}`,
           `alive=${importShots.filter(s => !s.isDeleted).length}`,
         );
       }
-      sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: importShots });
+      sectionEditsRef.current.set(importIdx, { ...freshEditState, shots: importShots });
 
       // For import-to-import connections, propagate the overlap mode to the
       // TARGET section's corresponding shots. The import's overlap shots are
@@ -1614,7 +1617,7 @@ export default function DmpNewImportDialog({
         }
 
         if (targetShots.length > 0) {
-          const importShotsForInterp = editState.shots;
+          const importShotsForInterp = freshEditState.shots;
           let modified = false;
           for (const overlapId of allOverlap) {
             const importShot = importShotsForInterp.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
@@ -1691,7 +1694,6 @@ export default function DmpNewImportDialog({
           `[handleConfirm target-fix] SKIPPED: overlapMode=${overlapMode} targetType=${currentSuggestion.targetType} targetImportIndex=${currentSuggestion.targetImportIndex}`,
         );
       }
-    }
 
     // Use selected merge pair for station indices (falls back to suggestion's original)
     const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
@@ -1729,7 +1731,11 @@ export default function DmpNewImportDialog({
       // Pool exhausted — check for unreachable sections
       transitionToPlacingOrManual();
     }
-  }, [currentSuggestion, selectedMergePair, editState, effectiveShots, overlapMode, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
+  // Note: editState/effectiveShots intentionally excluded — we read fresh data
+  // from sectionEditsRef to avoid stale closures when confirm fires before
+  // the init-effect's setEditState has re-rendered.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSuggestion, selectedMergePair, overlapMode, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, dmpFile.sections]);
 
   // Skip handler (suggesting phase)
   const handleSkip = useCallback(() => {
