@@ -209,6 +209,16 @@ function applyAllOverlapTreatments(
       actionableIds = allOverlapIds;
     }
 
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[applyAllOverlaps] processing suggestion: import=${importSectionIndex} impStn=${importStationIndex}`,
+        `matched=${matchedShots} dir=${direction} target=${targetType === 'importing' ? targetImportIndex : existingSectionId}`,
+        `targetType=${targetType} mode=${overlapMode}`,
+        `confirmed=${!!confirmed && matchesConfirmed(suggestion, confirmed)}`,
+        `actionableIds=[${[...actionableIds].join(',')}]`,
+      );
+    }
+
     // --- Import side: treat untreated overlap shots on the import section ---
     let importEdits = sectionEdits.get(importSectionIndex);
     if (!importEdits) {
@@ -234,22 +244,34 @@ function applyAllOverlapTreatments(
       if (hasUntreated) {
         // Build target map for interpolate/existing_data modes
         let targetMap: Map<number, TargetShotLike> | null = null;
+        let targetMapDiag = '';
         if (overlapMode !== 'import_data') {
           let targetShotArray: TargetShotLike[] | null = null;
           if (targetType === 'existing' && existingSectionId != null) {
             const currentProject = useProjectStore.getState().project;
             const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
-            if (targetSection) targetShotArray = targetSection.shots;
+            if (targetSection) {
+              targetShotArray = targetSection.shots;
+              targetMapDiag = `existing section ${existingSectionId} (${targetSection.shots.length} shots)`;
+            } else {
+              targetMapDiag = `MISS: existing section ${existingSectionId} not found in project`;
+            }
           } else if (targetType === 'importing' && targetImportIndex != null) {
             const targetEdits = sectionEdits.get(targetImportIndex);
             if (targetEdits) {
               targetShotArray = targetEdits.shots.filter(s => !s.isDeleted);
+              targetMapDiag = `importing section ${targetImportIndex} from edits (${targetEdits.shots.length} total, ${targetShotArray.length} alive)`;
             } else {
               const targetDmpSection = dmpFile.sections[targetImportIndex];
               if (targetDmpSection) {
                 targetShotArray = convertToEditableShots(targetDmpSection.shots);
+                targetMapDiag = `importing section ${targetImportIndex} from DMP (${targetShotArray.length} shots)`;
+              } else {
+                targetMapDiag = `MISS: importing section ${targetImportIndex} not in edits or DMP`;
               }
             }
+          } else {
+            targetMapDiag = `MISS: targetType=${targetType} existingSectionId=${existingSectionId} targetImportIndex=${targetImportIndex}`;
           }
 
           if (targetShotArray) {
@@ -261,32 +283,53 @@ function applyAllOverlapTreatments(
               if (targetIdx >= 0 && targetIdx < targetShotArray.length) {
                 const raw = targetShotArray[targetIdx]!;
                 targetMap.set(overlapId, shouldReverse ? reverseTargetShot(raw) : raw);
+              } else if (import.meta.env.DEV) {
+                console.warn(
+                  `[applyAllOverlaps]   targetIdx OUT OF RANGE: overlapId=${overlapId} → targetIdx=${targetIdx} (array len=${targetShotArray.length})`,
+                );
               }
             }
           }
+        } else {
+          targetMapDiag = 'SKIPPED (import_data mode)';
         }
 
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[applyAllOverlaps]   import ${importSectionIndex}: targetMap=${targetMap ? targetMap.size : 'null'}`,
+            `source: ${targetMapDiag}`,
+          );
+        }
+
+        let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyRef = 0;
         const newShots = importEdits.shots.map(shot => {
           if (shot.isNew || shot.isDeleted) return shot;
           if (!actionableIds.has(shot.id)) return shot;
-          if (shot.is_reference) return shot; // Already treated by an earlier suggestion
+          if (shot.is_reference) { diagAlreadyRef++; return shot; }
 
           const target = targetMap?.get(shot.id);
           if (overlapMode === 'interpolate' && target) {
+            diagInterpolated++;
             return { ...interpolateShots(shot, target), is_reference: true };
           } else if (overlapMode === 'existing_data' && target) {
+            diagInterpolated++;
             return { ...applyTargetData(shot, target), is_reference: true };
           } else {
+            diagRefOnly++;
             return { ...shot, is_reference: true };
           }
         });
 
         if (import.meta.env.DEV) {
-          const treated = newShots.filter(s => s.is_reference).length - importEdits.shots.filter(s => s.is_reference).length;
-          if (treated > 0) {
+          console.warn(
+            `[applyAllOverlaps]   import ${importSectionIndex} RESULT:`,
+            `interpolated=${diagInterpolated} refOnly=${diagRefOnly} alreadyRef=${diagAlreadyRef}`,
+          );
+          if (diagRefOnly > 0 && overlapMode !== 'import_data') {
             console.warn(
-              `[applyAllOverlaps] import section ${importSectionIndex}: treated ${treated} overlap shots`,
-              `(suggestion: impStn=${importStationIndex} matched=${matchedShots} target=${targetType === 'importing' ? targetImportIndex : existingSectionId})`,
+              `[applyAllOverlaps]   ⚠ ${diagRefOnly} shots marked reference WITHOUT target data!`,
+              `targetMap=${targetMap ? `size=${targetMap.size} keys=[${[...targetMap.keys()].join(',')}]` : 'null'}`,
+              `actionableIds=[${[...actionableIds].join(',')}]`,
             );
           }
         }
@@ -334,18 +377,19 @@ function applyAllOverlapTreatments(
           const importShotsForInterp = freshImportEdits?.shots ?? [];
           const targetShots = targetEdits.shots.map(s => ({ ...s }));
           let treated = 0;
+          let skippedOutOfRange = 0, skippedAlreadyRef = 0, skippedNoImport = 0;
 
           for (const overlapId of actionableIds) {
             const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-            if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) continue;
+            if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) { skippedOutOfRange++; continue; }
 
             const targetShot = targetShots[targetShotIdx];
-            if (!targetShot || targetShot.isDeleted || targetShot.is_reference) continue;
+            if (!targetShot || targetShot.isDeleted || targetShot.is_reference) { skippedAlreadyRef++; continue; }
 
             const importShot = importShotsForInterp.find(
               s => !s.isNew && !s.isDeleted && s.id === overlapId
             );
-            if (!importShot) continue;
+            if (!importShot) { skippedNoImport++; continue; }
 
             const importAsTarget: TargetShotLike = shouldReverse
               ? reverseTargetShot(importShot)
@@ -361,14 +405,15 @@ function applyAllOverlapTreatments(
             treated++;
           }
 
+          if (import.meta.env.DEV) {
+            console.warn(
+              `[applyAllOverlaps]   target ${targetImportIndex} RESULT: treated=${treated}`,
+              `skippedOutOfRange=${skippedOutOfRange} skippedAlreadyRef=${skippedAlreadyRef} skippedNoImport=${skippedNoImport}`,
+            );
+          }
+
           if (treated > 0) {
             sectionEdits.set(targetImportIndex, { ...targetEdits, shots: targetShots });
-            if (import.meta.env.DEV) {
-              console.warn(
-                `[applyAllOverlaps] target section ${targetImportIndex}: treated ${treated} overlap shots`,
-                `(from import ${importSectionIndex}, impStn=${importStationIndex} matched=${matchedShots})`,
-              );
-            }
           }
         }
       }
