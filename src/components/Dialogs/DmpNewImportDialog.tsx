@@ -52,6 +52,8 @@ interface DmpNewImportDialogProps {
   onBack: () => void;
   onHandoffToLegacy: (remainingIndices: Set<number>, connections: VirtualConnection[]) => void;
   onComplete: () => void;
+  /** Saved state to restore after returning from manual map placement. */
+  savedManualPlacingState?: SavedManualPlacingState | undefined;
 }
 
 // ─── Section edit state ──────────────────────────────────────────────────────
@@ -74,6 +76,18 @@ export type DirectPlacement = {
   anchorStationIndex: number;   // station within that section
   placement: ImportPlacement;   // origin, zero_datum, manual, manual_snap, or from_existing
 };
+
+/** Saved state for restoring the dialog after manual map placement. */
+export interface SavedManualPlacingState {
+  connections: VirtualConnection[];
+  skippedIndices: number[];
+  segmentQueue: number[][];
+  segmentAnchor: { sectionIndex: number; stationIndex: number };
+  directPlacements: DirectPlacement[];
+  skippedSuggestions: Array<[number, CrossSectionSuggestion]>;
+  segmentSkipCounts: Array<[string, number]>;
+  sectionEdits: Array<[number, SectionEditState]>;
+}
 
 // ─── Graph helpers ───────────────────────────────────────────────────────────
 
@@ -366,6 +380,7 @@ export default function DmpNewImportDialog({
   onBack,
   onHandoffToLegacy,
   onComplete,
+  savedManualPlacingState,
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
 
@@ -375,15 +390,22 @@ export default function DmpNewImportDialog({
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
 
+  // Shorthand for restoring state
+  const saved = savedManualPlacingState;
+
   // Core state — virtual connections instead of imported indices
-  const [connections, setConnections] = useState<VirtualConnection[]>([]);
-  const [skippedIndices, setSkippedIndices] = useState<Set<number>>(new Set());
+  const [connections, setConnections] = useState<VirtualConnection[]>(saved?.connections ?? []);
+  const [skippedIndices, setSkippedIndices] = useState<Set<number>>(
+    saved ? new Set(saved.skippedIndices) : new Set()
+  );
   const [currentSuggestion, setCurrentSuggestion] = useState<CrossSectionSuggestion | null>(null);
   const [alternatives, setAlternatives] = useState<CrossSectionSuggestion[]>([]);
   const [showAlternatives, setShowAlternatives] = useState(true);
   const [isCalculating, setIsCalculating] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [phase, setPhase] = useState<'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done'>('init');
+  const [phase, setPhase] = useState<'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done'>(
+    saved ? 'manual_placing' : 'init'
+  );
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -399,7 +421,9 @@ export default function DmpNewImportDialog({
 
   // Section editing state
   const [editState, setEditState] = useState<SectionEditState | null>(null);
-  const sectionEditsRef = useRef<Map<number, SectionEditState>>(new Map());
+  const sectionEditsRef = useRef<Map<number, SectionEditState>>(
+    saved ? new Map(saved.sectionEdits) : new Map()
+  );
   const nextTempIdRef = useRef(1);
 
   // Unified segment context (import-side DMP BFS + existing anchors, target-side geometry)
@@ -414,7 +438,7 @@ export default function DmpNewImportDialog({
   const fullPoolRef = useRef<CrossSectionSuggestion[]>([]);
 
   // ─── Manual placing phase state ────────────────────────────────────────────
-  const [segmentQueue, setSegmentQueue] = useState<number[][]>([]);
+  const [segmentQueue, setSegmentQueue] = useState<number[][]>(saved?.segmentQueue ?? []);
   const currentSegment = segmentQueue[0] ?? null;
 
   const [segmentPlacementMode, setSegmentPlacementMode] = useState<
@@ -422,26 +446,28 @@ export default function DmpNewImportDialog({
   >('origin');
   const [segmentAnchor, setSegmentAnchor] = useState<{
     sectionIndex: number; stationIndex: number;
-  } | null>(null);
+  } | null>(saved?.segmentAnchor ?? null);
 
   // Per-mode state for manual_placing
   const [fromExistingSectionId, setFromExistingSectionId] = useState<number | null>(null);
   const [fromExistingStationIdx, setFromExistingStationIdx] = useState<number>(0);
 
   // Track original suggestions for sections skipped during suggesting phase
-  const skippedSuggestionsRef = useRef<Map<number, CrossSectionSuggestion>>(new Map());
+  const skippedSuggestionsRef = useRef<Map<number, CrossSectionSuggestion>>(
+    saved ? new Map(saved.skippedSuggestions) : new Map()
+  );
 
   // Accumulated direct placements for manual_placing phase
-  const directPlacementsRef = useRef<DirectPlacement[]>([]);
+  const directPlacementsRef = useRef<DirectPlacement[]>(saved?.directPlacements ?? []);
 
   // Skip counter per segment (prevent infinite loops)
-  const segmentSkipCountRef = useRef<Map<string, number>>(new Map());
-
-  // Whether the dialog is temporarily hidden for map placement
-  const [isPlacingOnMap, setIsPlacingOnMap] = useState(false);
+  const segmentSkipCountRef = useRef<Map<string, number>>(
+    saved ? new Map(saved.segmentSkipCounts) : new Map()
+  );
 
   // Guard against React StrictMode double-firing the mount effect
-  const importStartedRef = useRef(false);
+  // When restoring from saved state, skip the init effect entirely
+  const importStartedRef = useRef(!!saved);
 
   // Refs to avoid stale closures
   const connectionsRef = useRef(connections);
@@ -1134,6 +1160,13 @@ export default function DmpNewImportDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // When restored from manual placement with an empty segment queue, transition to placing
+  useEffect(() => {
+    if (phase === 'manual_placing' && segmentQueue.length === 0) {
+      setPhase('placing');
+    }
+  }, [phase, segmentQueue.length]);
+
   // Handle 'placing' phase — build batch import and execute
   useEffect(() => {
     if (phase !== 'placing') return;
@@ -1543,6 +1576,8 @@ export default function DmpNewImportDialog({
   // Access UI store for map placement (use selectors to avoid full-store subscription)
   const startPlacementMode = useUIStore((s) => s.startPlacementMode);
   const getMapViewportCenter = useUIStore((s) => s.getMapViewportCenter);
+  const closeDialog = useUIStore((s) => s.closeDialog);
+  const openDialog = useUIStore((s) => s.openDialog);
 
   // Project sections for "From Existing" dropdown
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
@@ -1758,16 +1793,30 @@ export default function DmpNewImportDialog({
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
-    // Save state for restore on cancel
-    const savedDirectPlacements = [...directPlacementsRef.current];
+    // Serialize current state for restore after placement
+    const savedState: SavedManualPlacingState = {
+      connections: connectionsRef.current,
+      skippedIndices: Array.from(skippedIndicesRef.current),
+      segmentQueue: segmentQueue,
+      segmentAnchor: segmentAnchor,
+      directPlacements: [...directPlacementsRef.current],
+      skippedSuggestions: Array.from(skippedSuggestionsRef.current.entries()),
+      segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
+      sectionEdits: Array.from(sectionEditsRef.current.entries()),
+    };
 
-    // Hide dialog (keep mounted to preserve state)
-    setIsPlacingOnMap(true);
+    // Reopen data (same as what App.tsx passes)
+    const reopenData = {
+      dmpFile,
+      filePath: (useUIStore.getState().dialogData as Record<string, unknown>).filePath,
+      selectionConfig,
+      zeroDatumConfig,
+    };
 
     startPlacementMode(
       sectionData,
       segmentAnchor.stationIndex,
-      // onComplete
+      // onComplete — advance queue and reopen dialog
       (result: PlacementResult) => {
         let placement: ImportPlacement;
         if (result.snappedToStation) {
@@ -1789,32 +1838,36 @@ export default function DmpNewImportDialog({
           anchorStationIndex: segmentAnchor.stationIndex,
           placement,
         };
-        directPlacementsRef.current = [...savedDirectPlacements, dp];
 
-        // Show dialog again and advance queue
-        setIsPlacingOnMap(false);
-        setSegmentQueue((prev) => {
-          const next = prev.slice(1);
-          if (next.length === 0) {
-            setPhase('placing');
-            return [];
-          }
-          const firstSeg = next[0]!;
-          setSegmentAnchor({ sectionIndex: firstSeg[0]!, stationIndex: 0 });
-          const hasSuggestion = firstSeg.some(idx => skippedSuggestionsRef.current.has(idx));
-          setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
-          return next;
+        // Advance queue for restored state
+        const nextQueue = savedState.segmentQueue.slice(1);
+        const nextAnchor = nextQueue[0]
+          ? { sectionIndex: nextQueue[0][0]!, stationIndex: 0 }
+          : savedState.segmentAnchor;
+
+        openDialog('dmp-import-new', {
+          ...reopenData,
+          savedManualPlacingState: {
+            ...savedState,
+            segmentQueue: nextQueue,
+            segmentAnchor: nextAnchor,
+            directPlacements: [...savedState.directPlacements, dp],
+          },
         });
       },
-      // onCancel
+      // onCancel — reopen dialog with original state
       () => {
-        // Restore state and show dialog again
-        directPlacementsRef.current = savedDirectPlacements;
-        setIsPlacingOnMap(false);
+        openDialog('dmp-import-new', {
+          ...reopenData,
+          savedManualPlacingState: savedState,
+        });
       },
       additionalSections.length > 0 ? additionalSections : undefined,
     );
-  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, startPlacementMode]);
+
+    // Close dialog so user can interact with the map
+    closeDialog();
+  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, segmentQueue, zeroDatumConfig, startPlacementMode, closeDialog, openDialog]);
 
   // Cancel/Back
   const handleCancel = useCallback(() => {
@@ -1872,13 +1925,6 @@ export default function DmpNewImportDialog({
     return false;
   }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId]);
 
-  // When placing on map, return null to hide the dialog while keeping the
-  // component mounted (preserving all React state). The DialogWrapper portal
-  // and backdrop are fully removed so the user can interact with the map.
-  if (isPlacingOnMap) {
-    return null;
-  }
-
   return (
     <DialogWrapper
       title={t('dialogs.dmpNewImport.title')}
@@ -1887,7 +1933,6 @@ export default function DmpNewImportDialog({
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       data-testid="dmp-new-import-dialog"
-      hidden={isPlacingOnMap}
     >
       <div className="flex-1 flex flex-col min-h-0">
         {/* Progress header */}
