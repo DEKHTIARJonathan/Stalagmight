@@ -238,25 +238,25 @@ struct SuggestionConfig {
 impl Default for SuggestionConfig {
     fn default() -> Self {
         Self {
-            azimuth_sigma: 5.0,
-            length_sigma: 0.5,
-            depth_sigma: 0.15,
+            azimuth_sigma: 18.0,
+            length_sigma: 0.8,
+            depth_sigma: 0.35,
             azimuth_weight: 0.35,
             length_weight: 0.25,
             depth_in_weight: 0.20,
             depth_out_weight: 0.20,
-            min_shot_score: 0.25,
+            min_shot_score: 0.15,
             min_aggregate_score: 0.45,
             max_reference_shots: 5,
             max_suggestions: 10,
             min_partial_ratio: 0.15,
             short_shot_threshold: 0.5,
             single_shot_penalty: 0.6,
-            max_azimuth_error_full: 20.0,
+            max_azimuth_error_full: 25.0,
             max_azimuth_error_partial: 35.0,
-            max_depth_error: 0.30,
-            max_length_error_fraction: 0.05,
-            max_length_error_floor: 0.6,
+            max_depth_error: 0.50,
+            max_length_error_fraction: 0.15,
+            max_length_error_floor: 2.0,
         }
     }
 }
@@ -1251,15 +1251,15 @@ mod tests {
         let config = SuggestionConfig::default();
         let base = MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 19.9° — just under cutoff, should pass
-        let import_pass = MatchShot { avg_azimuth: 90.0 + 19.9, ..base };
+        // 24.9° — just under cutoff (max_azimuth_error_full=25.0), should pass
+        let import_pass = MatchShot { avg_azimuth: 90.0 + 24.9, ..base };
         let score = compute_shot_score(&import_pass, &base, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "19.9° azimuth error should pass cutoff, got {score}");
+        assert!(score > 0.0, "24.9° azimuth error should pass cutoff, got {score}");
 
-        // 20.1° — just over cutoff, should be rejected
-        let import_fail = MatchShot { avg_azimuth: 90.0 + 20.1, ..base };
+        // 25.1° — just over cutoff, should be rejected
+        let import_fail = MatchShot { avg_azimuth: 90.0 + 25.1, ..base };
         let score = compute_shot_score(&import_fail, &base, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "20.1° azimuth error should be hard-rejected, got {score}");
+        assert!(score == 0.0, "25.1° azimuth error should be hard-rejected, got {score}");
     }
 
     #[test]
@@ -1299,49 +1299,49 @@ mod tests {
         let config = SuggestionConfig::default();
         let base = MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 0.29m depth_in error — just under cutoff
-        let import_pass = MatchShot { depth_in: 3.29, ..base };
+        // 0.49m depth_in error — just under cutoff (max_depth_error=0.50)
+        let import_pass = MatchShot { depth_in: 3.49, ..base };
         let score = compute_shot_score(&import_pass, &base, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "0.29m depth error should pass cutoff, got {score}");
+        assert!(score > 0.0, "0.49m depth error should pass cutoff, got {score}");
 
-        // 0.31m depth_in error — just over cutoff
-        let import_fail = MatchShot { depth_in: 3.31, ..base };
+        // 0.51m depth_in error — just over cutoff
+        let import_fail = MatchShot { depth_in: 3.51, ..base };
         let score = compute_shot_score(&import_fail, &base, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "0.31m depth error should be hard-rejected, got {score}");
+        assert!(score == 0.0, "0.51m depth error should be hard-rejected, got {score}");
     }
 
     #[test]
     fn length_cutoff_uses_floor_for_short_shots() {
         let config = SuggestionConfig::default();
-        // Short existing shot (2.0m): 5% = 0.1m, but floor is 0.6m
+        // Short existing shot (2.0m): 15% = 0.3m, but floor is 2.0m
         let existing = MatchShot { avg_azimuth: 90.0, length: 2.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 0.59m error — under the 0.6m floor
-        let import_pass = MatchShot { length: 2.59, ..existing };
+        // 1.99m error — under the 2.0m floor
+        let import_pass = MatchShot { length: 3.99, ..existing };
         let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "0.59m length error should pass floor cutoff, got {score}");
+        assert!(score > 0.0, "1.99m length error should pass floor cutoff, got {score}");
 
-        // 0.61m error — over the 0.6m floor
-        let import_fail = MatchShot { length: 2.61, ..existing };
+        // 2.01m error — over the 2.0m floor
+        let import_fail = MatchShot { length: 4.01, ..existing };
         let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "0.61m length error should be hard-rejected by floor, got {score}");
+        assert!(score == 0.0, "2.01m length error should be hard-rejected by floor, got {score}");
     }
 
     #[test]
     fn length_cutoff_scales_for_long_shots() {
         let config = SuggestionConfig::default();
-        // Long existing shot (20.0m): 5% = 1.0m > 0.6m floor
+        // Long existing shot (20.0m): 15% = 3.0m > 2.0m floor
         let existing = MatchShot { avg_azimuth: 90.0, length: 20.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 0.99m error — under the 1.0m (5%) cutoff
-        let import_pass = MatchShot { length: 20.99, ..existing };
+        // 2.99m error — under the 3.0m (15%) cutoff
+        let import_pass = MatchShot { length: 22.99, ..existing };
         let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "0.99m length error should pass 5% cutoff for 20m shot, got {score}");
+        assert!(score > 0.0, "2.99m length error should pass 15% cutoff for 20m shot, got {score}");
 
-        // 1.01m error — over the 1.0m (5%) cutoff
-        let import_fail = MatchShot { length: 21.01, ..existing };
+        // 3.01m error — over the 3.0m (15%) cutoff
+        let import_fail = MatchShot { length: 23.01, ..existing };
         let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "1.01m length error should be hard-rejected by 5% cutoff, got {score}");
+        assert!(score == 0.0, "3.01m length error should be hard-rejected by 15% cutoff, got {score}");
     }
 
     #[test]
