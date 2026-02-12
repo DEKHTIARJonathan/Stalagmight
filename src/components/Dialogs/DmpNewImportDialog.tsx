@@ -147,21 +147,94 @@ function buildBatchImport(
   dmpFile: DmpFile,
   selectionConfig: DmpSelectionConfig,
   sectionEdits?: Map<number, SectionEditState>,
+  fullPool?: CrossSectionSuggestion[],
 ): { configs: BackendImportSectionConfig[]; unreachable: number[] } {
-  const adjacency = buildAdjacency(connections);
+  // Build adjacency + connections including any fallback anchors for disconnected components
+  const allConnections = [...connections];
+  const adjacency = buildAdjacency(allConnections);
 
   // Sections connected to existing project sections (anchors)
   const anchored = new Set<number>();
   if (zeroDatumIndex != null) anchored.add(zeroDatumIndex);
-  for (const c of connections) {
+  for (const c of allConnections) {
     if (c.targetType === 'existing') {
       anchored.add(c.importSectionIndex);
     }
   }
 
   // BFS from anchored sections
-  const reachableOrder = bfsReachable(anchored, adjacency);
-  const reachableSet = new Set(reachableOrder);
+  let reachableOrder = bfsReachable(anchored, adjacency);
+  let reachableSet = new Set(reachableOrder);
+
+  // Find disconnected components with confirmed connections but no anchor.
+  // For each, look for an existing-target suggestion in the full pool to create a fallback anchor.
+  if (fullPool && fullPool.length > 0) {
+    const connectedSections = new Set(allConnections.map((c) => c.importSectionIndex));
+    const unreachableConnected = Array.from(connectedSections).filter((idx) => !reachableSet.has(idx));
+
+    if (unreachableConnected.length > 0) {
+      // Group unreachable connected sections into components via BFS on adjacency
+      const visited = new Set<number>();
+      for (const seed of unreachableConnected) {
+        if (visited.has(seed)) continue;
+        // BFS to find this component
+        const component: number[] = [];
+        const queue = [seed];
+        visited.add(seed);
+        while (queue.length > 0) {
+          const node = queue.shift()!;
+          component.push(node);
+          for (const edge of adjacency.get(node) ?? []) {
+            if (!visited.has(edge.neighbor) && !reachableSet.has(edge.neighbor)) {
+              visited.add(edge.neighbor);
+              queue.push(edge.neighbor);
+            }
+          }
+        }
+
+        // Find best existing-target suggestion for any section in this component
+        const componentSet = new Set(component);
+        let bestExisting: CrossSectionSuggestion | null = null;
+        for (const s of fullPool) {
+          if (s.targetType === 'existing' && s.existingSectionId != null && componentSet.has(s.importSectionIndex)) {
+            if (!bestExisting || s.score > bestExisting.score) {
+              bestExisting = s;
+            }
+          }
+        }
+
+        if (bestExisting) {
+          // Create a fallback connection to anchor this component
+          const fallbackConn: VirtualConnection = {
+            importSectionIndex: bestExisting.importSectionIndex,
+            importStationIndex: bestExisting.importStationIndex,
+            targetType: 'existing',
+            existingSectionId: bestExisting.existingSectionId!,
+            existingStationIndex: bestExisting.existingStationIndex,
+          };
+          allConnections.push(fallbackConn);
+          anchored.add(bestExisting.importSectionIndex);
+        }
+      }
+
+      // Re-run BFS with new anchors
+      if (anchored.size > reachableSet.size) {
+        // Rebuild adjacency with new connections
+        const newAdjacency = buildAdjacency(allConnections);
+        reachableOrder = bfsReachable(anchored, newAdjacency);
+        reachableSet = new Set(reachableOrder);
+      }
+    }
+  }
+
+  // Build connection map — fallback 'existing' connections override original 'importing' ones
+  const connectionMap = new Map<number, VirtualConnection>();
+  for (const c of allConnections) {
+    const existing = connectionMap.get(c.importSectionIndex);
+    if (!existing || c.targetType === 'existing') {
+      connectionMap.set(c.importSectionIndex, c);
+    }
+  }
 
   // Track which sections are already emitted (by section_index) and their position in configs[]
   const emittedPosition = new Map<number, number>();
@@ -169,92 +242,98 @@ function buildBatchImport(
   const configs: BackendImportSectionConfig[] = [];
   let colorIdx = 0;
 
-  for (const idx of reachableOrder) {
-    // Skip zero datum — already imported
-    if (idx === zeroDatumIndex) continue;
+  // Multi-pass: BFS order may not match dependency order for fallback-anchored
+  // components, so retry sections whose from_importing target wasn't emitted yet.
+  let lastConfigCount = -1;
+  while (configs.length > lastConfigCount) {
+    lastConfigCount = configs.length;
+    for (const idx of reachableOrder) {
+      if (emittedPosition.has(idx)) continue;
+      // Skip zero datum — already imported
+      if (idx === zeroDatumIndex) continue;
 
-    const section = dmpFile.sections[idx];
-    if (!section) continue;
+      const section = dmpFile.sections[idx];
+      if (!section) continue;
 
-    const edits = sectionEdits?.get(idx);
+      const edits = sectionEdits?.get(idx);
 
-    // Use edited shots if available, otherwise fall back to DMP data
-    let backendShots: ShotData[];
-    if (edits) {
-      backendShots = edits.shots
-        .filter((s) => !s.isDeleted)
-        .map(editableShotToShotData);
-    } else {
-      const editableShots = convertToEditableShots(section.shots);
-      backendShots = editableShots.map(editableShotToShotData);
-    }
-    if (backendShots.length === 0) continue;
+      // Use edited shots if available, otherwise fall back to DMP data
+      let backendShots: ShotData[];
+      if (edits) {
+        backendShots = edits.shots
+          .filter((s) => !s.isDeleted)
+          .map(editableShotToShotData);
+      } else {
+        const editableShots = convertToEditableShots(section.shots);
+        backendShots = editableShots.map(editableShotToShotData);
+      }
+      if (backendShots.length === 0) continue;
 
-    // Find the connection that placed this section
-    const conn = connections.find((c) => c.importSectionIndex === idx);
-    if (!conn) continue;
+      const conn = connectionMap.get(idx);
+      if (!conn) continue;
 
-    // Adjust import station index for deleted shots (overlap removal shifts stations)
-    const adjustedImportStation = edits
-      ? adjustStationForDeletedShots(edits.shots, conn.importStationIndex)
-      : conn.importStationIndex;
+      // Adjust import station index for deleted shots (overlap removal shifts stations)
+      const adjustedImportStation = edits
+        ? adjustStationForDeletedShots(edits.shots, conn.importStationIndex)
+        : conn.importStationIndex;
 
-    let placement: ImportPlacement;
-    if (conn.targetType === 'existing' && conn.existingSectionId != null && conn.existingStationIndex != null) {
-      placement = {
-        type: 'from_existing',
-        import_station: adjustedImportStation,
-        existing_station: {
-          section_id: conn.existingSectionId,
-          station_index: conn.existingStationIndex,
-        },
-      };
-    } else if (conn.targetType === 'importing' && conn.targetImportIndex != null && conn.targetImportStationIndex != null) {
-      // The target must already be emitted in configs[]
-      const targetPos = emittedPosition.get(conn.targetImportIndex);
-      if (targetPos == null) {
-        // Target not yet placed — shouldn't happen with BFS order, but skip gracefully
+      let placement: ImportPlacement;
+      if (conn.targetType === 'existing' && conn.existingSectionId != null && conn.existingStationIndex != null) {
+        placement = {
+          type: 'from_existing',
+          import_station: adjustedImportStation,
+          existing_station: {
+            section_id: conn.existingSectionId,
+            station_index: conn.existingStationIndex,
+          },
+        };
+      } else if (conn.targetType === 'importing' && conn.targetImportIndex != null && conn.targetImportStationIndex != null) {
+        // The target must already be emitted in configs[]
+        const targetPos = emittedPosition.get(conn.targetImportIndex);
+        if (targetPos == null) {
+          // Target not yet placed — will retry in next pass
+          continue;
+        }
+        // Adjust target station index for deleted shots in the target section
+        const targetEdits = sectionEdits?.get(conn.targetImportIndex);
+        const adjustedTargetStation = targetEdits
+          ? adjustStationForDeletedShots(targetEdits.shots, conn.targetImportStationIndex)
+          : conn.targetImportStationIndex;
+        placement = {
+          type: 'from_importing',
+          import_station: adjustedImportStation,
+          target_section_index: targetPos,
+          target_station_index: adjustedTargetStation,
+        };
+      } else {
         continue;
       }
-      // Adjust target station index for deleted shots in the target section
-      const targetEdits = sectionEdits?.get(conn.targetImportIndex);
-      const adjustedTargetStation = targetEdits
-        ? adjustStationForDeletedShots(targetEdits.shots, conn.targetImportStationIndex)
-        : conn.targetImportStationIndex;
-      placement = {
-        type: 'from_importing',
-        import_station: adjustedImportStation,
-        target_section_index: targetPos,
-        target_station_index: adjustedTargetStation,
+
+      // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
+      const sectionName = edits?.name ?? section.name;
+      const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
+      const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
+      const colorValue = edits?.color ?? SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4';
+      const directionValue = edits?.direction ?? section.direction;
+      const qualityValue = edits?.quality ?? 1.0;
+
+      const config: BackendImportSectionConfig = {
+        section_index: configs.length,
+        name: sectionName,
+        surveyor: surveyorValue || null,
+        date: dateStr,
+        color: colorValue,
+        direction: directionValue,
+        quality: qualityValue,
+        shots: backendShots,
+        placement,
+        station_comments: [],
       };
-    } else {
-      continue;
+
+      emittedPosition.set(idx, configs.length);
+      configs.push(config);
+      colorIdx++;
     }
-
-    // Use edits for metadata if available, otherwise fall back to DMP data + selectionConfig
-    const sectionName = edits?.name ?? section.name;
-    const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
-    const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
-    const colorValue = edits?.color ?? SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4';
-    const directionValue = edits?.direction ?? section.direction;
-    const qualityValue = edits?.quality ?? 1.0;
-
-    const config: BackendImportSectionConfig = {
-      section_index: configs.length,
-      name: sectionName,
-      surveyor: surveyorValue || null,
-      date: dateStr,
-      color: colorValue,
-      direction: directionValue,
-      quality: qualityValue,
-      shots: backendShots,
-      placement,
-      station_comments: [],
-    };
-
-    emittedPosition.set(idx, configs.length);
-    configs.push(config);
-    colorIdx++;
   }
 
   // Unreachable = connected sections not in reachableSet + sections with no connection at all
@@ -319,6 +398,8 @@ export default function DmpNewImportDialog({
 
   // Cache all cross-section suggestions from startup calculation
   const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
+  // Keep full pool (unfiltered) so buildBatchImport can find existing-target anchors
+  const fullPoolRef = useRef<CrossSectionSuggestion[]>([]);
 
   // Guard against React StrictMode double-firing the mount effect
   const importStartedRef = useRef(false);
@@ -777,6 +858,7 @@ export default function DmpNewImportDialog({
         );
 
         suggestionPoolRef.current = suggestions;
+        fullPoolRef.current = suggestions;
       } catch {
         // Suggestion failure is non-fatal
         suggestionPoolRef.current = [];
@@ -813,6 +895,7 @@ export default function DmpNewImportDialog({
         dmpFile,
         selectionConfig,
         sectionEditsRef.current,
+        fullPoolRef.current,
       );
 
       if (configs.length > 0) {
