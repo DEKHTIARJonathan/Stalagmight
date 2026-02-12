@@ -140,6 +140,211 @@ function adjustStationForDeletedShots(
   return adjusted;
 }
 
+/**
+ * Finalize overlap treatments for ALL known overlaps in the suggestion pool.
+ *
+ * During the suggesting phase, `handleConfirm` treats overlaps for the specific
+ * suggestion that was confirmed. However, each section can only be an import ONCE
+ * (pickFromPool filters already-connected sections). If a section has overlaps at
+ * BOTH ends (common in chain topology), only one overlap gets treated.
+ *
+ * This function scans the full pool and applies overlap treatment to any shots that
+ * haven't been treated yet (identified by `is_reference === false`). It mutates the
+ * sectionEdits Map in-place.
+ */
+function finalizeOverlapTreatments(
+  fullPool: CrossSectionSuggestion[],
+  sectionEdits: Map<number, SectionEditState>,
+  dmpFile: DmpFile,
+  overlapMode: OverlapMode,
+): void {
+  if (overlapMode === 'keep_both') return;
+
+  for (const suggestion of fullPool) {
+    const {
+      importSectionIndex,
+      importStationIndex,
+      matchedShots,
+      existingStationIndex,
+      direction,
+      targetType,
+      existingSectionId,
+      targetImportIndex,
+    } = suggestion;
+
+    const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
+    if (allOverlapIds.size === 0) continue;
+
+    // --- Import side: treat untreated overlap shots on the import section ---
+    // If no edits exist yet, initialize from DMP data so we can apply treatment
+    let importEdits = sectionEdits.get(importSectionIndex);
+    if (!importEdits) {
+      const section = dmpFile.sections[importSectionIndex];
+      if (section) {
+        importEdits = {
+          name: section.name,
+          surveyor: '',
+          date: section.date?.split(/[T ]/)[0] ?? '',
+          color: '',
+          direction: section.direction === 'out' ? 'out' : 'in',
+          quality: 1.0,
+          shots: convertToEditableShots(section.shots),
+        };
+        sectionEdits.set(importSectionIndex, importEdits);
+      }
+    }
+    if (importEdits) {
+      const hasUntreated = importEdits.shots.some(
+        shot => !shot.isNew && !shot.isDeleted && allOverlapIds.has(shot.id) && !shot.is_reference
+      );
+
+      if (hasUntreated) {
+        // Build target map for interpolate/existing_data modes
+        let targetMap: Map<number, TargetShotLike> | null = null;
+        if (overlapMode !== 'import_data') {
+          let targetShotArray: TargetShotLike[] | null = null;
+          if (targetType === 'existing' && existingSectionId != null) {
+            const currentProject = useProjectStore.getState().project;
+            const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
+            if (targetSection) targetShotArray = targetSection.shots;
+          } else if (targetType === 'importing' && targetImportIndex != null) {
+            const targetEdits = sectionEdits.get(targetImportIndex);
+            if (targetEdits) {
+              targetShotArray = targetEdits.shots.filter(s => !s.isDeleted);
+            } else {
+              const targetDmpSection = dmpFile.sections[targetImportIndex];
+              if (targetDmpSection) {
+                targetShotArray = convertToEditableShots(targetDmpSection.shots);
+              }
+            }
+          }
+
+          if (targetShotArray) {
+            const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+            const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+            targetMap = new Map<number, TargetShotLike>();
+            for (const overlapId of allOverlapIds) {
+              const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
+              if (targetIdx >= 0 && targetIdx < targetShotArray.length) {
+                const raw = targetShotArray[targetIdx]!;
+                targetMap.set(overlapId, shouldReverse ? reverseTargetShot(raw) : raw);
+              }
+            }
+          }
+        }
+
+        const newShots = importEdits.shots.map(shot => {
+          if (shot.isNew || shot.isDeleted) return shot;
+          if (!allOverlapIds.has(shot.id)) return shot;
+          if (shot.is_reference) return shot; // Already treated by handleConfirm
+
+          const target = targetMap?.get(shot.id);
+          if (overlapMode === 'interpolate' && target) {
+            return { ...interpolateShots(shot, target), is_reference: true };
+          } else if (overlapMode === 'existing_data' && target) {
+            return { ...applyTargetData(shot, target), is_reference: true };
+          } else {
+            return { ...shot, is_reference: true };
+          }
+        });
+
+        if (import.meta.env.DEV) {
+          const treated = newShots.filter(s => s.is_reference).length - importEdits.shots.filter(s => s.is_reference).length;
+          if (treated > 0) {
+            console.warn(
+              `[finalizeOverlaps] import section ${importSectionIndex}: treated ${treated} additional overlap shots`,
+              `(suggestion: impStn=${importStationIndex} matched=${matchedShots} target=${targetType === 'importing' ? targetImportIndex : existingSectionId})`,
+            );
+          }
+        }
+
+        sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
+      }
+    }
+
+    // --- Target side (import-to-import only): treat untreated overlap shots on the target section ---
+    if (targetType === 'importing' && targetImportIndex != null) {
+      // Initialize from DMP data if no edits exist yet
+      let targetEdits = sectionEdits.get(targetImportIndex);
+      if (!targetEdits) {
+        const section = dmpFile.sections[targetImportIndex];
+        if (section) {
+          targetEdits = {
+            name: section.name,
+            surveyor: '',
+            date: section.date?.split(/[T ]/)[0] ?? '',
+            color: '',
+            direction: section.direction === 'out' ? 'out' : 'in',
+            quality: 1.0,
+            shots: convertToEditableShots(section.shots),
+          };
+          sectionEdits.set(targetImportIndex, targetEdits);
+        }
+      }
+      if (targetEdits) {
+        const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+        const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+
+        let hasUntreatedTarget = false;
+        for (const overlapId of allOverlapIds) {
+          const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+          if (targetShotIdx >= 0 && targetShotIdx < targetEdits.shots.length) {
+            const shot = targetEdits.shots[targetShotIdx];
+            if (shot && !shot.isDeleted && !shot.is_reference) {
+              hasUntreatedTarget = true;
+              break;
+            }
+          }
+        }
+
+        if (hasUntreatedTarget) {
+          // Re-read import edits (may have been updated by import-side above)
+          const freshImportEdits = sectionEdits.get(importSectionIndex);
+          const importShotsForInterp = freshImportEdits?.shots ?? [];
+          const targetShots = targetEdits.shots.map(s => ({ ...s }));
+          let treated = 0;
+
+          for (const overlapId of allOverlapIds) {
+            const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+            if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) continue;
+
+            const targetShot = targetShots[targetShotIdx];
+            if (!targetShot || targetShot.isDeleted || targetShot.is_reference) continue;
+
+            const importShot = importShotsForInterp.find(
+              s => !s.isNew && !s.isDeleted && s.id === overlapId
+            );
+            if (!importShot) continue;
+
+            const importAsTarget: TargetShotLike = shouldReverse
+              ? reverseTargetShot(importShot)
+              : importShot;
+
+            if (overlapMode === 'interpolate') {
+              targetShots[targetShotIdx] = { ...interpolateShots(targetShot, importAsTarget), is_reference: true };
+            } else if (overlapMode === 'existing_data') {
+              targetShots[targetShotIdx] = { ...targetShot, is_reference: true };
+            } else {
+              targetShots[targetShotIdx] = { ...applyTargetData(targetShot, importAsTarget), is_reference: true };
+            }
+            treated++;
+          }
+
+          if (treated > 0) {
+            sectionEdits.set(targetImportIndex, { ...targetEdits, shots: targetShots });
+            if (import.meta.env.DEV) {
+              console.warn(
+                `[finalizeOverlaps] target section ${targetImportIndex}: treated ${treated} additional overlap shots`,
+                `(from import ${importSectionIndex}, impStn=${importStationIndex} matched=${matchedShots})`,
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 /** Build batch import configs from virtual connections + BFS order. */
 function buildBatchImport(
   connections: VirtualConnection[],
@@ -1287,6 +1492,19 @@ export default function DmpNewImportDialog({
     const doBatchImport = async () => {
       setIsImporting(true);
       setError(null);
+
+      // Finalize overlap treatments for all known overlaps before building configs.
+      // handleConfirm only treats the overlap for the specific suggestion that was
+      // confirmed, but sections with overlaps at both ends only get one treated.
+      // This catches any remaining untreated overlaps from the full suggestion pool.
+      if (fullPoolRef.current.length > 0) {
+        finalizeOverlapTreatments(
+          fullPoolRef.current,
+          sectionEditsRef.current,
+          dmpFile,
+          overlapMode,
+        );
+      }
 
       const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
       const { configs, unreachable } = buildBatchImport(
