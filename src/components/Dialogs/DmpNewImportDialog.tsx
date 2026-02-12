@@ -993,10 +993,28 @@ export default function DmpNewImportDialog({
     const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
     const skipped = skippedIndicesRef.current;
 
-    // Filter pool to only remaining sections
-    const pool = suggestionPoolRef.current.filter(
-      (s) => !connected.has(s.importSectionIndex) && !skipped.has(s.importSectionIndex)
-    );
+    // Build reverse map: for each import-to-import connection, record who targets whom.
+    // Used to detect cycles: if A→B exists and we're considering B→A, skip it.
+    const importingTargets = new Map<number, Set<number>>();
+    for (const c of connectionsRef.current) {
+      if (c.targetType === 'importing' && c.targetImportIndex != null) {
+        let s = importingTargets.get(c.targetImportIndex);
+        if (!s) { s = new Set(); importingTargets.set(c.targetImportIndex, s); }
+        s.add(c.importSectionIndex);
+      }
+    }
+
+    // Filter pool to only remaining sections, excluding cycle-forming connections
+    const pool = suggestionPoolRef.current.filter((s) => {
+      if (connected.has(s.importSectionIndex) || skipped.has(s.importSectionIndex)) return false;
+      // Skip import-to-import suggestions that would create a direct cycle:
+      // if the target already has an importing connection pointing back to this section
+      if (s.targetType === 'importing' && s.targetImportIndex != null) {
+        const sourcesTargetingMe = importingTargets.get(s.importSectionIndex);
+        if (sourcesTargetingMe?.has(s.targetImportIndex)) return false;
+      }
+      return true;
+    });
     suggestionPoolRef.current = pool;
 
     if (pool.length === 0) return false;
