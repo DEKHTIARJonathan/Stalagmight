@@ -149,6 +149,7 @@ function buildBatchImport(
   sectionEdits?: Map<number, SectionEditState>,
   fullPool?: CrossSectionSuggestion[],
   directPlacements?: DirectPlacement[],
+  overlapMode?: OverlapMode,
 ): { configs: BackendImportSectionConfig[]; unreachable: number[] } {
   // Build adjacency + connections including any fallback anchors for disconnected components
   const allConnections = [...connections];
@@ -246,6 +247,112 @@ function buildBatchImport(
     const existing = connectionMap.get(c.importSectionIndex);
     if (!existing || c.targetType === 'existing') {
       connectionMap.set(c.importSectionIndex, c);
+    }
+  }
+
+  // Apply all import-to-import overlaps from the full suggestion pool.
+  // This handles multi-way overlaps: when a section physically overlaps with
+  // multiple other sections but only gets one accepted connection from the wizard,
+  // the unaccepted overlaps still need their target shots updated.
+  if (overlapMode && overlapMode !== 'keep_both' && overlapMode !== 'existing_data' && fullPool && sectionEdits) {
+    // Best suggestion per directed pair (import → target), restricted to reachable pairs
+    const bestOverlaps = new Map<string, CrossSectionSuggestion>();
+    for (const s of fullPool) {
+      if (s.targetType !== 'importing' || s.targetImportIndex == null) continue;
+      if (!reachableSet.has(s.importSectionIndex) || !reachableSet.has(s.targetImportIndex)) continue;
+      const key = `${s.importSectionIndex}\u2192${s.targetImportIndex}`;
+      const prev = bestOverlaps.get(key);
+      if (!prev || s.score > prev.score) {
+        bestOverlaps.set(key, s);
+      }
+    }
+
+    // Process in score-descending order; per-shot deduplication ensures
+    // the highest-scoring overlap takes precedence for each target shot.
+    const sortedOverlaps = [...bestOverlaps.values()].sort((a, b) => b.score - a.score);
+    const handledTargetShots = new Set<string>();
+
+    for (const suggestion of sortedOverlaps) {
+      const importIdx = suggestion.importSectionIndex;
+      const targetIdx = suggestion.targetImportIndex!;
+
+      // Get import shots (from edits or DMP file) — values may be flagged
+      // as deleted by a prior handleConfirm, but the measurement values are intact.
+      let importShots: EditableShot[];
+      const importEdits = sectionEdits.get(importIdx);
+      if (importEdits) {
+        importShots = importEdits.shots;
+      } else {
+        const sec = dmpFile.sections[importIdx];
+        if (!sec) continue;
+        importShots = convertToEditableShots(sec.shots);
+      }
+
+      // Target section edits (create if absent)
+      const targetEdits = sectionEdits.get(targetIdx);
+      const targetDmpSection = dmpFile.sections[targetIdx];
+      if (!targetDmpSection) continue;
+      const targetEditState: SectionEditState = targetEdits ?? {
+        name: targetDmpSection.name,
+        surveyor: '',
+        date: targetDmpSection.date?.split(/[T ]/)[0] ?? '',
+        color: '',
+        direction: targetDmpSection.direction,
+        quality: 1.0,
+        shots: convertToEditableShots(targetDmpSection.shots),
+      };
+
+      // Original DMP target shots — used as the base for interpolation so that
+      // handleConfirm's earlier per-connection fix doesn't cause double-averaging.
+      const originalTargetShots = convertToEditableShots(targetDmpSection.shots);
+
+      const { importStationIndex, matchedShots, existingStationIndex, direction } = suggestion;
+      const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
+      const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+      const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+
+      const targetShots = targetEditState.shots.map(s => ({ ...s }));
+      let modified = false;
+
+      for (const overlapId of allOverlap) {
+        const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+        const key = `${targetIdx}:${targetShotIdx}`;
+        if (handledTargetShots.has(key)) continue;
+        handledTargetShots.add(key);
+
+        // Import shot (may be isDeleted — we still want its measurement values)
+        const importShot = importShots.find(s => !s.isNew && s.id === overlapId);
+        if (!importShot) continue;
+
+        if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) continue;
+
+        let targetShot = targetShots[targetShotIdx]!;
+        if (targetShot.isDeleted) {
+          targetShot = { ...targetShot, isDeleted: false };
+          targetShots[targetShotIdx] = targetShot;
+        }
+
+        const importAsTarget: TargetShotLike = shouldReverse
+          ? reverseTargetShot(importShot) : importShot;
+
+        if (overlapMode === 'interpolate') {
+          // Use original DMP target values to avoid double-interpolation
+          // when handleConfirm already applied a per-connection interpolation.
+          const originalShot = originalTargetShots[targetShotIdx];
+          const baseShot = originalShot
+            ? applyTargetData(targetShot, originalShot)
+            : targetShot;
+          targetShots[targetShotIdx] = interpolateShots(baseShot, importAsTarget);
+        } else {
+          // import_data: replace target values with import values
+          targetShots[targetShotIdx] = applyTargetData(targetShot, importAsTarget);
+        }
+        modified = true;
+      }
+
+      if (modified) {
+        sectionEdits.set(targetIdx, { ...targetEditState, shots: targetShots });
+      }
     }
   }
 
@@ -1203,6 +1310,7 @@ export default function DmpNewImportDialog({
         sectionEditsRef.current,
         fullPoolRef.current,
         directPlacementsRef.current,
+        overlapMode,
       );
 
       if (configs.length > 0) {
