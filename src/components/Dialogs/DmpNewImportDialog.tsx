@@ -1540,8 +1540,9 @@ export default function DmpNewImportDialog({
 
   // ─── Manual placing phase handlers ────────────────────────────────────────
 
-  // Access UI store for map placement
-  const { startPlacementMode, getMapViewportCenter } = useUIStore();
+  // Access UI store for map placement (use selectors to avoid full-store subscription)
+  const startPlacementMode = useUIStore((s) => s.startPlacementMode);
+  const getMapViewportCenter = useUIStore((s) => s.getMapViewportCenter);
 
   // Project sections for "From Existing" dropdown
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
@@ -1870,6 +1871,13 @@ export default function DmpNewImportDialog({
     if (segmentPlacementMode === 'manual') return false; // must use "Place on Map" button
     return false;
   }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId]);
+
+  // When placing on map, return null to hide the dialog while keeping the
+  // component mounted (preserving all React state). The DialogWrapper portal
+  // and backdrop are fully removed so the user can interact with the map.
+  if (isPlacingOnMap) {
+    return null;
+  }
 
   return (
     <DialogWrapper
