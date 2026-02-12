@@ -52,6 +52,8 @@ export type {
   TargetType,
   CrossSectionSuggestion,
   ImportSectionForSuggestion,
+  SegmentGeometry,
+  SegmentSectionGeometry,
 } from './ipc.generated';
 
 // Batch command types for execute_batch IPC.

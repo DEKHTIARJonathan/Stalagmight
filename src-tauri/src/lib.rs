@@ -1072,6 +1072,7 @@ pub fn run() {
             commands::section::get_anchored_section_ids,
             commands::section::create_section_and_merge,
             commands::section::get_section_relationships,
+            commands::section::get_segment_geometry,
             // Shot commands
             commands::shot::create_shot,
             commands::shot::update_shot,

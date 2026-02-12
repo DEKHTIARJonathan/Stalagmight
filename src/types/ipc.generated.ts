@@ -80,6 +80,8 @@ export * from './ipc/ProviderStats';
 export * from './ipc/CacheStats';
 export * from './ipc/TileFetchStatsResponse';
 export * from './ipc/TileProviderInfo';
+export * from './ipc/SegmentGeometry';
+export * from './ipc/SegmentSectionGeometry';
 export * from './ipc/GeometryShot';
 export * from './ipc/SurveyGeometry';
 export * from './ipc/SurveyGeometryError';

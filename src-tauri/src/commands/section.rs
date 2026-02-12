@@ -1,8 +1,27 @@
 use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use tauri::State;
+use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{ClosureStrategy, Coordinates, Section, SectionId, SectionRelationships, SectionUpdates, ShotData, StationRef, SurveyDirection};
+
+/// Shot-line geometry for a single section within a segment.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SegmentSectionGeometry {
+    pub section_id: SectionId,
+    pub color: String,
+    /// Shot lines as pairs of [x, y] coords in meters, relative to the anchor section's station 0
+    pub shot_lines: Vec<[[f64; 2]; 2]>,
+}
+
+/// Shot-line geometry for all sections in a segment, positioned relative to a given section.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SegmentGeometry {
+    pub sections: Vec<SegmentSectionGeometry>,
+}
 
 /// Create a new section
 #[tauri::command]
@@ -225,4 +244,21 @@ pub(crate) fn get_section_relationships_impl(
     }
 
     Ok(project.get_section_relationships(section_id))
+}
+
+/// Get shot-line geometry for all sections in the segment containing the given section.
+/// Coordinates are relative to the given section's station 0.
+#[tauri::command]
+pub fn get_segment_geometry(
+    state: State<AppState>,
+    section_id: SectionId,
+) -> Result<SegmentGeometry, String> {
+    get_segment_geometry_impl(state.inner(), section_id)
+}
+
+pub(crate) fn get_segment_geometry_impl(
+    state: &AppState,
+    section_id: SectionId,
+) -> Result<SegmentGeometry, String> {
+    state.get_segment_geometry(section_id)
 }

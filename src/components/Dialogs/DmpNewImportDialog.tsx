@@ -3,14 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, DmpShot, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult } from '../../types/commands';
+import type { DmpFile, DmpShot, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
 import type { OverlapMode } from '../../types/config';
-import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig } from './SectionPreview';
+import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
@@ -396,6 +396,9 @@ export default function DmpNewImportDialog({
   const sectionEditsRef = useRef<Map<number, SectionEditState>>(new Map());
   const nextTempIdRef = useRef(1);
 
+  // Target-side segment context (fetched from backend)
+  const [targetSegmentContext, setTargetSegmentContext] = useState<ContextSectionGeometry[] | null>(null);
+
   // Cache all cross-section suggestions from startup calculation
   const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
   // Keep full pool (unfiltered) so buildBatchImport can find existing-target anchors
@@ -448,6 +451,42 @@ export default function DmpNewImportDialog({
       setSelectedMergeOffset(mergeOptions[mergeOptions.length - 1]!.offset);
     }
   }, [currentSuggestion, mergeOptions]);
+
+  // Fetch target-side segment geometry when suggestion changes
+  useEffect(() => {
+    if (!currentSuggestion || currentSuggestion.targetType !== 'existing' || currentSuggestion.existingSectionId == null) {
+      setTargetSegmentContext(null);
+      return;
+    }
+
+    let cancelled = false;
+    const targetSectionId = currentSuggestion.existingSectionId;
+
+    invoke<SegmentGeometry>('get_segment_geometry', { sectionId: targetSectionId })
+      .then((result) => {
+        if (cancelled) return;
+        // Filter out the target section itself (already rendered by merge preview)
+        // and transform to ContextSectionGeometry
+        const context: ContextSectionGeometry[] = result.sections
+          .filter((s) => s.section_id !== targetSectionId)
+          .map((s) => ({
+            color: s.color,
+            shots: s.shot_lines
+              .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
+              .map((line) => ({
+                from: [line[0]![0]!, line[0]![1]!] as [number, number],
+                to: [line[1]![0]!, line[1]![1]!] as [number, number],
+              })),
+          }))
+          .filter((s) => s.shots.length > 0);
+        setTargetSegmentContext(context.length > 0 ? context : null);
+      })
+      .catch(() => {
+        if (!cancelled) setTargetSegmentContext(null);
+      });
+
+    return () => { cancelled = true; };
+  }, [currentSuggestion]);
 
   // Initialize / restore section edit state when currentSuggestion changes
   useEffect(() => {
@@ -616,6 +655,91 @@ export default function DmpNewImportDialog({
     }
     return indices;
   }, [effectiveShots]);
+
+  // Import-side segment context — BFS through import-to-import connections
+  const importSegmentContext = useMemo((): ContextSectionGeometry[] | null => {
+    if (!currentSuggestion || connections.length === 0) return null;
+
+    const currentIdx = currentSuggestion.importSectionIndex;
+    const adjacency = buildAdjacency(connections);
+
+    // BFS from current import section through import-to-import edges
+    const visited = new Set<number>();
+    const queue: Array<{ idx: number; offsetX: number; offsetY: number }> = [];
+    visited.add(currentIdx);
+    queue.push({ idx: currentIdx, offsetX: 0, offsetY: 0 });
+
+    const contextEntries: ContextSectionGeometry[] = [];
+
+    while (queue.length > 0) {
+      const { idx, offsetX, offsetY } = queue.shift()!;
+
+      for (const edge of adjacency.get(idx) ?? []) {
+        if (visited.has(edge.neighbor)) continue;
+        visited.add(edge.neighbor);
+
+        const conn = edge.connection;
+
+        // Determine which side of the connection is idx vs neighbor
+        let stationInA: number;
+        let stationInB: number;
+        let sectionA: number;
+        if (conn.importSectionIndex === idx && conn.targetImportIndex === edge.neighbor) {
+          sectionA = idx;
+          stationInA = conn.importStationIndex;
+          stationInB = conn.targetImportStationIndex ?? 0;
+        } else if (conn.targetImportIndex === idx && conn.importSectionIndex === edge.neighbor) {
+          sectionA = conn.targetImportIndex;
+          stationInA = conn.targetImportStationIndex ?? 0;
+          stationInB = conn.importStationIndex;
+        } else {
+          continue;
+        }
+
+        // Compute stations for both sections
+        const sectionAData = dmpFile.sections[sectionA];
+        const neighborData = dmpFile.sections[edge.neighbor];
+        if (!sectionAData || !neighborData) continue;
+
+        const stationsA = computeStationsFromDmpShots(
+          sectionAData.shots.filter((s) => s.shot_type === 'Standard')
+        );
+        const stationsB = computeStationsFromDmpShots(
+          neighborData.shots.filter((s) => s.shot_type === 'Standard')
+        );
+
+        const posA = stationsA[stationInA];
+        const posB = stationsB[stationInB];
+        if (!posA || !posB) continue;
+
+        // The neighbor's offset: align merge stations
+        const neighborOffsetX = offsetX + posA.x - posB.x;
+        const neighborOffsetY = offsetY + posA.y - posB.y;
+
+        // Build shot lines for the neighbor section
+        const colorIdx = edge.neighbor % SECTION_COLORS.length;
+        const neighborColor = SECTION_COLORS[colorIdx] ?? '#95a5a6';
+
+        const shots: Array<{ from: [number, number]; to: [number, number] }> = [];
+        for (let i = 0; i < stationsB.length - 1; i++) {
+          const from = stationsB[i]!;
+          const to = stationsB[i + 1]!;
+          shots.push({
+            from: [from.x + neighborOffsetX, from.y + neighborOffsetY],
+            to: [to.x + neighborOffsetX, to.y + neighborOffsetY],
+          });
+        }
+
+        if (shots.length > 0) {
+          contextEntries.push({ color: neighborColor, shots });
+        }
+
+        queue.push({ idx: edge.neighbor, offsetX: neighborOffsetX, offsetY: neighborOffsetY });
+      }
+    }
+
+    return contextEntries.length > 0 ? contextEntries : null;
+  }, [currentSuggestion, connections, dmpFile.sections]);
 
   // Section edit callbacks
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
@@ -1117,6 +1241,49 @@ export default function DmpNewImportDialog({
     };
   }, [dmpMergePreviewConfig, resolvedTargetShotMap]);
 
+  // Merge target-side + import-side context for SectionPreview.
+  // Import-side context is relative to the import section's station 0 and needs the same
+  // merge offset that SectionPreview applies to align the import section with the target.
+  const mergedContextSections = useMemo((): ContextSectionGeometry[] | null => {
+    const parts: ContextSectionGeometry[] = [];
+    if (targetSegmentContext) parts.push(...targetSegmentContext);
+    if (importSegmentContext) {
+      const activePreview = previewMergeConfig ?? previewDmpMergeConfig;
+      let dx = 0;
+      let dy = 0;
+      if (activePreview && importPreviewSection) {
+        // Compute the same importOffset that SectionPreview uses internally
+        const importStations = computeStationsFromDmpShots(
+          importPreviewSection.shots.filter((s) => s.shot_type === 'Standard')
+        );
+        let targetStations: Array<{ x: number; y: number }> = [];
+        if (previewMergeConfig) {
+          targetStations = computeStationsFromShots(
+            previewMergeConfig.targetSection.shots.filter((s) => !s.is_reference)
+          );
+        } else if (previewDmpMergeConfig) {
+          targetStations = computeStationsFromDmpShots(
+            previewDmpMergeConfig.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard')
+          );
+        }
+        const importStn = importStations[activePreview.importStationIndex];
+        const targetStn = targetStations[activePreview.targetStationIndex];
+        if (importStn && targetStn) {
+          dx = targetStn.x - importStn.x;
+          dy = targetStn.y - importStn.y;
+        }
+      }
+      parts.push(...importSegmentContext.map((ctx) => ({
+        color: ctx.color,
+        shots: ctx.shots.map((shot) => ({
+          from: [shot.from[0] + dx, shot.from[1] + dy] as [number, number],
+          to: [shot.to[0] + dx, shot.to[1] + dy] as [number, number],
+        })),
+      })));
+    }
+    return parts.length > 0 ? parts : null;
+  }, [targetSegmentContext, importSegmentContext, previewMergeConfig, previewDmpMergeConfig, importPreviewSection]);
+
   // Import color for the current section
   const importColor = useMemo(() => {
     return SECTION_COLORS[connectedIndices.size % SECTION_COLORS.length] ?? '#4ecdc4';
@@ -1307,6 +1474,7 @@ export default function DmpNewImportDialog({
                 dmpMergePreview={previewDmpMergeConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
                 referenceIndices={referenceIndices}
+                contextSections={mergedContextSections}
               />
             </div>
 
