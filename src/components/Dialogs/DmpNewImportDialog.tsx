@@ -1896,8 +1896,12 @@ export default function DmpNewImportDialog({
   const directionLabel = (direction: string) =>
     direction === 'forward' ? '\u2192' : '\u2190';
 
-  // Progress
-  const placedCount = connectedIndices.size + (zeroDatumConfig ? 1 : 0);
+  // Progress — during manual_placing, compute from queue (which has ALL unplaced sections).
+  // Otherwise, count connected sections + zero datum.
+  const sectionsInQueue = useMemo(() => segmentQueue.flat().length, [segmentQueue]);
+  const placedCount = phase === 'manual_placing' || phase === 'placing' || phase === 'done'
+    ? totalSelected - sectionsInQueue
+    : connectedIndices.size + (zeroDatumConfig ? 1 : 0);
   const skippedCount = skippedIndices.size;
 
   // Whether we're in the suggestion view with a current suggestion (side-by-side layout)
@@ -2357,7 +2361,7 @@ export default function DmpNewImportDialog({
             )}
 
             {/* Done — all placed */}
-            {phase === 'done' && connectedIndices.size + (zeroDatumConfig ? 1 : 0) === totalSelected && (
+            {phase === 'done' && placedCount === totalSelected && (
               <div className="text-center" data-testid="wizard-all-placed">
                 <CheckCircleIcon size={32} className="text-success mx-auto mb-2" />
                 <div className="text-lg">{t('dialogs.dmpNewImport.allPlaced')}</div>
