@@ -1417,4 +1417,233 @@ mod tests {
         let section_data = section.to_section_data("#ff0000".to_string());
         assert!(section_data.shots.is_empty(), "only non-Standard shots → empty shot list");
     }
+
+    // ========================================================================
+    // kb5.dmp regression tests (skip by default — requires fixture file)
+    // ========================================================================
+
+    /// Parse kb5.dmp and validate section structure, shot counts, and key shot data.
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_parse_regression -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn kb5_parse_regression() {
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/kb5.dmp");
+        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+
+        let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
+
+        // Version
+        assert_eq!(dmp.version, 5);
+
+        // Section count
+        assert_eq!(dmp.sections.len(), 5, "expected 5 sections");
+
+        // Section names and directions
+        let names: Vec<&str> = dmp.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["001", "002", "003", "004", "005"]);
+        for section in &dmp.sections {
+            assert_eq!(section.direction, DmpDirection::In, "all sections should be direction In");
+        }
+
+        // DMP shot counts (all shot types)
+        let dmp_shot_counts: Vec<usize> = dmp.sections.iter().map(|s| s.shots.len()).collect();
+        assert_eq!(dmp_shot_counts, vec![108, 365, 30, 5, 8]);
+
+        // Standard shot counts (after filtering non-Standard types)
+        let standard_counts: Vec<usize> = dmp.sections.iter()
+            .map(|s| s.shots.iter().filter(|sh| sh.shot_type == DmpShotType::Standard).count())
+            .collect();
+        assert_eq!(standard_counts, vec![107, 364, 29, 4, 7]);
+
+        // Validate key shot data for each section (first and last standard shots)
+        let assert_shot = |section_idx: usize, shot_idx: usize,
+                           az_in: f64, az_out: f64, len: f64, d_in: f64, d_out: f64| {
+            let standard: Vec<&DmpShot> = dmp.sections[section_idx].shots.iter()
+                .filter(|s| s.shot_type == DmpShotType::Standard)
+                .collect();
+            let shot = standard[shot_idx];
+            assert!((shot.heading_in - az_in).abs() < 0.05,
+                "section[{}] shot[{}] az_in: {} != {}", section_idx, shot_idx, shot.heading_in, az_in);
+            assert!((shot.heading_out - az_out).abs() < 0.05,
+                "section[{}] shot[{}] az_out: {} != {}", section_idx, shot_idx, shot.heading_out, az_out);
+            assert!((shot.length - len).abs() < 0.005,
+                "section[{}] shot[{}] length: {} != {}", section_idx, shot_idx, shot.length, len);
+            assert!((shot.depth_in - d_in).abs() < 0.005,
+                "section[{}] shot[{}] depth_in: {} != {}", section_idx, shot_idx, shot.depth_in, d_in);
+            assert!((shot.depth_out - d_out).abs() < 0.005,
+                "section[{}] shot[{}] depth_out: {} != {}", section_idx, shot_idx, shot.depth_out, d_out);
+        };
+
+        // Section 001: first, last standard shots
+        assert_shot(0, 0,   209.7, 209.7, 11.360, 8.45, 8.55);
+        assert_shot(0, 106, 343.7, 343.7, 12.040, 8.03, 7.89);
+
+        // Section 002: first, last standard shots
+        assert_shot(1, 0,    23.2,  23.2,  3.580, 9.22, 9.12);
+        assert_shot(1, 363, 258.1, 258.1,  9.120, 7.42, 7.49);
+
+        // Section 003: first, last standard shots
+        assert_shot(2, 0,   229.9, 229.9,  5.210, 9.55, 9.44);
+        assert_shot(2, 28,   59.0,  59.0,  5.480, 7.21, 7.11);
+
+        // Section 004: all 4 standard shots
+        assert_shot(3, 0,  45.6, 45.6, 5.090, 9.35, 9.40);
+        assert_shot(3, 1, 352.0, 352.0, 3.760, 9.30, 9.35);
+        assert_shot(3, 2,  33.7, 33.7, 5.080, 9.48, 9.49);
+        assert_shot(3, 3,   9.5,  9.5, 5.710, 9.49, 9.39);
+
+        // Section 005: first, last standard shots
+        assert_shot(4, 0, 256.4, 256.4, 14.010, 8.30, 8.40);
+        assert_shot(4, 6, 299.0, 299.0, 13.360, 9.36, 9.16);
+    }
+
+    /// Run cross-section suggestions on kb5.dmp sections (with 002 as existing)
+    /// and validate the overlap detection results.
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn kb5_suggestions_regression() {
+        use crate::models::placement_suggest::{
+            suggest_all_placements, ImportSectionForSuggestion, ExistingSection,
+            MatchDirection, TargetType,
+        };
+        use crate::models::shot::Shot;
+
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/kb5.dmp");
+        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+
+        let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
+
+        // Build section 002 as the "existing" project section (simulates it being already imported)
+        let section_002 = &dmp.sections[1]; // index 1 = "002"
+        let existing_shots: Vec<Shot> = section_002.shots.iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .enumerate()
+            .map(|(i, s)| Shot {
+                id: i as u32,
+                azimuth_in: s.heading_in,
+                azimuth_out: s.heading_out,
+                length: s.length,
+                depth_in: s.depth_in,
+                depth_out: s.depth_out,
+                pitch_in: Some(s.pitch_in),
+                pitch_out: Some(s.pitch_out),
+                left: Some(s.left),
+                right: Some(s.right),
+                up: Some(s.up),
+                down: Some(s.down),
+                comment: s.comment.clone(),
+                is_reference: false,
+                marker_index: Some(u32::from(s.marker_index)),
+                temperature: Some(s.temperature),
+            })
+            .collect();
+
+        let existing_sections = vec![ExistingSection {
+            id: 0,
+            name: "002".to_string(),
+            shots: existing_shots,
+        }];
+
+        // Build import sections (all 5 from DMP, including 002)
+        let import_sections: Vec<ImportSectionForSuggestion> = dmp.sections.iter()
+            .enumerate()
+            .map(|(i, s)| ImportSectionForSuggestion {
+                index: i as u32,
+                name: s.name.clone(),
+                shots: s.shots.iter()
+                    .filter(|sh| sh.shot_type == DmpShotType::Standard)
+                    .map(DmpShot::to_shot_data)
+                    .collect(),
+            })
+            .collect();
+
+        let suggestions = suggest_all_placements(&import_sections, &existing_sections);
+
+        // Print all suggestions for debugging
+        for (i, s) in suggestions.iter().enumerate() {
+            println!(
+                "  suggestion[{}]: import={} '{}' impStn={} → target={} '{}' exStn={} matched={} dir={:?} score={:.3} conf={:?} partial={}",
+                i, s.import_section_index, s.import_section_name,
+                s.import_station_index,
+                match s.target_type { TargetType::Existing => format!("existing:{}", s.existing_section_id.unwrap_or(0)), TargetType::Importing => format!("importing:{}", s.target_import_index.unwrap_or(0)) },
+                s.existing_section_name,
+                s.existing_station_index,
+                s.matched_shots, s.direction, s.score, s.confidence, s.is_partial,
+            );
+        }
+
+        assert!(!suggestions.is_empty(), "should find suggestions");
+
+        // The key confirmed suggestions from the user's import flow:
+        // 1. import=4(005) impStn=7 → target=importing:0(001) exStn=25 matched=2 dir=forward
+        // 2. import=3(004) impStn=0 → target=importing:0(001) exStn=28 matched=2 dir=reverse
+        // 3. import=2(003) impStn=0 → target=importing:0(001) exStn=27 matched=2 dir=forward
+        // 4. import=0(001) impStn=107 → target=existing:0(002) exStn=182 matched=2 dir=reverse
+
+        // Verify the import→existing suggestion exists: 001 → 002
+        let s001_to_002 = suggestions.iter().find(|s|
+            s.import_section_index == 0
+            && s.target_type == TargetType::Existing
+            && s.existing_section_id == Some(0)
+        );
+        assert!(s001_to_002.is_some(), "should find 001→002 existing suggestion");
+        let s = s001_to_002.unwrap();
+        assert_eq!(s.import_station_index, 107, "001 connects at its last station");
+        assert_eq!(s.existing_station_index, 182, "connects to 002 station 182");
+        assert_eq!(s.matched_shots, 2);
+        assert_eq!(s.direction, MatchDirection::Reverse);
+
+        // Verify import→import suggestions exist
+        // 005 → 001
+        let s005_to_001 = suggestions.iter().find(|s|
+            s.import_section_index == 4
+            && s.target_type == TargetType::Importing
+            && s.target_import_index == Some(0)
+            && s.import_station_index == 7  // back of 005
+        );
+        assert!(s005_to_001.is_some(), "should find 005→001 importing suggestion");
+        let s = s005_to_001.unwrap();
+        assert_eq!(s.matched_shots, 2);
+        assert_eq!(s.existing_station_index, 25, "005 connects to 001 station 25");
+
+        // 004 → 001 (front of 004 connects to station 28 of 001)
+        let s004_to_001 = suggestions.iter().find(|s|
+            s.import_section_index == 3
+            && s.target_type == TargetType::Importing
+            && s.target_import_index == Some(0)
+            && s.import_station_index == 0  // front of 004
+        );
+        assert!(s004_to_001.is_some(), "should find 004→001 importing suggestion");
+        let s = s004_to_001.unwrap();
+        assert_eq!(s.matched_shots, 2);
+        assert_eq!(s.existing_station_index, 28, "004 connects to 001 station 28");
+
+        // 003 → 001 (front of 003 connects to station 27 of 001)
+        let s003_to_001 = suggestions.iter().find(|s|
+            s.import_section_index == 2
+            && s.target_type == TargetType::Importing
+            && s.target_import_index == Some(0)
+            && s.import_station_index == 0  // front of 003
+        );
+        assert!(s003_to_001.is_some(), "should find 003→001 importing suggestion");
+        let s = s003_to_001.unwrap();
+        assert_eq!(s.matched_shots, 2);
+        assert_eq!(s.existing_station_index, 27, "003 connects to 001 station 27");
+
+        // Verify section 004 also has an overlap against existing 002
+        // (This was the source of the double-treatment bug)
+        let s004_to_existing = suggestions.iter().find(|s|
+            s.import_section_index == 3
+            && s.target_type == TargetType::Existing
+            && s.import_station_index == 4  // back of 004
+        );
+        assert!(s004_to_existing.is_some(),
+            "section 004 should have a back-end overlap with existing 002 (double-treatment regression)");
+        let s = s004_to_existing.unwrap();
+        assert_eq!(s.matched_shots, 2, "004→002 overlap should be 2 shots");
+        assert_eq!(s.existing_station_index, 257, "004 back connects to 002 station 257");
+    }
 }
