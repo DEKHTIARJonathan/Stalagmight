@@ -393,6 +393,11 @@ export default function DmpNewImportDialog({
   // Shorthand for restoring state
   const saved = savedManualPlacingState;
 
+  // DEBUG: trace mount/restore
+  if (import.meta.env.DEV) {
+    console.warn('[DmpNewImportDialog] mount — saved:', !!saved, saved ? `queue=${saved.segmentQueue.length} dp=${saved.directPlacements.length}` : '(fresh)');
+  }
+
   // Core state — virtual connections instead of imported indices
   const [connections, setConnections] = useState<VirtualConnection[]>(saved?.connections ?? []);
   const [skippedIndices, setSkippedIndices] = useState<Set<number>>(
@@ -1049,6 +1054,9 @@ export default function DmpNewImportDialog({
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.warn('[DmpNewImportDialog] init effect — importStarted:', importStartedRef.current);
+    }
     if (importStartedRef.current) return;
     importStartedRef.current = true;
 
@@ -1153,6 +1161,7 @@ export default function DmpNewImportDialog({
         return;
       }
 
+      if (import.meta.env.DEV) console.warn('[DmpNewImportDialog] init complete → suggesting');
       setPhase('suggesting');
     };
 
@@ -1625,6 +1634,7 @@ export default function DmpNewImportDialog({
   const advanceSegmentQueue = useCallback(() => {
     setSegmentQueue((prev) => {
       const next = prev.slice(1);
+      if (import.meta.env.DEV) console.warn('[DmpNewImportDialog] advanceSegmentQueue:', prev.length, '→', next.length);
       if (next.length === 0) {
         // Queue empty — transition to placing
         setPhase('placing');
@@ -1845,14 +1855,22 @@ export default function DmpNewImportDialog({
           ? { sectionIndex: nextQueue[0][0]!, stationIndex: 0 }
           : savedState.segmentAnchor;
 
+        const nextSavedState = {
+          ...savedState,
+          segmentQueue: nextQueue,
+          segmentAnchor: nextAnchor,
+          directPlacements: [...savedState.directPlacements, dp],
+        };
+        if (import.meta.env.DEV) {
+          console.warn('[DmpNewImportDialog] onComplete — reopening with savedState:', {
+            queueLen: nextQueue.length,
+            dpLen: nextSavedState.directPlacements.length,
+            connectionsLen: nextSavedState.connections.length,
+          });
+        }
         openDialog('dmp-import-new', {
           ...reopenData,
-          savedManualPlacingState: {
-            ...savedState,
-            segmentQueue: nextQueue,
-            segmentAnchor: nextAnchor,
-            directPlacements: [...savedState.directPlacements, dp],
-          },
+          savedManualPlacingState: nextSavedState,
         });
       },
       // onCancel — reopen dialog with original state
