@@ -305,11 +305,20 @@ function applyAllOverlapTreatments(
           );
         }
 
-        let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyRef = 0;
+        let diagInterpolated = 0, diagRefOnly = 0, diagAlreadyRef = 0, diagDeleted = 0;
         const newShots = importEdits.shots.map(shot => {
           if (shot.isNew || shot.isDeleted) return shot;
           if (!actionableIds.has(shot.id)) return shot;
           if (shot.is_reference) { diagAlreadyRef++; return shot; }
+
+          // For import-to-import overlaps, delete the import's overlap shots.
+          // The target section keeps the overlap representation (treated below).
+          // For import-to-existing, we can't modify the existing section, so the
+          // import keeps its shots with transformed values as reference.
+          if (targetType === 'importing') {
+            diagDeleted++;
+            return { ...shot, isDeleted: true };
+          }
 
           const target = targetMap?.get(shot.id);
           if (overlapMode === 'interpolate' && target) {
@@ -327,7 +336,7 @@ function applyAllOverlapTreatments(
         if (import.meta.env.DEV) {
           console.warn(
             `[applyAllOverlaps]   import ${importSectionIndex} RESULT:`,
-            `interpolated=${diagInterpolated} refOnly=${diagRefOnly} alreadyRef=${diagAlreadyRef}`,
+            `interpolated=${diagInterpolated} deleted=${diagDeleted} refOnly=${diagRefOnly} alreadyRef=${diagAlreadyRef}`,
           );
           if (diagRefOnly > 0 && overlapMode !== 'import_data') {
             console.warn(
