@@ -1484,16 +1484,13 @@ export default function DmpNewImportDialog({
     setError(null);
 
     // Save edit state with effectiveShots applied to ref before moving on.
-    // Overlap shot handling depends on the overlap mode:
-    //   keep_both:     keep all shots (import + reference) as-is
-    //   existing_data: delete all overlap shots (target section covers this passage)
-    //   interpolate:   keep actionable overlap shots with averaged values, delete past-merge
-    //   import_data:   keep actionable overlap shots with import values, delete past-merge
+    // For non-keep_both modes, delete ALL overlap shots (both actionable/reference
+    // and past-merge) — they're redundant with the target section.
     if (editState) {
       let importShots: EditableShot[];
       if (overlapMode === 'keep_both') {
         importShots = effectiveShots;
-      } else if (overlapMode === 'existing_data') {
+      } else {
         const { importStationIndex, matchedShots } = currentSuggestion;
         const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
         importShots = effectiveShots.map(shot =>
@@ -1501,25 +1498,6 @@ export default function DmpNewImportDialog({
             ? { ...shot, isDeleted: true, is_reference: false }
             : shot
         );
-      } else {
-        // interpolate or import_data: keep actionable overlap shots (which carry
-        // interpolated or original import values from effectiveShots), delete
-        // only past-merge shots that are fully redundant with the target section.
-        const { importStationIndex, matchedShots } = currentSuggestion;
-        const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
-        const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
-        const actionableIds = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
-        importShots = effectiveShots.map(shot => {
-          if (shot.isNew || shot.isDeleted) return shot;
-          const isOverlap = !shot.isNew && allOverlapIds.has(shot.id);
-          if (!isOverlap) return shot;
-          if (actionableIds.has(shot.id)) {
-            // Keep with interpolated/import values, clear reference flag
-            return { ...shot, is_reference: false };
-          }
-          // Past-merge: delete (redundant with target section)
-          return { ...shot, isDeleted: true, is_reference: false };
-        });
       }
       sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: importShots });
     }
