@@ -474,6 +474,7 @@ function App() {
           project={project}
           stations={stations}
           zeroDatumConfig={dialogData.zeroDatumConfig as ZeroDatumConfigResult | undefined}
+          savedManualPlacingState={dialogData.savedManualPlacingState as import('./components/Dialogs/DmpNewImportDialog').SavedManualPlacingState | undefined}
           onCancel={closeDialog}
           onBack={() => {
             if (dialogData.zeroDatumConfig) {
