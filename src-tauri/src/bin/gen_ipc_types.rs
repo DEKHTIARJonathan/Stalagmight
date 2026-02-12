@@ -9,6 +9,7 @@ use ts_rs::TS;
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
 use stalagmight_lib::commands::project::ProjectState;
+use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
 use stalagmight_lib::persistence::{BackupInfo, RepairResult, SalvagedData};
 use stalagmight_lib::config::{
@@ -161,6 +162,10 @@ fn main() {
     export::<TileFetchStatsResponse>(&out_dir);
     export::<TileProviderInfo>(&out_dir);
 
+    // Segment geometry (for import preview)
+    export::<SegmentGeometry>(&out_dir);
+    export::<SegmentSectionGeometry>(&out_dir);
+
     // Survey geometry
     export::<GeometryShot>(&out_dir);
     export::<SurveyGeometry>(&out_dir);
@@ -286,6 +291,8 @@ fn main() {
         "CacheStats",
         "TileFetchStatsResponse",
         "TileProviderInfo",
+        "SegmentGeometry",
+        "SegmentSectionGeometry",
         "GeometryShot",
         "SurveyGeometry",
         "SurveyGeometryError",

@@ -2267,3 +2267,109 @@ fn test_reload_config_syncs_undo_history_limit() {
         });
     });
 }
+
+// === get_segment_geometry ===
+
+#[test]
+fn test_get_segment_geometry_no_project_errors() {
+    let app = app_with_state();
+    let result = section::get_segment_geometry_impl(state(&app).inner(), 0);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("No project open"));
+}
+
+#[test]
+fn test_get_segment_geometry_invalid_section_errors() {
+    let app = app_with_state();
+    create_project(&app);
+    let result = section::get_segment_geometry_impl(state(&app).inner(), 999);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("not found"));
+}
+
+#[test]
+fn test_get_segment_geometry_single_section() {
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(5.0), shot_data(3.0)]);
+
+    let geom = section::get_segment_geometry_impl(state(&app).inner(), id).unwrap();
+    assert_eq!(geom.sections.len(), 1);
+    assert_eq!(geom.sections[0].section_id, id);
+    // 2 shots → 2 shot lines (station 0→1, station 1→2)
+    assert_eq!(geom.sections[0].shot_lines.len(), 2);
+    // First station is the anchor, so first shot line starts at (0, 0)
+    let first_line = &geom.sections[0].shot_lines[0];
+    assert!((first_line[0][0]).abs() < 1e-6, "First station X should be 0 (anchor)");
+    assert!((first_line[0][1]).abs() < 1e-6, "First station Y should be 0 (anchor)");
+}
+
+#[test]
+fn test_get_segment_geometry_connected_sections() {
+    let app = app_with_state();
+    create_project(&app);
+    let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
+    let id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
+
+    // Merge section A station 1 with section B station 0
+    assert_success(&station::merge_stations(
+        state(&app),
+        StationRef::new(id_a, 1),
+        StationRef::new(id_b, 0),
+    ));
+
+    // Query segment from section A
+    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
+    assert_eq!(geom.sections.len(), 2, "Both connected sections should be in the segment");
+
+    // Both sections should have shot lines
+    let section_ids: Vec<u32> = geom.sections.iter().map(|s| s.section_id).collect();
+    assert!(section_ids.contains(&id_a));
+    assert!(section_ids.contains(&id_b));
+
+    // Section A should have 1 shot line, section B should have 1 shot line
+    for s in &geom.sections {
+        assert_eq!(s.shot_lines.len(), 1, "Each section has 1 shot → 1 shot line");
+    }
+
+    // Coordinates should be relative to section A station 0 (the anchor)
+    let sec_a = geom.sections.iter().find(|s| s.section_id == id_a).unwrap();
+    assert!((sec_a.shot_lines[0][0][0]).abs() < 1e-6, "Section A starts at anchor origin");
+    assert!((sec_a.shot_lines[0][0][1]).abs() < 1e-6, "Section A starts at anchor origin");
+}
+
+#[test]
+fn test_get_segment_geometry_unconnected_section_excluded() {
+    let app = app_with_state();
+    create_project(&app);
+    let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
+    let _id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
+
+    // No merge — sections are disconnected
+    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
+    assert_eq!(geom.sections.len(), 1, "Only the queried section should be returned");
+    assert_eq!(geom.sections[0].section_id, id_a);
+}
+
+#[test]
+fn test_get_segment_geometry_queried_from_either_end() {
+    let app = app_with_state();
+    create_project(&app);
+    let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
+    let id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
+
+    assert_success(&station::merge_stations(
+        state(&app),
+        StationRef::new(id_a, 1),
+        StationRef::new(id_b, 0),
+    ));
+
+    // Query from section B — should still include both sections
+    let geom = section::get_segment_geometry_impl(state(&app).inner(), id_b).unwrap();
+    assert_eq!(geom.sections.len(), 2);
+
+    // Coordinates should now be relative to section B station 0
+    let sec_b = geom.sections.iter().find(|s| s.section_id == id_b).unwrap();
+    assert!((sec_b.shot_lines[0][0][0]).abs() < 1e-6, "Section B starts at anchor origin");
+    assert!((sec_b.shot_lines[0][0][1]).abs() < 1e-6, "Section B starts at anchor origin");
+}

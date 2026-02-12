@@ -37,11 +37,20 @@ export interface DmpMergePreviewConfig {
 }
 
 /**
+ * Geometry for a context section (other sections in the same segment).
+ * Rendered behind the main preview sections to show surrounding cave context.
+ */
+export interface ContextSectionGeometry {
+  shots: Array<{ from: [number, number]; to: [number, number] }>;
+  color: string;
+}
+
+/**
  * Compute station coordinates from DMP shots.
  * Each station is positioned relative to the previous one based on shot heading and length.
  * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
  */
-function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: number; z: number }> {
+export function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: number; z: number }> {
   // Start at origin
   const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
 
@@ -73,7 +82,7 @@ function computeStationsFromDmpShots(shots: DmpShot[]): Array<{ x: number; y: nu
  * Used for existing sections in merge preview.
  * Depth change uses depth_in/out to stay consistent with placement overlay behavior.
  */
-function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: number; z: number }> {
+export function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: number; z: number }> {
   // Start at origin
   const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
 
@@ -128,6 +137,8 @@ interface SectionPreviewProps {
   focusStationIndex?: number | null;
   /** Set of visible-shot indices (0-based among non-deleted shots) that should render at reduced opacity (reference shots). */
   referenceIndices?: Set<number>;
+  /** Context sections from the same segment, rendered as dimmed lines behind the main preview. */
+  contextSections?: ContextSectionGeometry[] | null;
 }
 
 /**
@@ -156,6 +167,7 @@ export default function SectionPreview({
   gpsStationIndex = 0,
   focusStationIndex,
   referenceIndices,
+  contextSections,
 }: SectionPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -267,6 +279,12 @@ export default function SectionPreview({
         data: { type: 'FeatureCollection', features: [] },
       });
 
+      // Source for context sections (other sections in the segment)
+      map.addSource('preview-context-shots', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
       // Sources for merge preview
       map.addSource('preview-target-shots', {
         type: 'geojson',
@@ -281,6 +299,18 @@ export default function SectionPreview({
       map.addSource('preview-merge-highlight', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
+      });
+
+      // Add context section shot lines layer (furthest back, very dimmed)
+      map.addLayer({
+        id: 'preview-context-shots-layer',
+        type: 'line',
+        source: 'preview-context-shots',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 1,
+          'line-opacity': 0.3,
+        },
       });
 
       // Add target section shot lines layer (dimmed, rendered first so it's behind)
@@ -440,7 +470,7 @@ export default function SectionPreview({
             source: 'satellite-tiles',
             paint: { 'raster-opacity': 0.85 },
           },
-          'preview-target-shots-layer'
+          'preview-context-shots-layer'
         );
       }
       // Dim the background so satellite shows through
@@ -660,7 +690,35 @@ export default function SectionPreview({
       }
     }
 
+    // Build context section shot features
+    const contextShotFeatures: GeoJSON.Feature[] = [];
+    if (contextSections) {
+      for (const ctx of contextSections) {
+        for (const shot of ctx.shots) {
+          contextShotFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: [
+                metersToMapCoords(shot.from[0], shot.from[1], gpsOrigin),
+                metersToMapCoords(shot.to[0], shot.to[1], gpsOrigin),
+              ],
+            },
+            properties: { color: ctx.color },
+          });
+        }
+      }
+    }
+
     // Update sources
+    const contextShotsSource = map.getSource('preview-context-shots');
+    if (contextShotsSource && 'setData' in contextShotsSource) {
+      (contextShotsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: contextShotFeatures,
+      });
+    }
+
     const shotsSource = map.getSource('preview-shots');
     if (shotsSource && 'setData' in shotsSource) {
       (shotsSource as maplibregl.GeoJSONSource).setData({
@@ -846,6 +904,18 @@ export default function SectionPreview({
             b.maxY = Math.max(b.maxY, targetBounds.maxY);
           }
 
+          // Include context sections in bounds
+          if (contextSections) {
+            for (const ctx of contextSections) {
+              for (const shot of ctx.shots) {
+                b.minX = Math.min(b.minX, shot.from[0], shot.to[0]);
+                b.maxX = Math.max(b.maxX, shot.from[0], shot.to[0]);
+                b.minY = Math.min(b.minY, shot.from[1], shot.to[1]);
+                b.maxY = Math.max(b.maxY, shot.from[1], shot.to[1]);
+              }
+            }
+          }
+
           // Include existing station in bounds if present (legacy mode)
           if (!mergePreview && existingStationFeatures.length > 0) {
             const importStation =
@@ -901,7 +971,7 @@ export default function SectionPreview({
         }
       });
     }
-  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex, referenceIndices]);
+  }, [section, stations, targetStations, color, mapLoaded, existingStation, importStationIndex, mergePreview, dmpMergePreview, selectedStationIndex, gpsOrigin, gpsStationOffset, focusStationIndex, referenceIndices, contextSections]);
 
   // Re-apply theme colors when resolvedTheme changes
   useEffect(() => {
@@ -913,6 +983,7 @@ export default function SectionPreview({
     if (map.getLayer('background')) {
       map.setPaintProperty('background', 'background-color', colors.previewBg);
     }
+    // Context section layer uses per-feature color, no theme update needed
     // Target section layers
     if (map.getLayer('preview-target-shots-layer')) {
       map.setPaintProperty('preview-target-shots-layer', 'line-color', colors.grayLine);
