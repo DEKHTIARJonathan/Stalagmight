@@ -720,6 +720,13 @@ export default function DmpNewImportDialog({
     // Restore from ref if previously edited
     const existing = sectionEditsRef.current.get(idx);
     if (existing) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[init-effect] RESTORE section=${idx} from sectionEditsRef`,
+          `shots.length=${existing.shots.length}`,
+          `deleted=${existing.shots.filter(s => s.isDeleted).length}`,
+        );
+      }
       setEditStateForSection(idx);
       setEditState(existing);
       return;
@@ -735,6 +742,12 @@ export default function DmpNewImportDialog({
 
     const shots = convertToEditableShots(section.shots);
     nextTempIdRef.current = shots.length + 1;
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[init-effect] INITIALIZE section=${idx} "${section.name}"`,
+        `dmpShots=${section.shots.length} standardShots=${shots.length}`,
+      );
+    }
 
     const colorIdx = connectedIndices.size % SECTION_COLORS.length;
     const newState: SectionEditState = {
@@ -768,6 +781,12 @@ export default function DmpNewImportDialog({
         );
       }
       return;
+    }
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[sync-effect] WRITING sectionEditsRef[${currentSuggestion.importSectionIndex}]`,
+        `editState.shots.length=${editState.shots.length}`,
+      );
     }
     sectionEditsRef.current.set(currentSuggestion.importSectionIndex, editState);
   }, [editState, currentSuggestion, editStateForSection]);
@@ -1527,6 +1546,13 @@ export default function DmpNewImportDialog({
     // For non-keep_both modes, delete ALL overlap shots (both actionable/reference
     // and past-merge) — they're redundant with the target section.
     if (editState) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[handleConfirm import-save] section=${currentSuggestion.importSectionIndex}`,
+          `editState.shots.length=${editState.shots.length}`,
+          `effectiveShots.length=${effectiveShots.length}`,
+        );
+      }
       let importShots: EditableShot[];
       if (overlapMode === 'keep_both') {
         importShots = effectiveShots;
@@ -1537,6 +1563,14 @@ export default function DmpNewImportDialog({
           (shot.is_reference || (!shot.isNew && allOverlapIds.has(shot.id)))
             ? { ...shot, isDeleted: true, is_reference: false }
             : shot
+        );
+      }
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[handleConfirm import-save] writing sectionEditsRef[${currentSuggestion.importSectionIndex}]`,
+          `importShots.length=${importShots.length}`,
+          `deleted=${importShots.filter(s => s.isDeleted).length}`,
+          `alive=${importShots.filter(s => !s.isDeleted).length}`,
         );
       }
       sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: importShots });
