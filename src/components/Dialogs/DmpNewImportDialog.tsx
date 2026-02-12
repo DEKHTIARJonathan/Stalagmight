@@ -140,6 +140,138 @@ function adjustStationForDeletedShots(
   return adjusted;
 }
 
+// ─── Segment context helpers ────────────────────────────────────────────────
+
+type ExistingAnchor = {
+  existingSectionId: number;
+  existingStationIdx: number;
+  x: number;
+  y: number;
+};
+
+/**
+ * BFS from a DMP section through importing-type connections, collecting
+ * neighboring DMP section geometry and existing-type anchor positions.
+ */
+function computeDmpBfsContext(
+  startIdx: number,
+  excludeIndices: Set<number>,
+  connections: VirtualConnection[],
+  dmpSections: DmpSection[],
+): {
+  dmpContext: ContextSectionGeometry[];
+  existingAnchors: ExistingAnchor[];
+} {
+  const adjacency = buildAdjacency(connections);
+  const visited = new Set<number>();
+  const queue: Array<{ idx: number; offsetX: number; offsetY: number }> = [];
+  visited.add(startIdx);
+  for (const ex of excludeIndices) visited.add(ex);
+  queue.push({ idx: startIdx, offsetX: 0, offsetY: 0 });
+
+  const dmpContext: ContextSectionGeometry[] = [];
+  const existingAnchors: ExistingAnchor[] = [];
+
+  while (queue.length > 0) {
+    const { idx, offsetX, offsetY } = queue.shift()!;
+
+    // Collect existing-type anchors from this node
+    const nodeStations = computeStationsFromDmpShots(
+      (dmpSections[idx]?.shots ?? []).filter((s) => s.shot_type === 'Standard')
+    );
+    for (const conn of connections) {
+      if (
+        conn.targetType === 'existing' &&
+        conn.importSectionIndex === idx &&
+        conn.existingSectionId != null &&
+        conn.existingStationIndex != null
+      ) {
+        const stn = nodeStations[conn.importStationIndex];
+        if (stn) {
+          existingAnchors.push({
+            existingSectionId: conn.existingSectionId,
+            existingStationIdx: conn.existingStationIndex,
+            x: offsetX + stn.x,
+            y: offsetY + stn.y,
+          });
+        }
+      }
+    }
+
+    // BFS to importing-type neighbors
+    for (const edge of adjacency.get(idx) ?? []) {
+      if (visited.has(edge.neighbor)) continue;
+      visited.add(edge.neighbor);
+
+      const conn = edge.connection;
+      let stationInA: number;
+      let stationInB: number;
+      let sectionA: number;
+      if (conn.importSectionIndex === idx && conn.targetImportIndex === edge.neighbor) {
+        sectionA = idx;
+        stationInA = conn.importStationIndex;
+        stationInB = conn.targetImportStationIndex ?? 0;
+      } else if (conn.targetImportIndex === idx && conn.importSectionIndex === edge.neighbor) {
+        sectionA = conn.targetImportIndex;
+        stationInA = conn.targetImportStationIndex ?? 0;
+        stationInB = conn.importStationIndex;
+      } else {
+        continue;
+      }
+
+      const sectionAData = dmpSections[sectionA];
+      const neighborData = dmpSections[edge.neighbor];
+      if (!sectionAData || !neighborData) continue;
+
+      const stationsA = computeStationsFromDmpShots(
+        sectionAData.shots.filter((s) => s.shot_type === 'Standard')
+      );
+      const stationsB = computeStationsFromDmpShots(
+        neighborData.shots.filter((s) => s.shot_type === 'Standard')
+      );
+
+      const posA = stationsA[stationInA];
+      const posB = stationsB[stationInB];
+      if (!posA || !posB) continue;
+
+      const neighborOffsetX = offsetX + posA.x - posB.x;
+      const neighborOffsetY = offsetY + posA.y - posB.y;
+
+      const colorIdx = edge.neighbor % SECTION_COLORS.length;
+      const neighborColor = SECTION_COLORS[colorIdx] ?? '#95a5a6';
+
+      const shots: Array<{ from: [number, number]; to: [number, number] }> = [];
+      for (let i = 0; i < stationsB.length - 1; i++) {
+        const from = stationsB[i]!;
+        const to = stationsB[i + 1]!;
+        shots.push({
+          from: [from.x + neighborOffsetX, from.y + neighborOffsetY],
+          to: [to.x + neighborOffsetX, to.y + neighborOffsetY],
+        });
+      }
+
+      if (shots.length > 0) {
+        dmpContext.push({ color: neighborColor, shots });
+      }
+
+      queue.push({ idx: edge.neighbor, offsetX: neighborOffsetX, offsetY: neighborOffsetY });
+    }
+  }
+
+  return { dmpContext, existingAnchors };
+}
+
+/** Extract a station's XY position from backend shot_lines geometry. */
+function stationPositionFromShotLines(
+  shotLines: Array<Array<Array<number>>>,
+  stationIdx: number,
+): { x: number; y: number } | null {
+  if (stationIdx === 0) return { x: 0, y: 0 };
+  const line = shotLines[stationIdx - 1];
+  if (!line || line.length < 2 || !line[1] || line[1].length < 2) return null;
+  return { x: line[1][0]!, y: line[1][1]! };
+}
+
 /** Build batch import configs from virtual connections + BFS order. */
 function buildBatchImport(
   connections: VirtualConnection[],
@@ -396,8 +528,11 @@ export default function DmpNewImportDialog({
   const sectionEditsRef = useRef<Map<number, SectionEditState>>(new Map());
   const nextTempIdRef = useRef(1);
 
-  // Target-side segment context (fetched from backend)
-  const [targetSegmentContext, setTargetSegmentContext] = useState<ContextSectionGeometry[] | null>(null);
+  // Unified segment context (import-side DMP BFS + existing anchors, target-side geometry)
+  const [segmentContext, setSegmentContext] = useState<{
+    importSide: ContextSectionGeometry[];
+    targetSide: ContextSectionGeometry[];
+  } | null>(null);
 
   // Cache all cross-section suggestions from startup calculation
   const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
@@ -452,41 +587,145 @@ export default function DmpNewImportDialog({
     }
   }, [currentSuggestion, mergeOptions]);
 
-  // Fetch target-side segment geometry when suggestion changes
+  // Unified segment context — BFS through DMP connections + fetch existing segment geometry
   useEffect(() => {
-    if (!currentSuggestion || currentSuggestion.targetType !== 'existing' || currentSuggestion.existingSectionId == null) {
-      setTargetSegmentContext(null);
+    if (!currentSuggestion) {
+      setSegmentContext(null);
       return;
     }
 
     let cancelled = false;
-    const targetSectionId = currentSuggestion.existingSectionId;
 
-    invoke<SegmentGeometry>('get_segment_geometry', { sectionId: targetSectionId })
-      .then((result) => {
-        if (cancelled) return;
-        // Filter out the target section itself (already rendered by merge preview)
-        // and transform to ContextSectionGeometry
-        const context: ContextSectionGeometry[] = result.sections
-          .filter((s) => s.section_id !== targetSectionId)
-          .map((s) => ({
-            color: s.color,
-            shots: s.shot_lines
+    const compute = async () => {
+      const importIdx = currentSuggestion.importSectionIndex;
+      const importSide: ContextSectionGeometry[] = [];
+      const targetSide: ContextSectionGeometry[] = [];
+      const coveredExistingSectionIds = new Set<number>();
+
+      // Import-side BFS through importing-type connections
+      const importExclude = new Set<number>();
+      if (currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
+        importExclude.add(currentSuggestion.targetImportIndex);
+      }
+      const importBfs = computeDmpBfsContext(importIdx, importExclude, connections, dmpFile.sections);
+      importSide.push(...importBfs.dmpContext);
+
+      // Target-side handling
+      if (currentSuggestion.targetType === 'existing' && currentSuggestion.existingSectionId != null) {
+        // Fetch segment geometry for the existing target section
+        try {
+          const result = await invoke<SegmentGeometry>('get_segment_geometry', { sectionId: currentSuggestion.existingSectionId });
+          if (cancelled) return;
+
+          for (const s of result.sections) coveredExistingSectionIds.add(s.section_id);
+
+          const ctx: ContextSectionGeometry[] = result.sections
+            .filter((s) => s.section_id !== currentSuggestion.existingSectionId)
+            .map((s) => ({
+              color: s.color,
+              shots: s.shot_lines
+                .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
+                .map((line) => ({
+                  from: [line[0]![0]!, line[0]![1]!] as [number, number],
+                  to: [line[1]![0]!, line[1]![1]!] as [number, number],
+                })),
+            }))
+            .filter((s) => s.shots.length > 0);
+
+          targetSide.push(...ctx);
+        } catch {
+          // Non-fatal
+        }
+      } else if (currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
+        // Target-side DMP BFS
+        const targetExclude = new Set<number>([importIdx]);
+        const targetBfs = computeDmpBfsContext(currentSuggestion.targetImportIndex, targetExclude, connections, dmpFile.sections);
+        targetSide.push(...targetBfs.dmpContext);
+
+        // Process target-side existing anchors
+        for (const anchor of targetBfs.existingAnchors) {
+          if (coveredExistingSectionIds.has(anchor.existingSectionId)) continue;
+          coveredExistingSectionIds.add(anchor.existingSectionId);
+
+          try {
+            const result = await invoke<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId });
+            if (cancelled) return;
+
+            const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
+            if (!anchorGeo) continue;
+
+            const mergePos = stationPositionFromShotLines(anchorGeo.shot_lines, anchor.existingStationIdx);
+            if (!mergePos) continue;
+
+            const dx = anchor.x - mergePos.x;
+            const dy = anchor.y - mergePos.y;
+
+            for (const s of result.sections) {
+              if (coveredExistingSectionIds.has(s.section_id)) continue;
+              coveredExistingSectionIds.add(s.section_id);
+
+              const shots = s.shot_lines
+                .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
+                .map((line) => ({
+                  from: [line[0]![0]! + dx, line[0]![1]! + dy] as [number, number],
+                  to: [line[1]![0]! + dx, line[1]![1]! + dy] as [number, number],
+                }));
+
+              if (shots.length > 0) targetSide.push({ color: s.color, shots });
+            }
+          } catch {
+            // Non-fatal
+          }
+        }
+      }
+
+      // Process import-side existing anchors
+      for (const anchor of importBfs.existingAnchors) {
+        if (coveredExistingSectionIds.has(anchor.existingSectionId)) continue;
+        coveredExistingSectionIds.add(anchor.existingSectionId);
+
+        try {
+          const result = await invoke<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId });
+          if (cancelled) return;
+
+          const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
+          if (!anchorGeo) continue;
+
+          const mergePos = stationPositionFromShotLines(anchorGeo.shot_lines, anchor.existingStationIdx);
+          if (!mergePos) continue;
+
+          const dx = anchor.x - mergePos.x;
+          const dy = anchor.y - mergePos.y;
+
+          for (const s of result.sections) {
+            if (coveredExistingSectionIds.has(s.section_id)) continue;
+            coveredExistingSectionIds.add(s.section_id);
+
+            const shots = s.shot_lines
               .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
               .map((line) => ({
-                from: [line[0]![0]!, line[0]![1]!] as [number, number],
-                to: [line[1]![0]!, line[1]![1]!] as [number, number],
-              })),
-          }))
-          .filter((s) => s.shots.length > 0);
-        setTargetSegmentContext(context.length > 0 ? context : null);
-      })
-      .catch(() => {
-        if (!cancelled) setTargetSegmentContext(null);
-      });
+                from: [line[0]![0]! + dx, line[0]![1]! + dy] as [number, number],
+                to: [line[1]![0]! + dx, line[1]![1]! + dy] as [number, number],
+              }));
 
+            if (shots.length > 0) importSide.push({ color: s.color, shots });
+          }
+        } catch {
+          // Non-fatal
+        }
+      }
+
+      if (cancelled) return;
+      setSegmentContext(
+        importSide.length > 0 || targetSide.length > 0
+          ? { importSide, targetSide }
+          : null
+      );
+    };
+
+    compute();
     return () => { cancelled = true; };
-  }, [currentSuggestion]);
+  }, [currentSuggestion, connections, dmpFile.sections]);
 
   // Initialize / restore section edit state when currentSuggestion changes
   useEffect(() => {
@@ -655,91 +894,6 @@ export default function DmpNewImportDialog({
     }
     return indices;
   }, [effectiveShots]);
-
-  // Import-side segment context — BFS through import-to-import connections
-  const importSegmentContext = useMemo((): ContextSectionGeometry[] | null => {
-    if (!currentSuggestion || connections.length === 0) return null;
-
-    const currentIdx = currentSuggestion.importSectionIndex;
-    const adjacency = buildAdjacency(connections);
-
-    // BFS from current import section through import-to-import edges
-    const visited = new Set<number>();
-    const queue: Array<{ idx: number; offsetX: number; offsetY: number }> = [];
-    visited.add(currentIdx);
-    queue.push({ idx: currentIdx, offsetX: 0, offsetY: 0 });
-
-    const contextEntries: ContextSectionGeometry[] = [];
-
-    while (queue.length > 0) {
-      const { idx, offsetX, offsetY } = queue.shift()!;
-
-      for (const edge of adjacency.get(idx) ?? []) {
-        if (visited.has(edge.neighbor)) continue;
-        visited.add(edge.neighbor);
-
-        const conn = edge.connection;
-
-        // Determine which side of the connection is idx vs neighbor
-        let stationInA: number;
-        let stationInB: number;
-        let sectionA: number;
-        if (conn.importSectionIndex === idx && conn.targetImportIndex === edge.neighbor) {
-          sectionA = idx;
-          stationInA = conn.importStationIndex;
-          stationInB = conn.targetImportStationIndex ?? 0;
-        } else if (conn.targetImportIndex === idx && conn.importSectionIndex === edge.neighbor) {
-          sectionA = conn.targetImportIndex;
-          stationInA = conn.targetImportStationIndex ?? 0;
-          stationInB = conn.importStationIndex;
-        } else {
-          continue;
-        }
-
-        // Compute stations for both sections
-        const sectionAData = dmpFile.sections[sectionA];
-        const neighborData = dmpFile.sections[edge.neighbor];
-        if (!sectionAData || !neighborData) continue;
-
-        const stationsA = computeStationsFromDmpShots(
-          sectionAData.shots.filter((s) => s.shot_type === 'Standard')
-        );
-        const stationsB = computeStationsFromDmpShots(
-          neighborData.shots.filter((s) => s.shot_type === 'Standard')
-        );
-
-        const posA = stationsA[stationInA];
-        const posB = stationsB[stationInB];
-        if (!posA || !posB) continue;
-
-        // The neighbor's offset: align merge stations
-        const neighborOffsetX = offsetX + posA.x - posB.x;
-        const neighborOffsetY = offsetY + posA.y - posB.y;
-
-        // Build shot lines for the neighbor section
-        const colorIdx = edge.neighbor % SECTION_COLORS.length;
-        const neighborColor = SECTION_COLORS[colorIdx] ?? '#95a5a6';
-
-        const shots: Array<{ from: [number, number]; to: [number, number] }> = [];
-        for (let i = 0; i < stationsB.length - 1; i++) {
-          const from = stationsB[i]!;
-          const to = stationsB[i + 1]!;
-          shots.push({
-            from: [from.x + neighborOffsetX, from.y + neighborOffsetY],
-            to: [to.x + neighborOffsetX, to.y + neighborOffsetY],
-          });
-        }
-
-        if (shots.length > 0) {
-          contextEntries.push({ color: neighborColor, shots });
-        }
-
-        queue.push({ idx: edge.neighbor, offsetX: neighborOffsetX, offsetY: neighborOffsetY });
-      }
-    }
-
-    return contextEntries.length > 0 ? contextEntries : null;
-  }, [currentSuggestion, connections, dmpFile.sections]);
 
   // Section edit callbacks
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
@@ -1246,8 +1400,8 @@ export default function DmpNewImportDialog({
   // merge offset that SectionPreview applies to align the import section with the target.
   const mergedContextSections = useMemo((): ContextSectionGeometry[] | null => {
     const parts: ContextSectionGeometry[] = [];
-    if (targetSegmentContext) parts.push(...targetSegmentContext);
-    if (importSegmentContext) {
+    if (segmentContext?.targetSide) parts.push(...segmentContext.targetSide);
+    if (segmentContext?.importSide && segmentContext.importSide.length > 0) {
       const activePreview = previewMergeConfig ?? previewDmpMergeConfig;
       let dx = 0;
       let dy = 0;
@@ -1273,7 +1427,7 @@ export default function DmpNewImportDialog({
           dy = targetStn.y - importStn.y;
         }
       }
-      parts.push(...importSegmentContext.map((ctx) => ({
+      parts.push(...segmentContext.importSide.map((ctx) => ({
         color: ctx.color,
         shots: ctx.shots.map((shot) => ({
           from: [shot.from[0] + dx, shot.from[1] + dy] as [number, number],
@@ -1282,7 +1436,7 @@ export default function DmpNewImportDialog({
       })));
     }
     return parts.length > 0 ? parts : null;
-  }, [targetSegmentContext, importSegmentContext, previewMergeConfig, previewDmpMergeConfig, importPreviewSection]);
+  }, [segmentContext, previewMergeConfig, previewDmpMergeConfig, importPreviewSection]);
 
   // Import color for the current section
   const importColor = useMemo(() => {
