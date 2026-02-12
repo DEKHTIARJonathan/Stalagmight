@@ -836,7 +836,27 @@
       "overlapMode_importData": "Use import data",
       "overlapMode_existingData": "Use existing data",
       "overlapMode_interpolate": "Interpolate",
-      "overlapMode_keepBoth": "Keep both (reference)"
+      "overlapMode_keepBoth": "Keep both (reference)",
+      "manualPlacing": {
+        "segmentHeader": "Segment {{current}} of {{total}}",
+        "sections": "Sections",
+        "anchorStation": "Anchor: {{section}} stn {{station}}",
+        "selectAnchor": "Click a station in the preview to set the anchor point",
+        "placementMode": "Placement method",
+        "suggestion": "Suggested connection",
+        "origin": "Place at center of screen",
+        "zeroDatum": "Zero Datum (GPS)",
+        "fromExisting": "From existing station",
+        "manual": "Manual placement",
+        "placeOnMap": "Place on map",
+        "placeSegment": "Place segment",
+        "skip": "Skip (place later)",
+        "gpsLat": "Latitude",
+        "gpsLng": "Longitude",
+        "targetSection": "Target section",
+        "targetStation": "Target station",
+        "noSections": "No existing sections available"
+      }
     },
     "zeroDatumSelection": {
       "title": "Select Zero Datum Section",

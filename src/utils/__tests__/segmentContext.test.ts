@@ -4,6 +4,8 @@ import {
   computeDmpBfsContext,
   stationPositionFromShotLines,
   discoverBridgedDmpSections,
+  computeUnreachableSegments,
+  computeSegmentLayout,
   SECTION_COLORS,
   type VirtualConnection,
   type ExistingSectionGeoEntry,
@@ -436,5 +438,124 @@ describe('discoverBridgedDmpSections', () => {
     const result = discoverBridgedDmpSections(conns, new Set([2]), geoMap, sections);
     expect(result.targetSide).toHaveLength(1);
     expect(result.targetSide[0]!.color).toBe(SECTION_COLORS[1 % SECTION_COLORS.length]);
+  });
+});
+
+// ─── computeUnreachableSegments ──────────────────────────────────────────────
+
+describe('computeUnreachableSegments', () => {
+  it('returns empty result for empty input', () => {
+    expect(computeUnreachableSegments([], [])).toEqual([]);
+  });
+
+  it('returns single isolated section as a segment of 1', () => {
+    const result = computeUnreachableSegments([3], []);
+    expect(result).toEqual([[3]]);
+  });
+
+  it('groups two connected sections into one segment', () => {
+    const conns = [importingConn(1, 0, 2, 0)];
+    const result = computeUnreachableSegments([1, 2], conns);
+    expect(result).toEqual([[1, 2]]);
+  });
+
+  it('splits three sections into two segments when one is disconnected', () => {
+    // 1-2 connected, 3 isolated
+    const conns = [importingConn(1, 0, 2, 0)];
+    const result = computeUnreachableSegments([1, 2, 3], conns);
+    expect(result).toEqual([[1, 2], [3]]);
+  });
+
+  it('ignores connections where one endpoint is not in unreachable set', () => {
+    // Connection from 1→0, but 0 is not unreachable
+    const conns = [importingConn(1, 0, 0, 0)];
+    const result = computeUnreachableSegments([1, 2], conns);
+    // Each is its own segment since the connection to 0 is excluded
+    expect(result).toEqual([[1], [2]]);
+  });
+
+  it('ignores existing-type connections', () => {
+    const conns = [existingConn(1, 0, 42, 0)];
+    const result = computeUnreachableSegments([1, 2], conns);
+    expect(result).toEqual([[1], [2]]);
+  });
+
+  it('chains through multiple importing connections', () => {
+    const conns = [
+      importingConn(1, 0, 2, 0),
+      importingConn(2, 1, 3, 0),
+    ];
+    const result = computeUnreachableSegments([1, 2, 3], conns);
+    expect(result).toEqual([[1, 2, 3]]);
+  });
+
+  it('sorts segments by first index', () => {
+    const conns = [importingConn(5, 0, 6, 0)];
+    const result = computeUnreachableSegments([5, 6, 2], conns);
+    // Segment [2] comes first, then [5, 6]
+    expect(result).toEqual([[2], [5, 6]]);
+  });
+});
+
+// ─── computeSegmentLayout ───────────────────────────────────────────────────
+
+describe('computeSegmentLayout', () => {
+  // Section 0: 1 shot heading north (0°), length 10 → station 1 at (0, 10)
+  // Section 1: 1 shot heading east (90°), length 5 → station 1 at (5, 0)
+  // Section 2: 1 shot heading south (180°), length 8 → station 1 at (0, -8)
+  const sections: DmpSection[] = [
+    makeDmpSection('A', [makeShot(0, 10)]),
+    makeDmpSection('B', [makeShot(90, 5)]),
+    makeDmpSection('C', [makeShot(180, 8)]),
+  ];
+
+  it('returns single entry at origin for segment of 1', () => {
+    const result = computeSegmentLayout([0], [], sections);
+    expect(result).toEqual([{ sectionIndex: 0, offsetX: 0, offsetY: 0 }]);
+  });
+
+  it('computes correct offset for two connected sections', () => {
+    // Section 0 station 1 → Section 1 station 0
+    // Section 0 station 1 is at (0, 10). Section 1 station 0 is at (0, 0).
+    // Offset for section 1 = (0 + 0 - 0, 0 + 10 - 0) = (0, 10)
+    const conns = [importingConn(0, 1, 1, 0)];
+    const result = computeSegmentLayout([0, 1], conns, sections);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ sectionIndex: 0, offsetX: 0, offsetY: 0 });
+    expect(result[1]!.sectionIndex).toBe(1);
+    expect(result[1]!.offsetX).toBeCloseTo(0, 5);
+    expect(result[1]!.offsetY).toBeCloseTo(10, 5);
+  });
+
+  it('chains through multiple connections', () => {
+    // 0 → 1 → 2
+    const conns = [
+      importingConn(0, 1, 1, 0),
+      importingConn(1, 1, 2, 0),
+    ];
+    const result = computeSegmentLayout([0, 1, 2], conns, sections);
+
+    expect(result).toHaveLength(3);
+    // Section 1 offset = (0, 10) (from section 0's station 1)
+    expect(result[1]!.offsetX).toBeCloseTo(0, 5);
+    expect(result[1]!.offsetY).toBeCloseTo(10, 5);
+    // Section 2 offset: section 1's station 1 at (5, 0) + section 1's offset (0, 10) = (5, 10)
+    // Section 2's station 0 at (0, 0), so offset = (5 - 0, 10 - 0) = (5, 10)
+    expect(result[2]!.offsetX).toBeCloseTo(5, 5);
+    expect(result[2]!.offsetY).toBeCloseTo(10, 5);
+  });
+
+  it('returns empty for empty input', () => {
+    expect(computeSegmentLayout([], [], sections)).toEqual([]);
+  });
+
+  it('includes disconnected sections at origin', () => {
+    // Section 0 and 1 are in the segment but have no connection between them
+    const result = computeSegmentLayout([0, 1], [], sections);
+    expect(result).toHaveLength(2);
+    // Root (0) at origin, section 1 also at origin since no connection to offset it
+    expect(result[0]).toEqual({ sectionIndex: 0, offsetX: 0, offsetY: 0 });
+    expect(result[1]).toEqual({ sectionIndex: 1, offsetX: 0, offsetY: 0 });
   });
 });

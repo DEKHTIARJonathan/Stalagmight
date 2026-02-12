@@ -2774,6 +2774,7 @@ export default function MapCanvas() {
           cursorPosition={placementCursor}
           isSnapped={placementMode.snappedToStation !== null}
           pixelsPerMeter={pixelsPerMeter}
+          additionalSections={placementMode.additionalSections}
         />
       )}
 

@@ -53,6 +53,14 @@ export interface PlacementResult {
  * Placement mode state for manually placing a newly imported section on the map.
  * The section preview follows the cursor until the user clicks to confirm placement.
  */
+/** Additional section to render alongside the primary placement section. */
+export interface AdditionalPlacementSection {
+  sectionData: SectionData;
+  color: string;
+  offsetX: number;  // meters relative to primary section station 0
+  offsetY: number;
+}
+
 export interface PlacementModeState {
   /** The section data to be created (not yet in the project) */
   sectionData: SectionData;
@@ -66,6 +74,8 @@ export interface PlacementModeState {
   onComplete?: (result: PlacementResult) => void;
   /** Callback when placement is canceled */
   onCancel?: () => void;
+  /** Additional sections to render alongside primary (for segment placement) */
+  additionalSections?: AdditionalPlacementSection[];
 }
 
 export interface Selection {
@@ -243,7 +253,8 @@ interface UIStore {
     sectionData: SectionData,
     alignStationIndex: number,
     onComplete?: (result: PlacementResult) => void,
-    onCancel?: () => void
+    onCancel?: () => void,
+    additionalSections?: AdditionalPlacementSection[],
   ) => void;
   updatePlacementCursor: (position: Coordinates | null) => void;
   updatePlacementSnap: (stationRef: StationRef | null) => void;
@@ -673,7 +684,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel) =>
+  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) =>
     set({
       placementMode: {
         sectionData,
@@ -682,6 +693,7 @@ export const useUIStore = create<UIStore>((set) => ({
         snappedToStation: null,
         ...(onComplete !== undefined && { onComplete }),
         ...(onCancel !== undefined && { onCancel }),
+        ...(additionalSections !== undefined && { additionalSections }),
       },
     }),
   updatePlacementCursor: (position) =>
