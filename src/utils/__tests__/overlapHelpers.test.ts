@@ -1468,6 +1468,180 @@ describe('geometric invariant: station coordinates stay close across overlap mod
   }
 });
 
+// ─── Multi-connection overlap: target shot un-delete and update ──────────────
+//
+// When section A is the import for connection A→B (overlap shots in A deleted),
+// and later section C connects to A (C→A), the fix must update A's target shots.
+// If A's target shots were deleted by a DIFFERENT prior connection (e.g., A was
+// the import to D), those shots must be un-deleted so they can serve as the
+// surviving representative for the C→A overlap.
+
+describe('multi-connection overlap: target shot updates', () => {
+  // Section A has 10 shots. It was the import in A→D connection,
+  // which deleted overlap shots 8,9 (Back overlap at station 10).
+  // Now C→A connects at A's station 2 (Front overlap, 2 matched shots).
+  // C→A should update A's shots at indices 2,3.
+  const sectionA: EditableShotLike[] = Array.from({ length: 10 }, (_, i) =>
+    makeEditableShot(i, { azimuth_in: 100 + i, length: 5 + i * 0.1, depth_in: i, depth_out: i + 1 }),
+  );
+  // Mark shots 8,9 as deleted (from A→D connection)
+  sectionA[8] = { ...sectionA[8]!, isDeleted: true };
+  sectionA[9] = { ...sectionA[9]!, isDeleted: true };
+
+  const sectionC: EditableShotLike[] = [
+    makeEditableShot(0, { azimuth_in: 200, length: 7.0, depth_in: 2, depth_out: 3 }),
+    makeEditableShot(1, { azimuth_in: 210, length: 8.0, depth_in: 3, depth_out: 4 }),
+    makeEditableShot(2, { azimuth_in: 220, length: 9.0, depth_in: 4, depth_out: 5 }),
+  ];
+
+  // C→A suggestion: C import_stn=0 (Front), A existing_stn=2, matched=2, forward
+  const cToAParams: OverlapParams = {
+    importStationIndex: 0,
+    matchedShots: 2,
+    existingStationIndex: 2,
+    direction: 'forward',
+  };
+
+  it('updates non-deleted target shots with import_data', () => {
+    const allOverlap = computeOverlapIds(0, 2); // {0, 1}
+    const shouldReverse = needsDirectionReversal(0, 'forward');
+    expect(shouldReverse).toBe(false);
+
+    const modifiedA = sectionA.map(s => ({ ...s }));
+    let modified = false;
+
+    for (const overlapId of allOverlap) {
+      const importShot = sectionC.find(s => s.id === overlapId);
+      if (!importShot) continue;
+      const targetIdx = computeTargetShotIndex(overlapId, cToAParams);
+      if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
+      const targetShot = modifiedA[targetIdx]!;
+      if (targetShot.isDeleted) continue; // old behavior: skip deleted
+      modifiedA[targetIdx] = applyTargetData(targetShot, importShot);
+      modified = true;
+    }
+
+    expect(modified).toBe(true);
+    // A[2] updated with C[0] values
+    expect(modifiedA[2]!.azimuth_in).toBe(200);
+    expect(modifiedA[2]!.length).toBe(7.0);
+    // A[3] updated with C[1] values
+    expect(modifiedA[3]!.azimuth_in).toBe(210);
+    expect(modifiedA[3]!.length).toBe(8.0);
+    // A[8] still deleted (from A→D, not in C→A overlap)
+    expect(modifiedA[8]!.isDeleted).toBe(true);
+  });
+
+  it('un-deletes and updates target shots deleted by a previous connection', () => {
+    // Now simulate a scenario where A's shots 2,3 were ALSO deleted
+    // by a previous connection (e.g., A was import in A→E which overlapped at front)
+    const sectionAWithFrontDeleted = sectionA.map(s => ({ ...s }));
+    sectionAWithFrontDeleted[2] = { ...sectionAWithFrontDeleted[2]!, isDeleted: true };
+    sectionAWithFrontDeleted[3] = { ...sectionAWithFrontDeleted[3]!, isDeleted: true };
+
+    const allOverlap = computeOverlapIds(0, 2);
+    const shouldReverse = needsDirectionReversal(0, 'forward');
+
+    const modifiedA = sectionAWithFrontDeleted.map(s => ({ ...s }));
+    let modified = false;
+
+    for (const overlapId of allOverlap) {
+      const importShot = sectionC.find(s => s.id === overlapId);
+      if (!importShot) continue;
+      const targetIdx = computeTargetShotIndex(overlapId, cToAParams);
+      if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
+      let targetShot = modifiedA[targetIdx]!;
+      // NEW behavior: un-delete and apply
+      if (targetShot.isDeleted) {
+        targetShot = { ...targetShot, isDeleted: false };
+        modifiedA[targetIdx] = targetShot;
+      }
+      const importAsTarget: TargetShotLike = shouldReverse
+        ? reverseTargetShot(importShot)
+        : importShot;
+      modifiedA[targetIdx] = applyTargetData(targetShot, importAsTarget);
+      modified = true;
+    }
+
+    expect(modified).toBe(true);
+    // A[2] un-deleted and updated with C[0] values
+    expect(modifiedA[2]!.isDeleted).toBeFalsy();
+    expect(modifiedA[2]!.azimuth_in).toBe(200);
+    expect(modifiedA[2]!.length).toBe(7.0);
+    // A[3] un-deleted and updated with C[1] values
+    expect(modifiedA[3]!.isDeleted).toBeFalsy();
+    expect(modifiedA[3]!.azimuth_in).toBe(210);
+    expect(modifiedA[3]!.length).toBe(8.0);
+    // A[8] still deleted (not in the C→A overlap region)
+    expect(modifiedA[8]!.isDeleted).toBe(true);
+  });
+
+  it('adjacent non-overlapping connections update different target shots', () => {
+    // Simulates the kb.dmp scenario:
+    // Connection 1: B→A at A station 25, 2 matched, forward (updates A[25],A[26])
+    // Connection 2: C→A at A station 27, 2 matched, forward (updates A[27],A[28])
+    // These should be independent — no conflict.
+
+    // Expand section A to 30 shots for this test
+    const bigA: EditableShotLike[] = Array.from({ length: 30 }, (_, i) =>
+      makeEditableShot(i, { azimuth_in: 100 + i, length: 5 + i * 0.1, depth_in: i, depth_out: i + 1 }),
+    );
+
+    const sectionB: EditableShotLike[] = [
+      makeEditableShot(0, { azimuth_in: 300, length: 3.0, depth_in: 25, depth_out: 26 }),
+      makeEditableShot(1, { azimuth_in: 310, length: 4.0, depth_in: 26, depth_out: 27 }),
+    ];
+
+    // B→A: B import_stn=2 (Back, 2 shots), A existing_stn=25, matched=2, forward
+    const bToAParams: OverlapParams = {
+      importStationIndex: 2,
+      matchedShots: 2,
+      existingStationIndex: 25,
+      direction: 'forward',
+    };
+
+    // Apply B→A connection
+    const modifiedA = bigA.map(s => ({ ...s }));
+    const bOverlap = computeOverlapIds(2, 2); // {0, 1}
+    for (const overlapId of bOverlap) {
+      const importShot = sectionB.find(s => s.id === overlapId);
+      if (!importShot) continue;
+      const targetIdx = computeTargetShotIndex(overlapId, bToAParams);
+      if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
+      modifiedA[targetIdx] = applyTargetData(modifiedA[targetIdx]!, importShot);
+    }
+
+    // Verify B→A updated A[25] and A[26]
+    // Back + forward: (25 + 2 - 1) - k
+    // k=0 (overlapId=0): targetIdx = 26
+    // k=1 (overlapId=1): targetIdx = 25
+    expect(modifiedA[26]!.azimuth_in).toBe(300); // B[0] → A[26]
+    expect(modifiedA[25]!.azimuth_in).toBe(310); // B[1] → A[25]
+
+    // Apply C→A connection (C from the outer scope, existing_stn=27)
+    const cOverlap = computeOverlapIds(0, 2); // {0, 1}
+    for (const overlapId of cOverlap) {
+      const importShot = sectionC.find(s => s.id === overlapId);
+      if (!importShot) continue;
+      const targetIdx = computeTargetShotIndex(overlapId, { ...cToAParams, existingStationIndex: 27 });
+      if (targetIdx < 0 || targetIdx >= modifiedA.length) continue;
+      modifiedA[targetIdx] = applyTargetData(modifiedA[targetIdx]!, importShot);
+    }
+
+    // Verify C→A updated A[27] and A[28] independently
+    expect(modifiedA[27]!.azimuth_in).toBe(200); // C[0] → A[27]
+    expect(modifiedA[28]!.azimuth_in).toBe(210); // C[1] → A[28]
+
+    // B→A updates at A[25],A[26] should still be intact
+    expect(modifiedA[26]!.azimuth_in).toBe(300);
+    expect(modifiedA[25]!.azimuth_in).toBe(310);
+
+    // Non-overlap shots should be unchanged
+    expect(modifiedA[24]!.azimuth_in).toBe(124);
+    expect(modifiedA[29]!.azimuth_in).toBe(129);
+  });
+});
+
 // ─── handleConfirm target-shot-update simulation ────────────────────────────
 //
 // These tests simulate the exact code path in DmpNewImportDialog.handleConfirm
