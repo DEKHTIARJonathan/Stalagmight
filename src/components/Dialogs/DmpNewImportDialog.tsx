@@ -1500,6 +1500,73 @@ export default function DmpNewImportDialog({
         );
       }
       sectionEditsRef.current.set(currentSuggestion.importSectionIndex, { ...editState, shots: importShots });
+
+      // For 'interpolate' mode with import-to-import connections, apply the
+      // interpolated values to the TARGET section's corresponding overlap shots.
+      // The import's overlap shots are deleted (above) to preserve station index
+      // compatibility, so the averaged values must live on the target side.
+      if (overlapMode === 'interpolate' && currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
+        const { importStationIndex, matchedShots, existingStationIndex, direction } = currentSuggestion;
+        const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
+        const actionableIds = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
+        const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+        const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+
+        // Get or create target section's edit state
+        const targetIdx = currentSuggestion.targetImportIndex;
+        let targetShots: EditableShot[];
+        const existingTargetEdits = sectionEditsRef.current.get(targetIdx);
+        if (existingTargetEdits) {
+          targetShots = existingTargetEdits.shots.map(s => ({ ...s }));
+        } else {
+          const targetDmpSection = dmpFile.sections[targetIdx];
+          if (targetDmpSection) {
+            targetShots = convertToEditableShots(targetDmpSection.shots);
+          } else {
+            targetShots = [];
+          }
+        }
+
+        if (targetShots.length > 0) {
+          // Apply interpolated values from import shots to corresponding target shots
+          const importShotsForInterp = editState.shots;
+          let modified = false;
+          for (const overlapId of actionableIds) {
+            const importShot = importShotsForInterp.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
+            if (!importShot) continue;
+
+            const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+            if (targetShotIdx < 0 || targetShotIdx >= targetShots.length) continue;
+
+            const targetShot = targetShots[targetShotIdx]!;
+            if (targetShot.isDeleted) continue;
+
+            // The import shot needs direction reversal to match the target's frame
+            const importAsTarget: TargetShotLike = shouldReverse
+              ? reverseTargetShot(importShot)
+              : importShot;
+
+            targetShots[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+            modified = true;
+          }
+
+          if (modified) {
+            const targetDmpSection = dmpFile.sections[targetIdx]!;
+            sectionEditsRef.current.set(targetIdx, existingTargetEdits
+              ? { ...existingTargetEdits, shots: targetShots }
+              : {
+                  name: targetDmpSection.name,
+                  surveyor: '',
+                  date: targetDmpSection.date?.split(/[T ]/)[0] ?? '',
+                  color: '',
+                  direction: targetDmpSection.direction,
+                  quality: 1.0,
+                  shots: targetShots,
+                },
+            );
+          }
+        }
+      }
     }
 
     // Use selected merge pair for station indices (falls back to suggestion's original)
