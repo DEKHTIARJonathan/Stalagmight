@@ -236,6 +236,10 @@ function applyAllOverlapTreatments(
         sectionEdits.set(importSectionIndex, importEdits);
       }
     }
+    // Save raw import shots BEFORE import-side treatment modifies them.
+    // Target-side treatment needs original values to produce symmetric interpolation.
+    const rawImportShots = importEdits?.shots;
+
     if (importEdits) {
       const hasUntreated = importEdits.shots.some(
         shot => !shot.isNew && !shot.isDeleted && actionableIds.has(shot.id) && !shot.is_reference
@@ -373,8 +377,10 @@ function applyAllOverlapTreatments(
         }
 
         if (hasUntreatedTarget) {
-          const freshImportEdits = sectionEdits.get(importSectionIndex);
-          const importShotsForInterp = freshImportEdits?.shots ?? [];
+          // Use raw (pre-interpolation) import shots so both sides get symmetric results.
+          // If we read from sectionEdits here, import-side treatment has already averaged
+          // the values, and averaging again biases toward the target: avg(T, avg(I,T)) = (3T+I)/4.
+          const importShotsForInterp = rawImportShots ?? [];
           const targetShots = targetEdits.shots.map(s => ({ ...s }));
           let treated = 0;
           let skippedOutOfRange = 0, skippedAlreadyRef = 0, skippedNoImport = 0;
