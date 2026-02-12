@@ -282,6 +282,33 @@ function buildBatchImport(
             `[buildBatchImport] Section ${idx} "${section.name}": ${edits.shots.length} total shots, ${deletedCount} deleted, ${backendShots.length} emitted`,
           );
         }
+        // Compare edited shots to original DMP data to detect interpolation
+        if (import.meta.env.DEV) {
+          const origShots = convertToEditableShots(section.shots);
+          let modifiedCount = 0;
+          const aliveEdited = edits.shots.filter(s => !s.isDeleted);
+          for (const edited of aliveEdited) {
+            if (edited.isNew) continue;
+            const orig = origShots.find(o => o.id === edited.id);
+            if (orig && (
+              Math.abs(orig.azimuth_in - edited.azimuth_in) > 0.01 ||
+              Math.abs(orig.length - edited.length) > 0.001
+            )) {
+              modifiedCount++;
+              if (modifiedCount <= 3) {
+                console.warn(
+                  `[buildBatchImport]   MODIFIED shot id=${edited.id}:`,
+                  `az_in ${orig.azimuth_in.toFixed(1)}→${edited.azimuth_in.toFixed(1)}`,
+                  `len ${orig.length.toFixed(3)}→${edited.length.toFixed(3)}`,
+                  `is_ref=${edited.is_reference}`,
+                );
+              }
+            }
+          }
+          if (modifiedCount > 0) {
+            console.warn(`[buildBatchImport] Section ${idx} "${section.name}": ${modifiedCount} shots have INTERPOLATED values`);
+          }
+        }
       } else {
         const editableShots = convertToEditableShots(section.shots);
         backendShots = editableShots.map(editableShotToShotData);
@@ -370,6 +397,24 @@ function buildBatchImport(
   const unreachable = allSelected.filter(
     (idx) => idx !== zeroDatumIndex && !reachableSet.has(idx),
   );
+
+  if (import.meta.env.DEV) {
+    // Summarize connection types
+    let importingCount = 0;
+    let existingCount = 0;
+    let directCount = 0;
+    for (const c of allConnections) {
+      if (c.targetType === 'importing') importingCount++;
+      else existingCount++;
+    }
+    for (const _dp of directPlacements ?? []) directCount++;
+    const editedSections = sectionEdits ? Array.from(sectionEdits.keys()).length : 0;
+    console.warn(
+      `[buildBatchImport] SUMMARY: ${configs.length} configs emitted, ${unreachable.length} unreachable,`,
+      `connections: ${existingCount} existing + ${importingCount} importing + ${directCount} direct,`,
+      `sectionEdits has ${editedSections} entries`,
+    );
+  }
 
   return { configs, unreachable };
 }
