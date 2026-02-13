@@ -5607,3 +5607,116 @@ fn lsq_realistic_topology_preserves_geometry() {
         worst_shot, max_len_delta_a, actual_misclosure,
     );
 }
+
+#[test]
+fn lsq_spur_shots_are_not_modified() {
+    // Spur (branch) shots have no loop redundancy and must remain untouched.
+    //
+    // Topology:
+    //   Section A: 100 shots north (5m each), zero datum at A:100.
+    //   Section B: 1 shot east (10m), zero datum at B:0.
+    //   Section C: 20 shots east (3m each), merged to A:50 via C:0↔A:50.
+    //   Closure: A:30 ↔ B:1.
+    //
+    // Spur stations: A:0–A:29 (before closure), C:1–C:20 (branch beyond merge).
+    // Loop stations: A:30–A:100, B:0–B:1.
+    let mut project = Project::new("SpurTest".to_string(), None);
+
+    let shots_a: Vec<ShotData> = (0..100)
+        .map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0))
+        .collect();
+    let a = project.add_section(SectionData {
+        shots: shots_a,
+        ..Default::default()
+    }).id;
+
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    let shots_c: Vec<ShotData> = (0..20)
+        .map(|_| shot(90.0, 90.0, 3.0, 0.0, 0.0))
+        .collect();
+    let c = project.add_section(SectionData {
+        shots: shots_c,
+        ..Default::default()
+    }).id;
+
+    // Merge C:0 ↔ A:50
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(c, 0),
+        station_b: StationRef::new(a, 50),
+        merged_at: Utc::now(),
+    });
+
+    // Zero datums
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 100),
+        gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0),
+        gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
+    });
+
+    // Large offsets to stress the solver
+    project.section_offsets.insert(a, (500.0, 800.0));
+    project.section_offsets.insert(b, (500.0, 950.0));
+    project.section_offsets.insert(c, (500.0, 1050.0));
+
+    // Save original shot data for spur sections
+    let orig_a_spur: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == a).unwrap()
+        .shots[..30]  // A:0–A:29 are spur shots (before closure at A:30)
+        .iter().map(|s| (s.azimuth_in, s.length)).collect();
+
+    let orig_c: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == c).unwrap()
+        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+
+    let closure = LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 30),
+        station_b: StationRef::new(b, 1),
+        path_length: 360.0,
+        misclosure_distance: 5.0,
+        error_percentage: 1.4,
+        horizontal_misclosure: 5.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    };
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
+    let result = project.adjust_least_squares(
+        &component, &[closure], StationRef::new(a, 0), &config,
+    );
+    assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
+
+    // Verify spur shots in A (indices 0..29) are exactly unchanged.
+    let new_a_spur: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == a).unwrap()
+        .shots[..30]
+        .iter().map(|s| (s.azimuth_in, s.length)).collect();
+    for (i, (orig, new)) in orig_a_spur.iter().zip(new_a_spur.iter()).enumerate() {
+        assert!(
+            (orig.0 - new.0).abs() < f64::EPSILON && (orig.1 - new.1).abs() < f64::EPSILON,
+            "spur shot A:{i} was modified: az {:.6}→{:.6}, len {:.6}→{:.6}",
+            orig.0, new.0, orig.1, new.1,
+        );
+    }
+
+    // Verify all shots in section C are exactly unchanged.
+    let new_c: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == c).unwrap()
+        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+    for (i, (orig, new)) in orig_c.iter().zip(new_c.iter()).enumerate() {
+        assert!(
+            (orig.0 - new.0).abs() < f64::EPSILON && (orig.1 - new.1).abs() < f64::EPSILON,
+            "spur shot C:{i} was modified: az {:.6}→{:.6}, len {:.6}→{:.6}",
+            orig.0, new.0, orig.1, new.1,
+        );
+    }
+}
