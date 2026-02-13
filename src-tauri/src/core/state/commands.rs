@@ -427,8 +427,14 @@ impl AppState {
                     let max_shot = *modified_indices.iter().max().unwrap();
 
                     // Collect anchor station indices on this section.
-                    // An anchor is any station whose absolute position is constrained
-                    // by an external relationship (zero datum, merge, aligned closure).
+                    // An anchor is any station whose absolute position is
+                    // constrained by an immovable external relationship:
+                    //   - zero datums on this section (always anchors)
+                    //   - merges / aligned closures where the PARTNER can
+                    //     independently reach a datum (without going through
+                    //     this section).  A merge to a free-floating section
+                    //     is NOT a positional constraint — the partner can
+                    //     follow when this section's geometry changes.
                     let mut anchor_indices: Vec<u32> = Vec::new();
 
                     // Zero datums
@@ -437,23 +443,31 @@ impl AppState {
                             anchor_indices.push(zd.station_ref.station_index);
                         }
                     }
-                    // Station merges
+                    // Station merges (only datum-backed partners)
                     for m in &project.station_merges {
                         if m.station_a.section_id == sid {
-                            anchor_indices.push(m.station_a.station_index);
+                            if project.has_datum_path_excluding(m.station_b.section_id, sid) {
+                                anchor_indices.push(m.station_a.station_index);
+                            }
                         }
                         if m.station_b.section_id == sid {
-                            anchor_indices.push(m.station_b.station_index);
+                            if project.has_datum_path_excluding(m.station_a.section_id, sid) {
+                                anchor_indices.push(m.station_b.station_index);
+                            }
                         }
                     }
-                    // Aligned closures
+                    // Aligned closures (only datum-backed partners)
                     for c in &project.loop_closures {
                         if !c.is_aligned { continue; }
                         if c.station_a.section_id == sid {
-                            anchor_indices.push(c.station_a.station_index);
+                            if project.has_datum_path_excluding(c.station_b.section_id, sid) {
+                                anchor_indices.push(c.station_a.station_index);
+                            }
                         }
                         if c.station_b.section_id == sid {
-                            anchor_indices.push(c.station_b.station_index);
+                            if project.has_datum_path_excluding(c.station_a.section_id, sid) {
+                                anchor_indices.push(c.station_b.station_index);
+                            }
                         }
                     }
 
@@ -474,7 +488,11 @@ impl AppState {
                             "Skipping shot updates: modified range is between two anchored stations",
                         );
                         blocked_sections.insert(sid);
+                        continue;
                     }
+
+                    // (Connection-based constraints are handled post-update
+                    //  by adjusting only the affected section's offset.)
                 }
 
                 // Record anchor station positions BEFORE applying updates.
@@ -567,6 +585,128 @@ impl AppState {
                                 project.section_offsets.insert(*connected_sid, (current.0 + dx, current.1 + dy));
                             }
                         }
+                    }
+                }
+
+                // Cascade offset adjustments through drifted merge/closure
+                // connections.  After shot updates and zero datum compensation,
+                // some connections may be misaligned — the modified section's
+                // station shifted but its partner didn't follow.
+                //
+                // We BFS outward from "authoritative" sections (affected +
+                // datum-bearing) through merges and aligned closures.  For each
+                // connection where one side is authoritative and the other is
+                // not, we adjust the non-authoritative side's offset to realign,
+                // then mark it authoritative so further connections cascade.
+                let mut authoritative: HashSet<SectionId> = HashSet::new();
+                for zd in &project.zero_datums {
+                    authoritative.insert(zd.station_ref.section_id);
+                }
+                for &sid in &affected_section_ids {
+                    if !blocked_sections.contains(&sid) {
+                        authoritative.insert(sid);
+                    }
+                }
+
+                let merges: Vec<_> = project.station_merges.clone();
+                let closures: Vec<_> = project.loop_closures.clone();
+
+                for _iteration in 0..20 {
+                    let mut any_adjustment = false;
+
+                    for m in &merges {
+                        let (fixed_ref, free_ref) =
+                            if authoritative.contains(&m.station_a.section_id)
+                                && !authoritative.contains(&m.station_b.section_id)
+                            {
+                                (m.station_a, m.station_b)
+                            } else if authoritative.contains(&m.station_b.section_id)
+                                && !authoritative.contains(&m.station_a.section_id)
+                            {
+                                (m.station_b, m.station_a)
+                            } else {
+                                continue;
+                            };
+
+                        if let (Some(fixed_pos), Some(free_pos)) = (
+                            project.compute_station_raw_coords(fixed_ref),
+                            project.compute_station_raw_coords(free_ref),
+                        ) {
+                            let dx = fixed_pos.x - free_pos.x;
+                            let dy = fixed_pos.y - free_pos.y;
+                            if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
+                                tracing::info!(
+                                    fixed_section = fixed_ref.section_id,
+                                    free_section = free_ref.section_id,
+                                    dx,
+                                    dy,
+                                    purpose = "connection stability",
+                                    "Cascading offset to maintain merge alignment",
+                                );
+                                let current = project
+                                    .section_offsets
+                                    .get(&free_ref.section_id)
+                                    .copied()
+                                    .unwrap_or((0.0, 0.0));
+                                project.section_offsets.insert(
+                                    free_ref.section_id,
+                                    (current.0 + dx, current.1 + dy),
+                                );
+                                authoritative.insert(free_ref.section_id);
+                                any_adjustment = true;
+                            }
+                        }
+                    }
+
+                    for c in &closures {
+                        if !c.is_aligned {
+                            continue;
+                        }
+                        let (fixed_ref, free_ref) =
+                            if authoritative.contains(&c.station_a.section_id)
+                                && !authoritative.contains(&c.station_b.section_id)
+                            {
+                                (c.station_a, c.station_b)
+                            } else if authoritative.contains(&c.station_b.section_id)
+                                && !authoritative.contains(&c.station_a.section_id)
+                            {
+                                (c.station_b, c.station_a)
+                            } else {
+                                continue;
+                            };
+
+                        if let (Some(fixed_pos), Some(free_pos)) = (
+                            project.compute_station_raw_coords(fixed_ref),
+                            project.compute_station_raw_coords(free_ref),
+                        ) {
+                            let dx = fixed_pos.x - free_pos.x;
+                            let dy = fixed_pos.y - free_pos.y;
+                            if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
+                                tracing::info!(
+                                    fixed_section = fixed_ref.section_id,
+                                    free_section = free_ref.section_id,
+                                    dx,
+                                    dy,
+                                    purpose = "connection stability",
+                                    "Cascading offset to maintain closure alignment",
+                                );
+                                let current = project
+                                    .section_offsets
+                                    .get(&free_ref.section_id)
+                                    .copied()
+                                    .unwrap_or((0.0, 0.0));
+                                project.section_offsets.insert(
+                                    free_ref.section_id,
+                                    (current.0 + dx, current.1 + dy),
+                                );
+                                authoritative.insert(free_ref.section_id);
+                                any_adjustment = true;
+                            }
+                        }
+                    }
+
+                    if !any_adjustment {
+                        break;
                     }
                 }
             }
@@ -977,6 +1117,7 @@ impl AppState {
 
         // Only clean up if the section actually exists
         if project.get_section(section_id).is_some() {
+            project.preserve_connections_for_section_deletion(section_id);
             project.cleanup_section_references(section_id);
             project.remove_section(section_id);
             tracing::info!(
@@ -2438,13 +2579,13 @@ impl AppState {
                 ));
             }
 
-            // Step 3: Clean up section references (inline, Task 7 will provide helper later)
-            // Remove merges referencing this section
+            // Step 3: Preserve merge/closure connectivity, then clean up section references
+            project.preserve_connections_for_section_deletion(section_id);
+
             project.station_merges.retain(|m| {
                 m.station_a.section_id != section_id && m.station_b.section_id != section_id
             });
 
-            // Remove closures referencing this section
             project.loop_closures.retain(|lc| {
                 lc.station_a.section_id != section_id && lc.station_b.section_id != section_id
             });

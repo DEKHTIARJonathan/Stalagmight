@@ -857,7 +857,10 @@
         "gpsLng": "Longitude",
         "targetSection": "Target section",
         "targetStation": "Target station",
-        "noSections": "No existing sections available"
+        "noSections": "No existing sections available",
+        "doNotPlace": "Do not place",
+        "doNotPlaceDescription": "Skip this segment entirely — its sections will not be imported",
+        "next": "Next"
       }
     },
     "zeroDatumSelection": {
