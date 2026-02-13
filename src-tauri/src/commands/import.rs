@@ -106,7 +106,14 @@ pub fn import_sections(
     file_hash: Option<String>,
     existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
 ) -> CommandResult {
-    state.execute_import_sections(sections, Vec::new(), file_hash, existing_shot_updates.unwrap_or_default())
+    let updates = existing_shot_updates.unwrap_or_default();
+    tracing::info!(
+        section_count = sections.len(),
+        update_count = updates.len(),
+        purpose = "batch import with overlap updates",
+        "import_sections called",
+    );
+    state.execute_import_sections(sections, Vec::new(), file_hash, updates)
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.

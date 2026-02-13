@@ -190,6 +190,12 @@ function applyAllOverlapTreatments(
   overlapMode: OverlapMode,
 ): ExistingShotUpdateLocal[] {
   const existingShotUpdates: ExistingShotUpdateLocal[] = [];
+  if (import.meta.env.DEV) {
+    console.warn(
+      `[applyAllOverlaps] START: pool=${fullPool.length} suggestions, confirmed=${confirmedOverlaps.size}, mode=${overlapMode}`,
+      `edits keys=[${[...sectionEdits.keys()].join(',')}]`,
+    );
+  }
   // Track shots already treated by a previous suggestion to prevent double-treatment.
   // Key: "sectionIndex:shotId".  This replaced the old is_reference guard which was
   // removed so that is_reference only has user-facing semantics (keep_both mode).
@@ -437,6 +443,13 @@ function applyAllOverlapTreatments(
           // existing_data: target keeps its own values — no update needed
 
           if (updates) {
+            if (import.meta.env.DEV) {
+              console.warn(
+                `[applyAllOverlaps]   i2e update: section=${existingSectionId} shotId=${existingShot.id} shotIdx=${targetShotIdx}`,
+                `existing len=${existingShot.length.toFixed(3)} → update len=${(updates.length as number)?.toFixed(3)}`,
+                `existing az=${existingShot.azimuth_in.toFixed(1)} → update az=${(updates.azimuth_in as number)?.toFixed(1)}`,
+              );
+            }
             existingShotUpdates.push({
               section_id: existingSectionId,
               shot_id: existingShot.id,
@@ -517,7 +530,16 @@ function applyAllOverlapTreatments(
               : importShot;
 
             if (overlapMode === 'interpolate') {
-              targetShots[targetShotIdx] = interpolateShots(targetShot, importAsTarget);
+              const interpResult = interpolateShots(targetShot, importAsTarget);
+              if (import.meta.env.DEV) {
+                console.warn(
+                  `[applyAllOverlaps]   i2i target shot ${targetShotIdx} (id=${targetShot.id}):`,
+                  `len ${targetShot.length.toFixed(3)}→${interpResult.length.toFixed(3)}`,
+                  `az_in ${targetShot.azimuth_in.toFixed(1)}→${interpResult.azimuth_in.toFixed(1)}`,
+                  `(import: len=${importAsTarget.length.toFixed(3)} az=${importAsTarget.azimuth_in.toFixed(1)})`,
+                );
+              }
+              targetShots[targetShotIdx] = interpResult;
               treatedShots.add(targetTreatKey);
               treated++;
             } else if (overlapMode === 'existing_data') {
@@ -1777,6 +1799,16 @@ export default function DmpNewImportDialog({
       );
 
       if (configs.length > 0) {
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[doBatchImport] Sending ${configs.length} configs, ${existingShotUpdates.length} existingShotUpdates`,
+          );
+          for (const u of existingShotUpdates) {
+            console.warn(
+              `[doBatchImport]   update: section=${u.section_id} shot=${u.shot_id} len=${(u.updates.length as number)?.toFixed(3)}`,
+            );
+          }
+        }
         try {
           const result = await invoke<CommandResult>('import_sections', {
             sections: configs,
