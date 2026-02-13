@@ -17,6 +17,7 @@ export * from './ipc/SectionUpdates';
 export * from './ipc/SectionStats';
 export * from './ipc/SurveyDirection';
 export * from './ipc/ImportSectionConfig';
+export * from './ipc/ExistingShotUpdate';
 export * from './ipc/ImportPlacement';
 export * from './ipc/Shot';
 export * from './ipc/ShotData';

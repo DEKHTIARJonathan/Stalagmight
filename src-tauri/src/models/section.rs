@@ -4,7 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 use ts_rs::TS;
 
-use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, StationRef};
+use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotUpdates, StationRef};
 
 /// Unique identifier for a section
 pub type SectionId = u32;
@@ -137,6 +137,17 @@ pub struct ImportSectionConfig {
     /// Each tuple is (station_index, comment_text).
     #[serde(default)]
     pub station_comments: Vec<(u32, String)>,
+}
+
+/// Update to apply to an existing section's shot during batch import.
+/// Used for overlap interpolation: when an import section overlaps with an
+/// existing project section, the overlap shots on the existing side get
+/// updated with interpolated values as part of the same atomic transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ExistingShotUpdate {
+    pub section_id: SectionId,
+    pub shot_id: ShotId,
+    pub updates: ShotUpdates,
 }
 
 /// Placement strategy for an imported section.
