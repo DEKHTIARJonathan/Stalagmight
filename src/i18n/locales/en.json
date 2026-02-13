@@ -809,7 +809,7 @@
       "importingZeroDatum": "Setting up zero datum...",
       "calculating": "Finding connections...",
       "connectionHeading": "Suggested Connection",
-      "connectionDescription": "The system found matching survey data between these two sections. Confirm if the connection is correct, or skip to handle it manually.",
+      "connectionDescription": "Matching survey data was found between these two sections. Confirm if the connection is correct, or skip to handle it manually.",
       "connectsTo": "connects to",
       "station": "station {{index}}",
       "doesThisLookRight": "Does this connection look right?",
