@@ -8,8 +8,8 @@ use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::{Command, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
-    LoopClosure, Project, SectionData, SectionUpdates, ShotData, ShotUpdates, StationRef,
-    SurveyDirection,
+    LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
+    StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -8576,7 +8576,7 @@ fn test_execute_import_sections_origin_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None);
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8631,7 +8631,7 @@ fn test_execute_import_sections_from_importing_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), Some("abc123".to_string()));
+    let result = state.execute_import_sections(sections, Vec::new(), Some("abc123".to_string()), Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8678,7 +8678,7 @@ fn test_execute_import_sections_from_existing_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None);
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.sections.len(), 2);
@@ -8712,7 +8712,7 @@ fn test_execute_import_sections_manual_with_offset() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None);
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8752,7 +8752,7 @@ fn test_execute_import_sections_zero_datum_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None);
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8802,7 +8802,7 @@ fn test_execute_import_sections_rollback_on_failure() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None);
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
     assert!(!result.success, "should fail when merge target doesn't exist");
 
     // Project should be rolled back — no sections added
@@ -8818,7 +8818,7 @@ fn test_execute_import_sections_empty_is_noop() {
         location: None,
     });
 
-    let result = state.execute_import_sections(vec![], Vec::new(), None);
+    let result = state.execute_import_sections(vec![], Vec::new(), None, Vec::new());
     assert!(result.success);
 }
 
@@ -8841,7 +8841,7 @@ fn test_execute_import_sections_no_project() {
         placement: ImportPlacement::Origin,
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None);
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No project open"));
 }
@@ -8882,7 +8882,7 @@ fn test_execute_import_sections_manual_snap_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None);
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
     assert!(result.success, "import with ManualSnap failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.station_merges.len(), 1);
@@ -9409,12 +9409,13 @@ fn test_unmerge_undo_restores_merge() {
 ///
 /// Flow:
 /// 1. Import section 002 at origin (becomes the "existing" section)
-/// 2. Apply overlap treatment: interpolate 002 shots 180-181, remove 001 shots 105-106
-/// 3. Import section 001 (105 shots) merged to 002 at station 182
-/// 4. Read back from project state and assert actual interpolated values
+/// 2. Import section 001 (105 shots, overlap removed) with existing_shot_updates
+///    that interpolate 002's overlap shots — all in one atomic import call
+/// 3. Read back from project state and assert actual interpolated values
 #[test]
 #[ignore]
 fn kb5_import_overlap_interpolation_integration() {
+    use crate::models::ExistingShotUpdate;
     use crate::parsers::dmp::{parse_dmp, DmpShotType};
 
     let dmp_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
@@ -9454,6 +9455,7 @@ fn kb5_import_overlap_interpolation_integration() {
         }],
         Vec::new(),
         None,
+        Vec::new(),
     );
     assert!(result_002.success, "import 002 failed: {:?}", result_002.error);
 
@@ -9461,10 +9463,10 @@ fn kb5_import_overlap_interpolation_integration() {
     let section_002_id = project.sections[0].id;
     assert_eq!(project.sections[0].shots.len(), 364, "002 should have 364 shots");
 
-    // ── Step 2: Apply overlap treatment to existing section 002 ──
+    // ── Step 2: Import section 001 with overlap shots removed + existing shot updates ──
     // 001→002 overlap: Back (impStn=107), Reverse, matched=2, exStn=182.
     // Target shot indices (Back+Reverse): (182-2)+k = 180, 181.
-    // Interpolate: average import shot values with existing target values.
+    // Import shots 105, 106 are deleted; 002 shots 180, 181 get interpolated values.
 
     fn circular_mean_deg(a: f64, b: f64) -> f64 {
         let (a_r, b_r) = (a.to_radians(), b.to_radians());
@@ -9483,62 +9485,42 @@ fn kb5_import_overlap_interpolation_integration() {
         }
     }
 
-    // Pair 105↔180
-    let imp_105 = &shots_001[105];
-    let ext_180 = &shots_002[180];
+    fn interp_update(section_id: SectionId, shot_id: ShotId, imp: &ShotData, ext: &ShotData) -> ExistingShotUpdate {
+        ExistingShotUpdate {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                azimuth_in: Some(circular_mean_deg(imp.azimuth_in, ext.azimuth_in)),
+                azimuth_out: Some(circular_mean_deg(imp.azimuth_out, ext.azimuth_out)),
+                length: Some((imp.length + ext.length) / 2.0),
+                depth_in: Some((imp.depth_in + ext.depth_in) / 2.0),
+                depth_out: Some((imp.depth_out + ext.depth_out) / 2.0),
+                pitch_in: avg_opt(imp.pitch_in, ext.pitch_in),
+                pitch_out: avg_opt(imp.pitch_out, ext.pitch_out),
+                left: avg_opt(imp.left, ext.left),
+                right: avg_opt(imp.right, ext.right),
+                up: avg_opt(imp.up, ext.up),
+                down: avg_opt(imp.down, ext.down),
+                ..Default::default()
+            },
+        }
+    }
+
     let shot_180_id = project.sections[0].shots[180].id;
-    let result = state.execute(Command::UpdateShot {
-        section_id: section_002_id,
-        shot_id: shot_180_id,
-        updates: ShotUpdates {
-            azimuth_in: Some(circular_mean_deg(imp_105.azimuth_in, ext_180.azimuth_in)),
-            azimuth_out: Some(circular_mean_deg(imp_105.azimuth_out, ext_180.azimuth_out)),
-            length: Some((imp_105.length + ext_180.length) / 2.0),
-            depth_in: Some((imp_105.depth_in + ext_180.depth_in) / 2.0),
-            depth_out: Some((imp_105.depth_out + ext_180.depth_out) / 2.0),
-            pitch_in: avg_opt(imp_105.pitch_in, ext_180.pitch_in),
-            pitch_out: avg_opt(imp_105.pitch_out, ext_180.pitch_out),
-            left: avg_opt(imp_105.left, ext_180.left),
-            right: avg_opt(imp_105.right, ext_180.right),
-            up: avg_opt(imp_105.up, ext_180.up),
-            down: avg_opt(imp_105.down, ext_180.down),
-            ..Default::default()
-        },
-    });
-    assert!(result.success, "update shot 180 failed: {:?}", result.error);
-
-    // Pair 106↔181
-    let imp_106 = &shots_001[106];
-    let ext_181 = &shots_002[181];
     let shot_181_id = project.sections[0].shots[181].id;
-    let result = state.execute(Command::UpdateShot {
-        section_id: section_002_id,
-        shot_id: shot_181_id,
-        updates: ShotUpdates {
-            azimuth_in: Some(circular_mean_deg(imp_106.azimuth_in, ext_181.azimuth_in)),
-            azimuth_out: Some(circular_mean_deg(imp_106.azimuth_out, ext_181.azimuth_out)),
-            length: Some((imp_106.length + ext_181.length) / 2.0),
-            depth_in: Some((imp_106.depth_in + ext_181.depth_in) / 2.0),
-            depth_out: Some((imp_106.depth_out + ext_181.depth_out) / 2.0),
-            pitch_in: avg_opt(imp_106.pitch_in, ext_181.pitch_in),
-            pitch_out: avg_opt(imp_106.pitch_out, ext_181.pitch_out),
-            left: avg_opt(imp_106.left, ext_181.left),
-            right: avg_opt(imp_106.right, ext_181.right),
-            up: avg_opt(imp_106.up, ext_181.up),
-            down: avg_opt(imp_106.down, ext_181.down),
-            ..Default::default()
-        },
-    });
-    assert!(result.success, "update shot 181 failed: {:?}", result.error);
 
-    // ── Step 3: Import section 001 with overlap shots removed ──
-    // Remove shots 105, 106 (overlap region deleted from import side)
+    let existing_updates = vec![
+        interp_update(section_002_id, shot_180_id, &shots_001[105], &shots_002[180]),
+        interp_update(section_002_id, shot_181_id, &shots_001[106], &shots_002[181]),
+    ];
+
+    // Remove overlap shots 105, 106 from 001
     let mut shots_001_treated: Vec<ShotData> = shots_001.clone();
     shots_001_treated.remove(106); // remove higher index first
     shots_001_treated.remove(105);
     assert_eq!(shots_001_treated.len(), 105, "001 should have 105 shots after overlap removal");
 
-    // 001 merges at its back (station 105 after deletion) to 002 station 182
+    // Import 001 merged to 002 at station 182, with existing shot updates
     let result_001 = state.execute_import_sections(
         vec![ImportSectionConfig {
             section_index: 0,
@@ -9551,20 +9533,20 @@ fn kb5_import_overlap_interpolation_integration() {
             shots: shots_001_treated,
             station_comments: Vec::new(),
             placement: ImportPlacement::FromExisting {
-                import_station: 105, // last station after removing 2 shots
+                import_station: 105,
                 existing_station: StationRef::new(section_002_id, 182),
             },
         }],
         Vec::new(),
         None,
+        existing_updates,
     );
     assert!(result_001.success, "import 001 failed: {:?}", result_001.error);
 
-    // ── Step 4: Read back from project state and verify ──
+    // ── Step 3: Read back from project state and verify ──
     let project = state.get_project_state().unwrap();
     assert_eq!(project.sections.len(), 2, "should have 2 sections");
 
-    // Find section 002 and section 001 in the project
     let sec_002 = project.sections.iter().find(|s| s.id == section_002_id)
         .expect("section 002 should exist");
     let sec_001 = project.sections.iter().find(|s| s.id != section_002_id)
@@ -9573,20 +9555,20 @@ fn kb5_import_overlap_interpolation_integration() {
     // Section 001: 105 shots (overlap shots removed)
     assert_eq!(sec_001.shots.len(), 105, "001 should have 105 shots after import");
 
-    // Section 002: 247 shots, with shots 180-181 now having interpolated values
+    // Section 002: 364 shots, with shots 180-181 now having interpolated values
     assert_eq!(sec_002.shots.len(), 364, "002 should still have 364 shots");
 
     let actual_180 = &sec_002.shots[180];
     let actual_181 = &sec_002.shots[181];
 
-    // Verify shot 180 has interpolated values (not the original 002 values)
+    // Verify shot 180 has interpolated values (not the original 6.52m/329.7°)
     let eps = 0.01;
     assert!((actual_180.length - 5.665).abs() < eps,
         "002 shot 180 length after import: expected ~5.665, got {}", actual_180.length);
     assert!((actual_180.azimuth_in - 322.4).abs() < 0.5,
         "002 shot 180 azimuth_in after import: expected ~322.4°, got {}°", actual_180.azimuth_in);
 
-    // Verify shot 181 has interpolated values
+    // Verify shot 181 has interpolated values (not the original 12.71m/355.8°)
     assert!((actual_181.length - 12.375).abs() < eps,
         "002 shot 181 length after import: expected ~12.375, got {}", actual_181.length);
     assert!((actual_181.azimuth_in - 349.75).abs() < 0.5,
