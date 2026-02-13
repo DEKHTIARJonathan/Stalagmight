@@ -350,7 +350,7 @@ impl AppState {
         file_hash: Option<String>,
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
     ) -> CommandResult {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         use crate::models::{ClosureStrategy, ImportPlacement, StationRef};
 
         // Serialize command execution to prevent concurrent interleaving
@@ -396,6 +396,33 @@ impl AppState {
                 Err(poisoned) => poisoned.into_inner(),
             };
             if let Some(project) = proj_guard.as_mut() {
+                // Collect unique affected section IDs
+                let affected_section_ids: HashSet<SectionId> =
+                    existing_shot_updates.iter().map(|u| u.section_id).collect();
+
+                // Record anchor station positions BEFORE applying updates.
+                // For each affected section that has a zero datum, we need to keep
+                // the datum station fixed — otherwise modifying shots between station 0
+                // and the datum shifts the datum's absolute position.
+                let mut anchor_positions: HashMap<SectionId, (StationRef, Coordinates)> =
+                    HashMap::new();
+                for &sid in &affected_section_ids {
+                    if let Some(zd) = project.zero_datums.iter().find(|zd| zd.station_ref.section_id == sid) {
+                        if let Some(coords) = project.compute_station_raw_coords(zd.station_ref) {
+                            tracing::debug!(
+                                section_id = sid,
+                                anchor_station = zd.station_ref.station_index,
+                                x = coords.x,
+                                y = coords.y,
+                                purpose = "zero datum stability",
+                                "Recorded anchor position before shot updates",
+                            );
+                            anchor_positions.insert(sid, (zd.station_ref, coords));
+                        }
+                    }
+                }
+
+                // Apply the shot updates
                 for update in &existing_shot_updates {
                     if let Some(section) = project.sections.iter_mut().find(|s| s.id == update.section_id) {
                         if let Some(shot) = section.shots.iter_mut().find(|s| s.id == update.shot_id) {
@@ -433,6 +460,34 @@ impl AppState {
                             purpose = "overlap interpolation",
                             "Section not found in project",
                         );
+                    }
+                }
+
+                // Compensate section offsets to keep zero datum stations fixed.
+                // After modifying shots, the geometry between station 0 and the anchor
+                // station has changed, so the anchor's computed position has drifted.
+                // We adjust the section offset (and all connected sections in the rigid
+                // group) by the inverse delta to pin the anchor back to its original spot.
+                for (sid, (anchor_ref, old_coords)) in &anchor_positions {
+                    if let Some(new_coords) = project.compute_station_raw_coords(*anchor_ref) {
+                        let dx = old_coords.x - new_coords.x;
+                        let dy = old_coords.y - new_coords.y;
+                        if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
+                            let connected = project.get_merged_section_ids(*sid);
+                            tracing::info!(
+                                section_id = sid,
+                                anchor_station = anchor_ref.station_index,
+                                dx,
+                                dy,
+                                connected_count = connected.len(),
+                                purpose = "zero datum stability",
+                                "Compensating section offsets to keep zero datum fixed",
+                            );
+                            for connected_sid in &connected {
+                                let current = project.section_offsets.get(connected_sid).copied().unwrap_or((0.0, 0.0));
+                                project.section_offsets.insert(*connected_sid, (current.0 + dx, current.1 + dy));
+                            }
+                        }
                     }
                 }
             }
