@@ -1758,10 +1758,9 @@ mod tests {
                 if treated_shots.contains(&key) { continue; }
                 treated_shots.insert(key);
 
-                // Import-to-import: always delete.
-                // Confirmed import-to-existing: delete (existing section has the data).
-                // Unconfirmed import-to-existing: interpolate only (no deletion).
-                if s.target_type == TargetType::Importing || is_confirmed {
+                // Import-to-import: always delete (target section keeps the overlap).
+                // Import-to-existing: interpolate only (no deletion).
+                if s.target_type == TargetType::Importing {
                     deleted_shots
                         .entry(s.import_section_index)
                         .or_default()
@@ -1791,7 +1790,7 @@ mod tests {
         println!("Section 005: raw={}, deleted={:?}, alive={}",
             raw_counts[4], deleted_shots.get(&4), alive_005);
 
-        assert_eq!(alive_001, 105, "001: 107 raw - 2 deleted (confirmed import-to-existing with 002) = 105");
+        assert_eq!(alive_001, 107, "001: 107 raw - 0 deleted (import-to-existing overlaps are interpolated, not deleted) = 107");
         assert_eq!(alive_005, 5, "005: 7 raw - 2 deleted (import-to-import with 001) = 5");
         assert_eq!(alive_004, 2, "004: 4 raw - 2 deleted (front overlap with 001) = 2");
         assert_eq!(alive_003, 27, "003: 29 raw - 2 deleted (front overlap with 001) = 27");
@@ -1823,4 +1822,5 @@ mod tests {
         assert_eq!(s001.import_station_index, 107, "001 connects at its back (station 107)");
         assert_eq!(s001.existing_station_index, 182, "001 attaches to 002 station 182");
     }
+
 }
