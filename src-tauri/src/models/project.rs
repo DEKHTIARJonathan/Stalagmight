@@ -376,6 +376,232 @@ impl Project {
         }
     }
 
+    /// Preserve merge-group connectivity and rewire closures before removing a section.
+    ///
+    /// For every station on the deleted section that participates in merges with
+    /// stations on OTHER sections, we find the merge group, remove the deleted
+    /// station, compute connected components among the remaining stations, and
+    /// create replacement merges so that the group stays connected.
+    ///
+    /// For closures that reference a station on the deleted section, we rewire
+    /// them to a merge-group partner on another section if one exists.
+    pub(crate) fn preserve_connections_for_section_deletion(&mut self, section_id: SectionId) {
+        let station_count = self
+            .get_section(section_id)
+            .map(|s| s.shots.len() + 1)
+            .unwrap_or(0);
+
+        // Collect all stations on this section
+        let section_stations: HashSet<StationRef> = (0..station_count as u32)
+            .map(|i| StationRef::new(section_id, i))
+            .collect();
+
+        // --- Merge preservation ---
+        // Track which merge groups we've already processed (by a canonical member)
+        let mut processed_groups: HashSet<StationRef> = HashSet::new();
+        let mut replacement_merges: Vec<(StationRef, StationRef)> = Vec::new();
+
+        for &station in &section_stations {
+            let group = self.get_merge_group(station);
+
+            // Only process groups that touch other sections
+            let external_members: HashSet<StationRef> = group
+                .iter()
+                .filter(|s| s.section_id != section_id)
+                .copied()
+                .collect();
+
+            if external_members.is_empty() {
+                continue;
+            }
+
+            // Skip if we already processed this group via another station
+            if external_members.iter().any(|s| processed_groups.contains(s)) {
+                continue;
+            }
+            for &s in &external_members {
+                processed_groups.insert(s);
+            }
+
+            // Build components among the external members after removing ALL
+            // section stations from the graph
+            let components = self.build_merge_components_excluding_section(
+                &external_members,
+                section_id,
+            );
+
+            if components.len() > 1 {
+                // Connect each disconnected component to the first one
+                let base = &components[0];
+                for component in components.iter().skip(1) {
+                    // Find a cross-section pair (prefer different sections)
+                    let mut found = None;
+                    for a in base {
+                        for b in component {
+                            if a.section_id != b.section_id {
+                                found = Some((*a, *b));
+                                break;
+                            }
+                        }
+                        if found.is_some() {
+                            break;
+                        }
+                    }
+                    // Fall back to same-section pair if needed
+                    if found.is_none() {
+                        if let (Some(a), Some(b)) = (base.first(), component.first()) {
+                            found = Some((*a, *b));
+                        }
+                    }
+                    if let Some((a, b)) = found {
+                        if !self.has_direct_merge(a, b)
+                            && !replacement_merges
+                                .iter()
+                                .any(|(ra, rb)| (*ra == a && *rb == b) || (*ra == b && *rb == a))
+                        {
+                            replacement_merges.push((a, b));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add replacement merges
+        for (a, b) in &replacement_merges {
+            self.station_merges.push(StationMerge {
+                station_a: *a,
+                station_b: *b,
+                merged_at: Utc::now(),
+            });
+            debug!(
+                a_section = a.section_id,
+                a_station = a.station_index,
+                b_section = b.section_id,
+                b_station = b.station_index,
+                "Added replacement merge during section deletion"
+            );
+        }
+
+        // --- Closure rewiring ---
+        let closures_to_rewire: Vec<_> = self
+            .loop_closures
+            .iter()
+            .filter(|lc| {
+                lc.station_a.section_id == section_id || lc.station_b.section_id == section_id
+            })
+            .map(|lc| (lc.id, lc.station_a, lc.station_b))
+            .collect();
+
+        for (closure_id, station_a, station_b) in closures_to_rewire {
+            let (removed_station, other_station) = if station_a.section_id == section_id {
+                (station_a, station_b)
+            } else {
+                (station_b, station_a)
+            };
+
+            // If both sides are on the deleted section, it will just be removed
+            if other_station.section_id == section_id {
+                continue;
+            }
+
+            // Find a merge-group partner on another section to rewire to
+            let group = self.get_merge_group(removed_station);
+            let mut candidates: Vec<StationRef> = group
+                .into_iter()
+                .filter(|s| s.section_id != section_id)
+                .collect();
+            candidates.sort_by_key(Self::station_ref_key);
+
+            if let Some(replacement) = candidates.first().copied() {
+                // Don't rewire if it would create a self-referencing or duplicate closure
+                if replacement == other_station
+                    || self.are_stations_merged(replacement, other_station)
+                    || self.are_stations_in_closure(replacement, other_station)
+                {
+                    continue;
+                }
+
+                // Rewire the closure in place
+                if let Some(lc) = self.loop_closures.iter_mut().find(|lc| lc.id == closure_id) {
+                    if lc.station_a.section_id == section_id {
+                        lc.station_a = replacement;
+                    } else {
+                        lc.station_b = replacement;
+                    }
+                    debug!(
+                        closure_id,
+                        replacement_section = replacement.section_id,
+                        replacement_station = replacement.station_index,
+                        "Rewired closure during section deletion"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Like `build_merge_components` but excludes ALL stations from a given section
+    /// (not just a single station). Used during section deletion.
+    fn build_merge_components_excluding_section(
+        &self,
+        stations: &HashSet<StationRef>,
+        excluded_section: SectionId,
+    ) -> Vec<Vec<StationRef>> {
+        let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for station in stations {
+            adjacency.entry(*station).or_default();
+        }
+
+        for merge in &self.station_merges {
+            if merge.station_a.section_id == excluded_section
+                || merge.station_b.section_id == excluded_section
+            {
+                continue;
+            }
+            if stations.contains(&merge.station_a) && stations.contains(&merge.station_b) {
+                adjacency
+                    .entry(merge.station_a)
+                    .or_default()
+                    .push(merge.station_b);
+                adjacency
+                    .entry(merge.station_b)
+                    .or_default()
+                    .push(merge.station_a);
+            }
+        }
+
+        let mut components = Vec::new();
+        let mut visited = HashSet::new();
+
+        let mut station_list: Vec<StationRef> = stations.iter().copied().collect();
+        station_list.sort_by_key(Self::station_ref_key);
+
+        for station in station_list {
+            if visited.contains(&station) {
+                continue;
+            }
+            let mut component = Vec::new();
+            let mut queue = VecDeque::new();
+            visited.insert(station);
+            queue.push_back(station);
+
+            while let Some(current) = queue.pop_front() {
+                component.push(current);
+                if let Some(neighbors) = adjacency.get(&current) {
+                    for neighbor in neighbors {
+                        if visited.insert(*neighbor) {
+                            queue.push_back(*neighbor);
+                        }
+                    }
+                }
+            }
+
+            component.sort_by_key(Self::station_ref_key);
+            components.push(component);
+        }
+
+        components
+    }
+
     /// Remove all merges, closures, section_offsets, station_offsets, and zero_datums
     /// that reference the given section. Call before `remove_section()` to avoid orphans.
     pub fn cleanup_section_references(&mut self, section_id: SectionId) {
@@ -1094,6 +1320,62 @@ impl Project {
             }
         }
         connected
+    }
+
+    /// Check whether `start` can reach a zero datum station via merges and
+    /// aligned closures WITHOUT traversing through `excluded`.  This is used
+    /// by the doubly-anchored guard: a merge/closure to a partner is only a
+    /// positional constraint if that partner is independently datum-anchored.
+    pub(crate) fn has_datum_path_excluding(
+        &self,
+        start: SectionId,
+        excluded: SectionId,
+    ) -> bool {
+        let mut visited = HashSet::new();
+        let mut queue = vec![start];
+        while let Some(current) = queue.pop() {
+            if current == excluded {
+                continue;
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            if self
+                .zero_datums
+                .iter()
+                .any(|zd| zd.station_ref.section_id == current)
+            {
+                return true;
+            }
+            for m in &self.station_merges {
+                if m.station_a.section_id == current
+                    && !visited.contains(&m.station_b.section_id)
+                {
+                    queue.push(m.station_b.section_id);
+                }
+                if m.station_b.section_id == current
+                    && !visited.contains(&m.station_a.section_id)
+                {
+                    queue.push(m.station_a.section_id);
+                }
+            }
+            for c in &self.loop_closures {
+                if !c.is_aligned {
+                    continue;
+                }
+                if c.station_a.section_id == current
+                    && !visited.contains(&c.station_b.section_id)
+                {
+                    queue.push(c.station_b.section_id);
+                }
+                if c.station_b.section_id == current
+                    && !visited.contains(&c.station_a.section_id)
+                {
+                    queue.push(c.station_a.section_id);
+                }
+            }
+        }
+        false
     }
 
     /// Get all section IDs connected through station merges only (rigid groups).

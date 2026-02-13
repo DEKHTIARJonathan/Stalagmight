@@ -85,6 +85,11 @@ export interface SavedManualPlacingState {
   segmentSkipCounts: Array<[string, number]>;
   sectionEdits: Array<[number, SectionEditState]>;
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
+  earlyImported?: Array<[number, number]>;
+  /** DMP indices of a segment just placed that needs immediate import on dialog restore. */
+  pendingSegmentImport?: number[];
+  /** DMP indices of segments the user chose to discard ("Do not place"). */
+  discardedIndices?: number[];
 }
 
 // ─── Graph helpers ───────────────────────────────────────────────────────────
@@ -563,7 +568,8 @@ function buildBatchImport(
   sectionEdits?: Map<number, SectionEditState>,
   fullPool?: CrossSectionSuggestion[],
   directPlacements?: DirectPlacement[],
-): { configs: BackendImportSectionConfig[]; unreachable: number[] } {
+  alreadyImported?: Map<number, number>,
+): { configs: BackendImportSectionConfig[]; unreachable: number[]; emittedDmpIndices: number[] } {
   // Build adjacency + connections including any fallback anchors for disconnected components
   const allConnections = [...connections];
   const adjacency = buildAdjacency(allConnections);
@@ -678,6 +684,8 @@ function buildBatchImport(
       if (emittedPosition.has(idx)) continue;
       // Skip zero datum — already imported
       if (idx === zeroDatumIndex) continue;
+      // Skip sections already imported in a previous batch (early import)
+      if (alreadyImported?.has(idx)) continue;
 
       const section = dmpFile.sections[idx];
       if (!section) continue;
@@ -744,6 +752,22 @@ function buildBatchImport(
       // Fallback: section is only the TARGET of an import-to-import connection
       if (!directPlacement && !conn) {
         conn = findReverseImportConnection(idx, allConnections, emittedPosition);
+        // Also check if the reverse target was already imported in a previous batch
+        if (!conn && alreadyImported) {
+          for (const c of allConnections) {
+            if (c.targetType !== 'importing') continue;
+            if (c.targetImportIndex !== idx) continue;
+            if (!alreadyImported.has(c.importSectionIndex)) continue;
+            conn = {
+              importSectionIndex: idx,
+              importStationIndex: c.targetImportStationIndex ?? 0,
+              targetType: 'importing',
+              targetImportIndex: c.importSectionIndex,
+              targetImportStationIndex: c.importStationIndex,
+            };
+            break;
+          }
+        }
         if (!conn) {
           if (import.meta.env.DEV) {
             console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED — no connection or direct placement`);
@@ -775,6 +799,23 @@ function buildBatchImport(
             },
           };
         } else if (conn!.targetType === 'importing' && conn!.targetImportIndex != null && conn!.targetImportStationIndex != null) {
+          // Check if the target was already imported in a previous batch
+          const alreadyImportedSectionId = alreadyImported?.get(conn!.targetImportIndex);
+          if (alreadyImportedSectionId != null) {
+            // Convert from_importing → from_existing using the real section_id
+            const targetEdits = sectionEdits?.get(conn!.targetImportIndex);
+            const adjTargetStn = targetEdits
+              ? adjustStationForDeletedShots(targetEdits.shots, conn!.targetImportStationIndex!)
+              : conn!.targetImportStationIndex!;
+            placement = {
+              type: 'from_existing',
+              import_station: adjustedImportStation,
+              existing_station: {
+                section_id: alreadyImportedSectionId,
+                station_index: adjTargetStn,
+              },
+            };
+          } else {
           // The target must already be emitted in configs[]
           let targetPos = emittedPosition.get(conn!.targetImportIndex);
           if (targetPos == null) {
@@ -785,6 +826,22 @@ function buildBatchImport(
               const adjustedImportStation2 = edits
                 ? adjustStationForDeletedShots(edits.shots, conn.importStationIndex)
                 : conn.importStationIndex;
+              // Check if the reverse target was already imported
+              const reverseAlreadyId = alreadyImported?.get(conn.targetImportIndex!);
+              if (reverseAlreadyId != null) {
+                const targetEdits2 = sectionEdits?.get(conn.targetImportIndex!);
+                const adjTargetStn2 = targetEdits2
+                  ? adjustStationForDeletedShots(targetEdits2.shots, conn.targetImportStationIndex!)
+                  : conn.targetImportStationIndex!;
+                placement = {
+                  type: 'from_existing',
+                  import_station: adjustedImportStation2,
+                  existing_station: {
+                    section_id: reverseAlreadyId,
+                    station_index: adjTargetStn2,
+                  },
+                };
+              } else {
               targetPos = emittedPosition.get(conn.targetImportIndex!);
               if (targetPos == null) {
                 // Shouldn't happen — findReverseImportConnection checks emittedPosition
@@ -800,6 +857,7 @@ function buildBatchImport(
                 target_section_index: targetPos,
                 target_station_index: adjustedTargetStation2,
               };
+              }
             } else {
               // No reverse available — will retry in next pass
               if (import.meta.env.DEV) {
@@ -821,6 +879,7 @@ function buildBatchImport(
               target_section_index: targetPos,
               target_station_index: adjustedTargetStation,
             };
+          }
           }
         } else {
           continue;
@@ -894,7 +953,7 @@ function buildBatchImport(
     }
   }
 
-  return { configs, unreachable };
+  return { configs, unreachable, emittedDmpIndices: Array.from(emittedPosition.keys()) };
 }
 
 /**
@@ -981,7 +1040,7 @@ export default function DmpNewImportDialog({
   const currentSegment = segmentQueue[0] ?? null;
 
   const [segmentPlacementMode, setSegmentPlacementMode] = useState<
-    'suggestion' | 'origin' | 'fromExisting' | 'manual'
+    'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard'
   >('origin');
   const [segmentAnchor, setSegmentAnchor] = useState<{
     sectionIndex: number; stationIndex: number;
@@ -998,6 +1057,16 @@ export default function DmpNewImportDialog({
 
   // Accumulated direct placements for manual_placing phase
   const directPlacementsRef = useRef<DirectPlacement[]>(saved?.directPlacements ?? []);
+
+  // DMP index → project section_id for sections imported during early import
+  const earlyImportedRef = useRef<Map<number, number>>(
+    saved?.earlyImported ? new Map(saved.earlyImported) : new Map()
+  );
+
+  // DMP indices of segments the user chose to discard ("Do not place")
+  const discardedIndicesRef = useRef<Set<number>>(
+    new Set(saved?.discardedIndices ?? [])
+  );
 
   // Skip counter per segment (prevent infinite loops)
   const segmentSkipCountRef = useRef<Map<string, number>>(
@@ -1057,6 +1126,10 @@ export default function DmpNewImportDialog({
   // (modified overlap shots sit between two positional constraints). When true, only
   // 'existing_data' and 'keep_both' are valid — interpolation / import_data would break
   // a closure or zero-datum constraint.
+  //
+  // A merge/closure is only an anchor if the partner can independently reach a zero datum
+  // without going through this section.  A merge to a free-floating section is NOT a
+  // positional constraint — the partner can follow via cascading offset adjustments.
   const isTargetDoublyAnchored = useMemo(() => {
     if (!currentSuggestion) return false;
     if (currentSuggestion.targetType !== 'existing' || currentSuggestion.existingSectionId == null) return false;
@@ -1066,6 +1139,40 @@ export default function DmpNewImportDialog({
     if (!project) return false;
 
     const sid = currentSuggestion.existingSectionId;
+
+    // BFS: can `start` reach a zero datum via merges + aligned closures
+    // without traversing through `excluded`?
+    const hasDatumPathExcluding = (start: number, excluded: number): boolean => {
+      const visited = new Set<number>();
+      const queue = [start];
+      while (queue.length > 0) {
+        const current = queue.pop()!;
+        if (current === excluded) continue;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        if (project.zero_datums.some((zd) => zd.station_ref.section_id === current)) {
+          return true;
+        }
+        for (const m of project.station_merges) {
+          if (m.station_a.section_id === current && !visited.has(m.station_b.section_id)) {
+            queue.push(m.station_b.section_id);
+          }
+          if (m.station_b.section_id === current && !visited.has(m.station_a.section_id)) {
+            queue.push(m.station_a.section_id);
+          }
+        }
+        for (const c of project.loop_closures) {
+          if (!c.is_aligned) continue;
+          if (c.station_a.section_id === current && !visited.has(c.station_b.section_id)) {
+            queue.push(c.station_b.section_id);
+          }
+          if (c.station_b.section_id === current && !visited.has(c.station_a.section_id)) {
+            queue.push(c.station_a.section_id);
+          }
+        }
+      }
+      return false;
+    };
 
     // Compute the range of target shot indices that would be modified
     let minShot: number;
@@ -1078,20 +1185,30 @@ export default function DmpNewImportDialog({
       maxShot = currentSuggestion.existingStationIndex - 1;
     }
 
-    // Collect anchor station indices on the target section
+    // Collect anchor station indices on the target section.
+    // Zero datums are always anchors.  Merges/closures are only anchors
+    // if the partner is independently datum-backed.
     const anchors: number[] = [];
 
     for (const zd of project.zero_datums) {
       if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
     }
     for (const m of project.station_merges) {
-      if (m.station_a.section_id === sid) anchors.push(m.station_a.station_index);
-      if (m.station_b.section_id === sid) anchors.push(m.station_b.station_index);
+      if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {
+        anchors.push(m.station_a.station_index);
+      }
+      if (m.station_b.section_id === sid && hasDatumPathExcluding(m.station_a.section_id, sid)) {
+        anchors.push(m.station_b.station_index);
+      }
     }
     for (const c of project.loop_closures) {
       if (!c.is_aligned) continue;
-      if (c.station_a.section_id === sid) anchors.push(c.station_a.station_index);
-      if (c.station_b.section_id === sid) anchors.push(c.station_b.station_index);
+      if (c.station_a.section_id === sid && hasDatumPathExcluding(c.station_b.section_id, sid)) {
+        anchors.push(c.station_a.station_index);
+      }
+      if (c.station_b.section_id === sid && hasDatumPathExcluding(c.station_a.section_id, sid)) {
+        anchors.push(c.station_b.station_index);
+      }
     }
 
     const hasFront = anchors.some((idx) => idx <= minShot);
@@ -1646,20 +1763,84 @@ export default function DmpNewImportDialog({
     return true;
   }, []);
 
-  // Decide whether to enter manual_placing or go straight to placing.
-  // Called when the suggesting phase is done (pool exhausted or all confirmed/skipped).
-  const transitionToPlacingOrManual = useCallback(() => {
-    const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-    const { unreachable } = buildBatchImport(
-      connectionsRef.current,
-      zeroDatumIdx,
-      dmpFile,
-      selectionConfig,
-      sectionEditsRef.current,
-      fullPoolRef.current,
-      directPlacementsRef.current,
-    );
+  // Transition from suggesting phase: import reachable sections immediately (early import),
+  // then enter manual_placing for unreachable segments, or complete if none.
+  const transitionToPlacingOrManual = useCallback(async () => {
+    setIsImporting(true);
+    setError(null);
 
+    let unreachable: number[] = [];
+    try {
+      // 1. Apply overlap treatments (single source of truth)
+      let existingShotUpdates: ExistingShotUpdateLocal[] = [];
+      if (fullPoolRef.current.length > 0) {
+        existingShotUpdates = applyAllOverlapTreatments(
+          fullPoolRef.current,
+          confirmedOverlapsRef.current,
+          sectionEditsRef.current,
+          dmpFile,
+          overlapMode,
+        );
+      }
+
+      // 2. Redirect connections targeting deleted overlap zones
+      redirectDeletedTargets(
+        connectionsRef.current,
+        sectionEditsRef.current,
+        confirmedOverlapsRef.current,
+        fullPoolRef.current,
+      );
+
+      // 3. Build batch import configs for reachable sections
+      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+      let emittedDmpIndices: number[];
+      let configs: BackendImportSectionConfig[];
+      ({ configs, unreachable, emittedDmpIndices } = buildBatchImport(
+        connectionsRef.current,
+        zeroDatumIdx,
+        dmpFile,
+        selectionConfig,
+        sectionEditsRef.current,
+        fullPoolRef.current,
+        directPlacementsRef.current,
+      ));
+
+      // 4. Import reachable sections immediately
+      if (configs.length > 0) {
+        const oldSectionCount = useProjectStore.getState().project?.sections.length ?? 0;
+
+        const result = await invoke<CommandResult>('import_sections', {
+          sections: configs,
+          fileHash: selectionConfig.fileHash ?? null,
+          sectionHashes: selectionConfig.sectionHashes ?? null,
+          existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
+        });
+
+        if (!result.success) {
+          setError(result.error ?? 'Import failed');
+          return;
+        }
+
+        await refreshProjectState();
+
+        // Build DMP index → section_id mapping for late import
+        const projectSections = useProjectStore.getState().project?.sections ?? [];
+        for (let i = 0; i < emittedDmpIndices.length; i++) {
+          const sectionId = projectSections[oldSectionCount + i]?.id;
+          if (sectionId != null) {
+            earlyImportedRef.current.set(emittedDmpIndices[i]!, sectionId);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[earlyImport] Error during early import:', e);
+      setError(String(e));
+      return;
+    } finally {
+      setIsImporting(false);
+    }
+
+    // 5. Check for unreachable sections
     if (unreachable.length > 0) {
       const segments = computeUnreachableSegments(unreachable, connectionsRef.current);
       if (segments.length > 0) {
@@ -1679,8 +1860,9 @@ export default function DmpNewImportDialog({
       }
     }
 
-    setPhase('placing');
-  }, [zeroDatumConfig, dmpFile, selectionConfig]);
+    // No unreachable — all done
+    onComplete();
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -1795,98 +1977,159 @@ export default function DmpNewImportDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // When restored from manual placement with an empty segment queue, transition to placing
+  // On restore: import a just-placed segment immediately so it appears on the map
+  const pendingSegmentImportedRef = useRef(false);
   useEffect(() => {
-    if (phase === 'manual_placing' && segmentQueue.length === 0) {
+    if (!saved?.pendingSegmentImport || saved.pendingSegmentImport.length === 0) return;
+    if (pendingSegmentImportedRef.current) return;
+    pendingSegmentImportedRef.current = true;
+
+    const importPendingSegment = async () => {
+      setIsImporting(true);
+      try {
+        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+        const { configs, emittedDmpIndices } = buildBatchImport(
+          connectionsRef.current,
+          zeroDatumIdx,
+          dmpFile,
+          selectionConfig,
+          sectionEditsRef.current,
+          fullPoolRef.current,
+          directPlacementsRef.current,
+          earlyImportedRef.current,
+        );
+
+        // Filter to only the sections in the pending segment, remapping from_importing indices
+        const pendingSet = new Set(saved.pendingSegmentImport);
+        const segmentConfigs: BackendImportSectionConfig[] = [];
+        const segmentDmpIndices: number[] = [];
+        // Map original config position → new position in segmentConfigs
+        const posRemap = new Map<number, number>();
+        for (let i = 0; i < configs.length; i++) {
+          const dmpIdx = emittedDmpIndices[i];
+          if (dmpIdx != null && pendingSet.has(dmpIdx)) {
+            posRemap.set(i, segmentConfigs.length);
+            segmentConfigs.push({ ...configs[i]!, section_index: segmentConfigs.length });
+            segmentDmpIndices.push(dmpIdx);
+          }
+        }
+        // Remap from_importing target_section_index to new positions
+        for (const cfg of segmentConfigs) {
+          if (cfg.placement.type === 'from_importing') {
+            const oldTarget = (cfg.placement as { target_section_index: number }).target_section_index;
+            const newTarget = posRemap.get(oldTarget);
+            if (newTarget != null) {
+              (cfg.placement as { target_section_index: number }).target_section_index = newTarget;
+            }
+          }
+        }
+
+        if (segmentConfigs.length > 0) {
+          const oldSectionCount = useProjectStore.getState().project?.sections.length ?? 0;
+
+          const result = await invoke<CommandResult>('import_sections', {
+            sections: segmentConfigs,
+            fileHash: selectionConfig.fileHash ?? null,
+            sectionHashes: selectionConfig.sectionHashes ?? null,
+            existingShotUpdates: null,
+          });
+
+          if (result.success) {
+            await refreshProjectState();
+
+            const projectSections = useProjectStore.getState().project?.sections ?? [];
+            for (let i = 0; i < segmentDmpIndices.length; i++) {
+              const sectionId = projectSections[oldSectionCount + i]?.id;
+              if (sectionId != null) {
+                earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Non-fatal — segment will be retried in late import
+        console.error('[pendingSegmentImport] Error:', e);
+      } finally {
+        setIsImporting(false);
+      }
+
+      // If this was the last segment, finish the import — don't wait for the
+      // placing phase which would race with isImporting state.
+      if (segmentQueue.length === 0) {
+        onComplete();
+      }
+    };
+
+    importPendingSegment();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When restored from manual placement with an empty segment queue, transition to placing.
+  // Skip if a pending segment import is in progress — it will call onComplete directly.
+  useEffect(() => {
+    if (phase === 'manual_placing' && segmentQueue.length === 0 && !saved?.pendingSegmentImport?.length) {
       setPhase('placing');
     }
-  }, [phase, segmentQueue.length]);
+  }, [phase, segmentQueue.length, saved?.pendingSegmentImport?.length]);
 
-  // Handle 'placing' phase — build batch import and execute
+  // Handle 'placing' phase — late import of remaining sections after manual_placing.
+  // Overlap treatment and connection redirect already happened during early import.
   useEffect(() => {
     if (phase !== 'placing') return;
     if (isImporting) return;
 
-    const doBatchImport = async () => {
+    const doLateImport = async () => {
       setIsImporting(true);
       setError(null);
 
-      // Apply ALL overlap treatments in a single pass before building configs.
-      // This is the single source of truth for overlap mutation — handleConfirm
-      // only records the user's merge station choice, not the actual treatment.
-      let existingShotUpdates: ExistingShotUpdateLocal[] = [];
-      if (fullPoolRef.current.length > 0) {
-        existingShotUpdates = applyAllOverlapTreatments(
-          fullPoolRef.current,
-          confirmedOverlapsRef.current,
-          sectionEditsRef.current,
+      let unreachable: number[] = [];
+      try {
+        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+        let configs: BackendImportSectionConfig[];
+        ({ configs, unreachable } = buildBatchImport(
+          connectionsRef.current,
+          zeroDatumIdx,
           dmpFile,
-          overlapMode,
-        );
-      }
+          selectionConfig,
+          sectionEditsRef.current,
+          fullPoolRef.current,
+          directPlacementsRef.current,
+          earlyImportedRef.current,
+        ));
 
-      // Redirect connections whose target station was deleted by overlap treatment
-      redirectDeletedTargets(
-        connectionsRef.current,
-        sectionEditsRef.current,
-        confirmedOverlapsRef.current,
-        fullPoolRef.current,
-      );
-
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-      const { configs, unreachable } = buildBatchImport(
-        connectionsRef.current,
-        zeroDatumIdx,
-        dmpFile,
-        selectionConfig,
-        sectionEditsRef.current,
-        fullPoolRef.current,
-        directPlacementsRef.current,
-      );
-
-      if (configs.length > 0) {
-        if (import.meta.env.DEV) {
-          console.warn(
-            `[doBatchImport] Sending ${configs.length} configs, ${existingShotUpdates.length} existingShotUpdates`,
-          );
-          for (const u of existingShotUpdates) {
-            console.warn(
-              `[doBatchImport]   update: section=${u.section_id} shot=${u.shot_id} len=${(u.updates.length as number)?.toFixed(3)}`,
-            );
-          }
-        }
-        try {
+        if (configs.length > 0) {
           const result = await invoke<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
-            existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
+            existingShotUpdates: null,  // Already sent in early import
           });
 
           if (!result.success) {
-            setError(result.error ?? 'Batch import failed');
-            setIsImporting(false);
+            setError(result.error ?? 'Late import failed');
             return;
           }
 
           await refreshProjectState();
-        } catch (e) {
-          setError(String(e));
-          setIsImporting(false);
-          return;
         }
+      } catch (e) {
+        console.error('[lateImport] Error:', e);
+        setError(String(e));
+        return;
+      } finally {
+        setIsImporting(false);
       }
 
-      setIsImporting(false);
-
-      if (unreachable.length > 0) {
-        onHandoffToLegacy(new Set(unreachable), connectionsRef.current);
+      // Filter out discarded segments — they should not be handed to legacy
+      const remaining = unreachable.filter(idx => !discardedIndicesRef.current.has(idx));
+      if (remaining.length > 0) {
+        onHandoffToLegacy(new Set(remaining), connectionsRef.current);
       } else {
         onComplete();
       }
     };
 
-    doBatchImport();
+    doLateImport();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, placingRetry]);
 
@@ -2289,6 +2532,13 @@ export default function DmpNewImportDialog({
           station_index: fromExistingStationIdx,
         },
       };
+    } else if (segmentPlacementMode === 'discard') {
+      // Discard: skip this segment entirely without creating a placement
+      for (const idx of currentSegment) {
+        discardedIndicesRef.current.add(idx);
+      }
+      advanceSegmentQueue();
+      return;
     } else if (segmentPlacementMode === 'manual') {
       // Manual mode is handled by handleStartSegmentPlacement
       return;
@@ -2401,6 +2651,8 @@ export default function DmpNewImportDialog({
       segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
       sectionEdits: Array.from(sectionEditsRef.current.entries()),
       confirmedOverlaps: Array.from(confirmedOverlapsRef.current.entries()),
+      earlyImported: Array.from(earlyImportedRef.current.entries()),
+      discardedIndices: Array.from(discardedIndicesRef.current),
     };
 
     // Reopen data (same as what App.tsx passes)
@@ -2450,6 +2702,7 @@ export default function DmpNewImportDialog({
             segmentQueue: nextQueue,
             segmentAnchor: nextAnchor,
             directPlacements: [...savedState.directPlacements, dp],
+            pendingSegmentImport: savedState.segmentQueue[0],
           },
         });
       },
@@ -2524,6 +2777,7 @@ export default function DmpNewImportDialog({
     if (segmentPlacementMode === 'origin') return true;
     if (segmentPlacementMode === 'fromExisting') return fromExistingSectionId != null;
     if (segmentPlacementMode === 'manual') return false; // must use "Place on Map" button
+    if (segmentPlacementMode === 'discard') return true;
     return false;
   }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId]);
 
@@ -2911,6 +3165,23 @@ export default function DmpNewImportDialog({
                     )}
                   </div>
                 </label>
+
+                {/* Do not place (discard) */}
+                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="segmentPlacementMode"
+                    checked={segmentPlacementMode === 'discard'}
+                    onChange={() => setSegmentPlacementMode('discard')}
+                    className="mt-0.5"
+                  />
+                  <div className="text-sm">
+                    <div>{t('dialogs.dmpNewImport.manualPlacing.doNotPlace')}</div>
+                    <div className="text-xs text-text-secondary">
+                      {t('dialogs.dmpNewImport.manualPlacing.doNotPlaceDescription')}
+                    </div>
+                  </div>
+                </label>
               </div>
 
               {/* Error */}
@@ -2955,8 +3226,16 @@ export default function DmpNewImportDialog({
               </div>
             )}
 
+            {/* Early import in progress (between suggesting and manual_placing/done) */}
+            {phase === 'suggesting' && isImporting && (
+              <div className="text-center" data-testid="wizard-early-importing">
+                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.placing', { count: connectedIndices.size })}</div>
+                <div className="animate-pulse text-text-secondary">...</div>
+              </div>
+            )}
+
             {/* No suggestions — show done phase briefly before handoff */}
-            {phase === 'suggesting' && !isCalculating && !currentSuggestion && (
+            {phase === 'suggesting' && !isCalculating && !currentSuggestion && !isImporting && (
               <div className="text-center" data-testid="wizard-no-suggestions">
                 <div className="text-lg mb-2">{t('dialogs.dmpNewImport.noSuggestions')}</div>
                 {selectedIndices.filter((idx) => !connectedIndices.has(idx)).length > 0 && (
@@ -3025,7 +3304,9 @@ export default function DmpNewImportDialog({
                   disabled={!isSegmentPlacementValid}
                   data-testid="segment-place-button"
                 >
-                  {t('dialogs.dmpNewImport.manualPlacing.placeSegment')}
+                  {segmentPlacementMode === 'discard'
+                    ? t('dialogs.dmpNewImport.manualPlacing.next')
+                    : t('dialogs.dmpNewImport.manualPlacing.placeSegment')}
                 </Button>
               </>
             )}
