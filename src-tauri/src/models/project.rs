@@ -1213,23 +1213,65 @@ impl Project {
 
         self.shift_station_refs(section_id, (pos + 1) as u32, -1);
 
-        // Adjust section offset to keep post-deletion stations at their
-        // original absolute positions.  Removing a shot removes one link
-        // from the coordinate walk, shifting all stations after the deletion
-        // point by -displacement.  Adding +displacement to the section
-        // offset compensates, keeping the tail in place while the head
-        // (stations before the deletion) shifts.  This is correct because
-        // the shift_blocked guard already prevents deletion when both sides
+        // After removing a shot, stations after the deletion point (index > pos)
+        // shift by -displacement in section-local coordinates.  We must decide
+        // which side to keep at its original absolute position:
+        //
+        //   - tail anchored (datum reachable via post-deletion stations):
+        //     adjust offset += displacement → tail stays, head shifts
+        //   - head anchored or neither anchored:
+        //     don't adjust offset → head stays, tail shifts
+        //
+        // The shift_blocked guard already prevents deletion when BOTH sides
         // are datum-anchored.
         let (dx, dy) = Self::shot_displacement(&deleted_shot.to_shot_data());
-        if dx != 0.0 || dy != 0.0 {
-            let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-            self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
+
+        if pos == 0 {
+            // First shot: station 0 removed, ALL remaining stations are "tail".
+            // Always adjust to keep them in place.
+            if dx != 0.0 || dy != 0.0 {
+                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+                self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
+            }
+        } else if dx != 0.0 || dy != 0.0 {
+            // Mid-section: check if the tail side is datum-anchored.
+            // Tail stations have index > pos (after renumbering).
+            let tail_anchored = self.zero_datums.iter().any(|zd| {
+                zd.station_ref.section_id == section_id
+                    && zd.station_ref.station_index > pos as u32
+            }) || self.station_merges.iter().any(|m| {
+                let (our, their) = if m.station_a.section_id == section_id {
+                    (m.station_a, m.station_b)
+                } else if m.station_b.section_id == section_id {
+                    (m.station_b, m.station_a)
+                } else {
+                    return false;
+                };
+                our.station_index > pos as u32
+                    && their.section_id != section_id
+                    && self.has_datum_path_excluding(their.section_id, section_id)
+            }) || self.loop_closures.iter().any(|c| {
+                if !c.is_aligned { return false; }
+                let (our, their) = if c.station_a.section_id == section_id {
+                    (c.station_a, c.station_b)
+                } else if c.station_b.section_id == section_id {
+                    (c.station_b, c.station_a)
+                } else {
+                    return false;
+                };
+                our.station_index > pos as u32
+                    && their.section_id != section_id
+                    && self.has_datum_path_excluding(their.section_id, section_id)
+            });
+
+            if tail_anchored {
+                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+                self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
+            }
         }
 
-        // Cascade offset adjustments for any drifted head-side connections.
-        // The head stations shifted by +displacement; their non-datum
-        // partners need to follow.
+        // Cascade offset adjustments for any drifted connections on the
+        // non-anchored side.
         self.cascade_connection_offsets(&[section_id]);
 
         self.touch();
