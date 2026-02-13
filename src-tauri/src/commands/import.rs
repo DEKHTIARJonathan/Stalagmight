@@ -104,8 +104,9 @@ pub fn import_sections(
     state: State<'_, AppState>,
     sections: Vec<crate::models::ImportSectionConfig>,
     file_hash: Option<String>,
+    existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
 ) -> CommandResult {
-    state.execute_import_sections(sections, Vec::new(), file_hash)
+    state.execute_import_sections(sections, Vec::new(), file_hash, existing_shot_updates.unwrap_or_default())
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
@@ -177,7 +178,7 @@ pub fn execute_tml_import(
         "Converted TML to import configs, executing import"
     );
 
-    state.execute_import_sections(sections, closures, file_hash)
+    state.execute_import_sections(sections, closures, file_hash, Vec::new())
 }
 
 /// Parse a GPX file and return preview data for the import dialog.
@@ -261,7 +262,7 @@ pub fn execute_gpx_import(
         "Converted GPX to import configs, executing import"
     );
 
-    state.execute_import_sections(sections, Vec::new(), file_hash)
+    state.execute_import_sections(sections, Vec::new(), file_hash, Vec::new())
 }
 
 /// Suggest placement positions for an import section by detecting reference shot overlap.

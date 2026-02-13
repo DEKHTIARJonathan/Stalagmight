@@ -176,13 +176,20 @@ function matchesConfirmed(s: CrossSectionSuggestion, info: ConfirmedOverlapInfo)
  *
  * Mutates `sectionEdits` in-place.
  */
+interface ExistingShotUpdateLocal {
+  section_id: number;
+  shot_id: number;
+  updates: Record<string, number | null>;
+}
+
 function applyAllOverlapTreatments(
   fullPool: CrossSectionSuggestion[],
   confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
   sectionEdits: Map<number, SectionEditState>,
   dmpFile: DmpFile,
   overlapMode: OverlapMode,
-): void {
+): ExistingShotUpdateLocal[] {
+  const existingShotUpdates: ExistingShotUpdateLocal[] = [];
   // Track shots already treated by a previous suggestion to prevent double-treatment.
   // Key: "sectionIndex:shotId".  This replaced the old is_reference guard which was
   // removed so that is_reference only has user-facing semantics (keep_both mode).
@@ -381,7 +388,73 @@ function applyAllOverlapTreatments(
       }
     }
 
-    // --- Target side (import-to-import only): treat untreated overlap shots on the target section ---
+    // --- Target side (import-to-existing): collect shot updates for existing project sections ---
+    // Confirmed import-to-existing: compute interpolated values and collect as ExistingShotUpdate.
+    // These are sent to the backend as part of the atomic import transaction.
+    if (overlapMode !== 'keep_both' && isConfirmed && targetType === 'existing' && existingSectionId != null) {
+      const currentProject = useProjectStore.getState().project;
+      const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
+      if (targetSection) {
+        const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+        const shouldReverse = needsDirectionReversal(importStationIndex, direction);
+        const importShotsForInterp = rawImportShots ?? [];
+
+        for (const overlapId of actionableIds) {
+          const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
+          if (targetShotIdx < 0 || targetShotIdx >= targetSection.shots.length) continue;
+
+          const existingShot = targetSection.shots[targetShotIdx];
+          if (!existingShot) continue;
+          const treatKey = `existing:${existingSectionId}:${existingShot.id}`;
+          if (treatedShots.has(treatKey)) continue;
+
+          const importShot = importShotsForInterp.find(
+            s => !s.isNew && !s.isDeleted && s.id === overlapId
+          );
+          if (!importShot) continue;
+
+          const importAsTarget: TargetShotLike = shouldReverse
+            ? reverseTargetShot(importShot)
+            : importShot;
+
+          let updates: Record<string, number | null> | null = null;
+          if (overlapMode === 'interpolate') {
+            const interp = interpolateShots({ ...existingShot, id: existingShot.id, comment: existingShot.comment ?? null, is_reference: existingShot.is_reference, isNew: false, isDeleted: false }, importAsTarget);
+            updates = {
+              azimuth_in: interp.azimuth_in, azimuth_out: interp.azimuth_out,
+              length: interp.length, depth_in: interp.depth_in, depth_out: interp.depth_out,
+              pitch_in: interp.pitch_in, pitch_out: interp.pitch_out,
+              left: interp.left, right: interp.right, up: interp.up, down: interp.down,
+            };
+          } else if (overlapMode === 'import_data') {
+            updates = {
+              azimuth_in: importAsTarget.azimuth_in, azimuth_out: importAsTarget.azimuth_out,
+              length: importAsTarget.length, depth_in: importAsTarget.depth_in, depth_out: importAsTarget.depth_out,
+              pitch_in: importAsTarget.pitch_in, pitch_out: importAsTarget.pitch_out,
+              left: importAsTarget.left, right: importAsTarget.right, up: importAsTarget.up, down: importAsTarget.down,
+            };
+          }
+          // existing_data: target keeps its own values — no update needed
+
+          if (updates) {
+            existingShotUpdates.push({
+              section_id: existingSectionId,
+              shot_id: existingShot.id,
+              updates,
+            });
+            treatedShots.add(treatKey);
+          }
+        }
+
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[applyAllOverlaps]   existing target ${existingSectionId}: ${existingShotUpdates.length} shot updates collected`,
+          );
+        }
+      }
+    }
+
+    // --- Target side (import-to-import): treat untreated overlap shots on the target section ---
     // keep_both: no target modification — both sections retain their original values.
     if (overlapMode !== 'keep_both' && targetType === 'importing' && targetImportIndex != null) {
       let targetEdits = sectionEdits.get(targetImportIndex);
@@ -492,6 +565,8 @@ function applyAllOverlapTreatments(
       }
     }
   }
+
+  return existingShotUpdates;
 }
 
 /** Build batch import configs from virtual connections + BFS order. */
@@ -1679,8 +1754,9 @@ export default function DmpNewImportDialog({
       // Apply ALL overlap treatments in a single pass before building configs.
       // This is the single source of truth for overlap mutation — handleConfirm
       // only records the user's merge station choice, not the actual treatment.
+      let existingShotUpdates: ExistingShotUpdateLocal[] = [];
       if (fullPoolRef.current.length > 0) {
-        applyAllOverlapTreatments(
+        existingShotUpdates = applyAllOverlapTreatments(
           fullPoolRef.current,
           confirmedOverlapsRef.current,
           sectionEditsRef.current,
@@ -1705,6 +1781,7 @@ export default function DmpNewImportDialog({
           const result = await invoke<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
+            existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
           });
 
           if (!result.success) {

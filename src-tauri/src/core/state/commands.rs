@@ -348,6 +348,7 @@ impl AppState {
         sections: Vec<crate::models::ImportSectionConfig>,
         closures: Vec<crate::models::ImportClosure>,
         file_hash: Option<String>,
+        existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
     ) -> CommandResult {
         use std::collections::HashMap;
         use crate::models::{ClosureStrategy, ImportPlacement, StationRef};
@@ -604,6 +605,35 @@ impl AppState {
                         purpose = "import loop closures",
                         "Failed to create loop closure from TML import, skipping"
                     );
+                }
+            }
+        }
+
+        // Apply shot updates to existing sections (overlap interpolation).
+        // These modify shots on already-imported sections as part of the same atomic
+        // transaction, so undo reverts both the new sections and these updates.
+        if !existing_shot_updates.is_empty() {
+            let mut proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(project) = proj_guard.as_mut() {
+                for update in &existing_shot_updates {
+                    if let Some(section) = project.sections.iter_mut().find(|s| s.id == update.section_id) {
+                        if let Some(shot) = section.shots.iter_mut().find(|s| s.id == update.shot_id) {
+                            if let Some(v) = update.updates.azimuth_in { shot.azimuth_in = v; }
+                            if let Some(v) = update.updates.azimuth_out { shot.azimuth_out = v; }
+                            if let Some(v) = update.updates.length { shot.length = v; }
+                            if let Some(v) = update.updates.depth_in { shot.depth_in = v; }
+                            if let Some(v) = update.updates.depth_out { shot.depth_out = v; }
+                            if let Some(v) = update.updates.pitch_in { shot.pitch_in = v; }
+                            if let Some(v) = update.updates.pitch_out { shot.pitch_out = v; }
+                            if let Some(v) = update.updates.left { shot.left = v; }
+                            if let Some(v) = update.updates.right { shot.right = v; }
+                            if let Some(v) = update.updates.up { shot.up = v; }
+                            if let Some(v) = update.updates.down { shot.down = v; }
+                        }
+                    }
                 }
             }
         }

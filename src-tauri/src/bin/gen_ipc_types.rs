@@ -30,7 +30,7 @@ use stalagmight_lib::export::{
 use stalagmight_lib::models::{
     ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, ConnectivityResult,
     Coordinates, DeleteShotImpact, FrozenShotRef, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosure, Project, ProjectMetadata, ProjectStats, ProjectWarning,
+    ExistingShotUpdate, ImportSectionConfig, LoopClosure, Project, ProjectMetadata, ProjectStats, ProjectWarning,
     Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
     ShotUpdates, Station, StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
 };
@@ -85,6 +85,7 @@ fn main() {
     export::<SurveyDirection>(&out_dir);
     export::<ImportSectionConfig>(&out_dir);
     export::<ImportPlacement>(&out_dir);
+    export::<ExistingShotUpdate>(&out_dir);
     export::<Shot>(&out_dir);
     export::<ShotData>(&out_dir);
     export::<ShotUpdates>(&out_dir);
