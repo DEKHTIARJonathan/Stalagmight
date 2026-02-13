@@ -1057,6 +1057,52 @@ export default function DmpNewImportDialog({
     }
   }, [currentSuggestion, mergeOptions]);
 
+  // Check if the current suggestion targets an existing section that is doubly-anchored
+  // (modified overlap shots sit between two positional constraints). When true, only
+  // 'existing_data' and 'keep_both' are valid — interpolation / import_data would break
+  // a closure or zero-datum constraint.
+  const isTargetDoublyAnchored = useMemo(() => {
+    if (!currentSuggestion) return false;
+    if (currentSuggestion.targetType !== 'existing' || currentSuggestion.existingSectionId == null) return false;
+    if (currentSuggestion.matchedShots === 0) return false;
+
+    const project = useProjectStore.getState().project;
+    if (!project) return false;
+
+    const sid = currentSuggestion.existingSectionId;
+
+    // Compute the range of target shot indices that would be modified
+    let minShot: number;
+    let maxShot: number;
+    if (currentSuggestion.direction === 'forward') {
+      minShot = currentSuggestion.existingStationIndex;
+      maxShot = currentSuggestion.existingStationIndex + currentSuggestion.matchedShots - 1;
+    } else {
+      minShot = currentSuggestion.existingStationIndex - currentSuggestion.matchedShots;
+      maxShot = currentSuggestion.existingStationIndex - 1;
+    }
+
+    // Collect anchor station indices on the target section
+    const anchors: number[] = [];
+
+    for (const zd of project.zero_datums) {
+      if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
+    }
+    for (const m of project.station_merges) {
+      if (m.station_a.section_id === sid) anchors.push(m.station_a.station_index);
+      if (m.station_b.section_id === sid) anchors.push(m.station_b.station_index);
+    }
+    for (const c of project.loop_closures) {
+      if (!c.is_aligned) continue;
+      if (c.station_a.section_id === sid) anchors.push(c.station_a.station_index);
+      if (c.station_b.section_id === sid) anchors.push(c.station_b.station_index);
+    }
+
+    const hasFront = anchors.some((idx) => idx <= minShot);
+    const hasBack = anchors.some((idx) => idx > maxShot);
+    return hasFront && hasBack;
+  }, [currentSuggestion]);
+
   // Unified segment context — BFS through DMP connections + fetch existing segment geometry
   useEffect(() => {
     if (!currentSuggestion) {
@@ -1566,6 +1612,13 @@ export default function DmpNewImportDialog({
       updateConfig({ ...config, import: { ...config.import, overlap_mode: value } });
     }
   }, [config, updateConfig]);
+
+  // Auto-switch to 'existing_data' when a doubly-anchored target disables the current mode
+  useEffect(() => {
+    if (isTargetDoublyAnchored && (overlapMode === 'interpolate' || overlapMode === 'import_data')) {
+      handleOverlapModeChange('existing_data');
+    }
+  }, [isTargetDoublyAnchored, overlapMode, handleOverlapModeChange]);
 
   // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
   const pickFromPool = useCallback(() => {
@@ -2660,8 +2713,8 @@ export default function DmpNewImportDialog({
                     className="px-2 py-1 bg-background border border-border rounded text-xs"
                     data-testid="overlap-mode-select"
                   >
-                    <option value="interpolate">{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
-                    <option value="import_data">{t('dialogs.dmpNewImport.overlapMode_importData')}</option>
+                    <option value="interpolate" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
+                    <option value="import_data" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_importData')}</option>
                     <option value="existing_data">{t('dialogs.dmpNewImport.overlapMode_existingData')}</option>
                     <option value="keep_both">{t('dialogs.dmpNewImport.overlapMode_keepBoth')}</option>
                   </select>
