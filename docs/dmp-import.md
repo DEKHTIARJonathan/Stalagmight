@@ -8,7 +8,7 @@ The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cav
 |-------|-------------|
 | `init` | Import the zero-datum section (if provided), then call `suggest_all_import_placements` for all remaining sections |
 | `suggesting` | Present suggestions one at a time; user confirms, edits, or skips each |
-| `placing` | Build batch `ImportSectionConfig[]` from virtual connections and call `import_sections` |
+| `placing` | Run `applyAllOverlapTreatments`, build batch `ImportSectionConfig[]` + `ExistingShotUpdate[]`, and call `import_sections` |
 | `done` | All sections placed, or hand off unreachable sections to legacy dialog |
 
 ## Virtual Connections
@@ -46,18 +46,94 @@ The wizard picks the top suggestion for each unplaced section and shows alternat
 
 When a suggestion has `matchedShots > 0`, the wizard shows an overlap mode picker:
 
-| Mode | Behavior |
-|------|----------|
-| `interpolate` | Average import + target shot data for overlap region |
-| `import_data` | Keep import values, mark as reference |
-| `existing_data` | Replace with target values |
-| `keep_both` | Keep both sets of shots (no deletion) |
+| Mode | Import side | Target side (import-to-import) | Target side (import-to-existing) |
+|------|-------------|-------------------------------|----------------------------------|
+| `interpolate` | Delete actionable overlap shots | Replace overlap shots with interpolated values | Send `ExistingShotUpdate` with interpolated values |
+| `import_data` | Delete actionable overlap shots | Replace overlap shots with import values | Send `ExistingShotUpdate` with import values |
+| `existing_data` | Delete actionable overlap shots | No change | No change |
+| `keep_both` | Mark overlap shots as reference (no deletion) | No change | No change |
 
-The overlap mode is persisted to the project config. For all modes except `keep_both`, overlap shots are deleted from the import section at confirm time — only the non-overlapping shots survive in the final import.
+The overlap mode is persisted to the project config.
+
+### Centralized Overlap Treatment
+
+All overlap mutation is handled by a single function — `applyAllOverlapTreatments` — which runs once during the `placing` phase, before `buildBatchImport`. The `handleConfirm` callback does **not** mutate overlap shots; it only records:
+
+1. The virtual connection (placement info)
+2. A `ConfirmedOverlapInfo` entry (which merge station the user chose)
+
+```
+handleConfirm → records VirtualConnection + ConfirmedOverlapInfo
+              → saves raw user edits to sectionEditsRef (NO overlap mutation)
+
+applyAllOverlapTreatments → processes ALL pool suggestions in one pass
+                          → mutates sectionEditsRef (import-to-import targets)
+                          → returns ExistingShotUpdateLocal[] (import-to-existing targets)
+
+buildBatchImport → reads sectionEditsRef → ImportSectionConfig[]
+
+import_sections IPC → sections + existingShotUpdates
+```
+
+`applyAllOverlapTreatments` walks the full suggestion pool. For each suggestion:
+
+- **Confirmed suggestions** (matched by field comparison to `confirmedOverlapsRef`): use `computeActionableIds` with the user's merge station to determine which overlap shots to process.
+- **Unconfirmed suggestions**: use the full `computeOverlapIds` result.
+
+The function handles two target paths:
+
+- **Import-to-import**: Modifies the target import section's edits in `sectionEditsRef` directly (interpolation, import data replacement, or reference marking).
+- **Import-to-existing**: Collects `ExistingShotUpdateLocal[]` entries that are sent to the backend alongside the batch import.
+
+### Interpolation
+
+`interpolateShots` averages each numeric field between the import shot and the target shot. Azimuths use circular mean (`atan2((sin(a)+sin(b))/2, (cos(a)+cos(b))/2)`) to handle wraparound correctly. When the suggestion direction is `reverse`, the target shot is direction-reversed (`reverseTargetShot`) before interpolation so that in/out values align.
 
 ### Merge Station Picker
 
 When multiple overlap offsets are possible, a dropdown lets the user choose which station pair to merge at. This controls which shots are "actionable" (subject to the overlap mode) versus past-merge (deleted at import).
+
+### Doubly-Anchored Guard
+
+When the target existing section has positional constraints on **both sides** of the overlap shot range, `interpolate` and `import_data` are disabled:
+
+- The overlap mode dropdown greys out those options (`isTargetDoublyAnchored` useMemo)
+- The current mode auto-switches to `existing_data` if it was set to a blocked mode
+- The backend independently skips `ExistingShotUpdate` entries for doubly-anchored sections as a safety net
+
+**Anchor types** checked on each side of the modified range:
+- Zero datum stations
+- Station merge endpoints
+- Aligned loop closure endpoints (`is_aligned === true`)
+
+**Rationale**: Modifying shots between two positional anchors changes the geometry between them. The backend can compensate for a single anchor via section offset adjustment, but with two anchors on opposite sides of the modification, one constraint will inevitably break (e.g., shifting the offset to keep a zero datum fixed would misalign an aligned closure on the other side).
+
+## Existing Shot Updates (Backend)
+
+The `import_sections` backend command accepts an optional `existing_shot_updates: Vec<ExistingShotUpdate>` parameter. Each entry specifies a `(section_id, shot_id, ShotUpdates)` triple for modifying shots on existing project sections atomically within the same undo transaction as the batch import.
+
+### Application Order
+
+```
+1. Snapshot project state (for undo)
+2. Filter out doubly-anchored sections (backend safety net)
+3. Record zero datum anchor positions BEFORE updates
+4. Apply ExistingShotUpdates to existing section shots
+5. Compensate section offsets to keep zero datums fixed
+6. Create new sections + apply placements (FromExisting uses updated geometry)
+7. Snapshot project state (for redo)
+8. Push undo entry
+```
+
+### Zero Datum Stability
+
+After applying shot updates, the backend checks whether any affected section has a zero datum. If so:
+
+1. The datum station's absolute position was recorded before updates
+2. The new position is computed after updates
+3. The delta is applied (inverted) to the section offset — and to all sections in the same rigid group (`get_merged_section_ids`) — so the datum stays pinned
+
+This ensures that modifying overlap shots at indices lower than the zero datum station doesn't shift the section's GPS-anchored position.
 
 ## Section Editing
 
@@ -112,14 +188,17 @@ A `coveredExistingSectionIds` set tracks which existing section IDs have already
 
 ## Batch Import
 
-When all suggestions are exhausted (or skipped), `buildBatchImport()` constructs the final `ImportSectionConfig[]`:
+When all suggestions are exhausted (or skipped), the placing phase proceeds:
 
-1. Build adjacency from `importing`-type connections
-2. Find anchored sections (zero datum + `existing`-type connections)
-3. BFS from anchors to determine import order
-4. For disconnected components, search the full suggestion pool for fallback `existing`-type anchors
-5. Multi-pass emit: retry sections whose `from_importing` target hasn't been emitted yet
-6. Adjust station indices for deleted overlap shots
+1. `applyAllOverlapTreatments` processes all overlap suggestions → mutates `sectionEditsRef` + returns `ExistingShotUpdateLocal[]`
+2. `buildBatchImport()` constructs the final `ImportSectionConfig[]`:
+   1. Build adjacency from `importing`-type connections
+   2. Find anchored sections (zero datum + `existing`-type connections)
+   3. BFS from anchors to determine import order
+   4. For disconnected components, search the full suggestion pool for fallback `existing`-type anchors
+   5. Multi-pass emit: retry sections whose `from_importing` target hasn't been emitted yet
+   6. Adjust station indices for deleted overlap shots
+3. IPC call: `import_sections(sections, fileHash, existingShotUpdates)`
 
 Sections unreachable after all passes are handed off to the legacy import dialog.
 
@@ -128,6 +207,9 @@ Sections unreachable after all passes are handed off to the legacy import dialog
 | Type | Location | Purpose |
 |------|----------|---------|
 | `VirtualConnection` | `src/utils/segmentContext.ts` | Client-side connection record |
+| `ConfirmedOverlapInfo` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Merge station choice per confirmed suggestion |
+| `ExistingShotUpdateLocal` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Frontend representation of existing shot modifications |
+| `ExistingShotUpdate` | `src-tauri/src/models/section.rs` | Backend type for atomic existing shot modifications |
 | `ExistingAnchor` | `src/utils/segmentContext.ts` | Position where a DMP section meets an existing section |
 | `ExistingSectionGeoEntry` | `src/utils/segmentContext.ts` | Cached segment geometry with frame offset |
 | `CrossSectionSuggestion` | `src-tauri/src/models/placement_suggest.rs` | Backend suggestion with score/confidence |
@@ -139,12 +221,18 @@ Sections unreachable after all passes are handed off to the legacy import dialog
 
 | Function | Location | Purpose |
 |----------|----------|---------|
+| `applyAllOverlapTreatments` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Single-pass overlap mutation for all suggestions |
+| `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
 | `buildAdjacency` | `src/utils/segmentContext.ts` | Adjacency map from `importing`-type connections |
 | `computeDmpBfsContext` | `src/utils/segmentContext.ts` | BFS collecting DMP neighbor geometry + existing anchors |
 | `stationPositionFromShotLines` | `src/utils/segmentContext.ts` | Extract XY from backend `shot_lines` (station 0 = `[0][0]`, station N = `[N-1][1]`) |
 | `discoverBridgedDmpSections` | `src/utils/segmentContext.ts` | Find DMP sections connected through shared existing sections |
 | `computeStationsFromDmpShots` | `src/components/Dialogs/SectionPreview.tsx` | XY station positions from DMP shot headings + lengths |
-| `buildBatchImport` | `src/components/Dialogs/DmpNewImportDialog.tsx` | Construct ordered `ImportSectionConfig[]` for backend |
+| `computeOverlapIds` | `src/utils/overlapHelpers.ts` | Set of import shot IDs in the overlap region |
+| `computeActionableIds` | `src/utils/overlapHelpers.ts` | Subset of overlap IDs based on merge station choice |
+| `computeTargetShotIndex` | `src/utils/overlapHelpers.ts` | Map import overlap ID → target section shot index |
+| `interpolateShots` | `src/utils/overlapHelpers.ts` | Average two shots (circular mean for azimuths) |
+| `reverseTargetShot` | `src/utils/overlapHelpers.ts` | Swap in/out and reverse azimuth by 180° |
 
 ## Backend Commands
 
@@ -152,7 +240,15 @@ Sections unreachable after all passes are handed off to the legacy import dialog
 |---------|-------|--------|-------|
 | `suggest_all_import_placements` | `ImportSectionForSuggestion[]` | `CrossSectionSuggestion[]` | Compares against existing + other imports |
 | `get_segment_geometry` | `sectionId` | `SegmentGeometry` | All connected sections' shot-lines, centered on queried section |
-| `import_sections` | `ImportSectionConfig[], fileHash` | `CommandResult` | Batch import with undo support |
+| `import_sections` | `sections, fileHash, existingShotUpdates` | `CommandResult` | Batch import with atomic existing shot updates and undo support |
+
+## Backend Safety Guards
+
+The `execute_import_sections` function in `src-tauri/src/core/state/commands.rs` applies two guards before modifying existing section shots:
+
+1. **Doubly-anchored filter**: For each affected section, if the modified shot range is straddled by positional constraints (zero datums, station merges, aligned closures) on both sides, updates for that section are silently skipped.
+
+2. **Zero datum offset compensation**: For sections with a zero datum above the modified shots, the section offset (and all sections in the same rigid group) is adjusted after updates to keep the datum station at its original absolute position.
 
 ## Tests
 
@@ -161,3 +257,7 @@ Unit tests for the pure context-geometry functions live in `src/utils/__tests__/
 ```bash
 pnpm vitest run src/utils/__tests__/segmentContext.test.ts
 ```
+
+Overlap helper tests: `src/utils/__tests__/overlapHelpers.test.ts`
+
+Backend integration test for overlap interpolation: `src-tauri/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).
