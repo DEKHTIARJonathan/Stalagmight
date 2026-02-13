@@ -1608,18 +1608,6 @@ export default function DmpNewImportDialog({
     });
   }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
 
-  // Compute reference shot indices for SectionPreview (0-based among visible shots)
-  const referenceIndices = useMemo(() => {
-    const indices = new Set<number>();
-    let visibleIdx = 0;
-    for (const shot of effectiveShots) {
-      if (shot.isDeleted) continue;
-      if (shot.is_reference) indices.add(visibleIdx);
-      visibleIdx++;
-    }
-    return indices;
-  }, [effectiveShots]);
-
   // Section edit callbacks
   const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
@@ -2055,15 +2043,16 @@ export default function DmpNewImportDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
-  // Build preview section for import side (live from effectiveShots when available)
+  // Build preview section for import side from original shots (no mode modifications).
+  // Both import and target sections display their original geometry so the user can
+  // visually compare the overlap regardless of the selected overlap mode.
   const importPreviewSection = useMemo<DmpSection | null>(() => {
     if (!currentSuggestion) return null;
     const section = dmpFile.sections[currentSuggestion.importSectionIndex];
     if (!section) return null;
     if (!editState) return section;
 
-    // Build synthetic DmpSection from effectiveShots for live preview
-    const syntheticShots: DmpShot[] = effectiveShots
+    const syntheticShots: DmpShot[] = editState.shots
       .filter((s) => !s.isDeleted)
       .map((s) => ({
         shot_type: 'Standard' as const,
@@ -2088,7 +2077,7 @@ export default function DmpNewImportDialog({
       direction: editState.direction,
       shots: syntheticShots,
     };
-  }, [currentSuggestion, dmpFile.sections, editState, effectiveShots]);
+  }, [currentSuggestion, dmpFile.sections, editState]);
 
   // Build merge preview config for SectionPreview (existing target)
   const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
@@ -2128,101 +2117,6 @@ export default function DmpNewImportDialog({
     };
   }, [currentSuggestion, selectedMergePair, dmpFile.sections]);
 
-  // Map target shot indices → resolved data for preview overlay (interpolate/import_data only)
-  const resolvedTargetShotMap = useMemo((): Map<number, EditableShot> | null => {
-    if (!currentSuggestion || currentSuggestion.matchedShots === 0) return null;
-    if (overlapMode === 'existing_data' || overlapMode === 'keep_both') return null;
-
-    const { importStationIndex, matchedShots, direction, existingStationIndex } = currentSuggestion;
-    const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
-
-    const actionableIds = computeActionableIds(importStationIndex, matchedShots, mergeImportStation);
-
-    // Resolved shots are in import direction; reverse back to target direction if needed.
-    const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-    const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
-
-    const map = new Map<number, EditableShot>();
-    for (const overlapId of actionableIds) {
-      const resolvedShot = effectiveShots.find(s => !s.isNew && !s.isDeleted && s.id === overlapId);
-      if (!resolvedShot) continue;
-
-      const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
-      if (targetIdx >= 0) {
-        if (shouldReverse) {
-          const reversed = reverseTargetShot({
-            azimuth_in: resolvedShot.azimuth_in,
-            azimuth_out: resolvedShot.azimuth_out,
-            length: resolvedShot.length,
-            depth_in: resolvedShot.depth_in,
-            depth_out: resolvedShot.depth_out,
-            pitch_in: resolvedShot.pitch_in,
-            pitch_out: resolvedShot.pitch_out,
-            left: resolvedShot.left,
-            right: resolvedShot.right,
-            up: resolvedShot.up,
-            down: resolvedShot.down,
-          });
-          map.set(targetIdx, { ...resolvedShot, ...reversed });
-        } else {
-          map.set(targetIdx, resolvedShot);
-        }
-      }
-    }
-    return map.size > 0 ? map : null;
-  }, [currentSuggestion, selectedMergePair, overlapMode, effectiveShots]);
-
-  // Modified merge preview config — replaces target overlap shots with resolved data
-  const previewMergeConfig = useMemo((): MergePreviewConfig | null => {
-    if (!mergePreviewConfig) return null;
-    if (!resolvedTargetShotMap) return mergePreviewConfig;
-
-    const modifiedShots = mergePreviewConfig.targetSection.shots.map((shot, idx) => {
-      const resolved = resolvedTargetShotMap.get(idx);
-      if (!resolved) return shot;
-      return {
-        ...shot,
-        azimuth_in: resolved.azimuth_in,
-        azimuth_out: resolved.azimuth_out,
-        length: resolved.length,
-        depth_in: resolved.depth_in,
-        depth_out: resolved.depth_out,
-      };
-    });
-
-    return {
-      ...mergePreviewConfig,
-      targetSection: { ...mergePreviewConfig.targetSection, shots: modifiedShots },
-    };
-  }, [mergePreviewConfig, resolvedTargetShotMap]);
-
-  // Modified DMP merge preview config — replaces target overlap shots with resolved data
-  const previewDmpMergeConfig = useMemo((): DmpMergePreviewConfig | null => {
-    if (!dmpMergePreviewConfig) return null;
-    if (!resolvedTargetShotMap) return dmpMergePreviewConfig;
-
-    let standardIdx = 0;
-    const modifiedShots = dmpMergePreviewConfig.targetDmpSection.shots.map((shot) => {
-      if (shot.shot_type !== 'Standard') return shot;
-      const resolved = resolvedTargetShotMap.get(standardIdx);
-      standardIdx++;
-      if (!resolved) return shot;
-      return {
-        ...shot,
-        heading_in: resolved.azimuth_in,
-        heading_out: resolved.azimuth_out,
-        length: resolved.length,
-        depth_in: resolved.depth_in,
-        depth_out: resolved.depth_out,
-      };
-    });
-
-    return {
-      ...dmpMergePreviewConfig,
-      targetDmpSection: { ...dmpMergePreviewConfig.targetDmpSection, shots: modifiedShots },
-    };
-  }, [dmpMergePreviewConfig, resolvedTargetShotMap]);
-
   // Merge target-side + import-side context for SectionPreview.
   // Import-side context is relative to the import section's station 0 and needs the same
   // merge offset that SectionPreview applies to align the import section with the target.
@@ -2230,7 +2124,7 @@ export default function DmpNewImportDialog({
     const parts: ContextSectionGeometry[] = [];
     if (segmentContext?.targetSide) parts.push(...segmentContext.targetSide);
     if (segmentContext?.importSide && segmentContext.importSide.length > 0) {
-      const activePreview = previewMergeConfig ?? previewDmpMergeConfig;
+      const activePreview = mergePreviewConfig ?? dmpMergePreviewConfig;
       let dx = 0;
       let dy = 0;
       if (activePreview && importPreviewSection) {
@@ -2239,13 +2133,13 @@ export default function DmpNewImportDialog({
           importPreviewSection.shots.filter((s) => s.shot_type === 'Standard')
         );
         let targetStations: Array<{ x: number; y: number }> = [];
-        if (previewMergeConfig) {
+        if (mergePreviewConfig) {
           targetStations = computeStationsFromShots(
-            previewMergeConfig.targetSection.shots.filter((s) => !s.is_reference)
+            mergePreviewConfig.targetSection.shots.filter((s) => !s.is_reference)
           );
-        } else if (previewDmpMergeConfig) {
+        } else if (dmpMergePreviewConfig) {
           targetStations = computeStationsFromDmpShots(
-            previewDmpMergeConfig.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard')
+            dmpMergePreviewConfig.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard')
           );
         }
         const importStn = importStations[activePreview.importStationIndex];
@@ -2264,7 +2158,7 @@ export default function DmpNewImportDialog({
       })));
     }
     return parts.length > 0 ? parts : null;
-  }, [segmentContext, previewMergeConfig, previewDmpMergeConfig, importPreviewSection]);
+  }, [segmentContext, mergePreviewConfig, dmpMergePreviewConfig, importPreviewSection]);
 
   // Import color for the current section
   const importColor = useMemo(() => {
@@ -2794,10 +2688,9 @@ export default function DmpNewImportDialog({
                 section={importPreviewSection}
                 color={importColor}
                 size={340}
-                mergePreview={previewMergeConfig}
-                dmpMergePreview={previewDmpMergeConfig}
+                mergePreview={mergePreviewConfig}
+                dmpMergePreview={dmpMergePreviewConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
-                referenceIndices={referenceIndices}
                 contextSections={mergedContextSections}
               />
             </div>
