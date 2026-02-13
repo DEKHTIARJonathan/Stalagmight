@@ -968,7 +968,7 @@ function buildBatchImport(
       const sectionName = edits?.name ?? section.name;
       const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
       const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
-      const colorValue = edits?.color ?? SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4';
+      const colorValue = (edits?.color || null) ?? SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4';
       const directionValue = edits?.direction ?? section.direction;
       const qualityValue = edits?.quality ?? 1.0;
 
@@ -2804,79 +2804,91 @@ export default function DmpNewImportDialog({
 
             {/* Right column: connection details */}
             <div className="flex-1 min-w-0 overflow-y-auto p-5 space-y-4" data-testid="wizard-suggestion">
-              {/* Connection description */}
-              <div data-testid="wizard-connection-description">
-                <div className="text-sm">
-                  <span className="font-medium">&ldquo;{currentSuggestion!.importSectionName}&rdquo;</span>
-                  {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex })}
+              {/* Suggested connection — prominent card */}
+              <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 space-y-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-text-primary">
+                    {t('dialogs.dmpNewImport.connectionHeading')}
+                  </h3>
+                  <p className="text-xs text-text-secondary mt-0.5">
+                    {t('dialogs.dmpNewImport.connectionDescription')}
+                  </p>
                 </div>
-                <div className="text-text-secondary text-sm my-1">
-                  {t('dialogs.dmpNewImport.connectsTo')}
-                </div>
-                <div className="text-sm">
-                  <span className="font-medium">&ldquo;{targetSectionName}&rdquo;</span>
-                  {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex })}
-                  {isImportTarget && (
-                    <span className="ml-1 text-xs text-text-secondary">(importing)</span>
-                  )}
-                </div>
-              </div>
 
-              {/* Merge station dropdown */}
-              {mergeOptions.length > 1 && (
-                <div className="flex items-center gap-2" data-testid="merge-station-picker">
-                  <label className="text-xs text-text-secondary whitespace-nowrap">
-                    {t('dialogs.dmpNewImport.mergeStation')}
-                  </label>
-                  <select
-                    value={selectedMergeOffset}
-                    onChange={(e) => setSelectedMergeOffset(Number(e.target.value))}
-                    className="px-2 py-1 bg-background border border-border rounded text-xs"
-                    data-testid="merge-station-select"
-                  >
-                    {mergeOptions.map((opt) => (
-                      <option key={opt.offset} value={opt.offset}>
-                        stn {opt.importStation} → {targetSectionName} stn {opt.existingStation}
-                      </option>
-                    ))}
-                  </select>
+                {/* Connection description */}
+                <div className="rounded border border-border bg-background p-3" data-testid="wizard-connection-description">
+                  <div className="text-sm">
+                    <span className="font-medium">&ldquo;{currentSuggestion!.importSectionName}&rdquo;</span>
+                    {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex })}
+                  </div>
+                  <div className="text-text-secondary text-sm my-1">
+                    {t('dialogs.dmpNewImport.connectsTo')}
+                  </div>
+                  <div className="text-sm">
+                    <span className="font-medium">&ldquo;{targetSectionName}&rdquo;</span>
+                    {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex })}
+                    {isImportTarget && (
+                      <span className="ml-1 text-xs text-text-secondary">(importing)</span>
+                    )}
+                  </div>
                 </div>
-              )}
 
-              {/* Overlap mode picker */}
-              {currentSuggestion && currentSuggestion.matchedShots > 0 && (
-                <div className="flex items-center gap-2" data-testid="overlap-mode-picker">
-                  <label className="text-xs text-text-secondary whitespace-nowrap">
-                    {t('dialogs.dmpNewImport.overlapMode')}
-                  </label>
-                  <select
-                    value={overlapMode}
-                    onChange={(e) => handleOverlapModeChange(e.target.value as OverlapMode)}
-                    className="px-2 py-1 bg-background border border-border rounded text-xs"
-                    data-testid="overlap-mode-select"
-                  >
-                    <option value="interpolate" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
-                    <option value="import_data" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_importData')}</option>
-                    <option value="existing_data">{t('dialogs.dmpNewImport.overlapMode_existingData')}</option>
-                    <option value="keep_both">{t('dialogs.dmpNewImport.overlapMode_keepBoth')}</option>
-                  </select>
+                {/* Confidence badge */}
+                <div className="flex items-center gap-2" data-testid="wizard-confidence">
+                  <span className={`px-2 py-1 rounded border text-xs font-medium ${confidenceColors[currentSuggestion!.confidence] ?? ''}`}>
+                    {t(`dialogs.dmpNewImport.confidence.${currentSuggestion!.confidence}`)}
+                  </span>
+                  <span className="text-xs text-text-secondary">
+                    · {t('dialogs.dmpNewImport.matchedShots', { count: currentSuggestion!.matchedShots })} {directionLabel(currentSuggestion!.direction)}
+                    {currentSuggestion!.isPartial && <span className="ml-0.5 opacity-60">~</span>}
+                  </span>
                 </div>
-              )}
 
-              {/* Confidence badge */}
-              <div className="flex items-center gap-2" data-testid="wizard-confidence">
-                <span className={`px-2 py-1 rounded border text-xs font-medium ${confidenceColors[currentSuggestion!.confidence] ?? ''}`}>
-                  {t(`dialogs.dmpNewImport.confidence.${currentSuggestion!.confidence}`)}
-                </span>
-                <span className="text-xs text-text-secondary">
-                  · {t('dialogs.dmpNewImport.matchedShots', { count: currentSuggestion!.matchedShots })} {directionLabel(currentSuggestion!.direction)}
-                  {currentSuggestion!.isPartial && <span className="ml-0.5 opacity-60">~</span>}
-                </span>
-              </div>
+                {/* Merge station dropdown */}
+                {mergeOptions.length > 1 && (
+                  <div className="flex items-center gap-2" data-testid="merge-station-picker">
+                    <label className="text-xs text-text-secondary whitespace-nowrap">
+                      {t('dialogs.dmpNewImport.mergeStation')}
+                    </label>
+                    <select
+                      value={selectedMergeOffset}
+                      onChange={(e) => setSelectedMergeOffset(Number(e.target.value))}
+                      className="px-2 py-1 bg-background border border-border rounded text-xs"
+                      data-testid="merge-station-select"
+                    >
+                      {mergeOptions.map((opt) => (
+                        <option key={opt.offset} value={opt.offset}>
+                          stn {opt.importStation} → {targetSectionName} stn {opt.existingStation}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
-              {/* Prompt */}
-              <div className="text-sm font-medium">
-                {t('dialogs.dmpNewImport.doesThisLookRight')}
+                {/* Overlap mode picker */}
+                {currentSuggestion && currentSuggestion.matchedShots > 0 && (
+                  <div className="flex items-center gap-2" data-testid="overlap-mode-picker">
+                    <label className="text-xs text-text-secondary whitespace-nowrap">
+                      {t('dialogs.dmpNewImport.overlapMode')}
+                    </label>
+                    <select
+                      value={overlapMode}
+                      onChange={(e) => handleOverlapModeChange(e.target.value as OverlapMode)}
+                      className="px-2 py-1 bg-background border border-border rounded text-xs"
+                      data-testid="overlap-mode-select"
+                    >
+                      <option value="interpolate" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_interpolate')}</option>
+                      <option value="import_data" disabled={isTargetDoublyAnchored}>{t('dialogs.dmpNewImport.overlapMode_importData')}</option>
+                      <option value="existing_data">{t('dialogs.dmpNewImport.overlapMode_existingData')}</option>
+                      <option value="keep_both">{t('dialogs.dmpNewImport.overlapMode_keepBoth')}</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Prompt */}
+                <div className="text-sm font-medium">
+                  {t('dialogs.dmpNewImport.doesThisLookRight')}
+                </div>
               </div>
 
               {/* Error */}
