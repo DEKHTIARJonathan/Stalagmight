@@ -400,6 +400,82 @@ impl AppState {
                 let affected_section_ids: HashSet<SectionId> =
                     existing_shot_updates.iter().map(|u| u.section_id).collect();
 
+                // Filter out updates for doubly-anchored sections.
+                // If the modified shots sit between two positional constraints
+                // (zero datums, aligned closures, station merges), modifying
+                // the intermediate geometry would break one of them. We can only
+                // compensate for a single anchor via offset adjustment, so when
+                // two anchors straddle the modified range we must skip updates.
+                let mut blocked_sections: HashSet<SectionId> = HashSet::new();
+                for &sid in &affected_section_ids {
+                    let section = match project.sections.iter().find(|s| s.id == sid) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+
+                    // Find shot indices being modified on this section
+                    let mut modified_indices: Vec<u32> = Vec::new();
+                    for update in &existing_shot_updates {
+                        if update.section_id != sid { continue; }
+                        if let Some(idx) = section.shots.iter().position(|s| s.id == update.shot_id) {
+                            modified_indices.push(idx as u32);
+                        }
+                    }
+                    if modified_indices.is_empty() { continue; }
+                    let min_shot = *modified_indices.iter().min().unwrap();
+                    let max_shot = *modified_indices.iter().max().unwrap();
+
+                    // Collect anchor station indices on this section.
+                    // An anchor is any station whose absolute position is constrained
+                    // by an external relationship (zero datum, merge, aligned closure).
+                    let mut anchor_indices: Vec<u32> = Vec::new();
+
+                    // Zero datums
+                    for zd in &project.zero_datums {
+                        if zd.station_ref.section_id == sid {
+                            anchor_indices.push(zd.station_ref.station_index);
+                        }
+                    }
+                    // Station merges
+                    for m in &project.station_merges {
+                        if m.station_a.section_id == sid {
+                            anchor_indices.push(m.station_a.station_index);
+                        }
+                        if m.station_b.section_id == sid {
+                            anchor_indices.push(m.station_b.station_index);
+                        }
+                    }
+                    // Aligned closures
+                    for c in &project.loop_closures {
+                        if !c.is_aligned { continue; }
+                        if c.station_a.section_id == sid {
+                            anchor_indices.push(c.station_a.station_index);
+                        }
+                        if c.station_b.section_id == sid {
+                            anchor_indices.push(c.station_b.station_index);
+                        }
+                    }
+
+                    // Check for anchors on both sides of the modified range.
+                    // Shot i connects station i → station i+1, so stations
+                    // 0..=min_shot are unaffected (front) and stations
+                    // max_shot+1..end are on the back side.
+                    let has_front = anchor_indices.iter().any(|&idx| idx <= min_shot);
+                    let has_back = anchor_indices.iter().any(|&idx| idx > max_shot);
+
+                    if has_front && has_back {
+                        tracing::warn!(
+                            section_id = sid,
+                            min_shot,
+                            max_shot,
+                            anchors = ?anchor_indices,
+                            purpose = "doubly-anchored guard",
+                            "Skipping shot updates: modified range is between two anchored stations",
+                        );
+                        blocked_sections.insert(sid);
+                    }
+                }
+
                 // Record anchor station positions BEFORE applying updates.
                 // For each affected section that has a zero datum, we need to keep
                 // the datum station fixed — otherwise modifying shots between station 0
@@ -407,6 +483,7 @@ impl AppState {
                 let mut anchor_positions: HashMap<SectionId, (StationRef, Coordinates)> =
                     HashMap::new();
                 for &sid in &affected_section_ids {
+                    if blocked_sections.contains(&sid) { continue; }
                     if let Some(zd) = project.zero_datums.iter().find(|zd| zd.station_ref.section_id == sid) {
                         if let Some(coords) = project.compute_station_raw_coords(zd.station_ref) {
                             tracing::debug!(
@@ -422,8 +499,9 @@ impl AppState {
                     }
                 }
 
-                // Apply the shot updates
+                // Apply the shot updates (skipping doubly-anchored sections)
                 for update in &existing_shot_updates {
+                    if blocked_sections.contains(&update.section_id) { continue; }
                     if let Some(section) = project.sections.iter_mut().find(|s| s.id == update.section_id) {
                         if let Some(shot) = section.shots.iter_mut().find(|s| s.id == update.shot_id) {
                             let old_len = shot.length;
