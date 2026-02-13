@@ -333,8 +333,8 @@ function applyAllOverlapTreatments(
             if (treatedShots.has(treatKey)) { diagAlreadyTreated++; return shot; }
 
             // Import-to-import: always delete — target section keeps the overlap (treated below).
-            // Import-to-existing: interpolate/transform same as import-to-import target side.
-            if (targetType === 'importing') {
+            // Confirmed import-to-existing: delete — target section gets interpolated values.
+            if (targetType === 'importing' || isConfirmed) {
               diagDeleted++;
               treatedShots.add(treatKey);
               return { ...shot, isDeleted: true };
