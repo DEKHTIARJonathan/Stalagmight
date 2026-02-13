@@ -2383,6 +2383,32 @@ impl Project {
                     delta_xy = Some((dx, dy));
                 }
             }
+            // For all-spur sections (no non-spur station set a delta), derive the
+            // translation from the merge attachment point.  That station's group
+            // is shared with a loop station, so its solved position is exact.
+            if delta_xy.is_none() {
+                for merge in &self.station_merges {
+                    let local = if merge.station_a.section_id == section.id
+                        && component.contains(&merge.station_b.section_id)
+                    {
+                        merge.station_a
+                    } else if merge.station_b.section_id == section.id
+                        && component.contains(&merge.station_a.section_id)
+                    {
+                        merge.station_b
+                    } else {
+                        continue;
+                    };
+                    let root = *station_root.get(&local).unwrap_or(&local);
+                    if let (Some(target), Some(current)) = (
+                        group_coords.get(&root),
+                        self.compute_station_raw_coords(local),
+                    ) {
+                        delta_xy = Some((target.x - current.x, target.y - current.y));
+                        break;
+                    }
+                }
+            }
             if let Some((dx, dy)) = delta_xy {
                 if dx.abs() > 1e-9 || dy.abs() > 1e-9 {
                     section_deltas.insert(section.id, (dx, dy));
