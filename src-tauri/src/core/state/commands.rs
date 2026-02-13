@@ -592,123 +592,12 @@ impl AppState {
                 // connections.  After shot updates and zero datum compensation,
                 // some connections may be misaligned — the modified section's
                 // station shifted but its partner didn't follow.
-                //
-                // We BFS outward from "authoritative" sections (affected +
-                // datum-bearing) through merges and aligned closures.  For each
-                // connection where one side is authoritative and the other is
-                // not, we adjust the non-authoritative side's offset to realign,
-                // then mark it authoritative so further connections cascade.
-                let mut authoritative: HashSet<SectionId> = HashSet::new();
-                for zd in &project.zero_datums {
-                    authoritative.insert(zd.station_ref.section_id);
-                }
-                for &sid in &affected_section_ids {
-                    if !blocked_sections.contains(&sid) {
-                        authoritative.insert(sid);
-                    }
-                }
-
-                let merges: Vec<_> = project.station_merges.clone();
-                let closures: Vec<_> = project.loop_closures.clone();
-
-                for _iteration in 0..20 {
-                    let mut any_adjustment = false;
-
-                    for m in &merges {
-                        let (fixed_ref, free_ref) =
-                            if authoritative.contains(&m.station_a.section_id)
-                                && !authoritative.contains(&m.station_b.section_id)
-                            {
-                                (m.station_a, m.station_b)
-                            } else if authoritative.contains(&m.station_b.section_id)
-                                && !authoritative.contains(&m.station_a.section_id)
-                            {
-                                (m.station_b, m.station_a)
-                            } else {
-                                continue;
-                            };
-
-                        if let (Some(fixed_pos), Some(free_pos)) = (
-                            project.compute_station_raw_coords(fixed_ref),
-                            project.compute_station_raw_coords(free_ref),
-                        ) {
-                            let dx = fixed_pos.x - free_pos.x;
-                            let dy = fixed_pos.y - free_pos.y;
-                            if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                                tracing::info!(
-                                    fixed_section = fixed_ref.section_id,
-                                    free_section = free_ref.section_id,
-                                    dx,
-                                    dy,
-                                    purpose = "connection stability",
-                                    "Cascading offset to maintain merge alignment",
-                                );
-                                let current = project
-                                    .section_offsets
-                                    .get(&free_ref.section_id)
-                                    .copied()
-                                    .unwrap_or((0.0, 0.0));
-                                project.section_offsets.insert(
-                                    free_ref.section_id,
-                                    (current.0 + dx, current.1 + dy),
-                                );
-                                authoritative.insert(free_ref.section_id);
-                                any_adjustment = true;
-                            }
-                        }
-                    }
-
-                    for c in &closures {
-                        if !c.is_aligned {
-                            continue;
-                        }
-                        let (fixed_ref, free_ref) =
-                            if authoritative.contains(&c.station_a.section_id)
-                                && !authoritative.contains(&c.station_b.section_id)
-                            {
-                                (c.station_a, c.station_b)
-                            } else if authoritative.contains(&c.station_b.section_id)
-                                && !authoritative.contains(&c.station_a.section_id)
-                            {
-                                (c.station_b, c.station_a)
-                            } else {
-                                continue;
-                            };
-
-                        if let (Some(fixed_pos), Some(free_pos)) = (
-                            project.compute_station_raw_coords(fixed_ref),
-                            project.compute_station_raw_coords(free_ref),
-                        ) {
-                            let dx = fixed_pos.x - free_pos.x;
-                            let dy = fixed_pos.y - free_pos.y;
-                            if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                                tracing::info!(
-                                    fixed_section = fixed_ref.section_id,
-                                    free_section = free_ref.section_id,
-                                    dx,
-                                    dy,
-                                    purpose = "connection stability",
-                                    "Cascading offset to maintain closure alignment",
-                                );
-                                let current = project
-                                    .section_offsets
-                                    .get(&free_ref.section_id)
-                                    .copied()
-                                    .unwrap_or((0.0, 0.0));
-                                project.section_offsets.insert(
-                                    free_ref.section_id,
-                                    (current.0 + dx, current.1 + dy),
-                                );
-                                authoritative.insert(free_ref.section_id);
-                                any_adjustment = true;
-                            }
-                        }
-                    }
-
-                    if !any_adjustment {
-                        break;
-                    }
-                }
+                let cascade_seeds: Vec<SectionId> = affected_section_ids
+                    .iter()
+                    .filter(|sid| !blocked_sections.contains(sid))
+                    .copied()
+                    .collect();
+                project.cascade_connection_offsets(&cascade_seeds);
             }
         }
 
