@@ -6,6 +6,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use ts_rs::TS;
 use std::path::Path;
 
@@ -145,6 +146,9 @@ pub struct DmpSection {
     pub date: NaiveDateTime,
     /// Shots in this section
     pub shots: Vec<DmpShot>,
+    /// Deterministic content hash (SHA256 of section name + direction + standard shot measurements).
+    /// Excludes date/time so duplicate detection works across device exports.
+    pub content_hash: String,
 }
 
 /// Survey direction
@@ -235,6 +239,46 @@ pub struct DmpShot {
     /// User comment (not parsed from DMP format; defaults to None)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+}
+
+// ============================================================================
+// Content Hashing
+// ============================================================================
+
+/// Compute a deterministic content hash for a DMP section.
+///
+/// Hashes section name, direction, and each Standard shot's measurements
+/// (heading_in/out, length, depth_in/out, pitch_in/out, LRUD, temperature,
+/// marker_index).  Date/time is deliberately excluded so the same section
+/// exported at different times produces an identical hash.
+fn compute_section_hash(name: &str, direction: DmpDirection, shots: &[DmpShot]) -> String {
+    let mut hasher = Sha256::new();
+
+    // Section identity
+    hasher.update(name.as_bytes());
+    hasher.update(&[match direction {
+        DmpDirection::In => 0u8,
+        DmpDirection::Out => 1u8,
+    }]);
+
+    // Only Standard shots contribute to the content hash
+    for shot in shots.iter().filter(|s| s.shot_type == DmpShotType::Standard) {
+        hasher.update(shot.heading_in.to_le_bytes());
+        hasher.update(shot.heading_out.to_le_bytes());
+        hasher.update(shot.length.to_le_bytes());
+        hasher.update(shot.depth_in.to_le_bytes());
+        hasher.update(shot.depth_out.to_le_bytes());
+        hasher.update(shot.pitch_in.to_le_bytes());
+        hasher.update(shot.pitch_out.to_le_bytes());
+        hasher.update(shot.left.to_le_bytes());
+        hasher.update(shot.right.to_le_bytes());
+        hasher.update(shot.up.to_le_bytes());
+        hasher.update(shot.down.to_le_bytes());
+        hasher.update(shot.temperature.to_le_bytes());
+        hasher.update(&[shot.marker_index]);
+    }
+
+    format!("{:x}", hasher.finalize())
 }
 
 // ============================================================================
@@ -434,12 +478,15 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
         bail!("Section has no shots");
     }
 
+    let content_hash = compute_section_hash(&name, direction, &shots);
+
     Ok(DmpSection {
         version,
         name,
         direction,
         date,
         shots,
+        content_hash,
     })
 }
 
@@ -1317,37 +1364,40 @@ mod tests {
 
     #[test]
     fn test_dmp_section_to_section_data_filters_non_standard_shots() {
+        let shots = vec![
+            DmpShot {
+                shot_type: DmpShotType::CsA,
+                heading_in: 0.0, heading_out: 0.0, length: 1.0,
+                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                temperature: 0.0, hour: 0, minute: 0, second: 0,
+                marker_index: 0, comment: None,
+            },
+            DmpShot {
+                shot_type: DmpShotType::Standard,
+                heading_in: 90.0, heading_out: 270.0, length: 5.0,
+                depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
+                left: 1.0, right: 1.0, up: 2.0, down: 0.5,
+                temperature: 18.0, hour: 10, minute: 30, second: 0,
+                marker_index: 1, comment: None,
+            },
+            DmpShot {
+                shot_type: DmpShotType::EndOfSurvey,
+                heading_in: 0.0, heading_out: 0.0, length: 0.0,
+                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                temperature: 0.0, hour: 0, minute: 0, second: 0,
+                marker_index: 0, comment: None,
+            },
+        ];
+        let hash = compute_section_hash("TST", DmpDirection::Out, &shots);
         let section = DmpSection {
             version: 4,
             name: "TST".to_string(),
             direction: DmpDirection::Out,
             date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
-            shots: vec![
-                DmpShot {
-                    shot_type: DmpShotType::CsA,
-                    heading_in: 0.0, heading_out: 0.0, length: 1.0,
-                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                    temperature: 0.0, hour: 0, minute: 0, second: 0,
-                    marker_index: 0, comment: None,
-                },
-                DmpShot {
-                    shot_type: DmpShotType::Standard,
-                    heading_in: 90.0, heading_out: 270.0, length: 5.0,
-                    depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
-                    left: 1.0, right: 1.0, up: 2.0, down: 0.5,
-                    temperature: 18.0, hour: 10, minute: 30, second: 0,
-                    marker_index: 1, comment: None,
-                },
-                DmpShot {
-                    shot_type: DmpShotType::EndOfSurvey,
-                    heading_in: 0.0, heading_out: 0.0, length: 0.0,
-                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                    temperature: 0.0, hour: 0, minute: 0, second: 0,
-                    marker_index: 0, comment: None,
-                },
-            ],
+            shots,
+            content_hash: hash,
         };
 
         let section_data = section.to_section_data("#ff0000".to_string());
@@ -1389,33 +1439,116 @@ mod tests {
     #[test]
     fn test_section_data_filters_non_standard_shots_via_to_section_data() {
         // A DmpSection with only EOS/CsA shots should produce empty shot list in SectionData
+        let shots = vec![
+            DmpShot {
+                shot_type: DmpShotType::EndOfSurvey,
+                heading_in: 0.0, heading_out: 0.0, length: 0.0,
+                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                temperature: 0.0, hour: 0, minute: 0, second: 0,
+                marker_index: 0, comment: None,
+            },
+            DmpShot {
+                shot_type: DmpShotType::CsA,
+                heading_in: 0.0, heading_out: 0.0, length: 1.0,
+                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                temperature: 0.0, hour: 0, minute: 0, second: 0,
+                marker_index: 0, comment: None,
+            },
+        ];
+        let hash = compute_section_hash("TST", DmpDirection::In, &shots);
         let section = DmpSection {
             version: 3,
             name: "TST".to_string(),
             direction: DmpDirection::In,
             date: NaiveDate::from_ymd_opt(2024, 6, 15).unwrap().and_hms_opt(10, 30, 0).unwrap(),
-            shots: vec![
-                DmpShot {
-                    shot_type: DmpShotType::EndOfSurvey,
-                    heading_in: 0.0, heading_out: 0.0, length: 0.0,
-                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                    temperature: 0.0, hour: 0, minute: 0, second: 0,
-                    marker_index: 0, comment: None,
-                },
-                DmpShot {
-                    shot_type: DmpShotType::CsA,
-                    heading_in: 0.0, heading_out: 0.0, length: 1.0,
-                    depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
-                    left: 0.0, right: 0.0, up: 0.0, down: 0.0,
-                    temperature: 0.0, hour: 0, minute: 0, second: 0,
-                    marker_index: 0, comment: None,
-                },
-            ],
+            shots,
+            content_hash: hash,
         };
 
         let section_data = section.to_section_data("#ff0000".to_string());
         assert!(section_data.shots.is_empty(), "only non-Standard shots → empty shot list");
+    }
+
+    // ========================================================================
+    // Content hash tests
+    // ========================================================================
+
+    #[test]
+    fn test_content_hash_deterministic() {
+        let shots = vec![DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 90.0, heading_out: 270.0, length: 5.0,
+            depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
+            left: 1.0, right: 1.0, up: 2.0, down: 0.5,
+            temperature: 18.0, hour: 10, minute: 30, second: 0,
+            marker_index: 1, comment: None,
+        }];
+        let h1 = compute_section_hash("ABC", DmpDirection::In, &shots);
+        let h2 = compute_section_hash("ABC", DmpDirection::In, &shots);
+        assert_eq!(h1, h2, "same data must produce identical hash");
+        assert_eq!(h1.len(), 64, "SHA256 hex = 64 chars");
+    }
+
+    #[test]
+    fn test_content_hash_changes_with_shot_data() {
+        let shots_a = vec![DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 90.0, heading_out: 270.0, length: 5.0,
+            depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
+            left: 1.0, right: 1.0, up: 2.0, down: 0.5,
+            temperature: 18.0, hour: 10, minute: 30, second: 0,
+            marker_index: 1, comment: None,
+        }];
+        let mut shots_b = shots_a.clone();
+        shots_b[0].length = 5.1; // slightly different length
+        let h_a = compute_section_hash("ABC", DmpDirection::In, &shots_a);
+        let h_b = compute_section_hash("ABC", DmpDirection::In, &shots_b);
+        assert_ne!(h_a, h_b, "different shot data must produce different hash");
+    }
+
+    #[test]
+    fn test_content_hash_excludes_date() {
+        // Same shots, different dates — hash should be identical
+        let shots = vec![DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 90.0, heading_out: 270.0, length: 5.0,
+            depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
+            left: 1.0, right: 1.0, up: 2.0, down: 0.5,
+            temperature: 18.0, hour: 10, minute: 30, second: 0,
+            marker_index: 1, comment: None,
+        }];
+        // Date is not an input to compute_section_hash, so same data = same hash
+        let h1 = compute_section_hash("ABC", DmpDirection::In, &shots);
+        let h2 = compute_section_hash("ABC", DmpDirection::In, &shots);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_content_hash_ignores_non_standard_shots() {
+        let shots_with_eos = vec![
+            DmpShot {
+                shot_type: DmpShotType::Standard,
+                heading_in: 90.0, heading_out: 270.0, length: 5.0,
+                depth_in: 0.0, depth_out: 1.0, pitch_in: 0.0, pitch_out: 0.0,
+                left: 1.0, right: 1.0, up: 2.0, down: 0.5,
+                temperature: 18.0, hour: 10, minute: 30, second: 0,
+                marker_index: 1, comment: None,
+            },
+            DmpShot {
+                shot_type: DmpShotType::EndOfSurvey,
+                heading_in: 0.0, heading_out: 0.0, length: 0.0,
+                depth_in: 0.0, depth_out: 0.0, pitch_in: 0.0, pitch_out: 0.0,
+                left: 0.0, right: 0.0, up: 0.0, down: 0.0,
+                temperature: 0.0, hour: 0, minute: 0, second: 0,
+                marker_index: 0, comment: None,
+            },
+        ];
+        let shots_without = vec![shots_with_eos[0].clone()];
+        let h_with = compute_section_hash("ABC", DmpDirection::In, &shots_with_eos);
+        let h_without = compute_section_hash("ABC", DmpDirection::In, &shots_without);
+        assert_eq!(h_with, h_without, "non-Standard shots must not affect hash");
     }
 
     // ========================================================================

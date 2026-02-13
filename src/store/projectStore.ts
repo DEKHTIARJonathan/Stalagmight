@@ -237,7 +237,8 @@ interface ProjectStore {
   calculateFileHash: (path: string) => Promise<string>;
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
-  importSections: (sections: ImportSectionConfig[], fileHash?: string | null) => Promise<CommandResult>;
+  checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
+  importSections: (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => Promise<CommandResult>;
   suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
@@ -1252,12 +1253,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
   },
 
-  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null) => {
+  checkSectionHashes: async (hashes: string[]) => {
+    return await invokeIpc<boolean[]>('check_section_hashes', { hashes }, {
+      purpose: 'detect duplicate section imports',
+      fields: { count: hashes.length },
+    });
+  },
+
+  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => {
     const result = await invokeIpc<CommandResult>(
       'import_sections',
       {
         sections,
         fileHash: fileHash ?? null,
+        sectionHashes: sectionHashes ?? null,
       },
       { purpose: 'apply imported sections', fields: { section_count: sections.length } }
     );

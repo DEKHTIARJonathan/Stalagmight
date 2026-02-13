@@ -170,6 +170,9 @@ pub struct Project {
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
+    /// Content hashes of imported DMP sections (for section-level duplicate detection)
+    #[serde(default)]
+    pub imported_section_hashes: Vec<String>,
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
     pub next_closure_id: u64,
@@ -262,6 +265,7 @@ impl Project {
             station_offsets: HashMap::new(),
             station_comments: HashMap::new(),
             imported_file_hashes: Vec::new(),
+            imported_section_hashes: Vec::new(),
             next_closure_id: 1,
         }
     }

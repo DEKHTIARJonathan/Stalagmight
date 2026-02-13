@@ -21,6 +21,8 @@ export interface DmpSelectionConfig {
   defaultDate: string | null;
   /** SHA256 hash of the source DMP file, null if computation failed */
   fileHash: string | null;
+  /** Content hashes of selected sections (for section-level duplicate detection) */
+  sectionHashes: string[];
 }
 
 interface DmpSelectionDialogProps {
@@ -112,6 +114,7 @@ export default function DmpSelectionDialog({
   // Get hash functions from project store
   const calculateFileHash = useProjectStore((state) => state.calculateFileHash);
   const checkDuplicateImport = useProjectStore((state) => state.checkDuplicateImport);
+  const checkSectionHashes = useProjectStore((state) => state.checkSectionHashes);
 
   // File hash and duplicate detection state
   const [fileHash, setFileHash] = useState<string | null>(null);
@@ -119,6 +122,46 @@ export default function DmpSelectionDialog({
 
   // Track whether hash computation has settled (resolved or failed)
   const [hashSettled, setHashSettled] = useState(false);
+
+  // Section-level duplicate detection state
+  const [duplicateSectionIndices, setDuplicateSectionIndices] = useState<Set<number>>(new Set());
+  const [sectionHashesSettled, setSectionHashesSettled] = useState(false);
+
+  // Check section content hashes for duplicates on mount
+  useEffect(() => {
+    let cancelled = false;
+    setSectionHashesSettled(false);
+    setDuplicateSectionIndices(new Set());
+    (async () => {
+      try {
+        const hashes = dmpFile.sections.map(s => s.content_hash);
+        const results = await checkSectionHashes(hashes);
+        if (cancelled) return;
+        const dupes = new Set<number>();
+        results.forEach((isDup, idx) => {
+          if (isDup) dupes.add(idx);
+        });
+        setDuplicateSectionIndices(dupes);
+        // Auto-deselect duplicate sections
+        if (dupes.size > 0) {
+          setSelectedIndices(prev => {
+            const next = new Set(prev);
+            for (const idx of dupes) {
+              next.delete(idx);
+            }
+            return next;
+          });
+        }
+      } catch {
+        // Graceful degradation
+      } finally {
+        if (!cancelled) {
+          setSectionHashesSettled(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dmpFile.sections, checkSectionHashes]);
 
   // Compute file hash and check for duplicates on mount / filePath change
   useEffect(() => {
@@ -251,14 +294,23 @@ export default function DmpSelectionDialog({
       setLastUsedSurveyor(defaultSurveyor.trim());
     }
 
+    const sectionHashes: string[] = [];
+    for (const idx of selectedIndices) {
+      const section = dmpFile.sections[idx];
+      if (section) {
+        sectionHashes.push(section.content_hash);
+      }
+    }
+
     const config: DmpSelectionConfig = {
       selectedIndices,
       defaultSurveyor,
       defaultDate: defaultDate.trim() || null,
       fileHash,
+      sectionHashes,
     };
     onContinue(config);
-  }, [selectedIndices, defaultSurveyor, defaultDate, fileHash, onContinue, setLastUsedSurveyor]);
+  }, [selectedIndices, defaultSurveyor, defaultDate, fileHash, dmpFile.sections, onContinue, setLastUsedSurveyor]);
 
   // Calculate section counts for display
   const nonEmptySectionCount = useMemo(() => {
@@ -301,6 +353,16 @@ export default function DmpSelectionDialog({
             data-testid="duplicate-hash-warning"
           >
             {'\u26A0'} File may have been imported before (same hash detected)
+          </div>
+        )}
+
+        {/* Section-level duplicate banner */}
+        {sectionHashesSettled && duplicateSectionIndices.size > 0 && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="duplicate-sections-warning"
+          >
+            {'\u26A0'} {duplicateSectionIndices.size} of {dmpFile.sections.length} sections already imported (auto-deselected)
           </div>
         )}
 
@@ -382,6 +444,7 @@ export default function DmpSelectionDialog({
                   const shotCount = standardShots.length;
                   const isEmpty = shotCount === 0;
                   const isSelected = selectedIndices.has(index);
+                  const isDupeSection = duplicateSectionIndices.has(index);
                   const dateStr = section.date?.split(/[T ]/)[0] ?? '-';
 
                   return (
@@ -404,7 +467,14 @@ export default function DmpSelectionDialog({
                           aria-label={`Select section ${section.name}`}
                         />
                       </td>
-                      <td className="px-3 py-2">{section.name}</td>
+                      <td className="px-3 py-2">
+                        {section.name}
+                        {isDupeSection && (
+                          <span className="ml-2 text-xs text-warning" data-testid={`section-duplicate-${index}`}>
+                            (already imported)
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2">{dateStr}</td>
                       <td className="px-3 py-2 capitalize">{section.direction}</td>
                       <td className="px-3 py-2 text-right tabular-nums">
@@ -430,10 +500,10 @@ export default function DmpSelectionDialog({
           <Button
             variant="primary"
             onClick={handleContinue}
-            disabled={selectedIndices.size === 0 || !hashSettled}
+            disabled={selectedIndices.size === 0 || !hashSettled || !sectionHashesSettled}
             data-testid="continue-button"
           >
-            {hashSettled ? 'Continue to Section Setup' : 'Computing file hash...'}
+            {!hashSettled || !sectionHashesSettled ? 'Checking for duplicates...' : 'Continue to Section Setup'}
           </Button>
         </div>
       </div>

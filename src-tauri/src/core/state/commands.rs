@@ -348,6 +348,7 @@ impl AppState {
         sections: Vec<crate::models::ImportSectionConfig>,
         closures: Vec<crate::models::ImportClosure>,
         file_hash: Option<String>,
+        section_hashes: Vec<String>,
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
     ) -> CommandResult {
         use std::collections::{HashMap, HashSet};
@@ -808,6 +809,18 @@ impl AppState {
                     "Failed to track imported file hash"
                 );
                 // Non-fatal: don't rollback the entire import for a hash tracking failure
+            }
+        }
+
+        // Track section content hashes (before after-snapshot so undo reverts them)
+        if !section_hashes.is_empty() {
+            let track_result = self.track_section_hashes(section_hashes);
+            if !track_result.success {
+                tracing::warn!(
+                    purpose = "prevent duplicate section imports",
+                    error = ?track_result.error,
+                    "Failed to track imported section hashes"
+                );
             }
         }
 

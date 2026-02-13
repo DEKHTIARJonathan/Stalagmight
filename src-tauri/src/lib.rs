@@ -1106,6 +1106,7 @@ pub fn run() {
             commands::import::calculate_file_hash,
             commands::import::check_duplicate_import,
             commands::import::track_imported_file,
+            commands::import::check_section_hashes,
             commands::import::import_sections,
             commands::import::parse_tml,
             commands::import::execute_tml_import,

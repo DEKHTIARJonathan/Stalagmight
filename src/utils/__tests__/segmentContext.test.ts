@@ -34,7 +34,7 @@ function makeShot(heading: number, length: number, overrides: Partial<DmpShot> =
 
 /** Create a DMP section with shots heading in a single direction. */
 function makeDmpSection(name: string, shots: DmpShot[]): DmpSection {
-  return { version: 1, name, direction: 'in', date: '', shots };
+  return { version: 1, name, direction: 'in', date: '', shots, content_hash: '' };
 }
 
 /** Create an importing-type virtual connection. */
