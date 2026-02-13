@@ -155,6 +155,139 @@ function adjustStationForDeletedShots(
   return adjusted;
 }
 
+/**
+ * Find the overlap whose deleted zone contains `targetStation` for a section.
+ *
+ * Checks confirmedOverlaps first, then falls back to searching the suggestion
+ * pool. Handles both existing-to-import and import-to-import overlaps.
+ */
+function findOverlapForStation(
+  sectionIndex: number,
+  targetStation: number,
+  confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
+  fullPool: CrossSectionSuggestion[],
+): ConfirmedOverlapInfo | null {
+  // 1. Check confirmed overlap — the merge station determines the deleted zone boundary
+  const confirmed = confirmedOverlaps.get(sectionIndex);
+  if (confirmed) {
+    const isFront = confirmed.importStationIndex === 0;
+    const inDeletedZone = isFront
+      ? targetStation < confirmed.mergeImportStation
+      : targetStation > confirmed.mergeImportStation;
+    if (inDeletedZone) return confirmed;
+  }
+
+  // 2. Fall back to suggestion pool — for unconfirmed overlaps ALL overlap shots
+  //    are deleted, so the boundary is at the edge of the overlap region.
+  for (const s of fullPool) {
+    if (s.importSectionIndex !== sectionIndex) continue;
+
+    const isFront = s.importStationIndex === 0;
+    const mergeStation = isFront
+      ? s.matchedShots
+      : s.importStationIndex - s.matchedShots;
+
+    const inDeletedZone = isFront
+      ? targetStation < mergeStation
+      : targetStation > mergeStation;
+
+    if (inDeletedZone) {
+      return {
+        importStationIndex: s.importStationIndex,
+        matchedShots: s.matchedShots,
+        direction: s.direction,
+        existingStationIndex: s.existingStationIndex,
+        targetType: s.targetType as 'existing' | 'importing',
+        existingSectionId: s.existingSectionId,
+        targetImportIndex: s.targetImportIndex ?? null,
+        mergeImportStation: mergeStation,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Redirect connections whose target station falls in a deleted overlap zone.
+ *
+ * When section B overlaps with A (existing) or C (importing) and B's overlap
+ * shots are deleted, any connection targeting a deleted station in B must be
+ * redirected to the corresponding station in the section that replaced those
+ * shots. Handles both existing and importing overlaps, and follows chains
+ * (A→B→C→D) up to MAX_DEPTH.
+ */
+function redirectDeletedTargets(
+  connections: VirtualConnection[],
+  _sectionEdits: Map<number, SectionEditState>,
+  confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
+  fullPool: CrossSectionSuggestion[],
+): void {
+  const MAX_DEPTH = 10;
+
+  for (const conn of connections) {
+    if (conn.targetType !== 'importing') continue;
+    if (conn.targetImportIndex == null || conn.targetImportStationIndex == null) continue;
+
+    let targetIdx = conn.targetImportIndex;
+    let targetStation = conn.targetImportStationIndex;
+    let depth = 0;
+
+    while (depth < MAX_DEPTH) {
+      const overlap = findOverlapForStation(targetIdx, targetStation, confirmedOverlaps, fullPool);
+      if (!overlap) break;
+
+      // Compute the offset into the overlap and map to the next section
+      const isFront = overlap.importStationIndex === 0;
+      const offset = isFront
+        ? targetStation
+        : overlap.importStationIndex - targetStation;
+
+      const newStation = overlap.direction === 'forward'
+        ? overlap.existingStationIndex + offset
+        : overlap.existingStationIndex - offset;
+
+      depth++;
+
+      if (overlap.targetType === 'existing' && overlap.existingSectionId != null) {
+        // Redirect to existing section — end of chain
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[redirectDeletedTargets] Redirected import ${conn.importSectionIndex}:`,
+            `${conn.targetImportIndex}@${conn.targetImportStationIndex}`,
+            `→ existing section ${overlap.existingSectionId}@${newStation} (depth=${depth})`,
+          );
+        }
+        conn.targetType = 'existing';
+        conn.existingSectionId = overlap.existingSectionId;
+        conn.existingStationIndex = newStation;
+        delete conn.targetImportIndex;
+        delete conn.targetImportStationIndex;
+        break;
+      } else if (overlap.targetImportIndex != null) {
+        // Redirect to another import section — continue chain
+        targetIdx = overlap.targetImportIndex;
+        targetStation = newStation;
+      } else {
+        break;
+      }
+    }
+
+    // Update connection if redirected to another import section (not existing)
+    if (conn.targetType === 'importing' && depth > 0) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[redirectDeletedTargets] Redirected import ${conn.importSectionIndex}:`,
+          `${conn.targetImportIndex}@${conn.targetImportStationIndex}`,
+          `→ import ${targetIdx}@${targetStation} (depth=${depth})`,
+        );
+      }
+      conn.targetImportIndex = targetIdx;
+      conn.targetImportStationIndex = targetStation;
+    }
+  }
+}
+
 /** Check if a suggestion matches a confirmed overlap info by field comparison. */
 function matchesConfirmed(s: CrossSectionSuggestion, info: ConfirmedOverlapInfo): boolean {
   return s.importStationIndex === info.importStationIndex
@@ -1839,6 +1972,14 @@ export default function DmpNewImportDialog({
           overlapMode,
         );
       }
+
+      // Redirect connections whose target station was deleted by overlap treatment
+      redirectDeletedTargets(
+        connectionsRef.current,
+        sectionEditsRef.current,
+        confirmedOverlapsRef.current,
+        fullPoolRef.current,
+      );
 
       const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
       const { configs, unreachable } = buildBatchImport(
