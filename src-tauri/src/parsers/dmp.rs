@@ -1822,26 +1822,27 @@ mod tests {
         assert_eq!(s001.import_station_index, 107, "001 connects at its back (station 107)");
         assert_eq!(s001.existing_station_index, 182, "001 attaches to 002 station 182");
 
-        // Verify overlap shot data for the 001→002 connection.
-        // 001→002: Back (impStn=107) + Reverse, matched=2, exStn=182.
-        // Import overlap shot IDs: 105, 106 (back: impStn-matched..impStn-1).
-        // Target shot indices (Back+Reverse): (exStn - matched) + k = 180, 181.
+        // Overlap shot raw data for 001→002 connection.
+        // Import overlap shots 105, 106 are deleted from 001.
+        // Target shots 180, 181 on existing section 002 get interpolated values.
+        // Post-import interpolated values are verified in the integration test
+        // kb5_import_overlap_interpolation_integration (core/state/tests.rs).
         let std_001: Vec<_> = dmp.sections[0].shots.iter()
             .filter(|s| s.shot_type == DmpShotType::Standard).collect();
         let std_002: Vec<_> = dmp.sections[1].shots.iter()
             .filter(|s| s.shot_type == DmpShotType::Standard).collect();
 
-        // Import side: 001 shots 105, 106
+        // Import side: 001 shots 105, 106 (deleted during import)
         assert_eq!(std_001[105].length, 4.81, "001 shot 105 length");
         assert_eq!(std_001[105].heading_in, 315.4, "001 shot 105 azimuth");
         assert_eq!(std_001[106].length, 12.04, "001 shot 106 length");
         assert_eq!(std_001[106].heading_in, 343.7, "001 shot 106 azimuth");
 
-        // Target side: 002 shots 180, 181
-        assert_eq!(std_002[180].length, 6.52, "002 shot 180 length");
-        assert_eq!(std_002[180].heading_in, 329.7, "002 shot 180 azimuth");
-        assert_eq!(std_002[181].length, 12.71, "002 shot 181 length");
-        assert_eq!(std_002[181].heading_in, 355.8, "002 shot 181 azimuth");
+        // Target side: 002 shots 180, 181 (interpolated during import)
+        assert_eq!(std_002[180].length, 6.52, "002 shot 180 raw length");
+        assert_eq!(std_002[180].heading_in, 329.7, "002 shot 180 raw azimuth");
+        assert_eq!(std_002[181].length, 12.71, "002 shot 181 raw length");
+        assert_eq!(std_002[181].heading_in, 355.8, "002 shot 181 raw azimuth");
     }
 
 }
