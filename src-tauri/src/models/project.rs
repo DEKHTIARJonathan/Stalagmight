@@ -2120,6 +2120,23 @@ impl Project {
             }
         }
 
+        // Compute initial guess from current group positions (warm start).
+        // Starting from the current positions rather than zeros dramatically
+        // improves convergence — the initial residual is only the closure
+        // correction instead of the full absolute coordinates.
+        let mut x0_x = vec![0.0; n];
+        let mut x0_y = vec![0.0; n];
+        for (root, members) in &groups {
+            if let Some(&idx) = unknown_index.get(root) {
+                if let Some(member) = members.first() {
+                    if let Some(coords) = self.compute_station_raw_coords(*member) {
+                        x0_x[idx] = coords.x;
+                        x0_y[idx] = coords.y;
+                    }
+                }
+            }
+        }
+
         // Sparse matrix-vector product: y = A*x, where A is the graph Laplacian
         // stored as diagonal + adjacency list.  axis=0 for X, axis=1 for Y.
         let spmv = |x: &[f64], diag: &[f64], axis: usize| -> Vec<f64> {
@@ -2136,7 +2153,8 @@ impl Project {
 
         // Jacobi-preconditioned Conjugate Gradient solver.
         // Converges in O(diameter) iterations for graph Laplacians.
-        let pcg_solve = |diag: &[f64], rhs: &[f64], axis: usize| -> Result<Vec<f64>, String> {
+        // Accepts an initial guess x0 for warm-starting.
+        let pcg_solve = |diag: &[f64], rhs: &[f64], axis: usize, x0: &[f64]| -> Result<Vec<f64>, String> {
             let max_iter = n.min(10_000);
             let tol = 1e-12;
 
@@ -2145,8 +2163,10 @@ impl Project {
                 if d.abs() > 1e-30 { 1.0 / d } else { 1.0 }
             }).collect();
 
-            let mut x = vec![0.0; n];
-            let mut r = rhs.to_vec(); // r = b - A*x = b (since x=0)
+            let mut x = x0.to_vec();
+            // r = b - A*x0  (residual from initial guess)
+            let ax0 = spmv(&x, diag, axis);
+            let mut r: Vec<f64> = rhs.iter().zip(ax0.iter()).map(|(&bi, &ai)| bi - ai).collect();
             let mut z: Vec<f64> = r.iter().zip(inv_diag.iter()).map(|(&ri, &mi)| ri * mi).collect();
             let mut p = z.clone();
             let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
@@ -2188,8 +2208,8 @@ impl Project {
             Ok(x)
         };
 
-        let sol_x = pcg_solve(&diag_x, &atb_x, 0)?;
-        let sol_y = pcg_solve(&diag_y, &atb_y, 1)?;
+        let sol_x = pcg_solve(&diag_x, &atb_x, 0, &x0_x)?;
+        let sol_y = pcg_solve(&diag_y, &atb_y, 1, &x0_y)?;
 
         // Collect original Z coordinates for each group root (depths are not adjusted)
         let mut group_raw_z: HashMap<StationRef, f64> = HashMap::new();
@@ -2232,6 +2252,15 @@ impl Project {
                 let root_j = *station_root
                     .get(&station_j)
                     .ok_or_else(|| "Missing station root".to_string())?;
+
+                // Skip shots within the same constraint group — both endpoints
+                // share the same solved position, so the shot displacement would
+                // collapse to zero. These shots are internal to a rigid group
+                // (connected via merges/closures) and should not be modified.
+                if root_i == root_j {
+                    continue;
+                }
+
                 let coords_i = group_coords
                     .get(&root_i)
                     .ok_or_else(|| "Missing solved coordinates".to_string())?;
