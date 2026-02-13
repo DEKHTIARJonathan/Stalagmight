@@ -304,60 +304,72 @@ export default function ZeroDatumConfigDialog({
 
         {/* Right column: Configuration (scrollable) */}
         <div className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5">
-          {/* Station selection */}
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-text-secondary w-16 shrink-0">
-              {t('dialogs.zeroDatumConfig.stationLabel')}:
-            </label>
-            <Select
-              value={String(stationIndex)}
-              onChange={(v) => {
-                const index = parseInt(v, 10);
-                setStationIndex(index);
-                setPreviewStationIndex(index);
-                stationIndexRef.current = index;
-              }}
-              options={stationOptions}
-              className="flex-1"
-              data-testid="zero-datum-station-select"
-              onOptionHover={handleStationHover}
-            />
-          </div>
+          {/* Zero Datum Location — prominent card */}
+          <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">
+                {t('dialogs.zeroDatumConfig.zeroDatumHeading')}
+              </h3>
+              <p className="text-xs text-text-secondary mt-0.5">
+                {t('dialogs.zeroDatumConfig.zeroDatumDescription')}
+              </p>
+            </div>
 
-          {/* GPS input */}
-          <div className="space-y-1">
+            {/* Station selection */}
             <div className="flex items-center gap-2">
-              <label className="text-sm text-text-secondary w-16 shrink-0">
-                {t('dialogs.zeroDatumConfig.gpsLabel')}:
+              <label className="text-sm text-text-secondary shrink-0">
+                {t('dialogs.zeroDatumConfig.stationLabel')}:
               </label>
-              <input
-                type="text"
-                value={gpsInput}
-                onChange={(e) => handleGpsInputChange(e.target.value)}
-                placeholder={t('dialogs.zeroDatumConfig.gpsPlaceholder')}
-                className="flex-1 px-2 py-1 bg-background border border-border rounded text-sm"
-                data-testid="zero-datum-gps-input"
+              <Select
+                value={String(stationIndex)}
+                onChange={(v) => {
+                  const index = parseInt(v, 10);
+                  setStationIndex(index);
+                  setPreviewStationIndex(index);
+                  stationIndexRef.current = index;
+                }}
+                options={stationOptions}
+                className="flex-1"
+                data-testid="zero-datum-station-select"
+                onOptionHover={handleStationHover}
               />
-              {gpsFormat && (
-                <span
-                  className="text-xs px-2 py-1 bg-accent-10 text-accent rounded"
-                  data-testid="zero-datum-gps-format"
-                >
-                  {gpsFormat}
-                </span>
+            </div>
+
+            {/* GPS input */}
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-text-secondary shrink-0">
+                  {t('dialogs.zeroDatumConfig.gpsLabel')}:
+                </label>
+                <input
+                  type="text"
+                  value={gpsInput}
+                  onChange={(e) => handleGpsInputChange(e.target.value)}
+                  placeholder={t('dialogs.zeroDatumConfig.gpsPlaceholder')}
+                  className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm"
+                  data-testid="zero-datum-gps-input"
+                />
+                {gpsFormat && (
+                  <span
+                    className="text-xs px-2 py-1 bg-accent-10 text-accent rounded"
+                    data-testid="zero-datum-gps-format"
+                  >
+                    {gpsFormat}
+                  </span>
+                )}
+              </div>
+              {gpsError && (
+                <div className="text-xs text-error pl-1" data-testid="zero-datum-gps-error">
+                  {gpsError}
+                </div>
+              )}
+              {gpsCoords && (
+                <div className="text-xs text-success pl-1" data-testid="zero-datum-gps-parsed">
+                  Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
+                  {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                </div>
               )}
             </div>
-            {gpsError && (
-              <div className="text-xs text-error ml-[72px]" data-testid="zero-datum-gps-error">
-                {gpsError}
-              </div>
-            )}
-            {gpsCoords && (
-              <div className="text-xs text-success ml-[72px]" data-testid="zero-datum-gps-parsed">
-                Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
-                {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
-              </div>
-            )}
           </div>
 
           {/* Metadata form */}
