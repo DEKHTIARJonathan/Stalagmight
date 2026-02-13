@@ -41,6 +41,13 @@ import {
   computeSegmentLayout,
 } from '../../utils/segmentContext';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
+import {
+  adjustStationForDeletedShots,
+  findReverseImportConnection,
+  redirectDeletedTargets,
+  type SectionEditState,
+  type ConfirmedOverlapInfo,
+} from '../../utils/batchImportHelpers';
 
 interface DmpNewImportDialogProps {
   dmpFile: DmpFile;
@@ -56,31 +63,7 @@ interface DmpNewImportDialogProps {
   savedManualPlacingState?: SavedManualPlacingState | undefined;
 }
 
-// ─── Section edit state ──────────────────────────────────────────────────────
-
-interface SectionEditState {
-  name: string;
-  surveyor: string;
-  date: string;
-  color: string;
-  direction: 'in' | 'out';
-  quality: number;
-  shots: EditableShot[];
-}
-
-/** Merge station info recorded when user confirms a suggestion. */
-interface ConfirmedOverlapInfo {
-  /** Fields to match the suggestion in the pool (reference equality breaks after save/restore). */
-  importStationIndex: number;
-  matchedShots: number;
-  direction: 'forward' | 'reverse';
-  existingStationIndex: number;
-  targetType: 'existing' | 'importing';
-  existingSectionId: number | null;
-  targetImportIndex: number | null;
-  /** User-selected merge station (determines which overlap shots are actionable). */
-  mergeImportStation: number;
-}
+// SectionEditState and ConfirmedOverlapInfo imported from batchImportHelpers
 
 // ─── Direct placement (manual_placing phase) ─────────────────────────────────
 
@@ -133,159 +116,6 @@ function bfsReachable(
     }
   }
   return order;
-}
-
-/**
- * Adjust a station index for deleted shots.
- *
- * When overlap shots are deleted from an import section, station indices
- * shift. This counts non-deleted shots before the original station position
- * to compute the adjusted index in the filtered shot array.
- */
-function adjustStationForDeletedShots(
-  shots: EditableShot[],
-  originalStation: number,
-): number {
-  let adjusted = 0;
-  for (const s of shots) {
-    if (s.isDeleted) continue;
-    if (!s.isNew && s.id >= originalStation) break;
-    adjusted++;
-  }
-  return adjusted;
-}
-
-/**
- * Find the overlap whose deleted zone contains `targetStation` for a section.
- *
- * Checks confirmedOverlaps first, then falls back to searching the suggestion
- * pool. Handles both existing-to-import and import-to-import overlaps.
- */
-function findOverlapForStation(
-  sectionIndex: number,
-  targetStation: number,
-  confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
-  fullPool: CrossSectionSuggestion[],
-): ConfirmedOverlapInfo | null {
-  // 1. Check confirmed overlap — the merge station determines the deleted zone boundary
-  const confirmed = confirmedOverlaps.get(sectionIndex);
-  if (confirmed) {
-    const isFront = confirmed.importStationIndex === 0;
-    const inDeletedZone = isFront
-      ? targetStation < confirmed.mergeImportStation
-      : targetStation > confirmed.mergeImportStation;
-    if (inDeletedZone) return confirmed;
-  }
-
-  // 2. Fall back to suggestion pool — for unconfirmed overlaps ALL overlap shots
-  //    are deleted, so the boundary is at the edge of the overlap region.
-  for (const s of fullPool) {
-    if (s.importSectionIndex !== sectionIndex) continue;
-
-    const isFront = s.importStationIndex === 0;
-    const mergeStation = isFront
-      ? s.matchedShots
-      : s.importStationIndex - s.matchedShots;
-
-    const inDeletedZone = isFront
-      ? targetStation < mergeStation
-      : targetStation > mergeStation;
-
-    if (inDeletedZone) {
-      return {
-        importStationIndex: s.importStationIndex,
-        matchedShots: s.matchedShots,
-        direction: s.direction,
-        existingStationIndex: s.existingStationIndex,
-        targetType: s.targetType as 'existing' | 'importing',
-        existingSectionId: s.existingSectionId,
-        targetImportIndex: s.targetImportIndex ?? null,
-        mergeImportStation: mergeStation,
-      };
-    }
-  }
-
-  return null;
-}
-
-/**
- * Redirect connections whose target station falls in a deleted overlap zone.
- *
- * When section B overlaps with A (existing) or C (importing) and B's overlap
- * shots are deleted, any connection targeting a deleted station in B must be
- * redirected to the corresponding station in the section that replaced those
- * shots. Handles both existing and importing overlaps, and follows chains
- * (A→B→C→D) up to MAX_DEPTH.
- */
-function redirectDeletedTargets(
-  connections: VirtualConnection[],
-  _sectionEdits: Map<number, SectionEditState>,
-  confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
-  fullPool: CrossSectionSuggestion[],
-): void {
-  const MAX_DEPTH = 10;
-
-  for (const conn of connections) {
-    if (conn.targetType !== 'importing') continue;
-    if (conn.targetImportIndex == null || conn.targetImportStationIndex == null) continue;
-
-    let targetIdx = conn.targetImportIndex;
-    let targetStation = conn.targetImportStationIndex;
-    let depth = 0;
-
-    while (depth < MAX_DEPTH) {
-      const overlap = findOverlapForStation(targetIdx, targetStation, confirmedOverlaps, fullPool);
-      if (!overlap) break;
-
-      // Compute the offset into the overlap and map to the next section
-      const isFront = overlap.importStationIndex === 0;
-      const offset = isFront
-        ? targetStation
-        : overlap.importStationIndex - targetStation;
-
-      const newStation = overlap.direction === 'forward'
-        ? overlap.existingStationIndex + offset
-        : overlap.existingStationIndex - offset;
-
-      depth++;
-
-      if (overlap.targetType === 'existing' && overlap.existingSectionId != null) {
-        // Redirect to existing section — end of chain
-        if (import.meta.env.DEV) {
-          console.warn(
-            `[redirectDeletedTargets] Redirected import ${conn.importSectionIndex}:`,
-            `${conn.targetImportIndex}@${conn.targetImportStationIndex}`,
-            `→ existing section ${overlap.existingSectionId}@${newStation} (depth=${depth})`,
-          );
-        }
-        conn.targetType = 'existing';
-        conn.existingSectionId = overlap.existingSectionId;
-        conn.existingStationIndex = newStation;
-        delete conn.targetImportIndex;
-        delete conn.targetImportStationIndex;
-        break;
-      } else if (overlap.targetImportIndex != null) {
-        // Redirect to another import section — continue chain
-        targetIdx = overlap.targetImportIndex;
-        targetStation = newStation;
-      } else {
-        break;
-      }
-    }
-
-    // Update connection if redirected to another import section (not existing)
-    if (conn.targetType === 'importing' && depth > 0) {
-      if (import.meta.env.DEV) {
-        console.warn(
-          `[redirectDeletedTargets] Redirected import ${conn.importSectionIndex}:`,
-          `${conn.targetImportIndex}@${conn.targetImportStationIndex}`,
-          `→ import ${targetIdx}@${targetStation} (depth=${depth})`,
-        );
-      }
-      conn.targetImportIndex = targetIdx;
-      conn.targetImportStationIndex = targetStation;
-    }
-  }
 }
 
 /** Check if a suggestion matches a confirmed overlap info by field comparison. */
@@ -909,12 +739,20 @@ function buildBatchImport(
 
       // Check for direct placement first (from manual_placing phase)
       const directPlacement = directPlacementMap.get(idx);
-      const conn = connectionMap.get(idx);
+      let conn = connectionMap.get(idx);
+
+      // Fallback: section is only the TARGET of an import-to-import connection
       if (!directPlacement && !conn) {
-        if (import.meta.env.DEV) {
-          console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED — no connection or direct placement`);
+        conn = findReverseImportConnection(idx, allConnections, emittedPosition);
+        if (!conn) {
+          if (import.meta.env.DEV) {
+            console.warn(`[buildBatchImport] Section ${idx} "${section.name}": SKIPPED — no connection or direct placement`);
+          }
+          continue;
         }
-        continue;
+        if (import.meta.env.DEV) {
+          console.warn(`[buildBatchImport] Section ${idx} "${section.name}": using reverse import connection → ${conn.targetImportIndex}`);
+        }
       }
 
       let placement: ImportPlacement;
@@ -938,27 +776,52 @@ function buildBatchImport(
           };
         } else if (conn!.targetType === 'importing' && conn!.targetImportIndex != null && conn!.targetImportStationIndex != null) {
           // The target must already be emitted in configs[]
-          const targetPos = emittedPosition.get(conn!.targetImportIndex);
+          let targetPos = emittedPosition.get(conn!.targetImportIndex);
           if (targetPos == null) {
-            // Target not yet placed — will retry in next pass
-            if (import.meta.env.DEV) {
-              console.warn(
-                `[buildBatchImport] Section ${idx} "${section.name}": DEFERRED — target import ${conn!.targetImportIndex} not yet emitted`,
-              );
+            // Primary target not yet emitted — try reversed connection to an already-emitted section
+            const reverseConn = findReverseImportConnection(idx, allConnections, emittedPosition);
+            if (reverseConn) {
+              conn = reverseConn;
+              const adjustedImportStation2 = edits
+                ? adjustStationForDeletedShots(edits.shots, conn.importStationIndex)
+                : conn.importStationIndex;
+              targetPos = emittedPosition.get(conn.targetImportIndex!);
+              if (targetPos == null) {
+                // Shouldn't happen — findReverseImportConnection checks emittedPosition
+                continue;
+              }
+              const targetEdits2 = sectionEdits?.get(conn.targetImportIndex!);
+              const adjustedTargetStation2 = targetEdits2
+                ? adjustStationForDeletedShots(targetEdits2.shots, conn.targetImportStationIndex!)
+                : conn.targetImportStationIndex!;
+              placement = {
+                type: 'from_importing',
+                import_station: adjustedImportStation2,
+                target_section_index: targetPos,
+                target_station_index: adjustedTargetStation2,
+              };
+            } else {
+              // No reverse available — will retry in next pass
+              if (import.meta.env.DEV) {
+                console.warn(
+                  `[buildBatchImport] Section ${idx} "${section.name}": DEFERRED — target import ${conn!.targetImportIndex} not yet emitted`,
+                );
+              }
+              continue;
             }
-            continue;
+          } else {
+            // Target is emitted — original code path
+            const targetEdits = sectionEdits?.get(conn!.targetImportIndex);
+            const adjustedTargetStation = targetEdits
+              ? adjustStationForDeletedShots(targetEdits.shots, conn!.targetImportStationIndex)
+              : conn!.targetImportStationIndex;
+            placement = {
+              type: 'from_importing',
+              import_station: adjustedImportStation,
+              target_section_index: targetPos,
+              target_station_index: adjustedTargetStation,
+            };
           }
-          // Adjust target station index for deleted shots in the target section
-          const targetEdits = sectionEdits?.get(conn!.targetImportIndex);
-          const adjustedTargetStation = targetEdits
-            ? adjustStationForDeletedShots(targetEdits.shots, conn!.targetImportStationIndex)
-            : conn!.targetImportStationIndex;
-          placement = {
-            type: 'from_importing',
-            import_station: adjustedImportStation,
-            target_section_index: targetPos,
-            target_station_index: adjustedTargetStation,
-          };
         } else {
           continue;
         }
