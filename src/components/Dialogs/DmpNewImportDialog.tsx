@@ -333,10 +333,8 @@ function applyAllOverlapTreatments(
             if (treatedShots.has(treatKey)) { diagAlreadyTreated++; return shot; }
 
             // Import-to-import: always delete — target section keeps the overlap (treated below).
-            // Confirmed import-to-existing: delete — existing section already has the data.
-            // Unconfirmed import-to-existing: interpolate/transform (may be false positives
-            // from the pool, so we only adjust values rather than deleting shots).
-            if (targetType === 'importing' || isConfirmed) {
+            // Import-to-existing: interpolate/transform same as import-to-import target side.
+            if (targetType === 'importing') {
               diagDeleted++;
               treatedShots.add(treatKey);
               return { ...shot, isDeleted: true };
