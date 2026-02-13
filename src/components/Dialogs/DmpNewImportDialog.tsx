@@ -837,7 +837,8 @@ function buildBatchImport(
   const emittedPosition = new Map<number, number>();
 
   const configs: BackendImportSectionConfig[] = [];
-  let colorIdx = 0;
+  // Start after zero datum's color slot (it's imported separately)
+  let colorIdx = zeroDatumIndex != null ? 1 : 0;
 
   // Multi-pass: BFS order may not match dependency order for fallback-anchored
   // components, so retry sections whose from_importing target wasn't emitted yet.
@@ -1458,7 +1459,8 @@ export default function DmpNewImportDialog({
       );
     }
 
-    const colorIdx = connectedIndices.size % SECTION_COLORS.length;
+    // +1 to skip the zero datum section's color slot (it's not in connectedIndices)
+    const colorIdx = (connectedIndices.size + (zeroDatumConfig ? 1 : 0)) % SECTION_COLORS.length;
     const newState: SectionEditState = {
       name: section.name,
       surveyor: selectionConfig.defaultSurveyor || '',
@@ -2162,8 +2164,9 @@ export default function DmpNewImportDialog({
 
   // Import color for the current section (from editState, which tracks user changes)
   const importColor = useMemo(() => {
-    return (editState?.color || null) ?? SECTION_COLORS[connectedIndices.size % SECTION_COLORS.length] ?? '#4ecdc4';
-  }, [editState?.color, connectedIndices.size]);
+    const idx = (connectedIndices.size + (zeroDatumConfig ? 1 : 0)) % SECTION_COLORS.length;
+    return (editState?.color || null) ?? SECTION_COLORS[idx] ?? '#4ecdc4';
+  }, [editState?.color, connectedIndices.size, zeroDatumConfig]);
 
   // Target section name for display
   const targetSectionName = useMemo(() => {
