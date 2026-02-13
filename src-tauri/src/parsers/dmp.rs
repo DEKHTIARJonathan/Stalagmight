@@ -1646,4 +1646,160 @@ mod tests {
         assert_eq!(s.matched_shots, 2, "004→002 overlap should be 2 shots");
         assert_eq!(s.existing_station_index, 257, "004 back connects to 002 station 257");
     }
+
+    /// Simulate overlap treatment for kb5.dmp and validate post-import shot counts.
+    ///
+    /// Scenario: section 002 is already imported as existing (zero datum).
+    /// Sections 001, 003, 004, 005 are imported via the wizard with all default
+    /// suggestions and `interpolate` overlap mode.
+    ///
+    /// The treatment rules (matching the TypeScript `applyAllOverlapTreatments`):
+    /// - Import-to-import (targetType=Importing): import overlap shots are DELETED
+    /// - Import-to-existing (targetType=Existing): import overlap shots are INTERPOLATED (kept alive)
+    /// - treatedShots guard: a shot already treated by a prior suggestion is skipped
+    /// - Suggestions targeting importing:1 (section 002) are skipped (002 is existing, not imported)
+    ///
+    /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn kb5_overlap_treatment_regression() {
+        use crate::models::placement_suggest::{
+            suggest_all_placements, ImportSectionForSuggestion, ExistingSection,
+            CrossSectionSuggestion, TargetType,
+        };
+        use crate::models::shot::Shot;
+        use std::collections::{HashMap, HashSet};
+
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/kb5.dmp");
+        let dmp = parse_dmp(&test_file).expect("should parse kb5.dmp");
+
+        // Raw standard shot counts (pre-treatment)
+        let raw_counts: Vec<usize> = dmp.sections.iter()
+            .map(|s| s.shots.iter().filter(|sh| sh.shot_type == DmpShotType::Standard).count())
+            .collect();
+        assert_eq!(raw_counts[2], 29, "003 raw standard shots");
+        assert_eq!(raw_counts[3], 4, "004 raw standard shots");
+        assert_eq!(raw_counts[4], 7, "005 raw standard shots");
+
+        // Build 002 as existing, all 5 as imports (same setup as suggestions test)
+        let section_002 = &dmp.sections[1];
+        let existing_shots: Vec<Shot> = section_002.shots.iter()
+            .filter(|s| s.shot_type == DmpShotType::Standard)
+            .enumerate()
+            .map(|(i, s)| Shot {
+                id: i as u32,
+                azimuth_in: s.heading_in, azimuth_out: s.heading_out,
+                length: s.length, depth_in: s.depth_in, depth_out: s.depth_out,
+                pitch_in: Some(s.pitch_in), pitch_out: Some(s.pitch_out),
+                left: Some(s.left), right: Some(s.right),
+                up: Some(s.up), down: Some(s.down),
+                comment: s.comment.clone(), is_reference: false,
+                marker_index: Some(u32::from(s.marker_index)),
+                temperature: Some(s.temperature),
+            })
+            .collect();
+        let existing_sections = vec![ExistingSection {
+            id: 0, name: "002".to_string(), shots: existing_shots,
+        }];
+        let import_sections: Vec<ImportSectionForSuggestion> = dmp.sections.iter()
+            .enumerate()
+            .map(|(i, s)| ImportSectionForSuggestion {
+                index: i as u32, name: s.name.clone(),
+                shots: s.shots.iter()
+                    .filter(|sh| sh.shot_type == DmpShotType::Standard)
+                    .map(DmpShot::to_shot_data)
+                    .collect(),
+            })
+            .collect();
+
+        let suggestions = suggest_all_placements(&import_sections, &existing_sections);
+
+        // Simulate applyAllOverlapTreatments import-side logic.
+        // deleted_shots: section_index → set of shot IDs marked deleted.
+        // treated_shots: "section_index:shot_id" → already processed.
+        let mut deleted_shots: HashMap<u32, HashSet<usize>> = HashMap::new();
+        let mut treated_shots: HashSet<String> = HashSet::new();
+
+        for s in &suggestions {
+            // Skip suggestions where import section is 002 (index 1) — it's existing
+            if s.import_section_index == 1 { continue; }
+            // Skip suggestions targeting importing:1 (002) — not in import list
+            if s.target_type == TargetType::Importing && s.target_import_index == Some(1) { continue; }
+
+            if s.matched_shots == 0 { continue; }
+
+            // Compute overlap IDs (mirrors TypeScript computeOverlapIds)
+            let overlap_ids: Vec<usize> = if s.import_station_index == 0 {
+                (0..s.matched_shots).collect()
+            } else {
+                let start = s.import_station_index.saturating_sub(s.matched_shots);
+                (start..s.import_station_index).collect()
+            };
+
+            for &shot_id in &overlap_ids {
+                let key = format!("{}:{}", s.import_section_index, shot_id);
+                if treated_shots.contains(&key) { continue; }
+                treated_shots.insert(key);
+
+                if s.target_type == TargetType::Importing {
+                    // Import-to-import: delete
+                    deleted_shots
+                        .entry(s.import_section_index)
+                        .or_default()
+                        .insert(shot_id);
+                }
+                // Import-to-existing with interpolate: shot stays alive (interpolated)
+            }
+        }
+
+        // Compute post-treatment alive counts
+        let alive = |section_idx: u32| -> usize {
+            let raw = raw_counts[section_idx as usize];
+            let deleted = deleted_shots.get(&section_idx).map_or(0, |s| s.len());
+            raw - deleted
+        };
+
+        let alive_003 = alive(2);
+        let alive_004 = alive(3);
+        let alive_005 = alive(4);
+
+        println!("Section 003: raw={}, deleted={:?}, alive={}",
+            raw_counts[2], deleted_shots.get(&2), alive_003);
+        println!("Section 004: raw={}, deleted={:?}, alive={}",
+            raw_counts[3], deleted_shots.get(&3), alive_004);
+        println!("Section 005: raw={}, deleted={:?}, alive={}",
+            raw_counts[4], deleted_shots.get(&4), alive_005);
+
+        assert_eq!(alive_005, 5, "005: 7 raw - 2 deleted (import-to-import with 001) = 5");
+        assert_eq!(alive_004, 2, "004: 4 raw - 2 deleted (front overlap with 001) = 2");
+        assert_eq!(alive_003, 27, "003: 29 raw - 2 deleted (front overlap with 001) = 27");
+
+        // Verify attachment stations: all three sections connect to 001
+        let find_primary = |import_idx: u32| -> &CrossSectionSuggestion {
+            suggestions.iter().find(|s|
+                s.import_section_index == import_idx
+                && s.target_type == TargetType::Importing
+                && s.target_import_index == Some(0) // 001
+            ).unwrap_or_else(|| panic!("no importing suggestion for section index {}", import_idx))
+        };
+
+        let s005 = find_primary(4);
+        assert_eq!(s005.existing_station_index, 25, "005 attaches to 001 station 25");
+
+        let s003 = find_primary(2);
+        assert_eq!(s003.existing_station_index, 27, "003 attaches to 001 station 27");
+
+        let s004 = find_primary(3);
+        assert_eq!(s004.existing_station_index, 28, "004 attaches to 001 station 28");
+
+        // 001 connects to existing 002 at station 182
+        let s001 = suggestions.iter().find(|s|
+            s.import_section_index == 0
+            && s.target_type == TargetType::Existing
+            && s.existing_section_id == Some(0)
+        ).expect("001 should have an existing suggestion to 002");
+        assert_eq!(s001.import_station_index, 107, "001 connects at its back (station 107)");
+        assert_eq!(s001.existing_station_index, 182, "001 attaches to 002 station 182");
+    }
 }
