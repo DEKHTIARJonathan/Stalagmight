@@ -382,6 +382,62 @@ impl AppState {
             }
         };
 
+        // Apply shot updates to existing sections FIRST (overlap interpolation).
+        // This must happen before placing new sections so that FromExisting placements
+        // compute station positions using the updated (interpolated) shot data.
+        if !existing_shot_updates.is_empty() {
+            tracing::info!(
+                count = existing_shot_updates.len(),
+                purpose = "overlap interpolation",
+                "Applying existing shot updates before placement",
+            );
+            let mut proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(project) = proj_guard.as_mut() {
+                for update in &existing_shot_updates {
+                    if let Some(section) = project.sections.iter_mut().find(|s| s.id == update.section_id) {
+                        if let Some(shot) = section.shots.iter_mut().find(|s| s.id == update.shot_id) {
+                            let old_len = shot.length;
+                            if let Some(v) = update.updates.azimuth_in { shot.azimuth_in = v; }
+                            if let Some(v) = update.updates.azimuth_out { shot.azimuth_out = v; }
+                            if let Some(v) = update.updates.length { shot.length = v; }
+                            if let Some(v) = update.updates.depth_in { shot.depth_in = v; }
+                            if let Some(v) = update.updates.depth_out { shot.depth_out = v; }
+                            if let Some(v) = update.updates.pitch_in { shot.pitch_in = v; }
+                            if let Some(v) = update.updates.pitch_out { shot.pitch_out = v; }
+                            if let Some(v) = update.updates.left { shot.left = v; }
+                            if let Some(v) = update.updates.right { shot.right = v; }
+                            if let Some(v) = update.updates.up { shot.up = v; }
+                            if let Some(v) = update.updates.down { shot.down = v; }
+                            tracing::info!(
+                                section_id = update.section_id,
+                                shot_id = update.shot_id,
+                                old_length = old_len,
+                                new_length = shot.length,
+                                purpose = "overlap interpolation",
+                                "Updated existing shot",
+                            );
+                        } else {
+                            tracing::warn!(
+                                section_id = update.section_id,
+                                shot_id = update.shot_id,
+                                purpose = "overlap interpolation",
+                                "Shot not found in section",
+                            );
+                        }
+                    } else {
+                        tracing::warn!(
+                            section_id = update.section_id,
+                            purpose = "overlap interpolation",
+                            "Section not found in project",
+                        );
+                    }
+                }
+            }
+        }
+
         // Mapping from import section_index to created SectionId
         let mut created_ids: HashMap<u32, u32> = HashMap::new();
         let mut all_section_ids: Vec<u32> = Vec::new();
@@ -605,62 +661,6 @@ impl AppState {
                         purpose = "import loop closures",
                         "Failed to create loop closure from TML import, skipping"
                     );
-                }
-            }
-        }
-
-        // Apply shot updates to existing sections (overlap interpolation).
-        // These modify shots on already-imported sections as part of the same atomic
-        // transaction, so undo reverts both the new sections and these updates.
-        if !existing_shot_updates.is_empty() {
-            tracing::info!(
-                count = existing_shot_updates.len(),
-                purpose = "overlap interpolation",
-                "Applying existing shot updates",
-            );
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if let Some(project) = proj_guard.as_mut() {
-                for update in &existing_shot_updates {
-                    if let Some(section) = project.sections.iter_mut().find(|s| s.id == update.section_id) {
-                        if let Some(shot) = section.shots.iter_mut().find(|s| s.id == update.shot_id) {
-                            let old_len = shot.length;
-                            if let Some(v) = update.updates.azimuth_in { shot.azimuth_in = v; }
-                            if let Some(v) = update.updates.azimuth_out { shot.azimuth_out = v; }
-                            if let Some(v) = update.updates.length { shot.length = v; }
-                            if let Some(v) = update.updates.depth_in { shot.depth_in = v; }
-                            if let Some(v) = update.updates.depth_out { shot.depth_out = v; }
-                            if let Some(v) = update.updates.pitch_in { shot.pitch_in = v; }
-                            if let Some(v) = update.updates.pitch_out { shot.pitch_out = v; }
-                            if let Some(v) = update.updates.left { shot.left = v; }
-                            if let Some(v) = update.updates.right { shot.right = v; }
-                            if let Some(v) = update.updates.up { shot.up = v; }
-                            if let Some(v) = update.updates.down { shot.down = v; }
-                            tracing::info!(
-                                section_id = update.section_id,
-                                shot_id = update.shot_id,
-                                old_length = old_len,
-                                new_length = shot.length,
-                                purpose = "overlap interpolation",
-                                "Updated existing shot",
-                            );
-                        } else {
-                            tracing::warn!(
-                                section_id = update.section_id,
-                                shot_id = update.shot_id,
-                                purpose = "overlap interpolation",
-                                "Shot not found in section",
-                            );
-                        }
-                    } else {
-                        tracing::warn!(
-                            section_id = update.section_id,
-                            purpose = "overlap interpolation",
-                            "Section not found in project",
-                        );
-                    }
                 }
             }
         }
