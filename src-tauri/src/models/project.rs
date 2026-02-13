@@ -2240,11 +2240,81 @@ impl Project {
 
         let station_offsets = self.station_offsets.clone();
 
+        // Identify spur stations (not on any cycle) by iterative leaf pruning.
+        // Spur shots have no redundancy — there's nothing to adjust them against —
+        // so they must be skipped in the update phase.
+        let spur_stations: HashSet<StationRef> = {
+            let mut adj_deg: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+            for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
+                for idx in 0..section.shots.len() {
+                    let si = StationRef::new(section.id, idx as u32);
+                    let sj = StationRef::new(section.id, (idx + 1) as u32);
+                    adj_deg.entry(si).or_default().push(sj);
+                    adj_deg.entry(sj).or_default().push(si);
+                }
+            }
+            for merge in &self.station_merges {
+                if component.contains(&merge.station_a.section_id)
+                    && component.contains(&merge.station_b.section_id)
+                {
+                    adj_deg.entry(merge.station_a).or_default().push(merge.station_b);
+                    adj_deg.entry(merge.station_b).or_default().push(merge.station_a);
+                }
+            }
+            for closure in closures {
+                adj_deg.entry(closure.station_a).or_default().push(closure.station_b);
+                adj_deg.entry(closure.station_b).or_default().push(closure.station_a);
+            }
+
+            // Fixed stations must not be pruned — they anchor the network
+            // even if they sit at a graph leaf.  The anchor station is only
+            // fixed when no zero datums exist (mirrors the solver logic).
+            let mut pinned: HashSet<StationRef> = zero_datum_set.clone();
+            if pinned.is_empty() {
+                pinned.insert(anchor_station);
+            }
+
+            let mut degree: HashMap<StationRef, usize> = adj_deg
+                .iter()
+                .map(|(s, nbrs)| (*s, nbrs.len()))
+                .collect();
+
+            let mut stack: Vec<StationRef> = degree
+                .iter()
+                .filter(|(&s, &d)| d == 1 && !pinned.contains(&s))
+                .map(|(&s, _)| s)
+                .collect();
+
+            let mut pruned: HashSet<StationRef> = HashSet::new();
+            while let Some(station) = stack.pop() {
+                pruned.insert(station);
+                if let Some(neighbors) = adj_deg.get(&station) {
+                    for neighbor in neighbors {
+                        if !pruned.contains(neighbor) {
+                            if let Some(d) = degree.get_mut(neighbor) {
+                                *d = d.saturating_sub(1);
+                                if *d == 1 && !pinned.contains(neighbor) {
+                                    stack.push(*neighbor);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            pruned
+        };
+
         // Update shots based on solved coordinates
         for section in self.sections.iter_mut().filter(|s| component.contains(&s.id)) {
             for idx in 0..section.shots.len() {
                 let station_i = StationRef::new(section.id, idx as u32);
                 let station_j = StationRef::new(section.id, (idx + 1) as u32);
+
+                // Skip spur shots — they have no loop redundancy and must
+                // not be modified by the adjustment.
+                if spur_stations.contains(&station_i) || spur_stations.contains(&station_j) {
+                    continue;
+                }
 
                 let root_i = *station_root
                     .get(&station_i)
@@ -2291,6 +2361,11 @@ impl Project {
             let mut delta_xy: Option<(f64, f64)> = None;
             for idx in 0..=section.shots.len() {
                 let station = StationRef::new(section.id, idx as u32);
+                // Skip spur stations — their shots were not updated, so their
+                // current positions don't match the solved positions.
+                if spur_stations.contains(&station) {
+                    continue;
+                }
                 let root = *station_root.get(&station).unwrap_or(&station);
                 let target = group_coords
                     .get(&root)
@@ -2306,6 +2381,32 @@ impl Project {
                     }
                 } else {
                     delta_xy = Some((dx, dy));
+                }
+            }
+            // For all-spur sections (no non-spur station set a delta), derive the
+            // translation from the merge attachment point.  That station's group
+            // is shared with a loop station, so its solved position is exact.
+            if delta_xy.is_none() {
+                for merge in &self.station_merges {
+                    let local = if merge.station_a.section_id == section.id
+                        && component.contains(&merge.station_b.section_id)
+                    {
+                        merge.station_a
+                    } else if merge.station_b.section_id == section.id
+                        && component.contains(&merge.station_a.section_id)
+                    {
+                        merge.station_b
+                    } else {
+                        continue;
+                    };
+                    let root = *station_root.get(&local).unwrap_or(&local);
+                    if let (Some(target), Some(current)) = (
+                        group_coords.get(&root),
+                        self.compute_station_raw_coords(local),
+                    ) {
+                        delta_xy = Some((target.x - current.x, target.y - current.y));
+                        break;
+                    }
                 }
             }
             if let Some((dx, dy)) = delta_xy {
