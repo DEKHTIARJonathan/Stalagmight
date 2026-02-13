@@ -829,14 +829,76 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
   // Google Maps patterns:
   // - https://www.google.com/maps/@48.8584,2.2945,15z
   // - https://www.google.com/maps/place/.../@48.8584,2.2945,15z
+  // - https://www.google.com/maps/place/20%C2%B012'02.0%22N+87%C2%B029'59.8%22W/
   // - https://maps.google.com/?q=48.8584,2.2945
+  //
+  // IMPORTANT: In /place/ URLs, the @lat,lon is the VIEWPORT CENTER, not the
+  // place coordinates. We must prefer the place name or !3d/!4d data params.
 
-  // Pattern 1: @lat,lon,zoom
+  const isGooglePlace = /google\.com\/maps\/place\//i.test(trimmed);
+
+  // Pattern 1a: Google Maps /place/ URL — extract DMS/DDM/DD from the place name segment
+  if (isGooglePlace) {
+    const placeMatch = trimmed.match(/\/place\/([^/@]+)/);
+    if (placeMatch && placeMatch[1]) {
+      try {
+        const decoded = decodeURIComponent(placeMatch[1].replace(/\+/g, ' '));
+        // Try parsing the decoded place name as GPS coordinates
+        const placeResult = parseDMS(decoded);
+        if ('coordinates' in placeResult) return { ...placeResult, original: input };
+        const ddmResult = parseDDM(decoded);
+        if ('coordinates' in ddmResult) return { ...ddmResult, original: input };
+        const ddResult = parseDD(decoded);
+        if ('coordinates' in ddResult) return { ...ddResult, original: input };
+      } catch {
+        // decodeURIComponent can throw on malformed input — fall through
+      }
+    }
+  }
+
+  // Pattern 1b: Google Maps data parameters !3d=lat !4d=lon (accurate pin coordinates)
+  if (isGooglePlace) {
+    const data3d = trimmed.match(/!3d(-?\d+\.?\d*)/);
+    const data4d = trimmed.match(/!4d(-?\d+\.?\d*)/);
+    if (data3d?.[1] && data4d?.[1]) {
+      const lat = parseFloat(data3d[1]);
+      const lon = parseFloat(data4d[1]);
+      const validation = validateCoordinates(lat, lon);
+      if (validation.valid) {
+        return {
+          coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+          format: 'DD',
+          original: input,
+        };
+      }
+    }
+  }
+
+  // Pattern 1c: @lat,lon — only use for non-place URLs (where it IS the coordinate)
+  // For /place/ URLs the @ is just the viewport center and should be a last resort.
   const googleAtPattern = /@(-?\d+\.?\d*),(-?\d+\.?\d*)/;
   const googleAtMatch = trimmed.match(googleAtPattern);
   if (googleAtMatch && googleAtMatch[1] !== undefined && googleAtMatch[2] !== undefined) {
-    const lat = parseFloat(googleAtMatch[1]);
-    const lon = parseFloat(googleAtMatch[2]);
+    if (!isGooglePlace) {
+      const lat = parseFloat(googleAtMatch[1]);
+      const lon = parseFloat(googleAtMatch[2]);
+      const validation = validateCoordinates(lat, lon);
+      if (validation.valid) {
+        return {
+          coordinates: { latitude: lat, longitude: lon, depth_reference: 0 },
+          format: 'DD',
+          original: input,
+        };
+      }
+    }
+  }
+
+  // Pattern 2: ?q=lat,lon or ?ll=lat,lon
+  const queryPattern = /[?&](?:q|ll)=(-?\d+\.?\d*),(-?\d+\.?\d*)/;
+  const queryMatch = trimmed.match(queryPattern);
+  if (queryMatch && queryMatch[1] !== undefined && queryMatch[2] !== undefined) {
+    const lat = parseFloat(queryMatch[1]);
+    const lon = parseFloat(queryMatch[2]);
     const validation = validateCoordinates(lat, lon);
     if (validation.valid) {
       return {
@@ -847,12 +909,10 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
     }
   }
 
-  // Pattern 2: ?q=lat,lon or ?ll=lat,lon
-  const queryPattern = /[?&](?:q|ll)=(-?\d+\.?\d*),(-?\d+\.?\d*)/;
-  const queryMatch = trimmed.match(queryPattern);
-  if (queryMatch && queryMatch[1] !== undefined && queryMatch[2] !== undefined) {
-    const lat = parseFloat(queryMatch[1]);
-    const lon = parseFloat(queryMatch[2]);
+  // Pattern 2b: For place URLs, fall back to @ as last resort
+  if (isGooglePlace && googleAtMatch?.[1] !== undefined && googleAtMatch[2] !== undefined) {
+    const lat = parseFloat(googleAtMatch[1]);
+    const lon = parseFloat(googleAtMatch[2]);
     const validation = validateCoordinates(lat, lon);
     if (validation.valid) {
       return {
@@ -899,7 +959,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
 
   return {
     message:
-      'Could not extract coordinates from URL. Supported: Google Maps (@lat,lon or ?q=lat,lon), OpenStreetMap (#map=zoom/lat/lon), Bing Maps (cp=lat~lon)',
+      'Could not extract coordinates from URL. Supported: Google Maps (place name, @lat,lon, or ?q=lat,lon), OpenStreetMap (#map=zoom/lat/lon), Bing Maps (cp=lat~lon)',
     original: input,
   };
 }
