@@ -29,7 +29,6 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src-tauri/src/core/state.rs` | AppState with command execution |
 | `src-tauri/src/persistence/sqlite.rs` | Database schema and operations |
 | `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
-| `src-tauri/src/models/placement_suggest.rs` | Cross-section suggestion scoring + overlap matching |
 | `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
 | `src-tauri/src/models/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
 | `src-tauri/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
@@ -48,9 +47,6 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src/components/GlobalView/MetadataPanel.tsx` | System metadata display with aggregate stats |
 | `src/utils/coordinates.ts` | Coordinate transforms (meters ↔ GPS) |
 | `src/utils/tileProtocol.ts` | MapLibre tile protocol for caching |
-| `src/utils/overlapHelpers.ts` | Pure overlap geometry functions (IDs, target mapping, shot transforms) |
-| `src/utils/segmentContext.ts` | Segment context BFS, adjacency, bridge discovery |
-| `src/components/Dialogs/DmpNewImportDialog.tsx` | DMP import wizard (overlap treatment, batch import) |
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
