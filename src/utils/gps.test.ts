@@ -372,9 +372,33 @@ describe('parseUrl', () => {
     expectCoordsClose(result, 48.8584, 2.2945);
   });
 
-  it('extracts from Google Maps place URL', () => {
+  it('extracts from Google Maps place URL with text name (falls back to @)', () => {
     const result = parseUrl('https://www.google.com/maps/place/Eiffel+Tower/@48.8584,2.2945,15z');
     expectCoordsClose(result, 48.8584, 2.2945);
+  });
+
+  it('extracts DMS from Google Maps place name (short URL)', () => {
+    // 20°12'02.0"N 87°29'59.8"W
+    const result = parseUrl(
+      'https://www.google.com/maps/place/20%C2%B012\'02.0%22N+87%C2%B029\'59.8%22W/'
+    );
+    expectCoordsClose(result, 20.200556, -87.499944);
+  });
+
+  it('extracts DMS from Google Maps place name over viewport @', () => {
+    // The @ coordinates (20.200562,-87.5005877) are the viewport center, NOT the pin.
+    // The place name DMS (20°12'02.0"N 87°29'59.8"W) is the correct location.
+    const result = parseUrl(
+      'https://www.google.com/maps/place/20%C2%B012\'02.0%22N+87%C2%B029\'59.8%22W/@20.200562,-87.5005877,500m/data=!3m2!1e3!4b1!4m4!3m3!8m2!3d20.200562!4d-87.499944?entry=ttu'
+    );
+    expectCoordsClose(result, 20.200556, -87.499944);
+  });
+
+  it('extracts !3d/!4d data params for place URLs without coordinate names', () => {
+    const result = parseUrl(
+      'https://www.google.com/maps/place/Some+Cave/@20.2,−87.5,500m/data=!3m2!1e3!4b1!4m4!3m3!8m2!3d20.200556!4d-87.499944'
+    );
+    expectCoordsClose(result, 20.200556, -87.499944);
   });
 
   it('extracts from Google Maps query URL', () => {
