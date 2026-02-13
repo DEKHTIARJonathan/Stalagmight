@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::{Command, UndoStack};
 use crate::models::{
-    ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, SectionData, SectionUpdates,
-    ShotData, ShotUpdates, StationRef, SurveyDirection,
+    ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    LoopClosure, Project, SectionData, SectionUpdates, ShotData, ShotUpdates, StationRef,
+    SurveyDirection,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -9401,4 +9402,196 @@ fn test_unmerge_undo_restores_merge() {
     let undo = state.undo();
     assert!(undo.success);
     assert_eq!(state.get_project_state().unwrap().station_merges.len(), 1, "undo should restore unmerged pair");
+}
+
+/// Integration test: import kb5.dmp sections with overlap treatment and verify
+/// the actual shot values in the project state after import.
+///
+/// Flow:
+/// 1. Import section 002 at origin (becomes the "existing" section)
+/// 2. Apply overlap treatment: interpolate 002 shots 180-181, remove 001 shots 105-106
+/// 3. Import section 001 (105 shots) merged to 002 at station 182
+/// 4. Read back from project state and assert actual interpolated values
+#[test]
+#[ignore]
+fn kb5_import_overlap_interpolation_integration() {
+    use crate::parsers::dmp::{parse_dmp, DmpShotType};
+
+    let dmp_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
+    let dmp = parse_dmp(&dmp_path).expect("should parse kb5.dmp");
+
+    // Extract standard shots as ShotData for sections 001 (idx 0) and 002 (idx 1)
+    let shots_001: Vec<ShotData> = dmp.sections[0].shots.iter()
+        .filter(|s| s.shot_type == DmpShotType::Standard)
+        .map(|s| s.to_shot_data())
+        .collect();
+    let shots_002: Vec<ShotData> = dmp.sections[1].shots.iter()
+        .filter(|s| s.shot_type == DmpShotType::Standard)
+        .map(|s| s.to_shot_data())
+        .collect();
+    assert_eq!(shots_001.len(), 107);
+    assert_eq!(shots_002.len(), 364);
+
+    // ── Step 1: Create project and import section 002 at origin ──
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "KB5 Overlap Test".to_string(),
+        location: None,
+    });
+
+    let result_002 = state.execute_import_sections(
+        vec![ImportSectionConfig {
+            section_index: 0,
+            name: Some("002".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: shots_002.clone(),
+            station_comments: Vec::new(),
+            placement: ImportPlacement::Origin,
+        }],
+        Vec::new(),
+        None,
+    );
+    assert!(result_002.success, "import 002 failed: {:?}", result_002.error);
+
+    let project = state.get_project_state().unwrap();
+    let section_002_id = project.sections[0].id;
+    assert_eq!(project.sections[0].shots.len(), 364, "002 should have 364 shots");
+
+    // ── Step 2: Apply overlap treatment to existing section 002 ──
+    // 001→002 overlap: Back (impStn=107), Reverse, matched=2, exStn=182.
+    // Target shot indices (Back+Reverse): (182-2)+k = 180, 181.
+    // Interpolate: average import shot values with existing target values.
+
+    fn circular_mean_deg(a: f64, b: f64) -> f64 {
+        let (a_r, b_r) = (a.to_radians(), b.to_radians());
+        let mean = f64::atan2(
+            (a_r.sin() + b_r.sin()) / 2.0,
+            (a_r.cos() + b_r.cos()) / 2.0,
+        ).to_degrees();
+        if mean < 0.0 { mean + 360.0 } else { mean }
+    }
+
+    fn avg_opt(a: Option<f64>, b: Option<f64>) -> Option<Option<f64>> {
+        match (a, b) {
+            (None, None) => None,
+            (Some(v), None) | (None, Some(v)) => Some(Some(v)),
+            (Some(a), Some(b)) => Some(Some((a + b) / 2.0)),
+        }
+    }
+
+    // Pair 105↔180
+    let imp_105 = &shots_001[105];
+    let ext_180 = &shots_002[180];
+    let shot_180_id = project.sections[0].shots[180].id;
+    let result = state.execute(Command::UpdateShot {
+        section_id: section_002_id,
+        shot_id: shot_180_id,
+        updates: ShotUpdates {
+            azimuth_in: Some(circular_mean_deg(imp_105.azimuth_in, ext_180.azimuth_in)),
+            azimuth_out: Some(circular_mean_deg(imp_105.azimuth_out, ext_180.azimuth_out)),
+            length: Some((imp_105.length + ext_180.length) / 2.0),
+            depth_in: Some((imp_105.depth_in + ext_180.depth_in) / 2.0),
+            depth_out: Some((imp_105.depth_out + ext_180.depth_out) / 2.0),
+            pitch_in: avg_opt(imp_105.pitch_in, ext_180.pitch_in),
+            pitch_out: avg_opt(imp_105.pitch_out, ext_180.pitch_out),
+            left: avg_opt(imp_105.left, ext_180.left),
+            right: avg_opt(imp_105.right, ext_180.right),
+            up: avg_opt(imp_105.up, ext_180.up),
+            down: avg_opt(imp_105.down, ext_180.down),
+            ..Default::default()
+        },
+    });
+    assert!(result.success, "update shot 180 failed: {:?}", result.error);
+
+    // Pair 106↔181
+    let imp_106 = &shots_001[106];
+    let ext_181 = &shots_002[181];
+    let shot_181_id = project.sections[0].shots[181].id;
+    let result = state.execute(Command::UpdateShot {
+        section_id: section_002_id,
+        shot_id: shot_181_id,
+        updates: ShotUpdates {
+            azimuth_in: Some(circular_mean_deg(imp_106.azimuth_in, ext_181.azimuth_in)),
+            azimuth_out: Some(circular_mean_deg(imp_106.azimuth_out, ext_181.azimuth_out)),
+            length: Some((imp_106.length + ext_181.length) / 2.0),
+            depth_in: Some((imp_106.depth_in + ext_181.depth_in) / 2.0),
+            depth_out: Some((imp_106.depth_out + ext_181.depth_out) / 2.0),
+            pitch_in: avg_opt(imp_106.pitch_in, ext_181.pitch_in),
+            pitch_out: avg_opt(imp_106.pitch_out, ext_181.pitch_out),
+            left: avg_opt(imp_106.left, ext_181.left),
+            right: avg_opt(imp_106.right, ext_181.right),
+            up: avg_opt(imp_106.up, ext_181.up),
+            down: avg_opt(imp_106.down, ext_181.down),
+            ..Default::default()
+        },
+    });
+    assert!(result.success, "update shot 181 failed: {:?}", result.error);
+
+    // ── Step 3: Import section 001 with overlap shots removed ──
+    // Remove shots 105, 106 (overlap region deleted from import side)
+    let mut shots_001_treated: Vec<ShotData> = shots_001.clone();
+    shots_001_treated.remove(106); // remove higher index first
+    shots_001_treated.remove(105);
+    assert_eq!(shots_001_treated.len(), 105, "001 should have 105 shots after overlap removal");
+
+    // 001 merges at its back (station 105 after deletion) to 002 station 182
+    let result_001 = state.execute_import_sections(
+        vec![ImportSectionConfig {
+            section_index: 0,
+            name: Some("001".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff6b6b".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: shots_001_treated,
+            station_comments: Vec::new(),
+            placement: ImportPlacement::FromExisting {
+                import_station: 105, // last station after removing 2 shots
+                existing_station: StationRef::new(section_002_id, 182),
+            },
+        }],
+        Vec::new(),
+        None,
+    );
+    assert!(result_001.success, "import 001 failed: {:?}", result_001.error);
+
+    // ── Step 4: Read back from project state and verify ──
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.sections.len(), 2, "should have 2 sections");
+
+    // Find section 002 and section 001 in the project
+    let sec_002 = project.sections.iter().find(|s| s.id == section_002_id)
+        .expect("section 002 should exist");
+    let sec_001 = project.sections.iter().find(|s| s.id != section_002_id)
+        .expect("section 001 should exist");
+
+    // Section 001: 105 shots (overlap shots removed)
+    assert_eq!(sec_001.shots.len(), 105, "001 should have 105 shots after import");
+
+    // Section 002: 247 shots, with shots 180-181 now having interpolated values
+    assert_eq!(sec_002.shots.len(), 364, "002 should still have 364 shots");
+
+    let actual_180 = &sec_002.shots[180];
+    let actual_181 = &sec_002.shots[181];
+
+    // Verify shot 180 has interpolated values (not the original 002 values)
+    let eps = 0.01;
+    assert!((actual_180.length - 5.665).abs() < eps,
+        "002 shot 180 length after import: expected ~5.665, got {}", actual_180.length);
+    assert!((actual_180.azimuth_in - 322.4).abs() < 0.5,
+        "002 shot 180 azimuth_in after import: expected ~322.4°, got {}°", actual_180.azimuth_in);
+
+    // Verify shot 181 has interpolated values
+    assert!((actual_181.length - 12.375).abs() < eps,
+        "002 shot 181 length after import: expected ~12.375, got {}", actual_181.length);
+    assert!((actual_181.azimuth_in - 349.75).abs() < 0.5,
+        "002 shot 181 azimuth_in after import: expected ~349.75°, got {}°", actual_181.azimuth_in);
+
+    println!("002 shot 180: length={}, azi_in={}", actual_180.length, actual_180.azimuth_in);
+    println!("002 shot 181: length={}, azi_in={}", actual_181.length, actual_181.azimuth_in);
 }
