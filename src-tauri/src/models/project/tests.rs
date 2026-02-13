@@ -5719,4 +5719,15 @@ fn lsq_spur_shots_are_not_modified() {
             orig.0, new.0, orig.1, new.1,
         );
     }
+
+    // Verify merged stations (C:0 ↔ A:50) still share the same position.
+    let pos_c0 = project.compute_station_raw_coords(StationRef::new(c, 0)).unwrap();
+    let pos_a50 = project.compute_station_raw_coords(StationRef::new(a, 50)).unwrap();
+    let merge_gap = ((pos_c0.x - pos_a50.x).powi(2) + (pos_c0.y - pos_a50.y).powi(2)).sqrt();
+    assert!(
+        merge_gap < 1e-6,
+        "merge C:0↔A:50 broken after adjustment: gap={merge_gap:.6}m, \
+         C:0=({:.4},{:.4}), A:50=({:.4},{:.4})",
+        pos_c0.x, pos_c0.y, pos_a50.x, pos_a50.y,
+    );
 }
