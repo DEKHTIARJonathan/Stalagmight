@@ -1213,13 +1213,24 @@ impl Project {
 
         self.shift_station_refs(section_id, (pos + 1) as u32, -1);
 
-        if pos == 0 {
-            let (dx, dy) = Self::shot_displacement(&deleted_shot.to_shot_data());
-            if dx != 0.0 || dy != 0.0 {
-                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-                self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
-            }
+        // Adjust section offset to keep post-deletion stations at their
+        // original absolute positions.  Removing a shot removes one link
+        // from the coordinate walk, shifting all stations after the deletion
+        // point by -displacement.  Adding +displacement to the section
+        // offset compensates, keeping the tail in place while the head
+        // (stations before the deletion) shifts.  This is correct because
+        // the shift_blocked guard already prevents deletion when both sides
+        // are datum-anchored.
+        let (dx, dy) = Self::shot_displacement(&deleted_shot.to_shot_data());
+        if dx != 0.0 || dy != 0.0 {
+            let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+            self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
         }
+
+        // Cascade offset adjustments for any drifted head-side connections.
+        // The head stations shifted by +displacement; their non-datum
+        // partners need to follow.
+        self.cascade_connection_offsets(&[section_id]);
 
         self.touch();
         Ok((deleted_shot, impact))
@@ -1320,6 +1331,107 @@ impl Project {
             }
         }
         connected
+    }
+
+    /// Cascade offset adjustments through drifted merge/closure connections.
+    ///
+    /// `seeds` are the sections whose geometry is authoritative (changed
+    /// sections, datum-bearing sections, etc.).  BFS outward through merges
+    /// and aligned closures: when one side is authoritative and the other is
+    /// not, adjust the non-authoritative side's section offset to re-align,
+    /// then mark it authoritative so further connections cascade.
+    ///
+    /// Zero-datum-bearing sections are always included as authoritative.
+    pub(crate) fn cascade_connection_offsets(&mut self, seeds: &[SectionId]) {
+        let mut authoritative: HashSet<SectionId> = HashSet::new();
+        for &sid in seeds {
+            authoritative.insert(sid);
+        }
+        for zd in &self.zero_datums {
+            authoritative.insert(zd.station_ref.section_id);
+        }
+
+        let merges: Vec<_> = self.station_merges.clone();
+        let closures: Vec<_> = self.loop_closures.clone();
+
+        for _iteration in 0..20 {
+            let mut any_adjustment = false;
+
+            for m in &merges {
+                let (fixed_ref, free_ref) =
+                    if authoritative.contains(&m.station_a.section_id)
+                        && !authoritative.contains(&m.station_b.section_id)
+                    {
+                        (m.station_a, m.station_b)
+                    } else if authoritative.contains(&m.station_b.section_id)
+                        && !authoritative.contains(&m.station_a.section_id)
+                    {
+                        (m.station_b, m.station_a)
+                    } else {
+                        continue;
+                    };
+
+                if let (Some(fixed_pos), Some(free_pos)) = (
+                    self.compute_station_raw_coords(fixed_ref),
+                    self.compute_station_raw_coords(free_ref),
+                ) {
+                    let dx = fixed_pos.x - free_pos.x;
+                    let dy = fixed_pos.y - free_pos.y;
+                    if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
+                        let current = self
+                            .section_offsets
+                            .get(&free_ref.section_id)
+                            .copied()
+                            .unwrap_or((0.0, 0.0));
+                        self.section_offsets
+                            .insert(free_ref.section_id, (current.0 + dx, current.1 + dy));
+                        authoritative.insert(free_ref.section_id);
+                        any_adjustment = true;
+                    }
+                }
+            }
+
+            for c in &closures {
+                if !c.is_aligned {
+                    continue;
+                }
+                let (fixed_ref, free_ref) =
+                    if authoritative.contains(&c.station_a.section_id)
+                        && !authoritative.contains(&c.station_b.section_id)
+                    {
+                        (c.station_a, c.station_b)
+                    } else if authoritative.contains(&c.station_b.section_id)
+                        && !authoritative.contains(&c.station_a.section_id)
+                    {
+                        (c.station_b, c.station_a)
+                    } else {
+                        continue;
+                    };
+
+                if let (Some(fixed_pos), Some(free_pos)) = (
+                    self.compute_station_raw_coords(fixed_ref),
+                    self.compute_station_raw_coords(free_ref),
+                ) {
+                    let dx = fixed_pos.x - free_pos.x;
+                    let dy = fixed_pos.y - free_pos.y;
+                    if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
+                        let current = self
+                            .section_offsets
+                            .get(&free_ref.section_id)
+                            .copied()
+                            .unwrap_or((0.0, 0.0));
+                        self.section_offsets
+                            .insert(free_ref.section_id, (current.0 + dx, current.1 + dy));
+                        authoritative.insert(free_ref.section_id);
+                        any_adjustment = true;
+                    }
+                }
+            }
+
+            if !any_adjustment {
+                break;
+            }
+        }
     }
 
     /// Check whether `start` can reach a zero datum station via merges and
