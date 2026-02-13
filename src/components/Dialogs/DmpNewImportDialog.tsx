@@ -205,9 +205,10 @@ function applyAllOverlapTreatments(
 
     // Determine actionable IDs: use merge station from confirmed info, or full overlap range
     const confirmed = confirmedOverlaps.get(importSectionIndex);
+    const isConfirmed = !!(confirmed && matchesConfirmed(suggestion, confirmed));
     let actionableIds: Set<number>;
-    if (confirmed && matchesConfirmed(suggestion, confirmed)) {
-      actionableIds = computeActionableIds(importStationIndex, matchedShots, confirmed.mergeImportStation);
+    if (isConfirmed) {
+      actionableIds = computeActionableIds(importStationIndex, matchedShots, confirmed!.mergeImportStation);
     } else {
       actionableIds = allOverlapIds;
     }
@@ -331,11 +332,11 @@ function applyAllOverlapTreatments(
             const treatKey = `${importSectionIndex}:${shot.id}`;
             if (treatedShots.has(treatKey)) { diagAlreadyTreated++; return shot; }
 
-            // For import-to-import overlaps, delete the import's overlap shots.
-            // The target section keeps the overlap representation (treated below).
-            // For import-to-existing, we can't modify the existing section, so the
-            // import keeps its shots with transformed values.
-            if (targetType === 'importing') {
+            // Import-to-import: always delete — target section keeps the overlap (treated below).
+            // Confirmed import-to-existing: delete — existing section already has the data.
+            // Unconfirmed import-to-existing: interpolate/transform (may be false positives
+            // from the pool, so we only adjust values rather than deleting shots).
+            if (targetType === 'importing' || isConfirmed) {
               diagDeleted++;
               treatedShots.add(treatKey);
               return { ...shot, isDeleted: true };
