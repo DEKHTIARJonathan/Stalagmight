@@ -782,9 +782,13 @@ When an action is performed while the dropdown is open:
 
 ### 6.7 Dialogs
 
-#### DMP Import - Two-Step Flow
+#### DMP Import - Connection Wizard (DmpNewImportDialog)
 
-The DMP import workflow uses a two-step process for improved UX:
+After section selection, the primary import flow uses a connection wizard that auto-detects overlapping shots between sections and places them with a single batch import. The wizard handles overlap treatment (interpolation, import data, existing data, keep both), doubly-anchored guards to protect closure/datum constraints, and atomic updates to existing section shots. See [DMP Import Wizard](dmp-import.md) for full architecture documentation.
+
+#### DMP Import - Legacy Two-Step Flow
+
+The legacy DMP import workflow uses a two-step process for improved UX:
 
 ##### Step 1: Section Selection (DmpSelectionDialog)
 

@@ -5368,3 +5368,242 @@ fn lsq_update_shot_horizontal_only_zero_displacement() {
     // length = sqrt(0 + dz^2) = |4| = 4
     assert!((s.length - 4.0).abs() < 1e-6, "length should be |dz|=4, got {}", s.length);
 }
+
+#[test]
+fn lsq_long_chain_per_shot_changes_are_small() {
+    // Regression test: for a long chain with a small closure error, the
+    // per-shot geometry changes must be small (proportional to misclosure /
+    // shot_count), not massive due to solver non-convergence.
+    //
+    // Topology: section A (200 shots north, each 5m) with zero datum at A:200.
+    //           section B (1 shot, 10m east) with zero datum at B:0.
+    //           Closure: A:100 ↔ B:1
+    //
+    // This creates an asymmetric loop where B:1 is 1 shot from a fixed point
+    // and A:100 is 100-200 shots from fixed points. With proper convergence,
+    // each shot should change by at most misclosure/num_shots ≈ 0.01m.
+    let mut project = Project::new("LSQLongChain".to_string(), None);
+
+    // Section A: 200 shots heading north, each 5m
+    let shots_a: Vec<ShotData> = (0..200)
+        .map(|_| shot(0.0, 0.0, 5.0, 0.0, 0.0))
+        .collect();
+    let a = project.add_section(SectionData {
+        shots: shots_a,
+        ..Default::default()
+    }).id;
+
+    // Section B: 1 shot heading east, 10m
+    let b = project.add_section(SectionData {
+        shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    // Zero datums
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 200),
+        gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0),
+        gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
+    });
+
+    // Large offsets stress-test the solver: absolute coordinates are 500-1800m
+    // from origin, which triggers convergence issues if starting from x=0.
+    project.section_offsets.insert(a, (500.0, 800.0));
+    project.section_offsets.insert(b, (500.0, 1300.0));
+    // A:0 at (500, 800), A:100 at (500, 1300), A:200 at (500, 1800)
+    // B:0 at (500, 1300), B:1 at (510, 1300)
+    // misclosure distance((500, 1300), (510, 1300)) = 10m
+    // path_length ≈ 200*5 + 10 = 1010m
+
+    // Save original shot data
+    let orig_shots_a: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == a).unwrap()
+        .shots.iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
+
+    let closure = LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 100),
+        station_b: StationRef::new(b, 1),
+        path_length: 1010.0,
+        misclosure_distance: 10.0,
+        error_percentage: 0.99,
+        horizontal_misclosure: 10.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    };
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let result = project.adjust_least_squares(
+        &component, &[closure], StationRef::new(a, 0), &config,
+    );
+    assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
+
+    // Check per-shot changes are small (bounded by misclosure / num_shots * safety_factor)
+    // With 201 shots and 10m misclosure, max per-shot change ≈ 0.05m per shot.
+    // We allow up to 0.5m per shot to be safe (10x margin).
+    let new_shots_a: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == a).unwrap()
+        .shots.iter()
+        .map(|s| (s.azimuth_in, s.length))
+        .collect();
+
+    let mut max_length_delta = 0.0_f64;
+    for (i, ((orig_az, orig_len), (new_az, new_len))) in
+        orig_shots_a.iter().zip(new_shots_a.iter()).enumerate()
+    {
+        let len_delta = (new_len - orig_len).abs();
+        if len_delta > max_length_delta {
+            max_length_delta = len_delta;
+        }
+        assert!(
+            len_delta < 0.5,
+            "shot {} length changed by {:.3}m (orig={:.3}, new={:.3}) — \
+             suggests solver did not converge",
+            i, len_delta, orig_len, new_len,
+        );
+        // Azimuth change: for a 5m shot, 0.5m displacement is ~5.7 degrees
+        let az_delta = (new_az - orig_az).abs();
+        let az_delta = if az_delta > 180.0 { 360.0 - az_delta } else { az_delta };
+        assert!(
+            az_delta < 10.0,
+            "shot {} azimuth changed by {:.3}° (orig={:.3}, new={:.3}) — \
+             suggests solver did not converge",
+            i, az_delta, orig_az, new_az,
+        );
+    }
+}
+
+#[test]
+fn lsq_realistic_topology_preserves_geometry() {
+    // Mimics the user's topology from kbd.stalx:
+    // - Section A: 364 shots with varying azimuths (real-world cave)
+    // - Section B: 1 shot (anchor section)
+    // - Section C: 105 shots (branch)
+    // - Two zero datums at A:364 and B:0
+    // - Merge: C:105 ↔ A:180
+    // - Closure: A:73 ↔ B:1
+    // - Large section offsets (700-900m range)
+    let mut project = Project::new("RealisticLSQ".to_string(), None);
+
+    // Section A: 364 shots with varying azimuths (zigzag pattern)
+    let shots_a: Vec<ShotData> = (0..364)
+        .map(|i| {
+            let az = match i % 4 {
+                0 => 10.0 + (i as f64 * 0.3),
+                1 => 350.0 - (i as f64 * 0.2),
+                2 => 45.0 + (i as f64 * 0.1),
+                _ => 315.0 - (i as f64 * 0.15),
+            };
+            let az = az.rem_euclid(360.0);
+            let len = 5.0 + (i as f64 * 0.01).sin() * 3.0;
+            shot(az, az, len, i as f64 * 0.1, (i + 1) as f64 * 0.1)
+        })
+        .collect();
+    let a = project.add_section(SectionData {
+        shots: shots_a,
+        ..Default::default()
+    }).id;
+
+    // Section B: 1 shot (anchor)
+    let b = project.add_section(SectionData {
+        shots: vec![shot(120.0, 120.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    }).id;
+
+    // Set section A offset (large, like real data)
+    let offset_a = (761.5, -1284.6);
+    project.section_offsets.insert(a, offset_a);
+
+    // Compute A:73 absolute position = offset_a + cumulative shot vectors 0..72
+    let a_section = project.sections.iter().find(|s| s.id == a).unwrap();
+    let mut a73_x = 0.0_f64;
+    let mut a73_y = 0.0_f64;
+    for i in 0..73 {
+        let s = &a_section.shots[i];
+        let az = s.azimuth_in.to_radians();
+        let h = s.horizontal_length();
+        a73_x += h * az.sin();
+        a73_y += h * az.cos();
+    }
+    let a73_abs_x = offset_a.0 + a73_x;
+    let a73_abs_y = offset_a.1 + a73_y;
+    // B:0 → B:1 via one shot at azimuth 120°, 10m. B:1 = offset_b + shot_vector
+    let b_shot_dx = 10.0 * 120.0_f64.to_radians().sin();
+    let b_shot_dy = 10.0 * 120.0_f64.to_radians().cos();
+    // Set B offset so B:1 is near A:73 with a small misclosure (~2m)
+    project.section_offsets.insert(b, (a73_abs_x - b_shot_dx + 1.5, a73_abs_y - b_shot_dy + 1.3));
+
+    // Zero datums
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 364),
+        gps: GpsCoordinates::new(50.0, 50.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0),
+        gps: GpsCoordinates::new(49.99, 50.013, 0.0).unwrap(),
+    });
+
+    // Save original shots for section A
+    let orig_a: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == a).unwrap()
+        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+
+    // Closure: A:73 ↔ B:1 (misclosure ~2m)
+    let closure = LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 73),
+        station_b: StationRef::new(b, 1),
+        path_length: 3133.0,
+        misclosure_distance: 2.0,
+        error_percentage: 0.06,
+        horizontal_misclosure: 2.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::LeastSquaresWeighted,
+        is_aligned: false,
+    };
+
+    // Capture positions around closure point BEFORE adjustment
+    let pos_a73_before = project.compute_station_raw_coords(StationRef::new(a, 73)).unwrap();
+    let pos_b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let actual_misclosure = ((pos_a73_before.x - pos_b1_before.x).powi(2) + (pos_a73_before.y - pos_b1_before.y).powi(2)).sqrt();
+
+    let config = ClosureAdjustmentConfig::default();
+    let component: HashSet<SectionId> = [a, b].into_iter().collect();
+    let result = project.adjust_least_squares(
+        &component, &[closure], StationRef::new(a, 0), &config,
+    );
+    assert!(result.is_ok(), "LSQ should succeed: {:?}", result);
+
+    // Verify closure endpoints now coincide
+    let pos_a73_after = project.compute_station_raw_coords(StationRef::new(a, 73)).unwrap();
+    let pos_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
+    let residual_misc = ((pos_a73_after.x - pos_b1_after.x).powi(2) + (pos_a73_after.y - pos_b1_after.y).powi(2)).sqrt();
+    assert!(residual_misc < 0.01, "residual misclosure {residual_misc:.6}m should be near zero");
+
+    // Verify per-shot changes in section A are bounded.
+    let new_a: Vec<(f64, f64)> = project.sections.iter()
+        .find(|s| s.id == a).unwrap()
+        .shots.iter().map(|s| (s.azimuth_in, s.length)).collect();
+
+    let mut max_len_delta_a = 0.0_f64;
+    let mut worst_shot = 0;
+    for (i, ((_, orig_len), (_, new_len))) in orig_a.iter().zip(new_a.iter()).enumerate() {
+        let delta = (new_len - orig_len).abs();
+        if delta > max_len_delta_a {
+            max_len_delta_a = delta;
+            worst_shot = i;
+        }
+    }
+    assert!(
+        max_len_delta_a < 1.0,
+        "shot {} length changed by {:.4}m — too large for {:.2}m misclosure",
+        worst_shot, max_len_delta_a, actual_misclosure,
+    );
+}
