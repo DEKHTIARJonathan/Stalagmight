@@ -837,8 +837,7 @@ function buildBatchImport(
   const emittedPosition = new Map<number, number>();
 
   const configs: BackendImportSectionConfig[] = [];
-  // Start after zero datum's color slot (it's imported separately)
-  let colorIdx = zeroDatumIndex != null ? 1 : 0;
+  const sortedSelected = Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
 
   // Multi-pass: BFS order may not match dependency order for fallback-anchored
   // components, so retry sections whose from_importing target wasn't emitted yet.
@@ -969,7 +968,8 @@ function buildBatchImport(
       const sectionName = edits?.name ?? section.name;
       const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
       const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
-      const colorValue = (edits?.color || null) ?? SECTION_COLORS[colorIdx % SECTION_COLORS.length] ?? '#4ecdc4';
+      const selectedPos = sortedSelected.indexOf(idx);
+      const colorValue = (edits?.color || null) ?? SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4';
       const directionValue = edits?.direction ?? section.direction;
       const qualityValue = edits?.quality ?? 1.0;
 
@@ -988,7 +988,6 @@ function buildBatchImport(
 
       emittedPosition.set(idx, configs.length);
       configs.push(config);
-      colorIdx++;
     }
   }
 
@@ -1459,13 +1458,13 @@ export default function DmpNewImportDialog({
       );
     }
 
-    // +1 to skip the zero datum section's color slot (it's not in connectedIndices)
-    const colorIdx = (connectedIndices.size + (zeroDatumConfig ? 1 : 0)) % SECTION_COLORS.length;
+    // Color based on position in selection order (matches zero datum dialog)
+    const selectedPos = selectedIndices.indexOf(idx);
     const newState: SectionEditState = {
       name: section.name,
       surveyor: selectionConfig.defaultSurveyor || '',
       date: selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? '',
-      color: SECTION_COLORS[colorIdx] ?? '#4ecdc4',
+      color: SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4',
       direction: section.direction === 'out' ? 'out' : 'in',
       quality: 1.0,
       shots,
@@ -2164,9 +2163,11 @@ export default function DmpNewImportDialog({
 
   // Import color for the current section (from editState, which tracks user changes)
   const importColor = useMemo(() => {
-    const idx = (connectedIndices.size + (zeroDatumConfig ? 1 : 0)) % SECTION_COLORS.length;
-    return (editState?.color || null) ?? SECTION_COLORS[idx] ?? '#4ecdc4';
-  }, [editState?.color, connectedIndices.size, zeroDatumConfig]);
+    if (editState?.color) return editState.color;
+    const sectionIdx = currentSuggestion?.importSectionIndex ?? -1;
+    const pos = selectedIndices.indexOf(sectionIdx);
+    return SECTION_COLORS[(pos >= 0 ? pos : 0) % SECTION_COLORS.length] ?? '#4ecdc4';
+  }, [editState?.color, currentSuggestion?.importSectionIndex, selectedIndices]);
 
   // Target section name for display
   const targetSectionName = useMemo(() => {
@@ -2331,7 +2332,8 @@ export default function DmpNewImportDialog({
       const section = dmpFile.sections[entry.sectionIndex];
       if (!section) return null;
       const edits = sectionEditsRef.current.get(entry.sectionIndex);
-      const sectionColor = (edits?.color || null) ?? SECTION_COLORS[entry.sectionIndex % SECTION_COLORS.length] ?? '#95a5a6';
+      const selectedPos = selectedIndices.indexOf(entry.sectionIndex);
+      const sectionColor = (edits?.color || null) ?? SECTION_COLORS[(selectedPos >= 0 ? selectedPos : entry.sectionIndex) % SECTION_COLORS.length] ?? '#95a5a6';
       return {
         section,
         color: sectionColor,
@@ -2491,7 +2493,7 @@ export default function DmpNewImportDialog({
       name: edits?.name ?? anchorDmpSection.name,
       surveyor: edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null,
       date: edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null,
-      color: (edits?.color || null) ?? SECTION_COLORS[segmentAnchor.sectionIndex % SECTION_COLORS.length] ?? '#4ecdc4',
+      color: (edits?.color || null) ?? SECTION_COLORS[(selectedIndices.indexOf(segmentAnchor.sectionIndex)) % SECTION_COLORS.length] ?? '#4ecdc4',
       direction: edits?.direction ?? anchorDmpSection.direction,
       quality: edits?.quality ?? 1.0,
       shots,
@@ -2505,7 +2507,8 @@ export default function DmpNewImportDialog({
         const sec = dmpFile.sections[entry.sectionIndex];
         if (!sec) return null;
         const secEdits = sectionEditsRef.current.get(entry.sectionIndex);
-        const secColor = (secEdits?.color || null) ?? SECTION_COLORS[entry.sectionIndex % SECTION_COLORS.length] ?? '#95a5a6';
+        const secSelectedPos = selectedIndices.indexOf(entry.sectionIndex);
+        const secColor = (secEdits?.color || null) ?? SECTION_COLORS[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % SECTION_COLORS.length] ?? '#95a5a6';
         const secShots = convertToEditableShots(sec.shots).map(editableShotToShotData);
         return {
           sectionData: {
