@@ -97,6 +97,21 @@ pub(crate) fn track_imported_file_impl(state: &AppState, hash: String) -> Comman
     state.track_imported_file(hash)
 }
 
+/// Batch-check which section content hashes have already been imported.
+/// Returns a parallel Vec<bool> (true = already imported).
+#[tauri::command]
+pub fn check_section_hashes(
+    state: State<'_, AppState>,
+    hashes: Vec<String>,
+) -> Result<Vec<bool>, String> {
+    tracing::debug!(
+        count = hashes.len(),
+        purpose = "detect duplicate section imports",
+        "Checking section content hashes"
+    );
+    state.check_section_hashes(&hashes).map_err(|e| e.to_string())
+}
+
 /// Import multiple sections as a single atomic undo/redo unit.
 /// Includes file hash tracking so undo also reverts the duplicate-detection state.
 #[tauri::command]
@@ -104,6 +119,7 @@ pub fn import_sections(
     state: State<'_, AppState>,
     sections: Vec<crate::models::ImportSectionConfig>,
     file_hash: Option<String>,
+    section_hashes: Option<Vec<String>>,
     existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
 ) -> CommandResult {
     let updates = existing_shot_updates.unwrap_or_default();
@@ -113,7 +129,7 @@ pub fn import_sections(
         purpose = "batch import with overlap updates",
         "import_sections called",
     );
-    state.execute_import_sections(sections, Vec::new(), file_hash, updates)
+    state.execute_import_sections(sections, Vec::new(), file_hash, section_hashes.unwrap_or_default(), updates)
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
@@ -185,7 +201,7 @@ pub fn execute_tml_import(
         "Converted TML to import configs, executing import"
     );
 
-    state.execute_import_sections(sections, closures, file_hash, Vec::new())
+    state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new())
 }
 
 /// Parse a GPX file and return preview data for the import dialog.
@@ -269,7 +285,7 @@ pub fn execute_gpx_import(
         "Converted GPX to import configs, executing import"
     );
 
-    state.execute_import_sections(sections, Vec::new(), file_hash, Vec::new())
+    state.execute_import_sections(sections, Vec::new(), file_hash, Vec::new(), Vec::new())
 }
 
 /// Suggest placement positions for an import section by detecting reference shot overlap.

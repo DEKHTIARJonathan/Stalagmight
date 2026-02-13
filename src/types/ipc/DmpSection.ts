@@ -2,4 +2,4 @@
 import type { DmpDirection } from "./DmpDirection";
 import type { DmpShot } from "./DmpShot";
 
-export interface DmpSection { version: number, name: string, direction: DmpDirection, date: string, shots: Array<DmpShot>, }
+export interface DmpSection { version: number, name: string, direction: DmpDirection, date: string, shots: Array<DmpShot>, content_hash: string, }

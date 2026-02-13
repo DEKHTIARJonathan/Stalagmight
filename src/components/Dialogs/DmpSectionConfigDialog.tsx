@@ -198,6 +198,7 @@ export default function DmpSectionConfigDialog({
       name: currentConfig.name ?? currentDmpSection?.name ?? '',
       direction: currentConfig.direction ?? currentDmpSection?.direction ?? 'in',
       date: currentConfig.date ?? currentDmpSection?.date ?? '',
+      content_hash: currentDmpSection?.content_hash ?? '',
       shots: currentConfig.shots
         .filter((shot) => !shot.isDeleted)
         .map((shot) => {

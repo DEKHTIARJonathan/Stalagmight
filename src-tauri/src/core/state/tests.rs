@@ -8576,7 +8576,7 @@ fn test_execute_import_sections_origin_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8631,7 +8631,7 @@ fn test_execute_import_sections_from_importing_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), Some("abc123".to_string()), Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), Some("abc123".to_string()), Vec::new(), Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8678,7 +8678,7 @@ fn test_execute_import_sections_from_existing_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.sections.len(), 2);
@@ -8712,7 +8712,7 @@ fn test_execute_import_sections_manual_with_offset() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8752,7 +8752,7 @@ fn test_execute_import_sections_zero_datum_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -8802,7 +8802,7 @@ fn test_execute_import_sections_rollback_on_failure() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
     assert!(!result.success, "should fail when merge target doesn't exist");
 
     // Project should be rolled back — no sections added
@@ -8818,7 +8818,7 @@ fn test_execute_import_sections_empty_is_noop() {
         location: None,
     });
 
-    let result = state.execute_import_sections(vec![], Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(vec![], Vec::new(), None, Vec::new(), Vec::new());
     assert!(result.success);
 }
 
@@ -8841,7 +8841,7 @@ fn test_execute_import_sections_no_project() {
         placement: ImportPlacement::Origin,
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No project open"));
 }
@@ -8882,7 +8882,7 @@ fn test_execute_import_sections_manual_snap_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new());
+    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
     assert!(result.success, "import with ManualSnap failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.station_merges.len(), 1);
@@ -9456,6 +9456,7 @@ fn kb5_import_overlap_interpolation_integration() {
         Vec::new(),
         None,
         Vec::new(),
+        Vec::new(),
     );
     assert!(result_002.success, "import 002 failed: {:?}", result_002.error);
 
@@ -9539,6 +9540,7 @@ fn kb5_import_overlap_interpolation_integration() {
         }],
         Vec::new(),
         None,
+        Vec::new(),
         existing_updates,
     );
     assert!(result_001.success, "import 001 failed: {:?}", result_001.error);

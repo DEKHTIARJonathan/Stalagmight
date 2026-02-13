@@ -252,6 +252,15 @@ impl Database {
             [],
         )?;
 
+        // Ensure imported_section_hashes table exists (section-level duplicate detection)
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS imported_section_hashes (
+                id INTEGER PRIMARY KEY,
+                hash TEXT NOT NULL UNIQUE
+            )",
+            [],
+        )?;
+
         // Add closure_id column to loop_closures table if it doesn't exist (added for closure ID tracking)
         let has_closure_id: bool = self.conn
             .query_row(
@@ -1091,6 +1100,12 @@ impl Database {
                 hash TEXT NOT NULL UNIQUE
             );
 
+            -- Imported section hashes (section-level duplicate detection)
+            CREATE TABLE IF NOT EXISTS imported_section_hashes (
+                id INTEGER PRIMARY KEY,
+                hash TEXT NOT NULL UNIQUE
+            );
+
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_shots_section ON shots(section_id);
             CREATE INDEX IF NOT EXISTS idx_undo_sequence ON undo_stack(sequence);
@@ -1128,6 +1143,7 @@ impl Database {
             DELETE FROM station_comments;
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
+            DELETE FROM imported_section_hashes;
             DELETE FROM project;
             ",
         )?;
@@ -1325,6 +1341,14 @@ impl Database {
         for hash in &project.imported_file_hashes {
             tx.execute(
                 "INSERT INTO imported_file_hashes (hash) VALUES (?1)",
+                params![hash],
+            )?;
+        }
+
+        // Save imported section hashes
+        for hash in &project.imported_section_hashes {
+            tx.execute(
+                "INSERT INTO imported_section_hashes (hash) VALUES (?1)",
                 params![hash],
             )?;
         }
@@ -1598,6 +1622,9 @@ impl Database {
         // Load imported file hashes
         let imported_file_hashes = self.load_imported_file_hashes()?;
 
+        // Load imported section hashes
+        let imported_section_hashes = self.load_imported_section_hashes()?;
+
         // Derive next_closure_id: use persisted value if available, otherwise fall back to max(existing) + 1.
         // Always ensure it's at least max(existing closures) + 1 for safety.
         let max_existing = loop_closures.iter().map(|lc| lc.id).max().unwrap_or(0);
@@ -1624,6 +1651,7 @@ impl Database {
             file_path: None,
             next_section_id,
             imported_file_hashes,
+            imported_section_hashes,
             next_closure_id,
         })
     }
@@ -1974,6 +2002,31 @@ impl Database {
         }
 
         let mut stmt = self.conn.prepare("SELECT hash FROM imported_file_hashes")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        for row in rows {
+            hashes.push(row?);
+        }
+
+        Ok(hashes)
+    }
+
+    /// Load imported section hashes from database
+    fn load_imported_section_hashes(&self) -> Result<Vec<String>> {
+        let mut hashes = Vec::new();
+
+        // Check if table exists (for backwards compatibility with older files)
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='imported_section_hashes'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(hashes);
+        }
+
+        let mut stmt = self.conn.prepare("SELECT hash FROM imported_section_hashes")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
         for row in rows {

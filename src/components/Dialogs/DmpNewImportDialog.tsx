@@ -1731,7 +1731,7 @@ export default function DmpNewImportDialog({
           station_comments: [],
         };
 
-        const result = await importSections([config], selectionConfig.fileHash);
+        const result = await importSections([config], selectionConfig.fileHash, selectionConfig.sectionHashes);
         setIsImporting(false);
 
         if (!result.success) {
@@ -1866,6 +1866,7 @@ export default function DmpNewImportDialog({
           const result = await invoke<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
+            sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
           });
 
