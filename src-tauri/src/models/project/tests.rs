@@ -150,6 +150,9 @@ fn set_zero_datum_connected_sections_move_together() {
         })
         .id;
 
+    // Align b:0 to a:1 (a:1 is at (0, 10) since shot goes north 10m)
+    project.set_section_offset(b, (0.0, 10.0));
+
     // Merge section b's station 0 to section a's station 1
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1),
@@ -159,11 +162,11 @@ fn set_zero_datum_connected_sections_move_together() {
 
     // Record positions before setting datum
     // Section a station 1 is at (0, 10) before datum (shot goes north)
-    // Section b station 0 is at (0, 0) before datum (no offset yet)
-    // Section b station 1 is at (5, 0) before datum (shot goes east)
+    // Section b station 0 is at (0, 10) before datum (aligned to a:1)
+    // Section b station 1 is at (5, 10) before datum (shot goes east from b:0)
     let coords_b1_before = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
     assert!((coords_b1_before.x - 5.0).abs() < 1e-6, "Pre-datum b.1 x should be 5");
-    assert!((coords_b1_before.y - 0.0).abs() < 1e-6, "Pre-datum b.1 y should be 0");
+    assert!((coords_b1_before.y - 10.0).abs() < 1e-6, "Pre-datum b.1 y should be 10");
 
     // Set datum on section a, station 1 (which is at y=10 before datum)
     // This should move all connected sections so a.1 lands at origin
@@ -186,7 +189,7 @@ fn set_zero_datum_connected_sections_move_together() {
     assert!((coords_a0.y - (-10.0)).abs() < 1e-6, "a.0 y should be -10, got {}", coords_a0.y);
 
     // Section b should have moved by the same delta as section a
-    // Before: b.1 was at (5, 0). After: b.1 should be at (5, -10)
+    // Before: b.1 was at (5, 10). After: b.1 should be at (5, 0)
     // (The offset delta was (0, -10) to move a.1 from (0, 10) to (0, 0))
     let coords_b1_after = project.compute_station_raw_coords(StationRef::new(b, 1)).unwrap();
     assert!(
@@ -195,8 +198,8 @@ fn set_zero_datum_connected_sections_move_together() {
         coords_b1_after.x
     );
     assert!(
-        (coords_b1_after.y - (-10.0)).abs() < 1e-6,
-        "b.1 y should be -10 (moved with connected sections), got {}",
+        (coords_b1_after.y - 0.0).abs() < 1e-6,
+        "b.1 y should be 0 (moved with connected sections), got {}",
         coords_b1_after.y
     );
 }
@@ -2680,6 +2683,10 @@ fn remove_shot_with_rewire_replaces_merges() {
             ..Default::default()
         })
         .id;
+
+    // Align merge points: a:1 is at (0,1), so b:0 and c:0 need offset (0,1)
+    project.set_section_offset(section_b, (0.0, 1.0));
+    project.set_section_offset(section_c, (0.0, 1.0));
 
     // Merge section_a:1 with section_b:0
     project.station_merges.push(StationMerge {

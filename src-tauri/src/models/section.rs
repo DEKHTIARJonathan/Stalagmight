@@ -4,7 +4,7 @@ use std::fmt;
 use std::str::FromStr;
 use ts_rs::TS;
 
-use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotUpdates, StationRef};
+use super::{Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotUpdates, StationRef, FEATURE_ID_STRIDE};
 
 /// Unique identifier for a section
 pub type SectionId = u32;
@@ -229,7 +229,7 @@ impl Section {
                 default_section_quality()
             },
             shots: Vec::new(),
-            next_shot_id: 0,
+            next_shot_id: id * FEATURE_ID_STRIDE,
         };
 
         for shot_data in data.shots {
@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(section.color, "#4ecdc4");
         assert_eq!(section.direction, SurveyDirection::In);
         assert!(section.shots.is_empty());
-        assert_eq!(section.next_shot_id, 0);
+        assert_eq!(section.next_shot_id, 1 * FEATURE_ID_STRIDE);
     }
 
     #[test]
