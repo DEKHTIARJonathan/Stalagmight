@@ -5441,6 +5441,207 @@ impl Project {
         }
         frozen
     }
+
+    /// Find orphaned connected components and suggest placements for their leaf
+    /// ends against newly imported sections.
+    ///
+    /// An orphaned component is a set of sections connected via merges that has
+    /// no zero datum. Leaf ends are terminal stations with at least 3 free shots
+    /// (shots not adjacent to a merge or aligned closure).
+    pub fn suggest_orphan_placements(
+        &self,
+        newly_imported_section_ids: &[SectionId],
+    ) -> Vec<super::placement_suggest::OrphanPlacementSuggestion> {
+        use super::placement_suggest::{
+            ExistingSection, OrphanPlacementSuggestion, suggest_placements,
+        };
+
+        let new_set: HashSet<SectionId> = newly_imported_section_ids.iter().copied().collect();
+
+        // 1. Build all connected components (via merges only)
+        let mut visited: HashSet<SectionId> = HashSet::new();
+        let mut components: Vec<HashSet<SectionId>> = Vec::new();
+
+        for section in &self.sections {
+            if visited.contains(&section.id) {
+                continue;
+            }
+            let component = self.get_merged_section_ids(section.id);
+            for &sid in &component {
+                visited.insert(sid);
+            }
+            components.push(component);
+        }
+
+        // 2. Filter to orphan components: no datum AND no newly-imported member
+        let orphan_components: Vec<&HashSet<SectionId>> = components
+            .iter()
+            .filter(|comp| {
+                // Skip if any member is newly imported
+                if comp.iter().any(|sid| new_set.contains(sid)) {
+                    return false;
+                }
+                // Skip if component has a datum
+                let any_member = *comp.iter().next().unwrap();
+                !self.rigid_group_has_datum(any_member)
+            })
+            .collect();
+
+        if orphan_components.is_empty() || newly_imported_section_ids.is_empty() {
+            return Vec::new();
+        }
+
+        // 3. Build target sections (newly imported only)
+        let target_sections: Vec<ExistingSection> = newly_imported_section_ids
+            .iter()
+            .filter_map(|&id| self.get_section(id))
+            .map(|s| ExistingSection {
+                id: s.id,
+                name: s.name.clone().unwrap_or_else(|| format!("Section {}", s.id)),
+                shots: s.shots.clone(),
+            })
+            .collect();
+
+        if target_sections.is_empty() {
+            return Vec::new();
+        }
+
+        // Helper: check if a station has any merge
+        let station_has_merge = |sr: StationRef| -> bool {
+            self.station_merges.iter().any(|m| m.station_a == sr || m.station_b == sr)
+        };
+
+        // Helper: check if a station has any aligned closure
+        let station_has_aligned_closure = |sr: StationRef| -> bool {
+            self.loop_closures.iter().any(|c| {
+                c.is_aligned && (c.station_a == sr || c.station_b == sr)
+            })
+        };
+
+        // Helper: check if a station is constrained (merge or aligned closure)
+        let station_is_constrained = |sr: StationRef| -> bool {
+            station_has_merge(sr) || station_has_aligned_closure(sr)
+        };
+
+        let mut suggestions: Vec<OrphanPlacementSuggestion> = Vec::new();
+
+        // 4. For each orphan component, find leaf candidates
+        for component in &orphan_components {
+            for &section_id in *component {
+                let section = match self.get_section(section_id) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if section.shots.is_empty() {
+                    continue;
+                }
+
+                let section_name = section
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("Section {}", section_id));
+                let n_shots = section.shots.len();
+
+                // Try both ends: station 0 and station N
+                let ends: [(u32, bool); 2] = [(0, true), (n_shots as u32, false)];
+
+                for &(terminal_station_idx, is_start) in &ends {
+                    let terminal = StationRef {
+                        section_id,
+                        station_index: terminal_station_idx,
+                    };
+
+                    // Skip if this terminal station has a merge (not a leaf)
+                    if station_has_merge(terminal) {
+                        continue;
+                    }
+
+                    // Walk inward counting free shots until hitting a constraint
+                    let mut free_count = 0usize;
+                    if is_start {
+                        // Station 0: walk shots 0, 1, 2, ...
+                        for shot_idx in 0..n_shots {
+                            // Check the far station of this shot
+                            let far_station = StationRef {
+                                section_id,
+                                station_index: (shot_idx + 1) as u32,
+                            };
+                            if station_is_constrained(far_station) {
+                                break;
+                            }
+                            free_count += 1;
+                        }
+                    } else {
+                        // Station N: walk shots N-1, N-2, ...
+                        for shot_idx in (0..n_shots).rev() {
+                            // Check the far station of this shot (going inward)
+                            let far_station = StationRef {
+                                section_id,
+                                station_index: shot_idx as u32,
+                            };
+                            if station_is_constrained(far_station) {
+                                break;
+                            }
+                            free_count += 1;
+                        }
+                    }
+
+                    if free_count < 3 {
+                        continue;
+                    }
+
+                    let max_shots = (free_count - 1).min(5);
+
+                    // Collect the shots as ShotData
+                    let leaf_shots: Vec<ShotData> = if is_start {
+                        section.shots[..max_shots]
+                            .iter()
+                            .map(|s| s.to_shot_data())
+                            .collect()
+                    } else {
+                        section.shots[n_shots - max_shots..]
+                            .iter()
+                            .rev()
+                            .map(|s| {
+                                let mut sd = s.to_shot_data();
+                                // Reverse shot: flip azimuth 180°, swap depths
+                                sd.azimuth_in = (sd.azimuth_in + 180.0) % 360.0;
+                                sd.azimuth_out = (sd.azimuth_out + 180.0) % 360.0;
+                                std::mem::swap(&mut sd.depth_in, &mut sd.depth_out);
+                                sd
+                            })
+                            .collect()
+                    };
+
+                    // 5. Run suggest_placements for this leaf against target sections
+                    let placement_suggestions =
+                        suggest_placements(&leaf_shots, &target_sections);
+
+                    for ps in placement_suggestions {
+                        suggestions.push(OrphanPlacementSuggestion {
+                            orphan_section_id: section_id,
+                            orphan_section_name: section_name.clone(),
+                            orphan_station_index: terminal_station_idx as usize,
+                            target_section_id: ps.existing_section_id,
+                            target_section_name: ps.existing_section_name,
+                            target_station_index: ps.existing_station_index,
+                            score: ps.score,
+                            matched_shots: ps.matched_shots,
+                            direction: ps.direction,
+                            is_partial: ps.is_partial,
+                            confidence: ps.confidence,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort by score descending
+        suggestions
+            .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
+
+        suggestions
+    }
 }
 
 #[cfg(test)]

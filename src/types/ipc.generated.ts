@@ -47,6 +47,7 @@ export * from './ipc/PlacementSuggestion';
 export * from './ipc/TargetType';
 export * from './ipc/CrossSectionSuggestion';
 export * from './ipc/ImportSectionForSuggestion';
+export * from './ipc/OrphanPlacementSuggestion';
 export * from './ipc/UndoHistoryItem';
 export * from './ipc/PreviewData';
 export * from './ipc/FieldChange';

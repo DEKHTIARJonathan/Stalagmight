@@ -2,6 +2,7 @@ import { useEffect, useCallback, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
+import { invoke } from '@tauri-apps/api/core';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { useBeforeUnload, useLoadingProgress, useTheme } from './hooks';
@@ -10,13 +11,13 @@ import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { ShotData } from './types/project';
-import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from './types/commands';
+import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement, OrphanPlacementSuggestion } from './types/commands';
 import { editableShotToShotData, calculateStationPositions } from './utils/shotConversion';
 
 function App() {
@@ -502,7 +503,21 @@ function App() {
               },
             });
           }}
-          onComplete={() => {
+          onComplete={async (newSectionIds?: number[]) => {
+            if (newSectionIds?.length) {
+              try {
+                const suggestions = await invoke<OrphanPlacementSuggestion[]>(
+                  'suggest_orphan_placements',
+                  { newlyImportedSectionIds: newSectionIds }
+                );
+                if (suggestions.length > 0) {
+                  openDialog('orphan-placement', { suggestions });
+                  return;
+                }
+              } catch {
+                // Non-fatal: proceed without orphan detection
+              }
+            }
             closeDialog();
             setView('single');
             triggerFitToBounds();
@@ -590,6 +605,11 @@ function App() {
       {activeDialog === 'corruption-recovery' && <CorruptionRecoveryDialog />}
       {activeDialog === 'debug' && <DebugDialog />}
       {activeDialog === 'swap-comments' && <SwapCommentsDialog />}
+      {activeDialog === 'orphan-placement' && (
+        <OrphanPlacementDialog
+          suggestions={(dialogData.suggestions ?? []) as OrphanPlacementSuggestion[]}
+        />
+      )}
 
       {/* Toast notification (via Portal for z-index reliability) */}
       {toast && createPortal(

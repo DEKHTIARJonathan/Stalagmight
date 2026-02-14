@@ -35,8 +35,8 @@ use stalagmight_lib::models::{
     ShotUpdates, Station, StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
 };
 use stalagmight_lib::models::placement_suggest::{
-    CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection, PlacementSuggestion,
-    SuggestionConfidence, TargetType,
+    CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection,
+    OrphanPlacementSuggestion, PlacementSuggestion, SuggestionConfidence, TargetType,
 };
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
@@ -117,6 +117,7 @@ fn main() {
     export::<TargetType>(&out_dir);
     export::<CrossSectionSuggestion>(&out_dir);
     export::<ImportSectionForSuggestion>(&out_dir);
+    export::<OrphanPlacementSuggestion>(&out_dir);
 
     // Undo history
     export::<UndoHistoryItem>(&out_dir);
@@ -259,6 +260,7 @@ fn main() {
         "TargetType",
         "CrossSectionSuggestion",
         "ImportSectionForSuggestion",
+        "OrphanPlacementSuggestion",
         "UndoHistoryItem",
         "PreviewData",
         "FieldChange",

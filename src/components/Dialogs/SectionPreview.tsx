@@ -87,9 +87,6 @@ export function computeStationsFromShots(shots: Shot[]): Array<{ x: number; y: n
   const stations: Array<{ x: number; y: number; z: number }> = [{ x: 0, y: 0, z: 0 }];
 
   for (const shot of shots) {
-    // Skip reference shots for position calculation
-    if (shot.is_reference) continue;
-
     const prev = stations[stations.length - 1];
     if (!prev) continue;
 
@@ -209,8 +206,7 @@ export default function SectionPreview({
   // Compute stations for the target section (for merge preview)
   const targetStations = useMemo(() => {
     if (mergePreview) {
-      const nonReferenceShots = mergePreview.targetSection.shots.filter((s) => !s.is_reference);
-      return computeStationsFromShots(nonReferenceShots);
+      return computeStationsFromShots(mergePreview.targetSection.shots);
     }
     if (dmpMergePreview) {
       const standardShots = dmpMergePreview.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard');
@@ -630,9 +626,8 @@ export default function SectionPreview({
 
     if (activePreview && targetStations.length > 0) {
       // Build target section shot lines
-      // For existing section targets, count non-reference shots; for DMP targets, count standard shots
       const targetShotCount = mergePreview
-        ? mergePreview.targetSection.shots.filter((s) => !s.is_reference).length
+        ? mergePreview.targetSection.shots.length
         : (dmpMergePreview?.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard').length ?? 0);
 
       for (let i = 0; i < targetShotCount; i++) {

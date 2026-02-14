@@ -88,6 +88,34 @@ pub struct CrossSectionSuggestion {
     pub target_import_index: Option<u32>,
 }
 
+/// A suggestion for connecting an orphaned section leaf to a newly imported section.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanPlacementSuggestion {
+    /// The orphan section ID
+    pub orphan_section_id: SectionId,
+    /// Human-readable name of the orphan section
+    pub orphan_section_name: String,
+    /// Station index on the orphan section's leaf end
+    pub orphan_station_index: usize,
+    /// The target (newly imported) section ID
+    pub target_section_id: SectionId,
+    /// Human-readable name of the target section
+    pub target_section_name: String,
+    /// Station index on the target section to merge with
+    pub target_station_index: usize,
+    /// Aggregate match score (higher = better)
+    pub score: f64,
+    /// Number of shots that matched
+    pub matched_shots: usize,
+    /// Direction of match
+    pub direction: MatchDirection,
+    /// Whether the last matched shot was a partial (shorter) match
+    pub is_partial: bool,
+    /// Confidence tier based on score
+    pub confidence: SuggestionConfidence,
+}
+
 /// Minimal per-section data needed for the cross-section suggestion algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
