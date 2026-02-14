@@ -616,7 +616,7 @@ impl Project {
         });
 
         // Remove section offset
-        self.section_offsets.remove(&section_id);
+        self.remove_section_offset(section_id);
 
         // Remove station offsets referencing this section
         self.station_offsets.retain(|sr, _| sr.section_id != section_id);
@@ -636,6 +636,101 @@ impl Project {
         let az_rad = avg_az.to_radians();
         let horizontal = data.horizontal_length();
         (horizontal * az_rad.sin(), horizontal * az_rad.cos())
+    }
+
+    // === Section offset helpers ===
+
+    /// Read a section's offset, defaulting to (0, 0).
+    pub(crate) fn section_offset(&self, id: SectionId) -> (f64, f64) {
+        self.section_offsets.get(&id).copied().unwrap_or((0.0, 0.0))
+    }
+
+    /// Apply a delta to one section's offset. Low-level primitive —
+    /// callers handle cascade and invariants.
+    pub(crate) fn adjust_section_offset(&mut self, id: SectionId, dx: f64, dy: f64) {
+        let current = self.section_offset(id);
+        self.section_offsets
+            .insert(id, (current.0 + dx, current.1 + dy));
+    }
+
+    /// Set an exact offset value (for undo restoration / initial placement).
+    pub(crate) fn set_section_offset(&mut self, id: SectionId, offset: (f64, f64)) {
+        self.section_offsets.insert(id, offset);
+    }
+
+    /// Remove a section's offset entry entirely.
+    pub(crate) fn remove_section_offset(&mut self, id: SectionId) {
+        self.section_offsets.remove(&id);
+    }
+
+    /// Apply the same delta to every section in a merge group.
+    pub(crate) fn adjust_rigid_group_offsets(&mut self, anchor: SectionId, dx: f64, dy: f64) {
+        let group = self.get_merged_section_ids(anchor);
+        for sid in group {
+            self.adjust_section_offset(sid, dx, dy);
+        }
+    }
+
+    /// Does the merge group containing `section_id` hold a zero datum?
+    pub(crate) fn rigid_group_has_datum(&self, id: SectionId) -> bool {
+        let group = self.get_merged_section_ids(id);
+        group
+            .iter()
+            .any(|sid| self.zero_datums.iter().any(|zd| zd.station_ref.section_id == *sid))
+    }
+
+    /// Does this specific section directly hold a zero datum?
+    pub(crate) fn section_has_direct_datum(&self, id: SectionId) -> bool {
+        self.zero_datums
+            .iter()
+            .any(|zd| zd.station_ref.section_id == id)
+    }
+
+    /// Assert that all merge points are colocated (within 1cm tolerance).
+    /// Only active in debug builds — no-op in release.
+    /// Check that all merge points are colocated. Logs a warning for any
+    /// merge pair more than 5cm apart (allows for floating-point accumulation
+    /// across many shots in real survey data). In test builds, panics for
+    /// gaps > 1cm to catch regressions with synthetic data.
+    pub(crate) fn debug_assert_merge_alignment(&self, context: &str) {
+        for merge in &self.station_merges {
+            // Skip same-section merges (physically meaningless, used only in tests)
+            if merge.station_a.section_id == merge.station_b.section_id {
+                continue;
+            }
+            let a = self.compute_station_raw_coords(merge.station_a);
+            let b = self.compute_station_raw_coords(merge.station_b);
+            if let (Some(a_pos), Some(b_pos)) = (a, b) {
+                let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
+                if dist >= 0.05 {
+                    error!(
+                        context,
+                        a_ref = ?merge.station_a,
+                        b_ref = ?merge.station_b,
+                        dist,
+                        a_x = a_pos.x,
+                        a_y = a_pos.y,
+                        b_x = b_pos.x,
+                        b_y = b_pos.y,
+                        "Merge alignment violated (>{threshold}m)",
+                        threshold = 0.05,
+                    );
+                }
+                #[cfg(test)]
+                debug_assert!(
+                    dist < 0.01,
+                    "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
+                     are {dist:.6}m apart (threshold 0.01m). \
+                     A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
+                    a_ref = merge.station_a,
+                    b_ref = merge.station_b,
+                    ax = a_pos.x,
+                    ay = a_pos.y,
+                    bx = b_pos.x,
+                    by = b_pos.y,
+                );
+            }
+        }
     }
 
     /// Shift all StationRef indices in the project for the given section.
@@ -969,10 +1064,10 @@ impl Project {
         // because the new shot only changes this section's coordinate walk.
         if let Some((dx, dy)) = disp {
             if dx != 0.0 || dy != 0.0 {
-                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-                self.section_offsets.insert(section_id, (current.0 - dx, current.1 - dy));
+                self.adjust_section_offset(section_id, -dx, -dy);
             }
         }
+        self.debug_assert_merge_alignment("insert_shot_before");
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -1230,8 +1325,7 @@ impl Project {
             // First shot: station 0 removed, ALL remaining stations are "tail".
             // Always adjust to keep them in place.
             if dx != 0.0 || dy != 0.0 {
-                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-                self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
+                self.adjust_section_offset(section_id, dx, dy);
             }
         } else if dx != 0.0 || dy != 0.0 {
             // Mid-section: check if the tail side is datum-anchored.
@@ -1265,14 +1359,14 @@ impl Project {
             });
 
             if tail_anchored {
-                let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-                self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
+                self.adjust_section_offset(section_id, dx, dy);
             }
         }
 
         // Cascade offset adjustments for any drifted connections on the
         // non-anchored side.
         self.cascade_connection_offsets(&[section_id]);
+        self.debug_assert_merge_alignment("remove_shot_with_rewire");
 
         self.touch();
         Ok((deleted_shot, impact))
@@ -1420,13 +1514,7 @@ impl Project {
                     let dx = fixed_pos.x - free_pos.x;
                     let dy = fixed_pos.y - free_pos.y;
                     if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                        let current = self
-                            .section_offsets
-                            .get(&free_ref.section_id)
-                            .copied()
-                            .unwrap_or((0.0, 0.0));
-                        self.section_offsets
-                            .insert(free_ref.section_id, (current.0 + dx, current.1 + dy));
+                        self.adjust_section_offset(free_ref.section_id, dx, dy);
                         authoritative.insert(free_ref.section_id);
                         any_adjustment = true;
                     }
@@ -1457,13 +1545,7 @@ impl Project {
                     let dx = fixed_pos.x - free_pos.x;
                     let dy = fixed_pos.y - free_pos.y;
                     if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                        let current = self
-                            .section_offsets
-                            .get(&free_ref.section_id)
-                            .copied()
-                            .unwrap_or((0.0, 0.0));
-                        self.section_offsets
-                            .insert(free_ref.section_id, (current.0 + dx, current.1 + dy));
+                        self.adjust_section_offset(free_ref.section_id, dx, dy);
                         authoritative.insert(free_ref.section_id);
                         any_adjustment = true;
                     }
@@ -2169,8 +2251,7 @@ impl Project {
                 continue;
             }
             if delta.x.abs() > 1e-9 || delta.y.abs() > 1e-9 {
-                let current = self.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
-                self.section_offsets.insert(*section_id, (current.0 + delta.x, current.1 + delta.y));
+                self.adjust_section_offset(*section_id, delta.x, delta.y);
             }
             if delta.z.abs() > 1e-9 {
                 if let Some(shot_count) = section_station_counts.get(section_id).copied() {
@@ -2217,9 +2298,7 @@ impl Project {
                 let ref_delta = Self::coords_sub(ref_target, ref_current);
                 if Self::coords_norm(ref_delta) > 1e-9 {
                     if ref_delta.x.abs() > 1e-9 || ref_delta.y.abs() > 1e-9 {
-                        let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-                        self.section_offsets
-                            .insert(section_id, (current.0 + ref_delta.x, current.1 + ref_delta.y));
+                        self.adjust_section_offset(section_id, ref_delta.x, ref_delta.y);
                     }
                     if ref_delta.z.abs() > 1e-9 {
                         if let Some(shot_count) = section_station_counts.get(&section_id).copied() {
@@ -2857,10 +2936,10 @@ impl Project {
         }
 
         for (section_id, (dx, dy)) in section_deltas {
-            let current = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-            self.section_offsets.insert(section_id, (current.0 + dx, current.1 + dy));
+            self.adjust_section_offset(section_id, dx, dy);
         }
 
+        self.debug_assert_merge_alignment("adjust_loop_closures");
         Ok(())
     }
 
@@ -3864,13 +3943,7 @@ impl Project {
             purpose = "merge stations",
             "Computed merge offset for moving sections"
         );
-        for section_id in moving_sections {
-            let current_offset = self.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-            self.section_offsets.insert(section_id, (
-                current_offset.0 + offset_x,
-                current_offset.1 + offset_y,
-            ));
-        }
+        self.adjust_rigid_group_offsets(moving_section_id, offset_x, offset_y);
 
         // Record the merge
         self.station_merges.push(StationMerge {
@@ -3879,6 +3952,9 @@ impl Project {
             merged_at: Utc::now(),
         });
 
+        // Cascade through any further connections that the new merge may ripple into
+        self.cascade_connection_offsets(&[station_a.section_id, station_b.section_id]);
+        self.debug_assert_merge_alignment("merge_stations");
         self.touch();
         Ok(true)
     }
@@ -4274,22 +4350,12 @@ impl Project {
             "Computed offset delta for zero datum"
         );
 
-        // Apply offset to all connected sections
-        for section_id in &connected_sections {
-            let current_offset = self.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
-            let new_offset = (
-                current_offset.0 + offset_delta_x,
-                current_offset.1 + offset_delta_y,
-            );
-            self.section_offsets.insert(*section_id, new_offset);
-            trace!(
-                section_id = *section_id,
-                from = ?current_offset,
-                to = ?new_offset,
-                purpose = "reposition connected sections",
-                "Applied section offset for zero datum"
-            );
-        }
+        // Apply offset to all connected sections (rigid group)
+        self.adjust_rigid_group_offsets(station_ref.section_id, offset_delta_x, offset_delta_y);
+
+        // Cascade through aligned closures that may have been affected
+        self.cascade_connection_offsets(&[station_ref.section_id]);
+        self.debug_assert_merge_alignment("set_zero_datum");
 
         // Store the GPS datum
         // Update in-place if datum exists (preserves order/position for stable center)
@@ -4457,13 +4523,7 @@ impl Project {
             let delta_x = target_x - current.x;
             let delta_y = target_y - current.y;
             if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
-                let old = self
-                    .section_offsets
-                    .get(&datum_section_id)
-                    .copied()
-                    .unwrap_or((0.0, 0.0));
-                self.section_offsets
-                    .insert(datum_section_id, (old.0 + delta_x, old.1 + delta_y));
+                self.adjust_section_offset(datum_section_id, delta_x, delta_y);
             }
         }
 
@@ -4502,13 +4562,7 @@ impl Project {
                     let delta_x = this_pos.x - partner_pos.x;
                     let delta_y = this_pos.y - partner_pos.y;
                     if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
-                        let old = self
-                            .section_offsets
-                            .get(&partner_section)
-                            .copied()
-                            .unwrap_or((0.0, 0.0));
-                        self.section_offsets
-                            .insert(partner_section, (old.0 + delta_x, old.1 + delta_y));
+                        self.adjust_section_offset(partner_section, delta_x, delta_y);
                     }
                 }
 

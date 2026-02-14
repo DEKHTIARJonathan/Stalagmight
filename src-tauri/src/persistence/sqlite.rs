@@ -1530,6 +1530,9 @@ impl Database {
                 for shot_row in shot_rows {
                     section.shots.push(shot_row?);
                 }
+                // Shots were pushed directly (bypassing add_shot), so advance
+                // next_shot_id past the loaded shots to avoid ID collisions.
+                section.next_shot_id = id * FEATURE_ID_STRIDE + section.shots.len() as u32;
 
                 next_section_id = next_section_id.max(id + 1);
                 sections.push(section);

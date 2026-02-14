@@ -570,20 +570,15 @@ impl AppState {
                         let dx = old_coords.x - new_coords.x;
                         let dy = old_coords.y - new_coords.y;
                         if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                            let connected = project.get_merged_section_ids(*sid);
                             tracing::info!(
                                 section_id = sid,
                                 anchor_station = anchor_ref.station_index,
                                 dx,
                                 dy,
-                                connected_count = connected.len(),
                                 purpose = "zero datum stability",
                                 "Compensating section offsets to keep zero datum fixed",
                             );
-                            for connected_sid in &connected {
-                                let current = project.section_offsets.get(connected_sid).copied().unwrap_or((0.0, 0.0));
-                                project.section_offsets.insert(*connected_sid, (current.0 + dx, current.1 + dy));
-                            }
+                            project.adjust_rigid_group_offsets(*sid, dx, dy);
                         }
                     }
                 }
@@ -1736,32 +1731,27 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
-        if project.sections.iter().any(|s| s.id == section_id) {
-            if project.zero_datums.iter().any(|zd| zd.station_ref.section_id == section_id)
-                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-            {
-                tracing::error!(
-                    section_id,
-                    ?offset,
-                    purpose = "protect zero datum position",
-                    "Section move would shift a zero datum station"
-                );
-            }
-            let current = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
-            let new_offset = (current.0 + offset.x, current.1 + offset.y);
-            project.section_offsets.insert(section_id, new_offset);
-            project.touch();
-            tracing::info!(
-                ?section_id,
-                ?offset,
-                ?new_offset,
-                purpose = "reposition section for alignment",
-                "Section moved"
-            );
-            CommandResult::success()
-        } else {
-            CommandResult::failure("Section not found".to_string())
+        if !project.sections.iter().any(|s| s.id == section_id) {
+            return CommandResult::failure("Section not found".to_string());
         }
+
+        if project.section_has_direct_datum(section_id)
+            && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+        {
+            return CommandResult::failure(
+                "Cannot move a section that directly holds a zero datum".to_string(),
+            );
+        }
+
+        project.adjust_section_offset(section_id, offset.x, offset.y);
+        project.touch();
+        tracing::info!(
+            ?section_id,
+            ?offset,
+            purpose = "reposition section for alignment",
+            "Section moved"
+        );
+        CommandResult::success()
     }
 
     pub(super) fn move_segment(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
@@ -1787,31 +1777,19 @@ impl AppState {
             .filter(|id| existing.contains(id))
             .collect();
 
-        let mut zero_datum_sections: Vec<SectionId> = project
-            .zero_datums
-            .iter()
-            .map(|zd| zd.station_ref.section_id)
-            .filter(|sid| connected.contains(sid))
-            .collect();
-        zero_datum_sections.sort_unstable();
-        zero_datum_sections.dedup();
-        if !zero_datum_sections.is_empty()
+        if project.rigid_group_has_datum(section_id)
             && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
         {
-            tracing::error!(
-                ?offset,
-                section_id,
-                zero_datum_sections = ?zero_datum_sections,
-                purpose = "protect zero datum position",
-                "Segment move would shift zero datum stations"
+            return CommandResult::failure(
+                "Cannot move a segment whose merge group holds a zero datum".to_string(),
             );
         }
 
         // Apply offset to every section in the connected set
+        // (uses the pre-filtered connected set, not adjust_rigid_group_offsets,
+        // because move_segment follows rigid + aligned-closure connectivity)
         for sid in &connected {
-            let current = project.section_offsets.get(sid).copied().unwrap_or((0.0, 0.0));
-            let new_offset = (current.0 + offset.x, current.1 + offset.y);
-            project.section_offsets.insert(*sid, new_offset);
+            project.adjust_section_offset(*sid, offset.x, offset.y);
         }
         project.touch();
         tracing::info!(
@@ -1836,11 +1814,8 @@ impl AppState {
         if project.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
             && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
         {
-            tracing::error!(
-                ?station_ref,
-                ?offset,
-                purpose = "protect zero datum position",
-                "Station move would shift a zero datum station"
+            return CommandResult::failure(
+                "Cannot move a zero datum station".to_string(),
             );
         }
 
@@ -1915,12 +1890,10 @@ impl AppState {
         // Special case: moving station 0 should move the section offset so the
         // rest of the geometry stays in place. Shot 0 is adjusted below to
         // compensate for the offset shift.
+        // Note: can't use project.adjust_section_offset() here because `section`
+        // is a live &mut borrow from project.sections.
         if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
-            let current = project
-                .section_offsets
-                .get(&station_ref.section_id)
-                .copied()
-                .unwrap_or((0.0, 0.0));
+            let current = project.section_offsets.get(&station_ref.section_id).copied().unwrap_or((0.0, 0.0));
             project.section_offsets.insert(
                 station_ref.section_id,
                 (current.0 + total_dx, current.1 + total_dy),
@@ -2223,7 +2196,7 @@ impl AppState {
             }
 
             // Get existing section offset to add to computed B offset
-            let (section_ox, section_oy) = project.section_offsets.get(&section_id).copied().unwrap_or((0.0, 0.0));
+            let (section_ox, section_oy) = project.section_offset(section_id);
 
             // Capture counts before moving data
             let shots_after_len = shots_after.len();
@@ -2243,7 +2216,7 @@ impl AppState {
             let new_id = section_b.id;
 
             // Set section B offset
-            project.section_offsets.insert(new_id, (section_ox + bx, section_oy + by));
+            project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
 
             // Step 6: Remap merge/closure/station_offset references
             // Stations after split point belong to new section with adjusted indices.
@@ -2480,7 +2453,7 @@ impl AppState {
             });
 
             // Remove section offsets
-            project.section_offsets.remove(&section_id);
+            project.remove_section_offset(section_id);
 
             // Remove station offsets referencing this section
             let station_offset_keys: Vec<StationRef> = project
