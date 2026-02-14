@@ -7,8 +7,8 @@ use tauri::State;
 use crate::core::state::AppState;
 use crate::core::CommandResult;
 use crate::models::placement_suggest::{
-    CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion, PlacementSuggestion,
-    suggest_all_placements, suggest_placements,
+    CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion,
+    OrphanPlacementSuggestion, PlacementSuggestion, suggest_all_placements, suggest_placements,
 };
 use crate::models::ShotData;
 use crate::parsers::DmpFile;
@@ -330,4 +330,15 @@ pub fn suggest_all_import_placements(
     };
 
     Ok(suggest_all_placements(&import_sections, &existing_sections))
+}
+
+/// Suggest placements for orphaned sections' leaf ends against newly imported sections.
+/// Orphaned sections are those in connected components (via merges) with no zero datum.
+#[tauri::command]
+pub fn suggest_orphan_placements(
+    state: State<'_, AppState>,
+    newly_imported_section_ids: Vec<u32>,
+) -> Result<Vec<OrphanPlacementSuggestion>, String> {
+    let project = state.get_project_state().ok_or("No project open")?;
+    Ok(project.suggest_orphan_placements(&newly_imported_section_ids))
 }

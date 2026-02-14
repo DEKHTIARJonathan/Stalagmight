@@ -52,6 +52,7 @@ export type {
   TargetType,
   CrossSectionSuggestion,
   ImportSectionForSuggestion,
+  OrphanPlacementSuggestion,
   SegmentGeometry,
   SegmentSectionGeometry,
 } from './ipc.generated';

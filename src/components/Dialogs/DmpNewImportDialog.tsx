@@ -58,7 +58,7 @@ interface DmpNewImportDialogProps {
   onCancel: () => void;
   onBack: () => void;
   onHandoffToLegacy: (remainingIndices: Set<number>, connections: VirtualConnection[]) => void;
-  onComplete: () => void;
+  onComplete: (newSectionIds?: number[]) => void;
   /** Saved state to restore after returning from manual map placement. */
   savedManualPlacingState?: SavedManualPlacingState | undefined;
 }
@@ -1077,6 +1077,9 @@ export default function DmpNewImportDialog({
   // When restoring from saved state, skip the init effect entirely
   const importStartedRef = useRef(!!saved);
 
+  // Accumulate all section IDs created during import for post-import orphan detection
+  const importedSectionIdsRef = useRef<number[]>([]);
+
   // Refs to avoid stale closures
   const connectionsRef = useRef(connections);
   connectionsRef.current = connections;
@@ -1821,6 +1824,10 @@ export default function DmpNewImportDialog({
           return;
         }
 
+        if (result.section_ids.length > 0) {
+          importedSectionIdsRef.current.push(...result.section_ids);
+        }
+
         await refreshProjectState();
 
         // Build DMP index → section_id mapping for late import
@@ -1861,7 +1868,7 @@ export default function DmpNewImportDialog({
     }
 
     // No unreachable — all done
-    onComplete();
+    onComplete(importedSectionIdsRef.current);
   }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
@@ -1904,6 +1911,10 @@ export default function DmpNewImportDialog({
         if (!result.success) {
           setError(result.error ?? 'Failed to import zero datum section');
           return;
+        }
+
+        if (result.section_ids.length > 0) {
+          importedSectionIdsRef.current.push(...result.section_ids);
         }
 
         // Check if only 1 section was selected — we're done
@@ -2035,6 +2046,10 @@ export default function DmpNewImportDialog({
           });
 
           if (result.success) {
+            if (result.section_ids.length > 0) {
+              importedSectionIdsRef.current.push(...result.section_ids);
+            }
+
             await refreshProjectState();
 
             const projectSections = useProjectStore.getState().project?.sections ?? [];
@@ -2056,7 +2071,7 @@ export default function DmpNewImportDialog({
       // If this was the last segment, finish the import — don't wait for the
       // placing phase which would race with isImporting state.
       if (segmentQueue.length === 0) {
-        onComplete();
+        onComplete(importedSectionIdsRef.current);
       }
     };
 
@@ -2110,6 +2125,10 @@ export default function DmpNewImportDialog({
             return;
           }
 
+          if (result.section_ids.length > 0) {
+            importedSectionIdsRef.current.push(...result.section_ids);
+          }
+
           await refreshProjectState();
         }
       } catch (e) {
@@ -2125,7 +2144,7 @@ export default function DmpNewImportDialog({
       if (remaining.length > 0) {
         onHandoffToLegacy(new Set(remaining), connectionsRef.current);
       } else {
-        onComplete();
+        onComplete(importedSectionIdsRef.current);
       }
     };
 
@@ -2145,7 +2164,7 @@ export default function DmpNewImportDialog({
     if (remaining.size > 0) {
       onHandoffToLegacy(remaining, connectionsRef.current);
     } else {
-      onComplete();
+      onComplete(importedSectionIdsRef.current);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
@@ -2242,7 +2261,7 @@ export default function DmpNewImportDialog({
         let targetStations: Array<{ x: number; y: number }> = [];
         if (mergePreviewConfig) {
           targetStations = computeStationsFromShots(
-            mergePreviewConfig.targetSection.shots.filter((s) => !s.is_reference)
+            mergePreviewConfig.targetSection.shots
           );
         } else if (dmpMergePreviewConfig) {
           targetStations = computeStationsFromDmpShots(
@@ -2427,7 +2446,7 @@ export default function DmpNewImportDialog({
 
   const fromExistingStationCount = useMemo(() => {
     if (!fromExistingTargetSection) return 0;
-    return fromExistingTargetSection.shots.filter(s => !s.is_reference).length + 1;
+    return fromExistingTargetSection.shots.length + 1;
   }, [fromExistingTargetSection]);
 
   // Compute segment preview for manual_placing

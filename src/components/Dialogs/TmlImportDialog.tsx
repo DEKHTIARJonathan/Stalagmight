@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import type { TmlFile } from '../../types/commands';
+import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -77,16 +78,36 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     try {
       const result = await executeTmlImport(filePath, fileHash, includeExcluded, commentsOnStations);
 
-      closeDialog();
-      setView('single');
-      triggerFitToBounds();
-
       if (!result.success) {
+        closeDialog();
+        setView('single');
+        triggerFitToBounds();
         openDialog('error', {
           title: 'Import Errors',
           message: result.error ?? 'Unknown error during import',
         });
+        return;
       }
+
+      // Check for orphan placement opportunities
+      if (result.section_ids.length > 0) {
+        try {
+          const suggestions = await invoke<OrphanPlacementSuggestion[]>(
+            'suggest_orphan_placements',
+            { newlyImportedSectionIds: result.section_ids }
+          );
+          if (suggestions.length > 0) {
+            openDialog('orphan-placement', { suggestions });
+            return;
+          }
+        } catch {
+          // Non-fatal: proceed without orphan detection
+        }
+      }
+
+      closeDialog();
+      setView('single');
+      triggerFitToBounds();
     } catch (e) {
       setIsImporting(false);
       openDialog('error', {
