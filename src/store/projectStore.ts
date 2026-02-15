@@ -957,6 +957,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   setZeroDatum: async (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => {
+    // Detect first zero datum before the IPC call changes state
+    const isFirstDatum = (get().project?.zero_datums.length ?? 0) === 0;
     const result = await invokeIpc<CommandResult>(
       'set_zero_datum',
       { stationRef, coordinates },
@@ -966,7 +968,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       await get().refreshProjectState();
       set({ isDirty: true });
       if (options?.fitToBounds !== false) {
-        useUIStore.getState().triggerFitToBounds();
+        // Snap (no animation) for first zero datum — the camera has no
+        // meaningful prior position so animating from it is disorienting.
+        useUIStore.getState().triggerFitToBounds(isFirstDatum ? { snap: true } : undefined);
       }
     }
     return result;

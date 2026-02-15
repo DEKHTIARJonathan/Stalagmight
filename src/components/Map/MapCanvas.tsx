@@ -2150,7 +2150,7 @@ export default function MapCanvas() {
   );
 
   // Fit to survey bounds using transformed coordinates
-  const fitToBounds = useCallback(() => {
+  const fitToBounds = useCallback((options?: { snap?: boolean }) => {
     if (!map.current || stations.length === 0) return;
 
     const coords = stations.map((s) => s.coordinates);
@@ -2171,6 +2171,7 @@ export default function MapCanvas() {
     map.current.fitBounds([sw, ne], {
       padding,
       maxZoom: 20,
+      ...(options?.snap ? { animate: false } : {}),
     });
   }, [stations, calcPadding]);
 
@@ -2422,11 +2423,17 @@ export default function MapCanvas() {
   // Fit to bounds when requested (e.g., after import)
   useEffect(() => {
     if (requestFitToBounds && mapLoaded && stations.length > 0) {
-      // Small delay to ensure data is rendered
-      setTimeout(() => {
-        fitToBounds();
+      const snap = requestFitToBounds === 'snap';
+      if (snap) {
+        fitToBounds({ snap: true });
         clearFitToBoundsRequest();
-      }, 100);
+      } else {
+        // Small delay to ensure data is rendered
+        setTimeout(() => {
+          fitToBounds();
+          clearFitToBoundsRequest();
+        }, 100);
+      }
     }
   }, [requestFitToBounds, mapLoaded, stations.length, clearFitToBoundsRequest]);
 
@@ -2780,7 +2787,7 @@ export default function MapCanvas() {
 
       {/* Fit to view button */}
       <button
-        onClick={fitToBounds}
+        onClick={() => fitToBounds()}
         className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
         title={t('map.fitToViewTitle')}
         data-testid="fit-to-view-button"
