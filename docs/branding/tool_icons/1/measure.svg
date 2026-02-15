@@ -1,0 +1,9 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <!-- Ruler body -->
+  <rect x="2" y="8" width="20" height="8" rx="1" stroke-width="1.5" stroke-linejoin="round"/>
+  <!-- Tick marks from top -->
+  <line x1="6" y1="8" x2="6" y2="11" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="10" y1="8" x2="10" y2="12.5" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="14" y1="8" x2="14" y2="11" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="18" y1="8" x2="18" y2="12.5" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
