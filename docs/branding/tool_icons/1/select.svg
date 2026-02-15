@@ -1,0 +1,6 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <!-- Cursor arrow -->
+  <path d="M5 3L13 17L14 11L19 10Z" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- Selection box indicator -->
+  <rect x="15" y="15" width="6" height="6" stroke-width="1.5" stroke-dasharray="2 1.5" stroke-linejoin="round" fill="none"/>
+</svg>
