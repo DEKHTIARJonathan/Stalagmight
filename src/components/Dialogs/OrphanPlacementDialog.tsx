@@ -290,6 +290,13 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
     triggerFitToBounds();
   }, [refreshProjectState, closeDialog, setView, triggerFitToBounds]);
 
+  // Auto-close when all suggestions have been processed
+  useEffect(() => {
+    if (isFinished) {
+      finish();
+    }
+  }, [isFinished, finish]);
+
   const advance = useCallback(() => {
     setShowAlternatives(false);
     setSelectedSuggestionIndex(0);
@@ -509,17 +516,7 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
         )}
       </div>
 
-      {isFinished ? (
-        /* All done */
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center space-y-3">
-            <p className="text-text-secondary">All suggestions have been processed.</p>
-            <Button data-primary-action="" data-testid="orphan-close" onClick={finish}>
-              Close
-            </Button>
-          </div>
-        </div>
-      ) : (
+      {isFinished ? null : (
         /* Side-by-side layout */
         <div className="flex-1 flex min-h-0 overflow-hidden relative">
           {/* Left column: SectionPreview */}

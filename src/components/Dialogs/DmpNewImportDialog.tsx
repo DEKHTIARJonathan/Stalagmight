@@ -2431,12 +2431,12 @@ export default function DmpNewImportDialog({
 
   // Access UI store for map placement (use selectors to avoid full-store subscription)
   const startPlacementMode = useUIStore((s) => s.startPlacementMode);
-  const getMapViewportCenter = useUIStore((s) => s.getMapViewportCenter);
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
 
-  // Project sections for "From Existing" dropdown
+  // Project sections and merges for "From Existing" dropdown + preview
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
+  const projectMerges = useProjectStore((s) => s.project?.station_merges ?? []);
 
   // Get target section stations for "From Existing" mode
   const fromExistingTargetSection = useMemo(() => {
@@ -2468,6 +2468,99 @@ export default function DmpNewImportDialog({
       };
     }).filter((x): x is NonNullable<typeof x> => x !== null);
   }, [currentSegment, connections, dmpFile.sections]);
+
+  // Compute target segment context for "From Existing" preview (shows the target section's
+  // connected segment as dimmed lines behind the import segment preview)
+  const fromExistingContextSections = useMemo((): ContextSectionGeometry[] | null => {
+    if (segmentPlacementMode !== 'fromExisting' || fromExistingSectionId == null) return null;
+    if (!segmentAnchor || !segmentPreviewSections || segmentPreviewSections.length === 0) return null;
+
+    // Build adjacency from project station_merges
+    const mergeAdj = new Map<number, Array<{ neighborId: number; thisIdx: number; neighborIdx: number }>>();
+    for (const m of projectMerges) {
+      const a = m.station_a;
+      const b = m.station_b;
+      if (!mergeAdj.has(a.section_id)) mergeAdj.set(a.section_id, []);
+      if (!mergeAdj.has(b.section_id)) mergeAdj.set(b.section_id, []);
+      mergeAdj.get(a.section_id)!.push({ neighborId: b.section_id, thisIdx: a.station_index, neighborIdx: b.station_index });
+      mergeAdj.get(b.section_id)!.push({ neighborId: a.section_id, thisIdx: b.station_index, neighborIdx: a.station_index });
+    }
+
+    // BFS from target section through merges to discover connected segment
+    const visited = new Set<number>();
+    const queue: Array<{ sectionId: number; offsetX: number; offsetY: number }> = [];
+    visited.add(fromExistingSectionId);
+    queue.push({ sectionId: fromExistingSectionId, offsetX: 0, offsetY: 0 });
+
+    const entries: Array<{ sectionId: number; stations: Array<{ x: number; y: number }>; offsetX: number; offsetY: number }> = [];
+
+    while (queue.length > 0) {
+      const { sectionId, offsetX, offsetY } = queue.shift()!;
+      const section = projectSections.find((s) => s.id === sectionId);
+      if (!section) continue;
+
+      const stnPositions = computeStationsFromShots(section.shots);
+      entries.push({ sectionId, stations: stnPositions, offsetX, offsetY });
+
+      for (const edge of mergeAdj.get(sectionId) ?? []) {
+        if (visited.has(edge.neighborId)) continue;
+        visited.add(edge.neighborId);
+
+        const neighborSection = projectSections.find((s) => s.id === edge.neighborId);
+        if (!neighborSection) continue;
+
+        const neighborStns = computeStationsFromShots(neighborSection.shots);
+        const thisPos = stnPositions[edge.thisIdx];
+        const neighborPos = neighborStns[edge.neighborIdx];
+        if (!thisPos || !neighborPos) continue;
+
+        queue.push({
+          sectionId: edge.neighborId,
+          offsetX: offsetX + thisPos.x - neighborPos.x,
+          offsetY: offsetY + thisPos.y - neighborPos.y,
+        });
+      }
+    }
+
+    // Align target segment to import segment: target station → import anchor station
+    const targetEntry = entries.find((e) => e.sectionId === fromExistingSectionId);
+    if (!targetEntry) return null;
+    const targetStn = targetEntry.stations[fromExistingStationIdx];
+    if (!targetStn) return null;
+
+    const anchorEntry = segmentPreviewSections.find((e) => e.sectionIndex === segmentAnchor.sectionIndex);
+    if (!anchorEntry) return null;
+    const anchorStns = computeStationsFromDmpShots(
+      anchorEntry.section.shots.filter((s) => s.shot_type === 'Standard'),
+    );
+    const anchorStn = anchorStns[segmentAnchor.stationIndex];
+    if (!anchorStn) return null;
+
+    const gx = (anchorEntry.offsetX + anchorStn.x) - (targetEntry.offsetX + targetStn.x);
+    const gy = (anchorEntry.offsetY + anchorStn.y) - (targetEntry.offsetY + targetStn.y);
+
+    // Build ContextSectionGeometry for each section in the target segment
+    const result: ContextSectionGeometry[] = [];
+    for (const entry of entries) {
+      const shots: Array<{ from: [number, number]; to: [number, number] }> = [];
+      for (let i = 0; i < entry.stations.length - 1; i++) {
+        const from = entry.stations[i]!;
+        const to = entry.stations[i + 1]!;
+        shots.push({
+          from: [from.x + entry.offsetX + gx, from.y + entry.offsetY + gy],
+          to: [to.x + entry.offsetX + gx, to.y + entry.offsetY + gy],
+        });
+      }
+      if (shots.length > 0) {
+        result.push({
+          color: entry.sectionId === fromExistingSectionId ? '#95a5a6' : '#6b7280',
+          shots,
+        });
+      }
+    }
+
+    return result.length > 0 ? result : null;
+  }, [segmentPlacementMode, fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, segmentAnchor, segmentPreviewSections]);
 
   // Current segment's skipped suggestion (if any section in the segment had one)
   const segmentSkippedSuggestion = useMemo(() => {
@@ -2534,13 +2627,6 @@ export default function DmpNewImportDialog({
         return;
       }
       return;
-    } else if (segmentPlacementMode === 'origin') {
-      const viewportCenter = getMapViewportCenter();
-      placement = {
-        type: 'manual',
-        align_station_index: segmentAnchor.stationIndex,
-        offset: { x: viewportCenter.x, y: viewportCenter.y, z: 0 },
-      };
     } else if (segmentPlacementMode === 'fromExisting') {
       if (fromExistingSectionId == null) return;
       placement = {
@@ -2572,7 +2658,7 @@ export default function DmpNewImportDialog({
     };
     directPlacementsRef.current = [...directPlacementsRef.current, dp];
     advanceSegmentQueue();
-  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, getMapViewportCenter, advanceSegmentQueue]);
+  }, [currentSegment, segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId, fromExistingStationIdx, advanceSegmentQueue]);
 
   // Skip segment handler — appends to end of queue
   const handleSegmentSkip = useCallback(() => {
@@ -2793,7 +2879,6 @@ export default function DmpNewImportDialog({
   const isSegmentPlacementValid = useMemo(() => {
     if (!segmentAnchor) return false;
     if (segmentPlacementMode === 'suggestion') return segmentSkippedSuggestion != null;
-    if (segmentPlacementMode === 'origin') return true;
     if (segmentPlacementMode === 'fromExisting') return fromExistingSectionId != null;
     if (segmentPlacementMode === 'manual') return false; // must use "Place on Map" button
     if (segmentPlacementMode === 'discard') return true;
@@ -3025,6 +3110,7 @@ export default function DmpNewImportDialog({
             <div className="shrink-0 flex flex-col items-center p-4 border-r border-border" style={{ width: 380 }}>
               <SectionPreview
                 segmentSections={segmentPreviewSections}
+                contextSections={fromExistingContextSections}
                 size={340}
                 onStationClick={handleSegmentStationClick}
                 selectedStationIndex={segmentAnchor?.stationIndex ?? null}
@@ -3085,18 +3171,6 @@ export default function DmpNewImportDialog({
                   </label>
                 )}
 
-                {/* Origin */}
-                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="segmentPlacementMode"
-                    checked={segmentPlacementMode === 'origin'}
-                    onChange={() => setSegmentPlacementMode('origin')}
-                    className="mt-0.5"
-                  />
-                  <div className="text-sm">{t('dialogs.dmpNewImport.manualPlacing.origin')}</div>
-                </label>
-
                 {/* From existing station */}
                 <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
                   <input
@@ -3110,12 +3184,58 @@ export default function DmpNewImportDialog({
                     <div>{t('dialogs.dmpNewImport.manualPlacing.fromExisting')}</div>
                     {segmentPlacementMode === 'fromExisting' && (
                       <div className="mt-2 space-y-2">
+                        {/* Import side: segment section + station */}
+                        <div className="text-xs font-medium text-text-secondary mt-1">Import station</div>
+                        {currentSegment && currentSegment.length > 1 && (
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
+                            <select
+                              value={segmentAnchor?.sectionIndex ?? ''}
+                              onChange={(e) => {
+                                const idx = Number(e.target.value);
+                                setSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
+                              }}
+                              className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                              data-testid="from-existing-import-section-select"
+                            >
+                              {currentSegment.map((idx) => (
+                                <option key={idx} value={idx}>
+                                  {dmpFile.sections[idx]?.name ?? `Section ${idx}`}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-text-secondary whitespace-nowrap">
+                            {currentSegment && currentSegment.length <= 1 ? 'Station' : 'Station'}
+                          </label>
+                          <select
+                            value={segmentAnchor?.stationIndex ?? 0}
+                            onChange={(e) => {
+                              if (!segmentAnchor) return;
+                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(e.target.value) });
+                            }}
+                            className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                            data-testid="from-existing-import-station-select"
+                          >
+                            {(() => {
+                              const secIdx = segmentAnchor?.sectionIndex;
+                              const sec = secIdx != null ? dmpFile.sections[secIdx] : null;
+                              const count = sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
+                              return Array.from({ length: count }, (_, i) => (
+                                <option key={i} value={i}>Station {i}</option>
+                              ));
+                            })()}
+                          </select>
+                        </div>
+
+                        {/* Target side: existing project section + station */}
+                        <div className="text-xs font-medium text-text-secondary mt-1">Target station</div>
                         {projectSections.length > 0 ? (
                           <>
                             <div className="flex items-center gap-2">
-                              <label className="text-xs text-text-secondary whitespace-nowrap">
-                                {t('dialogs.dmpNewImport.manualPlacing.targetSection')}
-                              </label>
+                              <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
                               <select
                                 value={fromExistingSectionId ?? ''}
                                 onChange={(e) => {
@@ -3134,9 +3254,7 @@ export default function DmpNewImportDialog({
                             </div>
                             {fromExistingSectionId != null && (
                               <div className="flex items-center gap-2">
-                                <label className="text-xs text-text-secondary whitespace-nowrap">
-                                  {t('dialogs.dmpNewImport.manualPlacing.targetStation')}
-                                </label>
+                                <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
                                 <select
                                   value={fromExistingStationIdx}
                                   onChange={(e) => setFromExistingStationIdx(Number(e.target.value))}
