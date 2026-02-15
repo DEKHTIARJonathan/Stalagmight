@@ -5618,6 +5618,13 @@ impl Project {
                         suggest_placements(&leaf_shots, &target_sections);
 
                     for ps in placement_suggestions {
+                        // Only keep matches from the terminal end (import station 0).
+                        // suggest_placements tries both ends of the leaf, but for orphan
+                        // placement only the terminal end is meaningful — matches from
+                        // the interior end would produce wrong orphan station indices.
+                        if ps.import_station_index != 0 {
+                            continue;
+                        }
                         suggestions.push(OrphanPlacementSuggestion {
                             orphan_section_id: section_id,
                             orphan_section_name: section_name.clone(),
