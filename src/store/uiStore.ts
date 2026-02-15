@@ -169,8 +169,8 @@ interface UIStore {
   mapZoom: number;
   setMapCenter: (center: [number, number]) => void;
   setMapZoom: (zoom: number) => void;
-  requestFitToBounds: boolean;
-  triggerFitToBounds: () => void;
+  requestFitToBounds: false | 'animate' | 'snap';
+  triggerFitToBounds: (options?: { snap?: boolean }) => void;
   clearFitToBoundsRequest: () => void;
   requestZoomToSection: SectionId | null;
   triggerZoomToSection: (sectionId: SectionId) => void;
@@ -489,8 +489,8 @@ export const useUIStore = create<UIStore>((set) => ({
   mapZoom: 15,
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapZoom: (mapZoom) => set({ mapZoom }),
-  requestFitToBounds: false,
-  triggerFitToBounds: () => set({ requestFitToBounds: true }),
+  requestFitToBounds: false as false | 'animate' | 'snap',
+  triggerFitToBounds: (options?) => set({ requestFitToBounds: options?.snap ? 'snap' : 'animate' }),
   clearFitToBoundsRequest: () => set({ requestFitToBounds: false }),
   requestZoomToSection: null,
   triggerZoomToSection: (sectionId: SectionId) => set({ requestZoomToSection: sectionId }),
