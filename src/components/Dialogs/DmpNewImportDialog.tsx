@@ -1041,7 +1041,7 @@ export default function DmpNewImportDialog({
 
   const [segmentPlacementMode, setSegmentPlacementMode] = useState<
     'suggestion' | 'origin' | 'fromExisting' | 'manual' | 'discard'
-  >('origin');
+  >('manual');
   const [segmentAnchor, setSegmentAnchor] = useState<{
     sectionIndex: number; stationIndex: number;
   } | null>(saved?.segmentAnchor ?? null);
@@ -1860,7 +1860,7 @@ export default function DmpNewImportDialog({
 
         // Check if the first section has a skipped suggestion
         const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
-        setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
+        setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
 
         setPhase('manual_placing');
         return;
@@ -2492,7 +2492,7 @@ export default function DmpNewImportDialog({
       const firstSegment = next[0]!;
       setSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
       const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
-      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
+      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
       setFromExistingSectionId(null);
       setFromExistingStationIdx(0);
       return next;
