@@ -1917,6 +1917,9 @@ export default function DmpNewImportDialog({
           importedSectionIdsRef.current.push(...result.section_ids);
         }
 
+        // Snap-fit to the newly placed zero datum section
+        useUIStore.getState().triggerFitToBounds({ snap: true });
+
         // Check if only 1 section was selected — we're done
         if (selectedIndices.length === 1 && selectedIndices[0] === sectionIndex) {
           setPhase('done');
