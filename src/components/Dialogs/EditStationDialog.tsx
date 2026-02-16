@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -6,6 +6,8 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
+import type { GpsCoordinates } from '../../types/project';
 import type { StationRef } from '../../types/project';
 
 export default function EditStationDialog() {
@@ -27,8 +29,10 @@ export default function EditStationDialog() {
 
   // Form state
   const [isZeroDatum, setIsZeroDatumState] = useState(false);
-  const [latitude, setLatitude] = useState('');
-  const [longitude, setLongitude] = useState('');
+  const [gpsInput, setGpsInput] = useState('');
+  const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
+  const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,11 +41,36 @@ export default function EditStationDialog() {
   useEffect(() => {
     if (station) {
       setIsZeroDatumState(station.is_zero_datum);
-      setLatitude(station.gps_coordinates?.latitude.toString() ?? '');
-      setLongitude(station.gps_coordinates?.longitude.toString() ?? '');
       setComment(station.comment ?? '');
+      if (station.gps_coordinates) {
+        const initialInput = `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`;
+        setGpsInput(initialInput);
+        setGpsCoords(station.gps_coordinates);
+        setGpsFormat('DD');
+      }
     }
   }, [station]);
+
+  // GPS input handler
+  const handleGpsInputChange = useCallback((value: string) => {
+    setGpsInput(value);
+    if (!value.trim()) {
+      setGpsCoords(null);
+      setGpsFormat(null);
+      setGpsError(null);
+      return;
+    }
+    const fmt = detectFormat(value);
+    setGpsFormat(fmt ?? null);
+    const result = parseGps(value);
+    if ('coordinates' in result) {
+      setGpsCoords(result.coordinates);
+      setGpsError(null);
+    } else {
+      setGpsCoords(null);
+      setGpsError(result.message);
+    }
+  }, []);
 
   const handleSave = async () => {
     if (!stationRef || !station) return;
@@ -55,21 +84,14 @@ export default function EditStationDialog() {
 
       if (!wasZeroDatum && willBeZeroDatum) {
         // Setting new zero datum
-        const lat = parseFloat(latitude);
-        const lon = parseFloat(longitude);
-
-        if (isNaN(lat) || lat < -90 || lat > 90) {
-          setError('Latitude must be between -90 and 90');
-          return;
-        }
-        if (isNaN(lon) || lon < -180 || lon > 180) {
-          setError('Longitude must be between -180 and 180');
+        if (!gpsCoords) {
+          setError('Please enter valid GPS coordinates');
           return;
         }
 
         const result = await setZeroDatum(stationRef, {
-          latitude: lat,
-          longitude: lon,
+          latitude: gpsCoords.latitude,
+          longitude: gpsCoords.longitude,
           depth_reference: station.coordinates.z,
         });
 
@@ -86,26 +108,18 @@ export default function EditStationDialog() {
         }
       } else if (wasZeroDatum && willBeZeroDatum) {
         // Updating GPS coordinates - check if changed
-        const lat = parseFloat(latitude);
-        const lon = parseFloat(longitude);
-
-        if (isNaN(lat) || lat < -90 || lat > 90) {
-          setError('Latitude must be between -90 and 90');
-          return;
-        }
-        if (isNaN(lon) || lon < -180 || lon > 180) {
-          setError('Longitude must be between -180 and 180');
+        if (!gpsCoords) {
+          setError('Please enter valid GPS coordinates');
           return;
         }
 
         const oldLat = station.gps_coordinates?.latitude;
         const oldLon = station.gps_coordinates?.longitude;
 
-        if (lat !== oldLat || lon !== oldLon) {
-          // Update in place - backend's set_zero_datum handles in-place updates
+        if (gpsCoords.latitude !== oldLat || gpsCoords.longitude !== oldLon) {
           const result = await setZeroDatum(stationRef, {
-            latitude: lat,
-            longitude: lon,
+            latitude: gpsCoords.latitude,
+            longitude: gpsCoords.longitude,
             depth_reference: station.coordinates.z,
           });
 
@@ -138,10 +152,12 @@ export default function EditStationDialog() {
   };
 
   // Track if form has been modified
+  const originalGpsInput = station?.gps_coordinates
+    ? `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`
+    : '';
   const isDirty = station ? (
     isZeroDatum !== station.is_zero_datum ||
-    latitude !== (station.gps_coordinates?.latitude.toString() ?? '') ||
-    longitude !== (station.gps_coordinates?.longitude.toString() ?? '') ||
+    gpsInput !== originalGpsInput ||
     comment !== (station.comment ?? '')
   ) : false;
 
@@ -225,40 +241,40 @@ export default function EditStationDialog() {
           </div>
 
           {isZeroDatum && (
-            <div className="space-y-3 pl-6">
-              <div>
-                <label className="block text-sm text-text-secondary mb-1" htmlFor="station-latitude">
-                  Latitude
+            <div className="space-y-1 pl-6">
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-text-secondary shrink-0">
+                  GPS:
                 </label>
                 <input
-                  id="station-latitude"
-                  data-testid="station-latitude-input"
-                  type="number"
-                  value={latitude}
-                  onChange={(e) => setLatitude(e.target.value)}
-                  className="w-full"
-                  placeholder="e.g., 25.0340"
-                  step="0.000001"
-                  min="-90"
-                  max="90"
+                  type="text"
+                  value={gpsInput}
+                  onChange={(e) => handleGpsInputChange(e.target.value)}
+                  placeholder="48.8584, 2.2945"
+                  className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm"
+                  data-testid="station-gps-input"
                 />
+                {gpsFormat && (
+                  <span
+                    className="text-xs px-2 py-1 bg-accent-10 text-accent rounded"
+                    data-testid="station-gps-format"
+                  >
+                    {gpsFormat}
+                  </span>
+                )}
               </div>
-              <div>
-                <label className="block text-sm text-text-secondary mb-1">
-                  Longitude
-                </label>
-                <input
-                  type="number"
-                  value={longitude}
-                  onChange={(e) => setLongitude(e.target.value)}
-                  className="w-full"
-                  placeholder="e.g., -77.4010"
-                  step="0.000001"
-                  min="-180"
-                  max="180"
-                />
-              </div>
-              <p className="text-xs text-text-secondary">
+              {gpsError && (
+                <div className="text-xs text-error pl-1" data-testid="station-gps-error">
+                  {gpsError}
+                </div>
+              )}
+              {gpsCoords && (
+                <div className="text-xs text-success pl-1" data-testid="station-gps-parsed">
+                  Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon:{' '}
+                  {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
+                </div>
+              )}
+              <p className="text-xs text-text-secondary pt-1">
                 GPS coordinates for this station. Other stations will have their
                 GPS calculated relative to this datum.
               </p>

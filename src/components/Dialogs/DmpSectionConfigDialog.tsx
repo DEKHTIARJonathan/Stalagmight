@@ -1385,7 +1385,7 @@ export default function DmpSectionConfigDialog({
                               value={gpsInput}
                               onChange={(e) => handleGpsInputChange(e.target.value)}
                               placeholder="48.8584, 2.2945"
-                              className="flex-1 px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-50"
+                              className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-sm disabled:opacity-50"
                               disabled={isCurrentPlaced || isCurrentExcluded}
                               data-testid="gps-input"
                             />
@@ -1399,12 +1399,12 @@ export default function DmpSectionConfigDialog({
                             )}
                           </div>
                           {gpsError && (
-                            <div className="text-xs text-error ml-14" data-testid="gps-error">
+                            <div className="text-xs text-error pl-1" data-testid="gps-error">
                               {gpsError}
                             </div>
                           )}
                           {gpsCoords && (
-                            <div className="text-xs text-success ml-14" data-testid="gps-parsed">
+                            <div className="text-xs text-success pl-1" data-testid="gps-parsed">
                               Lat: {formatFixed(gpsCoords.latitude, undefined, precision.gps)}, Lon: {formatFixed(gpsCoords.longitude, undefined, precision.gps)}
                             </div>
                           )}
