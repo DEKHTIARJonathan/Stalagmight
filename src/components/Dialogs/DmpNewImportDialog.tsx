@@ -3294,7 +3294,48 @@ export default function DmpNewImportDialog({
                   <div className="text-sm flex-1">
                     <div>{t('dialogs.dmpNewImport.manualPlacing.manual')}</div>
                     {segmentPlacementMode === 'manual' && (
-                      <div className="mt-2">
+                      <div className="mt-2 space-y-2">
+                        {currentSegment && currentSegment.length > 1 && (
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
+                            <select
+                              value={segmentAnchor?.sectionIndex ?? ''}
+                              onChange={(e) => {
+                                const idx = Number(e.target.value);
+                                setSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
+                              }}
+                              className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                              data-testid="manual-import-section-select"
+                            >
+                              {currentSegment.map((idx) => (
+                                <option key={idx} value={idx}>
+                                  {dmpFile.sections[idx]?.name ?? `Section ${idx}`}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
+                          <select
+                            value={segmentAnchor?.stationIndex ?? 0}
+                            onChange={(e) => {
+                              if (!segmentAnchor) return;
+                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(e.target.value) });
+                            }}
+                            className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                            data-testid="manual-import-station-select"
+                          >
+                            {(() => {
+                              const secIdx = segmentAnchor?.sectionIndex;
+                              const sec = secIdx != null ? dmpFile.sections[secIdx] : null;
+                              const count = sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
+                              return Array.from({ length: count }, (_, i) => (
+                                <option key={i} value={i}>Station {i}</option>
+                              ));
+                            })()}
+                          </select>
+                        </div>
                         <Button
                           size="sm"
                           onClick={handleStartSegmentPlacement}
