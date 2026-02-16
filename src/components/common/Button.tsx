@@ -71,9 +71,9 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   ...props
 }, ref) {
   const iconSizes: Record<ButtonSize, string> = {
-    sm: 'w-6 h-6',
-    md: 'w-8 h-8',
-    lg: 'w-10 h-10',
+    sm: 'w-7 h-7',
+    md: 'w-9 h-9',
+    lg: 'w-11 h-11',
   };
 
   return (

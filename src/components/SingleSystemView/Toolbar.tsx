@@ -7,18 +7,18 @@ import {
   ArrowLeftIcon,
   BugIcon,
   ChevronDownIcon,
-  CursorIcon,
   HandIcon,
-  LinkIcon,
-  MagnifierIcon,
-  MoveAllIcon,
-  MoveDiagonalIcon,
-  MessageIcon,
-  MoveCommentIcon,
-  MoveHorizontalIcon,
-  PencilIcon,
-  RulerIcon,
-  TrashIcon,
+  SelectToolIcon,
+  ZoomToolIcon,
+  DrawToolIcon,
+  DeleteToolIcon,
+  MergeToolIcon,
+  MeasureToolIcon,
+  MoveStationToolIcon,
+  MoveSegmentToolIcon,
+  MoveShotToolIcon,
+  CommentToolIcon,
+  MoveCommentToolIcon,
 } from '../common/icons';
 import DisplayMenu from './DisplayMenu';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
@@ -82,13 +82,6 @@ function getShortcutForTool(tool: ToolType, shortcuts: Record<string, string[]>)
     return bindings[0] ?? '';
   }
   return '';
-}
-
-/**
- * Format a tooltip string for a tool, including shortcut key if available.
- */
-function formatTooltip(label: string, shortcut: string): string {
-  return shortcut ? `${label} (${shortcut})` : label;
 }
 
 /** Translation keys for tool labels */
@@ -212,16 +205,11 @@ export default function Toolbar({
             }
             if (item.kind === 'standalone') {
               return (
-                <IconButton
+                <ToolButton
                   key={item.id}
-                  icon={<ToolIcon tool={item.id} />}
+                  tool={item.id}
                   active={activeTool === item.id}
                   onClick={() => setActiveTool(item.id)}
-                  tooltip={formatTooltip(t(TOOL_LABEL_KEYS[item.id]), item.shortcut)}
-                  aria-label={formatTooltip(t(TOOL_LABEL_KEYS[item.id]), item.shortcut)}
-                  size="sm"
-                  aria-pressed={activeTool === item.id}
-                  data-testid={`tool-${item.id}`}
                 />
               );
             }
@@ -249,6 +237,97 @@ export default function Toolbar({
         />
       </div>
     </header>
+  );
+}
+
+interface ToolButtonProps {
+  tool: ToolType;
+  active: boolean;
+  onClick: () => void;
+}
+
+function ToolButton({ tool, active, onClick }: ToolButtonProps) {
+  const { t } = useTranslation();
+  const [flyoutOpen, setFlyoutOpen] = useState(false);
+  const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const config = useProjectStore((s) => s.config);
+  const shortcuts = config?.shortcuts ?? defaultConfig.shortcuts;
+  const shortcut = getShortcutForTool(tool, shortcuts as unknown as Record<string, string[]>);
+
+  const handleMouseEnter = useCallback(() => {
+    if (hoverCloseTimerRef.current) {
+      clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+    if (!flyoutOpen) {
+      hoverOpenTimerRef.current = setTimeout(() => {
+        setFlyoutOpen(true);
+      }, 300);
+    }
+  }, [flyoutOpen]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverOpenTimerRef.current) {
+      clearTimeout(hoverOpenTimerRef.current);
+      hoverOpenTimerRef.current = null;
+    }
+    hoverCloseTimerRef.current = setTimeout(() => {
+      setFlyoutOpen(false);
+    }, 150);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (hoverOpenTimerRef.current) clearTimeout(hoverOpenTimerRef.current);
+      if (hoverCloseTimerRef.current) clearTimeout(hoverCloseTimerRef.current);
+    };
+  }, []);
+
+  const handleClick = useCallback(() => {
+    onClick();
+    setFlyoutOpen(false);
+  }, [onClick]);
+
+  return (
+    <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+      <IconButton
+        icon={<ToolIcon tool={tool} />}
+        active={active}
+        onClick={handleClick}
+        aria-label={t(TOOL_LABEL_KEYS[tool])}
+        size="sm"
+        aria-pressed={active}
+        data-testid={`tool-${tool}`}
+      />
+
+      {flyoutOpen && (
+        <div
+          className="absolute top-full right-0 mt-1 z-50 bg-panel border border-border rounded shadow-lg py-1 min-w-[10rem]"
+          role="menu"
+          aria-label={t(TOOL_LABEL_KEYS[tool])}
+          data-testid={`subtool-flyout-${tool}`}
+        >
+          <button
+            role="menuitem"
+            className={`
+              flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left
+              transition-colors
+              ${active ? 'bg-accent-20 text-accent' : 'text-text-primary hover:bg-border'}
+            `}
+            onClick={handleClick}
+            tabIndex={0}
+            aria-current={active ? 'true' : undefined}
+            data-testid={`subtool-${tool}`}
+          >
+            <span className="w-5 text-center"><ToolIcon tool={tool} /></span>
+            <span className="flex-1">{t(TOOL_LABEL_KEYS[tool])}</span>
+            {shortcut && <span className="text-text-secondary text-xs ml-2">{shortcut}</span>}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -422,7 +501,6 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
     closeFlyout();
   }, [onActivateTool, closeFlyout]);
 
-  const displayShortcut = getShortcutForTool(displayTool, shortcuts as unknown as Record<string, string[]>);
   const groupLabel = t(TOOL_GROUP_LABEL_KEYS[group.id] ?? group.id);
 
   return (
@@ -444,8 +522,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         active={isGroupActive}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        tooltip={formatTooltip(t(TOOL_LABEL_KEYS[displayTool]), displayShortcut)}
-        aria-label={formatTooltip(t(TOOL_LABEL_KEYS[displayTool]), displayShortcut)}
+        aria-label={t(TOOL_LABEL_KEYS[displayTool])}
         aria-pressed={isGroupActive}
         aria-haspopup="true"
         aria-expanded={flyoutOpen}
@@ -494,19 +571,19 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
 
 function ToolIcon({ tool }: { tool: ToolType }) {
   const icons: Record<ToolType, ReactNode> = {
-    select: <CursorIcon size={14} />,
-    pan: <HandIcon size={14} />,
-    zoom: <MagnifierIcon size={14} />,
-    draw: <PencilIcon size={14} />,
-    delete: <TrashIcon size={14} />,
-    merge: <LinkIcon size={14} />,
-    measure: <RulerIcon size={14} />,
-    move_station: <MoveAllIcon size={14} />,
-    move_segment: <MoveHorizontalIcon size={14} />,
-    move_shot: <MoveDiagonalIcon size={14} />,
-    comment: <MessageIcon size={14} />,
-    move_comment: <MoveCommentIcon size={14} />,
+    select: <SelectToolIcon size={20} />,
+    pan: <HandIcon size={20} />,
+    zoom: <ZoomToolIcon size={20} />,
+    draw: <DrawToolIcon size={20} />,
+    delete: <DeleteToolIcon size={20} />,
+    merge: <MergeToolIcon size={20} />,
+    measure: <MeasureToolIcon size={20} />,
+    move_station: <MoveStationToolIcon size={20} />,
+    move_segment: <MoveSegmentToolIcon size={20} />,
+    move_shot: <MoveShotToolIcon size={20} />,
+    comment: <CommentToolIcon size={20} />,
+    move_comment: <MoveCommentToolIcon size={20} />,
   };
 
-  return <span className="text-sm">{icons[tool]}</span>;
+  return <span className="inline-flex items-center justify-center">{icons[tool]}</span>;
 }

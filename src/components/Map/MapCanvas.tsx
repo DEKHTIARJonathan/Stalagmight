@@ -26,6 +26,7 @@ import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { FitToViewIcon } from '../common/icons';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 
 // Tools that support Ctrl+drag for panning
@@ -2792,7 +2793,7 @@ export default function MapCanvas() {
         title={t('map.fitToViewTitle')}
         data-testid="fit-to-view-button"
       >
-        ⊞
+        <FitToViewIcon size={16} />
       </button>
 
       {/* Placement mode indicator */}
