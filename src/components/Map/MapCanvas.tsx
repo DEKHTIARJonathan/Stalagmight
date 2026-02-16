@@ -2174,7 +2174,7 @@ export default function MapCanvas() {
       maxZoom: 20,
       ...(options?.snap ? { animate: false } : {}),
     });
-  }, [stations, calcPadding]);
+  }, [stations, gpsOrigin, calcPadding]);
 
   // Fit to a specific section's bounds
   const fitToSection = useCallback(
@@ -2436,7 +2436,7 @@ export default function MapCanvas() {
         }, 100);
       }
     }
-  }, [requestFitToBounds, mapLoaded, stations.length, clearFitToBoundsRequest]);
+  }, [requestFitToBounds, mapLoaded, stations.length, fitToBounds, clearFitToBoundsRequest]);
 
   // Fit to section when requested (e.g., from sections panel double-click)
   useEffect(() => {
