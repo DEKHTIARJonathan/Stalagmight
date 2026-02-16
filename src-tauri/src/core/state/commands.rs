@@ -167,17 +167,9 @@ impl AppState {
         );
 
         // Take a project snapshot BEFORE any modifications
-        let snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => return CommandResult::failure(format!("Failed to serialize project: {e}")),
-            }
+        let snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Step 1: Create the section (using internal method)
@@ -211,95 +203,18 @@ impl AppState {
         if !merge_result.success {
             // Merge failed after section was created — rollback to pre-mutation snapshot
             // to avoid leaving a created section with no undo entry.
-            // Use unwrap_or_else to recover from poisoned mutex (rollback must succeed).
             tracing::error!(
                 purpose = "keep project consistent after failed merge",
                 "Merge failed after section creation; rolling back to pre-mutation snapshot"
             );
-            match serde_json::from_str::<crate::models::Project>(&snapshot) {
-                Ok(restored) => {
-                    match self.project.lock() {
-                        Ok(mut proj) => {
-                            *proj = Some(restored);
-                            tracing::info!(
-                                purpose = "restore project after failed merge",
-                                "Successfully rolled back create_and_merge after merge failure"
-                            );
-                        }
-                        Err(poisoned) => {
-                            let mut proj = poisoned.into_inner();
-                            *proj = Some(restored);
-                            tracing::warn!(
-                                purpose = "restore project after failed merge",
-                                "Rolled back create_and_merge via poisoned mutex after merge failure"
-                            );
-                        }
-                    }
-                }
-                Err(e) => tracing::error!(
-                    purpose = "restore project after failed merge",
-                    reason = %e,
-                    "Failed to deserialize snapshot for rollback"
-                ),
-            }
+            self.rollback_project(&snapshot);
             return merge_result;
         }
 
         // Step 4: Capture the after snapshot and push undo entry with before+after.
-        // Use unwrap_or_else on lock to handle poisoned mutex — rollback must apply.
-        let after_snapshot = {
-            let mut proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => {
-                    // Mutex was poisoned — recover the guard so we can still capture snapshot
-                    tracing::warn!(
-                        purpose = "finalize undo snapshot",
-                        "Project mutex poisoned during after-snapshot; recovering"
-                    );
-                    poisoned.into_inner()
-                }
-            };
-            if let Some(p) = proj_guard.as_ref() { match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => {
-                    // Serialization failure — rollback to pre-mutation snapshot
-                    tracing::error!(
-                        purpose = "finalize undo snapshot",
-                        reason = %e,
-                        "Failed to serialize after snapshot; rolling back"
-                    );
-                    match serde_json::from_str::<crate::models::Project>(&snapshot) {
-                        Ok(restored) => {
-                            *proj_guard = Some(restored);
-                            tracing::info!(
-                                purpose = "restore project after snapshot failure",
-                                "Successfully rolled back create_and_merge after serialization failure"
-                            );
-                        }
-                        Err(re) => tracing::error!(
-                            purpose = "restore project after snapshot failure",
-                            reason = %re,
-                            "Failed to deserialize snapshot for rollback"
-                        ),
-                    }
-                    return CommandResult::failure(format!("Failed to serialize after snapshot: {e}"));
-                }
-            } } else {
-                // Project became None — rollback to pre-mutation snapshot
-                tracing::error!(
-                    purpose = "restore project after mutation error",
-                    "Project became None after mutation; rolling back"
-                );
-                match serde_json::from_str::<crate::models::Project>(&snapshot) {
-                    Ok(restored) => *proj_guard = Some(restored),
-                    Err(e) => tracing::error!(
-                        purpose = "restore project after mutation error",
-                        reason = %e,
-                        "Failed to deserialize snapshot for rollback"
-                    ),
-                }
-                return CommandResult::failure("No project for after snapshot".to_string());
-            }
+        let after_snapshot = match self.capture_after_snapshot_or_rollback(&snapshot) {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Create a Batch command that represents both operations for the description
@@ -320,22 +235,18 @@ impl AppState {
             ],
         };
 
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(batch_cmd, UndoData::ProjectSnapshotPair {
-                before: snapshot,
-                after: after_snapshot,
-            });
-        }
+        self.push_snapshot_undo(batch_cmd, snapshot, after_snapshot);
 
         // Combine warnings from both operations
         let mut all_warnings = create_result.warnings;
         all_warnings.extend(merge_result.warnings);
 
         // Return success with the new section ID
+        let result = CommandResult::success().with_section_id(new_section_id);
         if all_warnings.is_empty() {
-            CommandResult::success_with_section_id(new_section_id)
+            result
         } else {
-            CommandResult::success_with_section_id_and_warnings(new_section_id, all_warnings)
+            result.with_warnings(all_warnings)
         }
     }
 
@@ -370,17 +281,9 @@ impl AppState {
         );
 
         // Take a project snapshot BEFORE any modifications
-        let before_snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => return CommandResult::failure(format!("Failed to serialize project: {e}")),
-            }
+        let before_snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Apply shot updates to existing sections FIRST (overlap interpolation).
@@ -619,7 +522,7 @@ impl AppState {
             let create_result = self.create_section(section_data.clone());
             if !create_result.success {
                 // Rollback to before-snapshot
-                self.rollback_to_snapshot(&before_snapshot);
+                self.rollback_project(&before_snapshot);
                 return CommandResult::failure(format!(
                     "Failed to create section \"{}\": {}",
                     config.name.as_deref().unwrap_or("unnamed"),
@@ -628,7 +531,7 @@ impl AppState {
             }
 
             let Some(section_id) = create_result.section_id else {
-                self.rollback_to_snapshot(&before_snapshot);
+                self.rollback_project(&before_snapshot);
                 return CommandResult::failure("Section created but no ID returned".to_string());
             };
 
@@ -669,7 +572,7 @@ impl AppState {
                     let station_ref = StationRef::new(section_id, *station_index);
                     let result = self.set_zero_datum(station_ref, *coordinates);
                     if !result.success {
-                        self.rollback_to_snapshot(&before_snapshot);
+                        self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
                             "Failed to set zero datum for section \"{}\": {}",
                             config.name.as_deref().unwrap_or("unnamed"),
@@ -687,7 +590,7 @@ impl AppState {
                     let import_ref = StationRef::new(section_id, *import_station);
                     let result = self.merge_stations(import_ref, *existing_station);
                     if !result.success {
-                        self.rollback_to_snapshot(&before_snapshot);
+                        self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
                             "Failed to merge section \"{}\": {}",
                             config.name.as_deref().unwrap_or("unnamed"),
@@ -703,7 +606,7 @@ impl AppState {
 
                 ImportPlacement::FromImporting { import_station, target_section_index, target_station_index } => {
                     let Some(&target_section_id) = created_ids.get(target_section_index) else {
-                        self.rollback_to_snapshot(&before_snapshot);
+                        self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
                             "Section \"{}\" references import section index {} which has not been created yet",
                             config.name.as_deref().unwrap_or("unnamed"),
@@ -714,7 +617,7 @@ impl AppState {
                     let target_ref = StationRef::new(target_section_id, *target_station_index);
                     let result = self.merge_stations(import_ref, target_ref);
                     if !result.success {
-                        self.rollback_to_snapshot(&before_snapshot);
+                        self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
                             "Failed to merge section \"{}\" with imported section: {}",
                             config.name.as_deref().unwrap_or("unnamed"),
@@ -732,7 +635,7 @@ impl AppState {
                     if let Some(offset) = offset {
                         let result = self.move_section(section_id, *offset);
                         if !result.success {
-                            self.rollback_to_snapshot(&before_snapshot);
+                            self.rollback_project(&before_snapshot);
                             return CommandResult::failure(format!(
                                 "Failed to move section \"{}\": {}",
                                 config.name.as_deref().unwrap_or("unnamed"),
@@ -752,7 +655,7 @@ impl AppState {
                     let import_ref = StationRef::new(section_id, snap_index);
                     let result = self.merge_stations(import_ref, *snapped_to_station);
                     if !result.success {
-                        self.rollback_to_snapshot(&before_snapshot);
+                        self.rollback_project(&before_snapshot);
                         return CommandResult::failure(format!(
                             "Failed to snap section \"{}\": {}",
                             config.name.as_deref().unwrap_or("unnamed"),
@@ -849,87 +752,23 @@ impl AppState {
         }
 
         // Capture after-snapshot for redo support
-        let after_snapshot = {
-            let proj_guard = match self.project.lock() {
-                Ok(g) => g,
-                Err(poisoned) => {
-                    tracing::warn!(
-                        purpose = "finalize import snapshot",
-                        "Project mutex poisoned during after-snapshot; recovering"
-                    );
-                    poisoned.into_inner()
-                }
-            };
-            if let Some(p) = proj_guard.as_ref() { match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => {
-                    tracing::error!(
-                        purpose = "finalize import snapshot",
-                        reason = %e,
-                        "Failed to serialize after-snapshot; rolling back"
-                    );
-                    drop(proj_guard);
-                    self.rollback_to_snapshot(&before_snapshot);
-                    return CommandResult::failure(format!("Failed to capture after-snapshot: {e}"));
-                }
-            } } else {
-                tracing::error!(
-                    purpose = "restore project after import failure",
-                    "Project became None after import; rolling back"
-                );
-                drop(proj_guard);
-                self.rollback_to_snapshot(&before_snapshot);
-                return CommandResult::failure("No project after import".to_string());
-            }
+        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Push a single undo entry covering all sections + hash
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(
-                Command::Batch { commands: batch_commands },
-                UndoData::ProjectSnapshotPair {
-                    before: before_snapshot,
-                    after: after_snapshot,
-                },
-            );
-        }
+        self.push_snapshot_undo(
+            Command::Batch { commands: batch_commands },
+            before_snapshot,
+            after_snapshot,
+        );
 
+        let result = CommandResult::success().with_section_ids(all_section_ids);
         if all_warnings.is_empty() {
-            CommandResult::success_with_section_ids_and_warnings(all_section_ids, vec![])
+            result
         } else {
-            CommandResult::success_with_section_ids_and_warnings(all_section_ids, all_warnings)
-        }
-    }
-
-    /// Rollback project state to a serialized snapshot.
-    fn rollback_to_snapshot(&self, snapshot: &str) {
-        match serde_json::from_str::<crate::models::Project>(snapshot) {
-            Ok(restored) => {
-                match self.project.lock() {
-                    Ok(mut proj) => {
-                        *proj = Some(restored);
-                        tracing::info!(
-                            purpose = "restore project after failed command",
-                            "Successfully rolled back to snapshot"
-                        );
-                    }
-                    Err(poisoned) => {
-                        let mut proj = poisoned.into_inner();
-                        *proj = Some(restored);
-                        tracing::warn!(
-                            purpose = "restore project after failed command",
-                            "Rolled back via poisoned mutex"
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!(
-                    purpose = "restore project after failed command",
-                    reason = %e,
-                    "Failed to deserialize snapshot for rollback"
-                );
-            }
+            result.with_warnings(all_warnings)
         }
     }
 
@@ -983,57 +822,45 @@ impl AppState {
             "Section created"
         );
 
+        let result = CommandResult::success().with_section_id(section_id);
         if warnings.is_empty() {
-            CommandResult::success_with_section_id(section_id)
+            result
         } else {
-            CommandResult::success_with_section_id_and_warnings(section_id, warnings)
+            result.with_warnings(warnings)
         }
     }
 
     pub(super) fn delete_section(&self, section_id: SectionId) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        // Only clean up if the section actually exists
-        if project.get_section(section_id).is_some() {
-            project.preserve_connections_for_section_deletion(section_id);
-            project.cleanup_section_references(section_id);
-            project.remove_section(section_id);
-            tracing::info!(
-                section_id,
-                purpose = "remove section and cleanup references",
-                "Section deleted (with cleanup)"
-            );
-            CommandResult::success()
-        } else {
-            CommandResult::failure(format!("Section {section_id} not found"))
-        }
+        self.with_project_mut(|project| {
+            if project.get_section(section_id).is_some() {
+                project.preserve_connections_for_section_deletion(section_id);
+                project.cleanup_section_references(section_id);
+                project.remove_section(section_id);
+                tracing::info!(
+                    section_id,
+                    purpose = "remove section and cleanup references",
+                    "Section deleted (with cleanup)"
+                );
+                CommandResult::success()
+            } else {
+                CommandResult::failure(format!("Section {section_id} not found"))
+            }
+        })
     }
 
     pub(super) fn update_section(&self, section_id: SectionId, updates: SectionUpdates) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        if project.update_section(section_id, &updates).is_some() {
-            tracing::info!(
-                section_id,
-                purpose = "update section metadata or shots",
-                "Section updated"
-            );
-            CommandResult::success()
-        } else {
-            CommandResult::failure(format!("Section {section_id} not found"))
-        }
+        self.with_project_mut(|project| {
+            if project.update_section(section_id, &updates).is_some() {
+                tracing::info!(
+                    section_id,
+                    purpose = "update section metadata or shots",
+                    "Section updated"
+                );
+                CommandResult::success()
+            } else {
+                CommandResult::failure(format!("Section {section_id} not found"))
+            }
+        })
     }
 
     // === Shot operations ===
@@ -1126,10 +953,11 @@ impl AppState {
                 purpose = "add shot to section",
                 "Shot created"
             );
+            let result = CommandResult::success().with_shot_id(new_shot_id);
             if warnings.is_empty() {
-                CommandResult::success_with_shot_id(new_shot_id)
+                result
             } else {
-                CommandResult::success_with_shot_id_and_warnings(new_shot_id, warnings)
+                result.with_warnings(warnings)
             }
         } else {
             CommandResult::failure("Failed to create shot".to_string())
@@ -1253,29 +1081,23 @@ impl AppState {
         shot_id: ShotId,
         is_reference: bool,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        if project
-            .set_shot_reference(section_id, shot_id, is_reference)
-            .is_some()
-        {
-            tracing::info!(
-                section_id,
-                shot_id,
-                is_reference,
-                purpose = "toggle reference shot visibility",
-                "Shot reference status updated"
-            );
-            CommandResult::success()
-        } else {
-            CommandResult::failure(format!("Shot {section_id}:{shot_id} not found"))
-        }
+        self.with_project_mut(|project| {
+            if project
+                .set_shot_reference(section_id, shot_id, is_reference)
+                .is_some()
+            {
+                tracing::info!(
+                    section_id,
+                    shot_id,
+                    is_reference,
+                    purpose = "toggle reference shot visibility",
+                    "Shot reference status updated"
+                );
+                CommandResult::success()
+            } else {
+                CommandResult::failure(format!("Shot {section_id}:{shot_id} not found"))
+            }
+        })
     }
 
     // === Station operations ===
@@ -1285,42 +1107,36 @@ impl AppState {
         station_a: StationRef,
         station_b: StationRef,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        // Check same section (not allowed)
-        if station_a.section_id == station_b.section_id {
-            return CommandResult::failure(
-                "Cannot merge stations from the same section".to_string(),
-            );
-        }
-
-        match project.merge_stations(station_a, station_b) {
-            Ok(_) => {
-                tracing::info!(
-                    ?station_a,
-                    ?station_b,
-                    purpose = "connect survey sections",
-                    "Stations merged"
+        self.with_project_mut(|project| {
+            // Check same section (not allowed)
+            if station_a.section_id == station_b.section_id {
+                return CommandResult::failure(
+                    "Cannot merge stations from the same section".to_string(),
                 );
-                CommandResult::success()
             }
-            Err(e) => {
-                tracing::warn!(
-                    ?station_a,
-                    ?station_b,
-                    error = %e,
-                    purpose = "connect survey sections",
-                    "Failed to merge stations"
-                );
-                CommandResult::failure(e)
+
+            match project.merge_stations(station_a, station_b) {
+                Ok(_) => {
+                    tracing::info!(
+                        ?station_a,
+                        ?station_b,
+                        purpose = "connect survey sections",
+                        "Stations merged"
+                    );
+                    CommandResult::success()
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        ?station_a,
+                        ?station_b,
+                        error = %e,
+                        purpose = "connect survey sections",
+                        "Failed to merge stations"
+                    );
+                    CommandResult::failure(e)
+                }
             }
-        }
+        })
     }
 
     pub(super) fn create_loop_closure(
@@ -1365,124 +1181,100 @@ impl AppState {
         anchor_station: StationRef,
         method: ClosureStrategy,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_ref() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
         let config = self.get_config();
-        let mut working = project.clone();
+        self.with_project_mut(|project| {
+            let mut working = project.clone();
 
-        match working.adjust_loop_closures(
-            anchor_station,
-            method,
-            &config.closure_adjustment,
-        ) {
-            Ok(()) => {
-                working.touch();
-                *proj_guard = Some(working);
-                tracing::info!(
-                    ?anchor_station,
-                    ?method,
-                    purpose = "reduce misclosure error",
-                    "Loop closures adjusted"
-                );
-                CommandResult::success()
+            match working.adjust_loop_closures(
+                anchor_station,
+                method,
+                &config.closure_adjustment,
+            ) {
+                Ok(()) => {
+                    working.touch();
+                    *project = working;
+                    tracing::info!(
+                        ?anchor_station,
+                        ?method,
+                        purpose = "reduce misclosure error",
+                        "Loop closures adjusted"
+                    );
+                    CommandResult::success()
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        ?anchor_station,
+                        ?method,
+                        error = %e,
+                        purpose = "reduce misclosure error",
+                        "Failed to adjust loop closures"
+                    );
+                    CommandResult::failure(e)
+                }
             }
-            Err(e) => {
-                tracing::warn!(
-                    ?anchor_station,
-                    ?method,
-                    error = %e,
-                    purpose = "reduce misclosure error",
-                    "Failed to adjust loop closures"
-                );
-                CommandResult::failure(e)
-            }
-        }
+        })
     }
 
     pub(super) fn unmerge_stations(&self, station_ref: StationRef) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        self.with_project_mut(|project| {
+            // Find and unmerge all merges involving this station
+            let merges_to_remove: Vec<_> = project
+                .station_merges
+                .iter()
+                .filter(|m| m.station_a == station_ref || m.station_b == station_ref)
+                .map(|m| (m.station_a, m.station_b))
+                .collect();
 
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
+            for (a, b) in merges_to_remove {
+                project.unmerge_stations(a, b);
+            }
 
-        // Find and unmerge all merges involving this station
-        let merges_to_remove: Vec<_> = project
-            .station_merges
-            .iter()
-            .filter(|m| m.station_a == station_ref || m.station_b == station_ref)
-            .map(|m| (m.station_a, m.station_b))
-            .collect();
-
-        for (a, b) in merges_to_remove {
-            project.unmerge_stations(a, b);
-        }
-
-        tracing::info!(
-            ?station_ref,
-            purpose = "disconnect merged stations",
-            "Station unmerged"
-        );
-        CommandResult::success()
+            tracing::info!(
+                ?station_ref,
+                purpose = "disconnect merged stations",
+                "Station unmerged"
+            );
+            CommandResult::success()
+        })
     }
 
     pub(super) fn set_zero_datum(&self, station_ref: StationRef, gps: GpsCoordinates) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        match project.set_zero_datum(station_ref, gps) {
-            Ok(_) => {
-                tracing::info!(
-                    ?station_ref,
-                    purpose = "anchor survey to GPS coordinates",
-                    "Zero datum set"
-                );
-                CommandResult::success()
+        self.with_project_mut(|project| {
+            match project.set_zero_datum(station_ref, gps) {
+                Ok(_) => {
+                    tracing::info!(
+                        ?station_ref,
+                        purpose = "anchor survey to GPS coordinates",
+                        "Zero datum set"
+                    );
+                    CommandResult::success()
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        ?station_ref,
+                        error = %e,
+                        purpose = "anchor survey to GPS coordinates",
+                        "Failed to set zero datum"
+                    );
+                    CommandResult::failure(e)
+                }
             }
-            Err(e) => {
-                tracing::warn!(
-                    ?station_ref,
-                    error = %e,
-                    purpose = "anchor survey to GPS coordinates",
-                    "Failed to set zero datum"
-                );
-                CommandResult::failure(e)
-            }
-        }
+        })
     }
 
     pub(super) fn remove_zero_datum(&self, station_ref: StationRef) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        if project.remove_zero_datum(station_ref) {
-            tracing::info!(
-                ?station_ref,
-                purpose = "remove GPS anchor",
-                "Zero datum removed"
-            );
-            CommandResult::success()
-        } else {
-            CommandResult::failure("Station is not a zero datum".to_string())
-        }
+        self.with_project_mut(|project| {
+            if project.remove_zero_datum(station_ref) {
+                tracing::info!(
+                    ?station_ref,
+                    purpose = "remove GPS anchor",
+                    "Zero datum removed"
+                );
+                CommandResult::success()
+            } else {
+                CommandResult::failure("Station is not a zero datum".to_string())
+            }
+        })
     }
 
     pub(super) fn set_station_comment(
@@ -1490,50 +1282,44 @@ impl AppState {
         station_ref: StationRef,
         comment: Option<String>,
     ) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        self.with_project_mut(|project| {
+            // Validate station exists
+            let section = match project.get_section(station_ref.section_id) {
+                Some(s) => s,
+                None => {
+                    return CommandResult::failure(format!(
+                        "Section {} not found",
+                        station_ref.section_id
+                    ));
+                }
+            };
 
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        // Validate station exists
-        let section = match project.get_section(station_ref.section_id) {
-            Some(s) => s,
-            None => {
+            let max_station_index = section.shots.len() as u32;
+            if station_ref.station_index > max_station_index {
                 return CommandResult::failure(format!(
-                    "Section {} not found",
-                    station_ref.section_id
+                    "Station index {} out of range (section has {} stations)",
+                    station_ref.station_index,
+                    max_station_index + 1
                 ));
             }
-        };
 
-        let max_station_index = section.shots.len() as u32;
-        if station_ref.station_index > max_station_index {
-            return CommandResult::failure(format!(
-                "Station index {} out of range (section has {} stations)",
-                station_ref.station_index,
-                max_station_index + 1
-            ));
-        }
-
-        match comment {
-            Some(text) if !text.is_empty() => {
-                project.station_comments.insert(station_ref, text);
+            match comment {
+                Some(text) if !text.is_empty() => {
+                    project.station_comments.insert(station_ref, text);
+                }
+                _ => {
+                    project.station_comments.remove(&station_ref);
+                }
             }
-            _ => {
-                project.station_comments.remove(&station_ref);
-            }
-        }
 
-        project.touch();
-        tracing::info!(
-            ?station_ref,
-            purpose = "set station comment",
-            "Station comment updated"
-        );
-        CommandResult::success()
+            project.touch();
+            tracing::info!(
+                ?station_ref,
+                purpose = "set station comment",
+                "Station comment updated"
+            );
+            CommandResult::success()
+        })
     }
 
     /// Execute a move-comment operation as a single atomic undo/redo unit.
@@ -1546,19 +1332,9 @@ impl AppState {
         cmd: Command,
     ) -> CommandResult {
         // Step 1: Take BEFORE snapshot
-        let before_snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => {
-                    return CommandResult::failure(format!("Failed to serialize project: {e}"))
-                }
-            }
+        let before_snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Step 2: Read source and target comments, then mutate
@@ -1599,42 +1375,13 @@ impl AppState {
         }
 
         // Step 3: Take AFTER snapshot
-        let after_snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => {
-                    // Rollback to before snapshot
-                    drop(proj_guard);
-                    if let Ok(mut pg) = self.project.lock() {
-                        if let Ok(restored) =
-                            serde_json::from_str::<crate::models::Project>(&before_snapshot)
-                        {
-                            *pg = Some(restored);
-                        }
-                    }
-                    return CommandResult::failure(format!(
-                        "Failed to serialize after snapshot: {e}"
-                    ));
-                }
-            }
+        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Step 4: Push single undo entry
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(
-                cmd,
-                UndoData::ProjectSnapshotPair {
-                    before: before_snapshot,
-                    after: after_snapshot,
-                },
-            );
-        }
+        self.push_snapshot_undo(cmd, before_snapshot, after_snapshot);
 
         tracing::info!(
             swap = swap,
@@ -1723,217 +1470,199 @@ impl AppState {
     }
 
     pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        self.with_project_mut(|project| {
+            if !project.sections.iter().any(|s| s.id == section_id) {
+                return CommandResult::failure("Section not found".to_string());
+            }
 
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
+            if project.section_has_direct_datum(section_id)
+                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+            {
+                return CommandResult::failure(
+                    "Cannot move a section that directly holds a zero datum".to_string(),
+                );
+            }
 
-        if !project.sections.iter().any(|s| s.id == section_id) {
-            return CommandResult::failure("Section not found".to_string());
-        }
-
-        if project.section_has_direct_datum(section_id)
-            && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-        {
-            return CommandResult::failure(
-                "Cannot move a section that directly holds a zero datum".to_string(),
+            project.adjust_section_offset(section_id, offset.x, offset.y);
+            project.touch();
+            tracing::info!(
+                ?section_id,
+                ?offset,
+                purpose = "reposition section for alignment",
+                "Section moved"
             );
-        }
-
-        project.adjust_section_offset(section_id, offset.x, offset.y);
-        project.touch();
-        tracing::info!(
-            ?section_id,
-            ?offset,
-            purpose = "reposition section for alignment",
-            "Section moved"
-        );
-        CommandResult::success()
+            CommandResult::success()
+        })
     }
 
     pub(super) fn move_segment(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
+        self.with_project_mut(|project| {
+            // Validate section exists
+            if !project.sections.iter().any(|s| s.id == section_id) {
+                return CommandResult::failure("Section not found".to_string());
+            }
 
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
+            // Get all connected section IDs (merges + closures), filtered to existing sections
+            let existing: std::collections::HashSet<SectionId> =
+                project.sections.iter().map(|s| s.id).collect();
+            let connected: Vec<SectionId> = project
+                .get_rigid_connected_section_ids(section_id)
+                .into_iter()
+                .filter(|id| existing.contains(id))
+                .collect();
 
-        // Validate section exists
-        if !project.sections.iter().any(|s| s.id == section_id) {
-            return CommandResult::failure("Section not found".to_string());
-        }
+            if project.rigid_group_has_datum(section_id)
+                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+            {
+                return CommandResult::failure(
+                    "Cannot move a segment whose merge group holds a zero datum".to_string(),
+                );
+            }
 
-        // Get all connected section IDs (merges + closures), filtered to existing sections
-        let existing: std::collections::HashSet<SectionId> =
-            project.sections.iter().map(|s| s.id).collect();
-        let connected: Vec<SectionId> = project
-            .get_rigid_connected_section_ids(section_id)
-            .into_iter()
-            .filter(|id| existing.contains(id))
-            .collect();
-
-        if project.rigid_group_has_datum(section_id)
-            && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-        {
-            return CommandResult::failure(
-                "Cannot move a segment whose merge group holds a zero datum".to_string(),
+            // Apply offset to every section in the connected set
+            // (uses the pre-filtered connected set, not adjust_rigid_group_offsets,
+            // because move_segment follows rigid + aligned-closure connectivity)
+            for sid in &connected {
+                project.adjust_section_offset(*sid, offset.x, offset.y);
+            }
+            project.touch();
+            tracing::info!(
+                ?section_id,
+                ?offset,
+                section_count = connected.len(),
+                purpose = "move connected segment as rigid group",
+                "Segment moved"
             );
-        }
-
-        // Apply offset to every section in the connected set
-        // (uses the pre-filtered connected set, not adjust_rigid_group_offsets,
-        // because move_segment follows rigid + aligned-closure connectivity)
-        for sid in &connected {
-            project.adjust_section_offset(*sid, offset.x, offset.y);
-        }
-        project.touch();
-        tracing::info!(
-            ?section_id,
-            ?offset,
-            section_count = connected.len(),
-            purpose = "move connected segment as rigid group",
-            "Segment moved"
-        );
-        CommandResult::success()
+            CommandResult::success()
+        })
     }
 
     pub(super) fn move_station(&self, station_ref: StationRef, offset: Coordinates) -> CommandResult {
-        let Ok(mut proj_guard) = self.project.lock() else {
-            return CommandResult::failure("Failed to lock project".to_string());
-        };
-
-        let Some(project) = proj_guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-
-        if project.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
-            && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-        {
-            return CommandResult::failure(
-                "Cannot move a zero datum station".to_string(),
-            );
-        }
-
-        // Incorporate any existing station offset
-        let existing = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
-        let total_dx = existing.0 + offset.x;
-        let total_dy = existing.1 + offset.y;
-        let total_dz = existing.2 + offset.z;
-
-        // Find the section containing this station (mutable)
-        let Some(section) = project.sections.iter_mut().find(|s| s.id == station_ref.section_id) else {
-            return CommandResult::failure("Section not found".to_string());
-        };
-
-        let idx = station_ref.station_index as usize;
-
-        // Validate station index (N shots → N+1 stations, indices 0..=N)
-        if idx > section.shots.len() {
-            return CommandResult::failure("Invalid station index".to_string());
-        }
-
-        // Pre-compute updates to avoid partial mutations on failure.
-        let mut prev_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_out, pitch
-        if idx > 0 {
-            let shot = &section.shots[idx - 1];
-            let azi_rad = shot.average_azimuth().to_radians();
-            let old_horizontal = shot.horizontal_length();
-            let old_dx = old_horizontal * azi_rad.sin();
-            let old_dy = old_horizontal * azi_rad.cos();
-            let new_dx = old_dx + total_dx;
-            let new_dy = old_dy + total_dy;
-            let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
-            let new_depth_out = shot.depth_out + total_dz;
-            let new_dz = new_depth_out - shot.depth_in;
-            let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-            if new_len <= 0.0 {
-                return CommandResult::failure("Move would create zero-length shot".to_string());
+        self.with_project_mut(|project| {
+            if project.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
+                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+            {
+                return CommandResult::failure(
+                    "Cannot move a zero datum station".to_string(),
+                );
             }
-            let new_azi = if new_horizontal > 1e-9 {
-                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
-            } else {
-                shot.average_azimuth()
+
+            // Incorporate any existing station offset
+            let existing = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
+            let total_dx = existing.0 + offset.x;
+            let total_dy = existing.1 + offset.y;
+            let total_dz = existing.2 + offset.z;
+
+            // Find the section containing this station (mutable)
+            let Some(section) = project.sections.iter_mut().find(|s| s.id == station_ref.section_id) else {
+                return CommandResult::failure("Section not found".to_string());
             };
-            let pitch = new_dz.atan2(new_horizontal).to_degrees();
-            prev_update = Some((new_len, new_azi, new_depth_out, pitch));
-        }
 
-        let mut next_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_in, pitch
-        if let Some(shot) = section.shots.get(idx) {
-            let azi_rad = shot.average_azimuth().to_radians();
-            let old_horizontal = shot.horizontal_length();
-            let old_dx = old_horizontal * azi_rad.sin();
-            let old_dy = old_horizontal * azi_rad.cos();
-            let new_dx = old_dx - total_dx;
-            let new_dy = old_dy - total_dy;
-            let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
-            let new_depth_in = shot.depth_in + total_dz;
-            let new_dz = shot.depth_out - new_depth_in;
-            let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-            if new_len <= 0.0 {
-                return CommandResult::failure("Move would create zero-length shot".to_string());
+            let idx = station_ref.station_index as usize;
+
+            // Validate station index (N shots → N+1 stations, indices 0..=N)
+            if idx > section.shots.len() {
+                return CommandResult::failure("Invalid station index".to_string());
             }
-            let new_azi = if new_horizontal > 1e-9 {
-                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
-            } else {
-                shot.average_azimuth()
-            };
-            let pitch = new_dz.atan2(new_horizontal).to_degrees();
-            next_update = Some((new_len, new_azi, new_depth_in, pitch));
-        }
 
-        // Special case: moving station 0 should move the section offset so the
-        // rest of the geometry stays in place. Shot 0 is adjusted below to
-        // compensate for the offset shift.
-        // Note: can't use project.adjust_section_offset() here because `section`
-        // is a live &mut borrow from project.sections.
-        if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
-            let current = project.section_offsets.get(&station_ref.section_id).copied().unwrap_or((0.0, 0.0));
-            project.section_offsets.insert(
-                station_ref.section_id,
-                (current.0 + total_dx, current.1 + total_dy),
+            // Pre-compute updates to avoid partial mutations on failure.
+            let mut prev_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_out, pitch
+            if idx > 0 {
+                let shot = &section.shots[idx - 1];
+                let azi_rad = shot.average_azimuth().to_radians();
+                let old_horizontal = shot.horizontal_length();
+                let old_dx = old_horizontal * azi_rad.sin();
+                let old_dy = old_horizontal * azi_rad.cos();
+                let new_dx = old_dx + total_dx;
+                let new_dy = old_dy + total_dy;
+                let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
+                let new_depth_out = shot.depth_out + total_dz;
+                let new_dz = new_depth_out - shot.depth_in;
+                let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
+                if new_len <= 0.0 {
+                    return CommandResult::failure("Move would create zero-length shot".to_string());
+                }
+                let new_azi = if new_horizontal > 1e-9 {
+                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                } else {
+                    shot.average_azimuth()
+                };
+                let pitch = new_dz.atan2(new_horizontal).to_degrees();
+                prev_update = Some((new_len, new_azi, new_depth_out, pitch));
+            }
+
+            let mut next_update: Option<(f64, f64, f64, f64)> = None; // len, azi, depth_in, pitch
+            if let Some(shot) = section.shots.get(idx) {
+                let azi_rad = shot.average_azimuth().to_radians();
+                let old_horizontal = shot.horizontal_length();
+                let old_dx = old_horizontal * azi_rad.sin();
+                let old_dy = old_horizontal * azi_rad.cos();
+                let new_dx = old_dx - total_dx;
+                let new_dy = old_dy - total_dy;
+                let new_horizontal = (new_dx * new_dx + new_dy * new_dy).sqrt();
+                let new_depth_in = shot.depth_in + total_dz;
+                let new_dz = shot.depth_out - new_depth_in;
+                let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
+                if new_len <= 0.0 {
+                    return CommandResult::failure("Move would create zero-length shot".to_string());
+                }
+                let new_azi = if new_horizontal > 1e-9 {
+                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                } else {
+                    shot.average_azimuth()
+                };
+                let pitch = new_dz.atan2(new_horizontal).to_degrees();
+                next_update = Some((new_len, new_azi, new_depth_in, pitch));
+            }
+
+            // Special case: moving station 0 should move the section offset so the
+            // rest of the geometry stays in place. Shot 0 is adjusted below to
+            // compensate for the offset shift.
+            // Note: can't use project.adjust_section_offset() here because `section`
+            // is a live &mut borrow from project.sections.
+            if idx == 0 && (total_dx != 0.0 || total_dy != 0.0) {
+                let current = project.section_offsets.get(&station_ref.section_id).copied().unwrap_or((0.0, 0.0));
+                project.section_offsets.insert(
+                    station_ref.section_id,
+                    (current.0 + total_dx, current.1 + total_dy),
+                );
+            }
+
+            // Apply updates after validation
+            if let Some((new_len, new_azi, new_depth_out, pitch)) = prev_update {
+                if let Some(shot) = section.shots.get_mut(idx - 1) {
+                    shot.length = new_len;
+                    shot.azimuth_in = new_azi;
+                    shot.azimuth_out = new_azi;
+                    shot.depth_out = new_depth_out;
+                    shot.pitch_in = Some(pitch);
+                    shot.pitch_out = Some(pitch);
+                }
+            }
+
+            if let Some((new_len, new_azi, new_depth_in, pitch)) = next_update {
+                if let Some(shot) = section.shots.get_mut(idx) {
+                    shot.length = new_len;
+                    shot.azimuth_in = new_azi;
+                    shot.azimuth_out = new_azi;
+                    shot.depth_in = new_depth_in;
+                    shot.pitch_in = Some(pitch);
+                    shot.pitch_out = Some(pitch);
+                }
+            }
+
+            // Clear station offset (now incorporated into shot data)
+            project.station_offsets.remove(&station_ref);
+            project.touch();
+
+            tracing::info!(
+                ?station_ref,
+                ?offset,
+                purpose = "adjust station position",
+                "Station moved (shot data updated)"
             );
-        }
-
-        // Apply updates after validation
-        if let Some((new_len, new_azi, new_depth_out, pitch)) = prev_update {
-            if let Some(shot) = section.shots.get_mut(idx - 1) {
-                shot.length = new_len;
-                shot.azimuth_in = new_azi;
-                shot.azimuth_out = new_azi;
-                shot.depth_out = new_depth_out;
-                shot.pitch_in = Some(pitch);
-                shot.pitch_out = Some(pitch);
-            }
-        }
-
-        if let Some((new_len, new_azi, new_depth_in, pitch)) = next_update {
-            if let Some(shot) = section.shots.get_mut(idx) {
-                shot.length = new_len;
-                shot.azimuth_in = new_azi;
-                shot.azimuth_out = new_azi;
-                shot.depth_in = new_depth_in;
-                shot.pitch_in = Some(pitch);
-                shot.pitch_out = Some(pitch);
-            }
-        }
-
-        // Clear station offset (now incorporated into shot data)
-        project.station_offsets.remove(&station_ref);
-        project.touch();
-
-        tracing::info!(
-            ?station_ref,
-            ?offset,
-            purpose = "adjust station position",
-            "Station moved (shot data updated)"
-        );
-        CommandResult::success()
+            CommandResult::success()
+        })
     }
 
     /// Check if a command is allowed in a batch (whitelist for IPC safety)
@@ -1971,17 +1700,9 @@ impl AppState {
         }
 
         // Capture pre-batch snapshot for rollback on partial failure and undo
-        let before_snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => return CommandResult::failure(format!("Failed to capture pre-batch snapshot: {e}")),
-            }
+        let before_snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         let mut all_warnings = Vec::new();
@@ -1993,29 +1714,7 @@ impl AppState {
             let result = self.execute_without_undo(cmd.clone());
             if !result.success {
                 // Rollback: restore pre-batch state to avoid partial mutations
-                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
-                    Ok(project) => {
-                        if let Ok(mut proj) = self.project.lock() {
-                            *proj = Some(project);
-                            tracing::info!(
-                                purpose = "restore project after batch failure",
-                                "Successfully rolled back batch after sub-command failure"
-                            );
-                        } else {
-                            tracing::error!(
-                                purpose = "restore project after batch failure",
-                                "Failed to acquire project lock during batch rollback; project state may be inconsistent"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            purpose = "restore project after batch failure",
-                            reason = %e,
-                            "Failed to deserialize before-snapshot during batch rollback; project state may be inconsistent"
-                        );
-                    }
-                }
+                self.rollback_project(&before_snapshot);
                 return result;
             }
             all_warnings.extend(result.warnings);
@@ -2028,61 +1727,24 @@ impl AppState {
 
         if push_undo {
             // Capture after-snapshot for redo support; failure means rollback
-            let after_snapshot = {
-                let Ok(proj_guard) = self.project.lock() else {
-                    // Cannot lock — rollback impossible, return failure
-                    return CommandResult::failure("Failed to lock project for after-snapshot".to_string());
-                };
-                match proj_guard.as_ref() {
-                    Some(p) => match serde_json::to_string(p) {
-                        Ok(json) => json,
-                        Err(e) => {
-                            tracing::error!(
-                                purpose = "finalize batch undo snapshot",
-                                reason = %e,
-                                "Failed to capture after-snapshot for batch; rolling back"
-                            );
-                            drop(proj_guard);
-                            // Rollback: restore pre-batch state
-                            if let Ok(project) = serde_json::from_str::<crate::models::Project>(&before_snapshot) {
-                                if let Ok(mut proj) = self.project.lock() {
-                                    *proj = Some(project);
-                                    tracing::info!(
-                                        purpose = "restore project after batch snapshot failure",
-                                        "Successfully rolled back batch after after-snapshot failure"
-                                    );
-                                }
-                            } else {
-                                tracing::error!(
-                                    purpose = "restore project after batch snapshot failure",
-                                    "Failed to deserialize before-snapshot during rollback; project state may be inconsistent"
-                                );
-                            }
-                            return CommandResult::failure(format!("Failed to capture after-snapshot for batch undo: {e}"));
-                        }
-                    },
-                    None => {
-                        return CommandResult::failure("No project open after batch execution".to_string());
-                    }
-                }
+            let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+                Ok(s) => s,
+                Err(result) => return result,
             };
 
             // Push undo entry directly (bypasses finalize_undo_data which is a no-op for Batch)
-            if let Ok(mut undo_stack) = self.undo_stack.lock() {
-                undo_stack.push_with_data(
-                    Command::Batch { commands },
-                    UndoData::ProjectSnapshotPair {
-                        before: before_snapshot,
-                        after: after_snapshot,
-                    },
-                );
-            }
+            self.push_snapshot_undo(Command::Batch { commands }, before_snapshot, after_snapshot);
         }
 
-        if section_ids.is_empty() {
-            CommandResult::success_with_warnings(all_warnings)
+        let result = if section_ids.is_empty() {
+            CommandResult::success()
         } else {
-            CommandResult::success_with_section_ids_and_warnings(section_ids, all_warnings)
+            CommandResult::success().with_section_ids(section_ids)
+        };
+        if all_warnings.is_empty() {
+            result
+        } else {
+            result.with_warnings(all_warnings)
         }
     }
 
@@ -2108,17 +1770,9 @@ impl AppState {
         );
 
         // Step 1: Take BEFORE snapshot
-        let before_snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => return CommandResult::failure(format!("Failed to serialize project: {e}")),
-            }
+        let before_snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         let undo_section_b_name = name_b.clone();
@@ -2323,17 +1977,9 @@ impl AppState {
         };
 
         // Step 7: Take AFTER snapshot
-        let after_snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project for after snapshot".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project for after snapshot".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => return CommandResult::failure(format!("Failed to serialize after snapshot: {e}")),
-            }
+        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Step 8: Push single undo entry with ProjectSnapshotPair
@@ -2355,12 +2001,7 @@ impl AppState {
             ],
         };
 
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(batch_cmd, UndoData::ProjectSnapshotPair {
-                before: before_snapshot,
-                after: after_snapshot,
-            });
-        }
+        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
 
         tracing::info!(
             section_id,
@@ -2370,7 +2011,7 @@ impl AppState {
             "Delete shot and split section completed"
         );
 
-        CommandResult::success_with_section_id(new_section_id)
+        CommandResult::success().with_section_id(new_section_id)
     }
 
     /// Execute a delete-last-shot-and-section operation as a single atomic undo/redo unit.
@@ -2394,17 +2035,9 @@ impl AppState {
         );
 
         // Step 1: Take BEFORE snapshot
-        let before_snapshot = {
-            let Ok(proj_guard) = self.project.lock() else {
-                return CommandResult::failure("Failed to lock project".to_string());
-            };
-            let Some(p) = proj_guard.as_ref() else {
-                return CommandResult::failure("No project open".to_string());
-            };
-            match serde_json::to_string(p) {
-                Ok(json) => json,
-                Err(e) => return CommandResult::failure(format!("Failed to serialize project: {e}")),
-            }
+        let before_snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
         };
 
         // Step 2: Validate, mutate, and capture AFTER snapshot in a single lock scope.
@@ -2556,35 +2189,7 @@ impl AppState {
             ],
         };
 
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.push_with_data(batch_cmd, UndoData::ProjectSnapshotPair {
-                before: before_snapshot,
-                after: after_snapshot,
-            });
-        } else {
-            // Undo stack lock failure: rollback to preserve atomicity
-            tracing::error!(
-                purpose = "preserve atomic delete operation",
-                "Failed to lock undo stack; rolling back mutation"
-            );
-            match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
-                Ok(restored) => {
-                    if let Ok(mut proj) = self.project.lock() {
-                        *proj = Some(restored);
-                        tracing::info!(
-                            purpose = "restore after undo-stack lock failure",
-                            "Successfully rolled back after undo-stack lock failure"
-                        );
-                    }
-                }
-                Err(e) => tracing::error!(
-                    purpose = "restore after undo-stack lock failure",
-                    reason = %e,
-                    "Failed to rollback from before_snapshot"
-                ),
-            }
-            return CommandResult::failure("Failed to lock undo stack".to_string());
-        }
+        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
 
         CommandResult::success()
     }
@@ -2704,26 +2309,20 @@ impl AppState {
             .command_lock
             .lock()
             .map_err(|_| "Failed to acquire command lock".to_string())?;
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let project = proj_guard
-            .as_ref()
-            .ok_or_else(|| "No project open".to_string())?;
+        self.with_project(|project| {
+            // Validate section exists
+            if !project.sections.iter().any(|s| s.id == section_id) {
+                return Err(format!("Section {section_id} not found"));
+            }
 
-        // Validate section exists
-        if !project.sections.iter().any(|s| s.id == section_id) {
-            return Err(format!("Section {section_id} not found"));
-        }
-
-        // Filter to existing sections (stale merges/closures may reference deleted sections)
-        let existing: std::collections::HashSet<SectionId> =
-            project.sections.iter().map(|s| s.id).collect();
-        let connected = project.get_rigid_connected_section_ids(section_id);
-        let mut result: Vec<SectionId> = connected.into_iter().filter(|id| existing.contains(id)).collect();
-        result.sort_unstable();
-        Ok(result)
+            // Filter to existing sections (stale merges/closures may reference deleted sections)
+            let existing: std::collections::HashSet<SectionId> =
+                project.sections.iter().map(|s| s.id).collect();
+            let connected = project.get_rigid_connected_section_ids(section_id);
+            let mut result: Vec<SectionId> = connected.into_iter().filter(|id| existing.contains(id)).collect();
+            result.sort_unstable();
+            Ok(result)
+        })
     }
 
     /// Get shot-line geometry for all sections in the segment containing the given section.
@@ -2822,24 +2421,18 @@ impl AppState {
             .command_lock
             .lock()
             .map_err(|_| "Failed to acquire command lock".to_string())?;
-        let proj_guard = self
-            .project
-            .lock()
-            .map_err(|_| "Failed to lock project".to_string())?;
-        let project = proj_guard
-            .as_ref()
-            .ok_or_else(|| "No project open".to_string())?;
-
-        // Filter to existing sections (stale merges/closures may reference deleted sections)
-        let existing: std::collections::HashSet<SectionId> =
-            project.sections.iter().map(|s| s.id).collect();
-        let mut anchored = std::collections::HashSet::new();
-        for zd in &project.zero_datums {
-            let connected = project.get_rigid_connected_section_ids(zd.station_ref.section_id);
-            anchored.extend(connected.into_iter().filter(|id| existing.contains(id)));
-        }
-        let mut result: Vec<SectionId> = anchored.into_iter().collect();
-        result.sort_unstable();
-        Ok(result)
+        self.with_project(|project| {
+            // Filter to existing sections (stale merges/closures may reference deleted sections)
+            let existing: std::collections::HashSet<SectionId> =
+                project.sections.iter().map(|s| s.id).collect();
+            let mut anchored = std::collections::HashSet::new();
+            for zd in &project.zero_datums {
+                let connected = project.get_rigid_connected_section_ids(zd.station_ref.section_id);
+                anchored.extend(connected.into_iter().filter(|id| existing.contains(id)));
+            }
+            let mut result: Vec<SectionId> = anchored.into_iter().collect();
+            result.sort_unstable();
+            Ok(result)
+        })
     }
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -46,7 +47,7 @@ export default function SplitSectionDialog() {
         setError(result.error ?? 'Failed to split section');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to split section');
+      setError(getErrorMessage(e, 'Failed to split section'));
     } finally {
       setIsLoading(false);
     }

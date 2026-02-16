@@ -6,7 +6,7 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { getThemedDisplayDefaults, getThemedSectionColorDefaults } from '../../../types/config';
 import { useUIStore } from '../../../store/uiStore';
 
@@ -58,122 +58,33 @@ export function DisplaySettings({
     { value: '50', label: t('settings.display.grid.spacingOptionOther', { value: 50 }) },
   ], [t]);
 
-  const handleBackgroundChange = (value: string) => {
-    onChange({
-      display: {
-        ...config.display,
-        default_background: value,
-      },
-    });
-  };
+  // --- Background ---
+  const handleBackgroundChange = createSelectHandler(onChange,
+    (v) => ({ display: { ...config.display, default_background: v } }));
 
-  const handleGridColorChange = (value: string) => {
-    onChange({
-      display: {
-        ...config.display,
-        grid_color: value,
-      },
-    });
-  };
+  // --- Grid ---
+  const handleGridColorChange = createSelectHandler(onChange,
+    (v) => ({ display: { ...config.display, grid_color: v } }));
+  const handleGridSpacingChange = createNumericHandler(onChange,
+    (n) => ({ display: { ...config.display, grid_spacing: n } }), parseIntRadix10);
 
-  const handleGridSpacingChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        display: {
-          ...config.display,
-          grid_spacing: num,
-        },
-      });
-    }
-  };
+  // --- Font ---
+  const handleFontSizeChange = createNumericHandler(onChange,
+    (n) => ({ display: { ...config.display, font_size: n } }), parseIntRadix10);
+  const handleFontColorChange = createSelectHandler(onChange,
+    (v) => ({ display: { ...config.display, font_color: v } }));
 
-  const handleFontSizeChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        display: {
-          ...config.display,
-          font_size: num,
-        },
-      });
-    }
-  };
-
-  const handleFontColorChange = (value: string) => {
-    onChange({
-      display: {
-        ...config.display,
-        font_color: value,
-      },
-    });
-  };
-
-  const handleDepthGradientEnabledChange = (checked: boolean) => {
-    onChange({
-      display: {
-        ...config.display,
-        depth_gradient: {
-          ...config.display.depth_gradient,
-          enabled: checked,
-        },
-      },
-    });
-  };
-
-  const handleShallowColorChange = (value: string) => {
-    onChange({
-      display: {
-        ...config.display,
-        depth_gradient: {
-          ...config.display.depth_gradient,
-          shallow_color: value,
-        },
-      },
-    });
-  };
-
-  const handleDeepColorChange = (value: string) => {
-    onChange({
-      display: {
-        ...config.display,
-        depth_gradient: {
-          ...config.display.depth_gradient,
-          deep_color: value,
-        },
-      },
-    });
-  };
-
-  const handleShallowDepthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        display: {
-          ...config.display,
-          depth_gradient: {
-            ...config.display.depth_gradient,
-            shallow_depth: num,
-          },
-        },
-      });
-    }
-  };
-
-  const handleDeepDepthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        display: {
-          ...config.display,
-          depth_gradient: {
-            ...config.display.depth_gradient,
-            deep_depth: num,
-          },
-        },
-      });
-    }
-  };
+  // --- Depth gradient ---
+  const handleDepthGradientEnabledChange = createToggleHandler(onChange,
+    (v) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, enabled: v } } }));
+  const handleShallowColorChange = createSelectHandler(onChange,
+    (v) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_color: v } } }));
+  const handleDeepColorChange = createSelectHandler(onChange,
+    (v) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_color: v } } }));
+  const handleShallowDepthChange = createNumericHandler(onChange,
+    (n) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, shallow_depth: n } } }));
+  const handleDeepDepthChange = createNumericHandler(onChange,
+    (n) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_depth: n } } }));
 
   return (
     <div

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
 import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
 import {
@@ -365,7 +366,7 @@ export default function UndoHistoryDropdown({
       } catch (error) {
         // Secondary safety net: unexpected thrown exceptions
         console.error(`Failed to execute queued ${mode} action:`, error);
-        const errorReason = error instanceof Error ? error.message : String(error);
+        const errorReason = getErrorMessage(error);
         const errorStack = error instanceof Error ? error.stack : undefined;
 
         // Refresh stack so dropdown reflects actual backend state even after error

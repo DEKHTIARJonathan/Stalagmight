@@ -3,6 +3,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc } from '../../utils/ipc';
+import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { RepairResult } from '../../types/ipc/RepairResult';
@@ -274,7 +275,7 @@ export default function CorruptionRecoveryDialog() {
                 ? Number(backup.sizeBytes)
                 : Number(backup.sizeBytes);
               const sizeKb = (sizeNum / 1024).toFixed(1);
-              const filename = backup.path.split(/[/\\]/).pop() ?? backup.path;
+              const filename = extractFilename(backup.path);
               return (
                 <button
                   key={backup.path}

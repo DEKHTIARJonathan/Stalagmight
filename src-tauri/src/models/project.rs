@@ -1656,6 +1656,27 @@ impl Project {
         offsets
     }
 
+    /// Restore section offsets from a captured snapshot.
+    ///
+    /// For each entry in `offsets`:
+    /// - `Some(offset)` restores the offset to that value
+    /// - `None` removes the offset (it didn't exist before)
+    ///
+    /// This is used by undo to restore exact previous state (counterpart of
+    /// `capture_connected_section_offsets`).
+    pub fn restore_section_offsets(&mut self, offsets: &HashMap<SectionId, Option<(f64, f64)>>) {
+        for (section_id, prev_offset) in offsets {
+            match prev_offset {
+                Some(offset) => {
+                    self.section_offsets.insert(*section_id, *offset);
+                }
+                None => {
+                    self.section_offsets.remove(section_id);
+                }
+            }
+        }
+    }
+
     /// Check if a section is connected to a zero datum (directly or through merges only)
     fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
         let merged = self.get_merged_section_ids(section_id);

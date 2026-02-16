@@ -12,6 +12,7 @@ import {
   getEffectiveShowStationComments,
   getEffectiveShowShotComments,
 } from '../../store/displaySelectors';
+import { getErrorMessage } from '../../utils/ipc';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
@@ -1041,8 +1042,7 @@ export default function MapCanvas() {
           moveCallbacks?.onCancel?.();
         }
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        showToast(message, 'snap-merge-error');
+        showToast(getErrorMessage(e), 'snap-merge-error');
         moveCallbacks?.onCancel?.();
       }
     },

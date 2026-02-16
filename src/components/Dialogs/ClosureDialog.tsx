@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getErrorColor } from '../../utils/colors';
@@ -67,7 +68,7 @@ export default function ClosureDialog() {
         setError(result.error ?? 'Failed to create loop closure');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create loop closure');
+      setError(getErrorMessage(e, 'Failed to create loop closure'));
     } finally {
       setIsLoading(false);
     }

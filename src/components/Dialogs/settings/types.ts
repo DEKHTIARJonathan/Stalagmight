@@ -36,3 +36,57 @@ export function getByPath(obj: unknown, path: string): unknown {
   }
   return current;
 }
+
+// ---------------------------------------------------------------------------
+// Config handler factories
+// ---------------------------------------------------------------------------
+// These reduce boilerplate in settings components where dozens of handlers
+// follow the same parse-then-patch pattern.
+
+type OnChange = SettingsCategoryProps['onChange'];
+
+/**
+ * Create a numeric input handler that parses string -> number and calls onChange.
+ * @param onChange  The settings onChange callback
+ * @param updater  Builds the config patch from the parsed number
+ * @param parser   parseInt or parseFloat (default: parseFloat)
+ */
+export function createNumericHandler(
+  onChange: OnChange,
+  updater: (num: number) => Partial<Config>,
+  parser: (value: string) => number = parseFloat,
+): (value: string) => void {
+  return (value: string) => {
+    const num = parser(value);
+    if (!isNaN(num)) {
+      onChange(updater(num));
+    }
+  };
+}
+
+/**
+ * Create a boolean toggle handler.
+ */
+export function createToggleHandler(
+  onChange: OnChange,
+  updater: (checked: boolean) => Partial<Config>,
+): (checked: boolean) => void {
+  return (checked: boolean) => {
+    onChange(updater(checked));
+  };
+}
+
+/**
+ * Create a string select / text handler.
+ */
+export function createSelectHandler(
+  onChange: OnChange,
+  updater: (value: string) => Partial<Config>,
+): (value: string) => void {
+  return (value: string) => {
+    onChange(updater(value));
+  };
+}
+
+/** parseInt wrapper suitable as a `parser` argument. */
+export const parseIntRadix10 = (v: string): number => parseInt(v, 10);

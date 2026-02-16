@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
 import type { DmpFile, DmpShot, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
@@ -1251,7 +1251,7 @@ export default function DmpNewImportDialog({
       if (currentSuggestion.targetType === 'existing' && currentSuggestion.existingSectionId != null) {
         // Fetch segment geometry for the existing target section
         try {
-          const result = await invoke<SegmentGeometry>('get_segment_geometry', { sectionId: currentSuggestion.existingSectionId });
+          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: currentSuggestion.existingSectionId }, { purpose: 'fetch segment geometry for target section' });
           if (cancelled) return;
 
           for (const s of result.sections) {
@@ -1294,7 +1294,7 @@ export default function DmpNewImportDialog({
           coveredExistingSectionIds.add(anchor.existingSectionId);
 
           try {
-            const result = await invoke<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId });
+            const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for anchor section' });
             if (cancelled) return;
 
             const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
@@ -1337,7 +1337,7 @@ export default function DmpNewImportDialog({
         coveredExistingSectionIds.add(anchor.existingSectionId);
 
         try {
-          const result = await invoke<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId });
+          const result = await invokeIpc<SegmentGeometry>('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for import-side anchor' });
           if (cancelled) return;
 
           const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
@@ -1812,12 +1812,12 @@ export default function DmpNewImportDialog({
       if (configs.length > 0) {
         const oldSectionCount = useProjectStore.getState().project?.sections.length ?? 0;
 
-        const result = await invoke<CommandResult>('import_sections', {
+        const result = await invokeIpc<CommandResult>('import_sections', {
           sections: configs,
           fileHash: selectionConfig.fileHash ?? null,
           sectionHashes: selectionConfig.sectionHashes ?? null,
           existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
-        });
+        }, { purpose: 'import reachable sections (early import)' });
 
         if (!result.success) {
           setError(result.error ?? 'Import failed');
@@ -1961,9 +1961,10 @@ export default function DmpNewImportDialog({
       }
 
       try {
-        const suggestions = await invoke<CrossSectionSuggestion[]>(
+        const suggestions = await invokeIpc<CrossSectionSuggestion[]>(
           'suggest_all_import_placements',
           { importSections: remainingSections },
+          { purpose: 'suggest import placements for remaining sections' },
         );
 
         suggestionPoolRef.current = suggestions;
@@ -2038,12 +2039,12 @@ export default function DmpNewImportDialog({
         if (segmentConfigs.length > 0) {
           const oldSectionCount = useProjectStore.getState().project?.sections.length ?? 0;
 
-          const result = await invoke<CommandResult>('import_sections', {
+          const result = await invokeIpc<CommandResult>('import_sections', {
             sections: segmentConfigs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: null,
-          });
+          }, { purpose: 'import segment sections' });
 
           if (result.success) {
             if (result.section_ids.length > 0) {
@@ -2113,12 +2114,12 @@ export default function DmpNewImportDialog({
         ));
 
         if (configs.length > 0) {
-          const result = await invoke<CommandResult>('import_sections', {
+          const result = await invokeIpc<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: null,  // Already sent in early import
-          });
+          }, { purpose: 'import remaining sections (late import)' });
 
           if (!result.success) {
             setError(result.error ?? 'Late import failed');

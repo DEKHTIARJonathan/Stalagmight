@@ -4,6 +4,7 @@ import { Button } from '../common/Button';
 import { Panel } from '../common/Panel';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { extractFilename } from '../../utils/path';
 import { defaultConfig } from '../../types/config';
 import { formatLength, formatDepthRange } from '../../utils/formatStats';
 import type { DmpFile } from '../../types/commands';
@@ -102,8 +103,7 @@ export default function DmpSelectionDialog({
 }: DmpSelectionDialogProps) {
   // Extract filename from path
   const fileName = useMemo(() => {
-    const parts = filePath.split(/[/\\]/);
-    return parts[parts.length - 1] ?? filePath;
+    return extractFilename(filePath);
   }, [filePath]);
 
   // Get config for unit conversion (fallback to defaults)

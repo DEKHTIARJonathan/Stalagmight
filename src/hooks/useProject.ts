@@ -3,6 +3,8 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
+import { getErrorMessage } from '../utils/ipc';
+import { extractFilename } from '../utils/path';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -154,7 +156,7 @@ export function useProject() {
       } catch (e) {
         openDialog('error', {
           title: 'Import Failed',
-          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+          message: getErrorMessage(e, 'Failed to parse DMP file'),
         });
       }
     } else {
@@ -166,7 +168,7 @@ export function useProject() {
         const dmpFile = await store.importDmp(selectedPath);
         if (dmpFile) {
           // Extract filename for default project name
-          const fileName = selectedPath.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+          const fileName = extractFilename(selectedPath, /\.dmp$/i) || 'Imported';
           openDialog('new-project-for-import', {
             dmpFile,
             filePath: selectedPath,
@@ -176,7 +178,7 @@ export function useProject() {
       } catch (e) {
         openDialog('error', {
           title: 'Import Failed',
-          message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+          message: getErrorMessage(e, 'Failed to parse DMP file'),
         });
       }
     }
@@ -217,7 +219,7 @@ export function useProject() {
           filePath: selectedPath,
         });
       } else {
-        const fileName = selectedPath.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+        const fileName = extractFilename(selectedPath, /\.tmlu?$/i) || 'Imported';
         openDialog('new-project-for-import', {
           tmlFile,
           filePath: selectedPath,
@@ -228,7 +230,7 @@ export function useProject() {
     } catch (e) {
       openDialog('error', {
         title: 'Import Failed',
-        message: e instanceof Error ? e.message : 'Failed to parse TML file',
+        message: getErrorMessage(e, 'Failed to parse TML file'),
       });
     }
   }, [store, openDialog]);
@@ -268,7 +270,7 @@ export function useProject() {
           filePath: selectedPath,
         });
       } else {
-        const fileName = selectedPath.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+        const fileName = extractFilename(selectedPath, /\.gpx$/i) || 'Imported';
         openDialog('new-project-for-import', {
           gpxFile,
           filePath: selectedPath,
@@ -279,7 +281,7 @@ export function useProject() {
     } catch (e) {
       openDialog('error', {
         title: 'Import Failed',
-        message: e instanceof Error ? e.message : 'Failed to parse GPX file',
+        message: getErrorMessage(e, 'Failed to parse GPX file'),
       });
     }
   }, [store, openDialog]);
