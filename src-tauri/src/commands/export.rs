@@ -1,24 +1,25 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
 use crate::export::{DepthPreset, DepthPresetColors, ExportImageOptions};
+use crate::models::Project;
 
-/// Export project data to CSV
-#[tauri::command]
-pub fn export_csv(state: State<AppState>, path: PathBuf) -> Result<(), String> {
-    export_csv_impl(state.inner(), path)
-}
-
-pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
+/// Generic helper that handles the shared export logic for all text-based formats.
+fn export_format_impl(
+    state: &AppState,
+    path: PathBuf,
+    format: &str,
+    export_fn: fn(&Project, &Path) -> Result<(), anyhow::Error>,
+) -> Result<(), String> {
     let project = state
         .get_project_state()
         .ok_or_else(|| {
             tracing::warn!(
                 path = ?path,
                 purpose = "export project for sharing",
-                format = "csv",
+                format = format,
                 "Export requested with no project open"
             );
             "No project open".to_string()
@@ -27,16 +28,16 @@ pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), Str
     tracing::info!(
         path = ?path,
         purpose = "export project for sharing",
-        format = "csv",
-        "Exporting project to CSV"
+        format = format,
+        "Exporting project to {}", format.to_uppercase()
     );
-    match crate::export::export_csv(&project, &path) {
+    match export_fn(&project, &path) {
         Ok(()) => {
             tracing::info!(
                 path = ?path,
                 purpose = "export project for sharing",
-                format = "csv",
-                "CSV export completed"
+                format = format,
+                "{} export completed", format.to_uppercase()
             );
             Ok(())
         }
@@ -44,13 +45,23 @@ pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), Str
             tracing::error!(
                 path = ?path,
                 purpose = "export project for sharing",
-                format = "csv",
+                format = format,
                 reason = %e,
-                "CSV export failed"
+                "{} export failed", format.to_uppercase()
             );
             Err(e.to_string())
         }
     }
+}
+
+/// Export project data to CSV
+#[tauri::command]
+pub fn export_csv(state: State<AppState>, path: PathBuf) -> Result<(), String> {
+    export_csv_impl(state.inner(), path)
+}
+
+pub(crate) fn export_csv_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
+    export_format_impl(state, path, "csv", crate::export::export_csv)
 }
 
 /// Export project data to JSON
@@ -60,45 +71,7 @@ pub fn export_json(state: State<AppState>, path: PathBuf) -> Result<(), String> 
 }
 
 pub(crate) fn export_json_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| {
-            tracing::warn!(
-                path = ?path,
-                purpose = "export project for sharing",
-                format = "json",
-                "Export requested with no project open"
-            );
-            "No project open".to_string()
-        })?;
-
-    tracing::info!(
-        path = ?path,
-        purpose = "export project for sharing",
-        format = "json",
-        "Exporting project to JSON"
-    );
-    match crate::export::export_json(&project, &path) {
-        Ok(()) => {
-            tracing::info!(
-                path = ?path,
-                purpose = "export project for sharing",
-                format = "json",
-                "JSON export completed"
-            );
-            Ok(())
-        }
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "export project for sharing",
-                format = "json",
-                reason = %e,
-                "JSON export failed"
-            );
-            Err(e.to_string())
-        }
-    }
+    export_format_impl(state, path, "json", crate::export::export_json)
 }
 
 /// Export project data to Ariane TML/TMLU
@@ -108,45 +81,7 @@ pub fn export_tml(state: State<AppState>, path: PathBuf) -> Result<(), String> {
 }
 
 pub(crate) fn export_tml_impl(state: &AppState, path: PathBuf) -> Result<(), String> {
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| {
-            tracing::warn!(
-                path = ?path,
-                purpose = "export project for sharing",
-                format = "tml",
-                "Export requested with no project open"
-            );
-            "No project open".to_string()
-        })?;
-
-    tracing::info!(
-        path = ?path,
-        purpose = "export project for sharing",
-        format = "tml",
-        "Exporting project to TML"
-    );
-    match crate::export::export_tml(&project, &path) {
-        Ok(()) => {
-            tracing::info!(
-                path = ?path,
-                purpose = "export project for sharing",
-                format = "tml",
-                "TML export completed"
-            );
-            Ok(())
-        }
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "export project for sharing",
-                format = "tml",
-                reason = %e,
-                "TML export failed"
-            );
-            Err(e.to_string())
-        }
-    }
+    export_format_impl(state, path, "tml", crate::export::export_tml)
 }
 
 /// Export map image with progress events via shared loading-progress infrastructure.

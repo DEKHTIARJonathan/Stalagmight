@@ -60,3 +60,10 @@ const invokeNoTrace: InvokeIpc = <T>(command: string, args?: Record<string, unkn
  * Logs are compiled out in production unless VITE_IPC_TRACE is enabled.
  */
 export const invokeIpc: InvokeIpc = IPC_TRACE ? invokeWithTrace : invokeNoTrace;
+
+/** Extract error message from unknown catch value */
+export function getErrorMessage(e: unknown, fallback?: string): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'string') return e;
+  return fallback ?? String(e);
+}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { ClosureStrategy, StationRef } from '../../types/project';
@@ -36,7 +37,7 @@ export default function AdjustClosuresDialog() {
         setError(result.error ?? 'Failed to adjust closures');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to adjust closures');
+      setError(getErrorMessage(e, 'Failed to adjust closures'));
     } finally {
       setIsLoading(false);
     }

@@ -606,16 +606,7 @@ impl AppState {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
                             // Restore section offsets to pre-merge positions
-                            for (section_id, prev_offset) in previous_offsets {
-                                match prev_offset {
-                                    Some(offset) => {
-                                        project.section_offsets.insert(*section_id, *offset);
-                                    }
-                                    None => {
-                                        project.section_offsets.remove(section_id);
-                                    }
-                                }
-                            }
+                            project.restore_section_offsets(previous_offsets);
 
                             // Then unmerge the stations
                             project.unmerge_stations(*station_a, *station_b);
@@ -708,16 +699,7 @@ impl AppState {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
                             // Restore section offsets directly
-                            for (section_id, prev_offset) in previous_offsets {
-                                match prev_offset {
-                                    Some(offset) => {
-                                        project.section_offsets.insert(*section_id, *offset);
-                                    }
-                                    None => {
-                                        project.section_offsets.remove(section_id);
-                                    }
-                                }
-                            }
+                            project.restore_section_offsets(previous_offsets);
 
                             // Restore GPS datum state
                             if let Some(gps) = previous_gps {
@@ -756,16 +738,7 @@ impl AppState {
                 match self.project.lock() {
                     Ok(mut proj_guard) => match proj_guard.as_mut() {
                         Some(project) => {
-                            for (section_id, prev_offset) in previous_offsets {
-                                match prev_offset {
-                                    Some(offset) => {
-                                        project.section_offsets.insert(*section_id, *offset);
-                                    }
-                                    None => {
-                                        project.section_offsets.remove(section_id);
-                                    }
-                                }
-                            }
+                            project.restore_section_offsets(previous_offsets);
                             project.touch();
                             CommandResult::success()
                         }
@@ -1142,7 +1115,7 @@ impl AppState {
         }
 
         tracing::info!(section_id = original_id, "Section restored");
-        CommandResult::success_with_section_id(original_id)
+        CommandResult::success().with_section_id(original_id)
     }
 
     /// Restore a deleted shot at its original position with its original ID

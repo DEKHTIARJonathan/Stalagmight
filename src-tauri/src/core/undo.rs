@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -16,9 +16,9 @@ const DEFAULT_UNDO_HISTORY_LIMIT: usize = 100;
 #[expect(clippy::struct_field_names)]
 pub struct UndoStack {
     /// Commands that can be undone
-    undo_stack: Vec<UndoEntry>,
+    undo_stack: VecDeque<UndoEntry>,
     /// Commands that can be redone
-    redo_stack: Vec<UndoEntry>,
+    redo_stack: VecDeque<UndoEntry>,
     /// Maximum entries to keep in memory
     history_limit: usize,
 }
@@ -197,8 +197,8 @@ impl UndoData {
 impl Default for UndoStack {
     fn default() -> Self {
         Self {
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
             history_limit: DEFAULT_UNDO_HISTORY_LIMIT,
         }
     }
@@ -213,8 +213,8 @@ impl UndoStack {
     /// Create a new empty undo stack with custom limit
     pub fn new_with_limit(history_limit: usize) -> Self {
         Self {
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
             history_limit,
         }
     }
@@ -229,7 +229,7 @@ impl UndoStack {
         self.history_limit = limit;
         // Trim stack if needed
         while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
     }
 
@@ -241,14 +241,14 @@ impl UndoStack {
             timestamp: Some(Utc::now()),
         };
 
-        self.undo_stack.push(entry);
+        self.undo_stack.push_back(entry);
 
         // Clear redo stack when new command is executed
         self.redo_stack.clear();
 
         // Limit stack size
         while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
     }
 
@@ -259,22 +259,22 @@ impl UndoStack {
 
     /// Pop from undo stack and return the entry
     pub fn pop_undo(&mut self) -> Option<UndoEntry> {
-        self.undo_stack.pop()
+        self.undo_stack.pop_back()
     }
 
     /// Push to redo stack
     pub fn push_redo(&mut self, entry: UndoEntry) {
-        self.redo_stack.push(entry);
+        self.redo_stack.push_back(entry);
     }
 
     /// Pop from redo stack
     pub fn pop_redo(&mut self) -> Option<UndoEntry> {
-        self.redo_stack.pop()
+        self.redo_stack.pop_back()
     }
 
     /// Push back to undo stack (for redo operations)
     pub fn push_undo(&mut self, entry: UndoEntry) {
-        self.undo_stack.push(entry);
+        self.undo_stack.push_back(entry);
         // Don't clear redo stack when pushing for redo
     }
 
@@ -296,17 +296,17 @@ impl UndoStack {
 
     /// Get the last command that can be undone
     pub fn peek_undo(&self) -> Option<&Command> {
-        self.undo_stack.last().map(|e| &e.command)
+        self.undo_stack.back().map(|e| &e.command)
     }
 
     /// Get the last command that can be redone
     pub fn peek_redo(&self) -> Option<&Command> {
-        self.redo_stack.last().map(|e| &e.command)
+        self.redo_stack.back().map(|e| &e.command)
     }
 
     /// Get the undo data for the last undoable command
     pub fn peek_undo_data(&self) -> Option<&UndoData> {
-        self.undo_stack.last().map(|e| &e.undo_data)
+        self.undo_stack.back().map(|e| &e.undo_data)
     }
 
     /// Get undo entries to persist (last N entries up to persist_limit)
@@ -381,13 +381,13 @@ impl UndoStack {
 
         for (command_json, undo_data_json) in entries {
             if let Some(entry) = Self::deserialize_entry(&command_json, &undo_data_json) {
-                self.undo_stack.push(entry);
+                self.undo_stack.push_back(entry);
             }
         }
 
         // Trim to history limit
         while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
     }
 
@@ -406,7 +406,7 @@ impl UndoStack {
                 &undo_data_json,
                 timestamp_str.as_deref(),
             ) {
-                self.undo_stack.push(entry);
+                self.undo_stack.push_back(entry);
             }
         }
 
@@ -416,16 +416,16 @@ impl UndoStack {
                 &undo_data_json,
                 timestamp_str.as_deref(),
             ) {
-                self.redo_stack.push(entry);
+                self.redo_stack.push_back(entry);
             }
         }
 
         // Trim to history limit
         while self.undo_stack.len() > self.history_limit {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
         while self.redo_stack.len() > self.history_limit {
-            self.redo_stack.remove(0);
+            self.redo_stack.pop_front();
         }
     }
 

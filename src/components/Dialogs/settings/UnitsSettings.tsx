@@ -5,7 +5,7 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createSelectHandler, parseIntRadix10 } from './types';
 import { defaultConfig, type LengthUnit, type AngleUnit, type DecimalPrecision } from '../../../types/config';
 
 const precisionFields: Array<{ key: keyof DecimalPrecision; i18nKey: string }> = [
@@ -44,35 +44,15 @@ export function UnitsSettings({
     }
   }, [config.units, onValidationError]);
 
-  const handleLengthChange = (value: string) => {
-    onChange({
-      units: {
-        ...config.units,
-        length: value as LengthUnit,
-      },
-    });
-  };
-
-  const handleDepthChange = (value: string) => {
-    onChange({
-      units: {
-        ...config.units,
-        depth: value as LengthUnit,
-      },
-    });
-  };
-
-  const handleAngleChange = (value: string) => {
-    onChange({
-      units: {
-        ...config.units,
-        angle: value as AngleUnit,
-      },
-    });
-  };
+  const handleLengthChange = createSelectHandler(onChange,
+    (v) => ({ units: { ...config.units, length: v as LengthUnit } }));
+  const handleDepthChange = createSelectHandler(onChange,
+    (v) => ({ units: { ...config.units, depth: v as LengthUnit } }));
+  const handleAngleChange = createSelectHandler(onChange,
+    (v) => ({ units: { ...config.units, angle: v as AngleUnit } }));
 
   const handlePrecisionChange = (field: keyof DecimalPrecision, value: string) => {
-    const num = parseInt(value, 10);
+    const num = parseIntRadix10(value);
     if (!isNaN(num)) {
       onChange({
         units: {

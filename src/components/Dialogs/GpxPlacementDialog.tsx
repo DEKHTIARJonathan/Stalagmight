@@ -1,14 +1,11 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
-
-const SECTION_COLORS = [
-  '#4A90D9', '#D94A4A', '#4AD94A', '#D9D94A', '#D94AD9',
-  '#4AD9D9', '#D9904A', '#904AD9', '#4A90FF', '#FF4A90',
-];
+import { SECTION_COLORS } from '../../utils/colors';
 
 /**
  * Step 2 dialog for GPX import.
@@ -152,7 +149,7 @@ export default function GpxPlacementDialog() {
       setIsImporting(false);
       openDialog('error', {
         title: 'Import Failed',
-        message: e instanceof Error ? e.message : 'Failed to import GPX file',
+        message: getErrorMessage(e, 'Failed to import GPX file'),
       });
     }
   };

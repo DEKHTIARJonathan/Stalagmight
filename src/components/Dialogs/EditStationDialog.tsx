@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
@@ -130,7 +131,7 @@ export default function EditStationDialog() {
 
       closeDialog();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'An error occurred');
+      setError(getErrorMessage(e, 'An error occurred'));
     } finally {
       setIsLoading(false);
     }

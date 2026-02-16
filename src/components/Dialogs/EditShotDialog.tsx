@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -113,7 +114,7 @@ export default function EditShotDialog() {
         setError(result.error ?? 'Failed to update shot');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update shot');
+      setError(getErrorMessage(e, 'Failed to update shot'));
     } finally {
       setIsLoading(false);
     }
