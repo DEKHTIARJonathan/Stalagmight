@@ -13,6 +13,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import type { DmpFile } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
+import { SECTION_COLORS } from '../../utils/colors';
 
 export interface ZeroDatumConfigResult {
   sectionIndex: number;
@@ -28,11 +29,6 @@ export interface ZeroDatumConfigResult {
   };
   shots: EditableShot[];
 }
-
-const SECTION_COLORS = [
-  '#4ecdc4', '#ff6b6b', '#95a5a6', '#3498db',
-  '#9b59b6', '#1abc9c', '#e67e22', '#f39c12',
-];
 
 interface ZeroDatumConfigDialogProps {
   dmpFile: DmpFile;

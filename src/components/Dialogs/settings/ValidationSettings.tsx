@@ -4,7 +4,7 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createNumericHandler } from './types';
 import { defaultConfig } from '../../../types/config';
 
 /**
@@ -55,65 +55,16 @@ export function ValidationSettings({
     }
   }, [config.validation, onValidationError, t]);
 
-  const handleShotLengthMinChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        validation: {
-          ...config.validation,
-          warn_shot_length_min: num,
-        },
-      });
-    }
-  };
-
-  const handleShotLengthMaxChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        validation: {
-          ...config.validation,
-          warn_shot_length_max: num,
-        },
-      });
-    }
-  };
-
-  const handleDepthChangeMaxChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        validation: {
-          ...config.validation,
-          warn_depth_change_per_shot_max: num,
-        },
-      });
-    }
-  };
-
-  const handleAzimuthDiffChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        validation: {
-          ...config.validation,
-          azimuth_diff_threshold: num,
-        },
-      });
-    }
-  };
-
-  const handlePitchDiffChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        validation: {
-          ...config.validation,
-          pitch_diff_threshold: num,
-        },
-      });
-    }
-  };
+  const handleShotLengthMinChange = createNumericHandler(onChange,
+    (n) => ({ validation: { ...config.validation, warn_shot_length_min: n } }));
+  const handleShotLengthMaxChange = createNumericHandler(onChange,
+    (n) => ({ validation: { ...config.validation, warn_shot_length_max: n } }));
+  const handleDepthChangeMaxChange = createNumericHandler(onChange,
+    (n) => ({ validation: { ...config.validation, warn_depth_change_per_shot_max: n } }));
+  const handleAzimuthDiffChange = createNumericHandler(onChange,
+    (n) => ({ validation: { ...config.validation, azimuth_diff_threshold: n } }));
+  const handlePitchDiffChange = createNumericHandler(onChange,
+    (n) => ({ validation: { ...config.validation, pitch_diff_threshold: n } }));
 
   return (
     <div

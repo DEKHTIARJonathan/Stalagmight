@@ -5,6 +5,8 @@ import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
+import { getErrorMessage } from '../utils/ipc';
+import { extractFilename } from '../utils/path';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -580,7 +582,7 @@ export function useKeyboardShortcuts() {
             } catch (e) {
               openDialog('error', {
                 title: 'Open Failed',
-                message: e instanceof Error ? e.message : 'Failed to open project',
+                message: getErrorMessage(e, 'Failed to open project'),
               });
             }
           })();
@@ -630,7 +632,7 @@ export function useKeyboardShortcuts() {
               } catch (e) {
                 openDialog('error', {
                   title: 'Save Failed',
-                  message: e instanceof Error ? e.message : 'Failed to save project',
+                  message: getErrorMessage(e, 'Failed to save project'),
                 });
               }
             })();
@@ -663,7 +665,7 @@ export function useKeyboardShortcuts() {
                 if (currentProject) {
                   openDialog('gpx-selection', { gpxFile, filePath: selected });
                 } else {
-                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+                  const fileName = extractFilename(selected, /\.gpx$/i) || 'Imported';
                   openDialog('new-project-for-import', {
                     gpxFile,
                     filePath: selected,
@@ -682,7 +684,7 @@ export function useKeyboardShortcuts() {
                 } else {
                   const tmlFile = await parseTml(selected);
                   if (tmlFile) {
-                    const fileName = selected.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+                    const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
                     openDialog('new-project-for-import', {
                       tmlFile,
                       filePath: selected,
@@ -705,7 +707,7 @@ export function useKeyboardShortcuts() {
                   });
                 } else {
                   setImportContext('new-project');
-                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+                  const fileName = extractFilename(selected, /\.dmp$/i) || 'Imported';
                   openDialog('new-project-for-import', {
                     dmpFile,
                     filePath: selected,
@@ -716,7 +718,7 @@ export function useKeyboardShortcuts() {
             } catch (e) {
               openDialog('error', {
                 title: 'Import Failed',
-                message: e instanceof Error ? e.message : 'Failed to import file',
+                message: getErrorMessage(e, 'Failed to import file'),
               });
             }
           })();

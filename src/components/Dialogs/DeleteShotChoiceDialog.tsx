@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
@@ -24,14 +24,14 @@ export default function DeleteShotChoiceDialog() {
 
   useEffect(() => {
     if (sectionId !== undefined && shotId !== undefined) {
-      invoke<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId })
+      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion' })
         .then((result) => {
           setImpact(result);
           setImpactError(null);
         })
         .catch((e) => {
           setImpact(null);
-          setImpactError(e instanceof Error ? e.message : 'Failed to load shot impacts');
+          setImpactError(getErrorMessage(e, 'Failed to load shot impacts'));
         });
     } else {
       setImpact(null);
@@ -61,7 +61,7 @@ export default function DeleteShotChoiceDialog() {
         setError(result.error ?? 'Failed to delete shot');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete shot');
+      setError(getErrorMessage(e, 'Failed to delete shot'));
     } finally {
       setIsLoading(false);
     }

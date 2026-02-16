@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
@@ -47,7 +47,7 @@ export default function ConfirmDialog() {
   // Fetch relationships when dialog opens for any deletion that removes a section
   useEffect(() => {
     if (removesSection && sectionId !== undefined) {
-      invoke<SectionRelationships>('get_section_relationships', { sectionId })
+      invokeIpc<SectionRelationships>('get_section_relationships', { sectionId }, { purpose: 'fetch section relationships for deletion' })
         .then(setRelationships)
         .catch(() => setRelationships(null));
     } else {
@@ -58,14 +58,14 @@ export default function ConfirmDialog() {
   // Fetch delete impact for shot deletions (edge shots)
   useEffect(() => {
     if (type === 'shot' && !removesSection && !splitRequired && sectionId !== undefined && shotId !== undefined) {
-      invoke<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId })
+      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId }, { purpose: 'preview shot deletion impact' })
         .then((result) => {
           setShotImpact(result);
           setShotImpactError(null);
         })
         .catch((e) => {
           setShotImpact(null);
-          setShotImpactError(e instanceof Error ? e.message : 'Failed to load shot impacts');
+          setShotImpactError(getErrorMessage(e, 'Failed to load shot impacts'));
         });
     } else {
       setShotImpact(null);

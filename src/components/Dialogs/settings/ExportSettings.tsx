@@ -6,7 +6,7 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { defaultConfig } from '../../../types/config';
 
 /**
@@ -54,53 +54,16 @@ export function ExportSettings({
     { value: '600', label: t('settings.export.dpi.options.highQuality') },
   ], [t]);
 
-  const handleFormatChange = (value: string) => {
-    onChange({
-      export: {
-        ...config.export,
-        default_image_format: value,
-      },
-    });
-  };
-
-  const handleDpiChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        export: {
-          ...config.export,
-          default_dpi: num,
-        },
-      });
-    }
-  };
-
-  const handleIncludeSatelliteChange = (checked: boolean) => {
-    onChange({
-      export: {
-        ...config.export,
-        default_include_satellite: checked,
-      },
-    });
-  };
-
-  const handleIncludeGridChange = (checked: boolean) => {
-    onChange({
-      export: {
-        ...config.export,
-        default_include_grid: checked,
-      },
-    });
-  };
-
-  const handleIncludeLabelsChange = (checked: boolean) => {
-    onChange({
-      export: {
-        ...config.export,
-        default_include_labels: checked,
-      },
-    });
-  };
+  const handleFormatChange = createSelectHandler(onChange,
+    (v) => ({ export: { ...config.export, default_image_format: v } }));
+  const handleDpiChange = createNumericHandler(onChange,
+    (n) => ({ export: { ...config.export, default_dpi: n } }), parseIntRadix10);
+  const handleIncludeSatelliteChange = createToggleHandler(onChange,
+    (v) => ({ export: { ...config.export, default_include_satellite: v } }));
+  const handleIncludeGridChange = createToggleHandler(onChange,
+    (v) => ({ export: { ...config.export, default_include_grid: v } }));
+  const handleIncludeLabelsChange = createToggleHandler(onChange,
+    (v) => ({ export: { ...config.export, default_include_labels: v } }));
 
   return (
     <div

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { DmpFile, TmlFile, GpxFile } from '../../types/commands';
@@ -63,7 +64,7 @@ export default function NewProjectForImportDialog() {
         setError(result.error ?? 'Failed to create project');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'An error occurred');
+      setError(getErrorMessage(e, 'An error occurred'));
     } finally {
       setIsCreating(false);
     }

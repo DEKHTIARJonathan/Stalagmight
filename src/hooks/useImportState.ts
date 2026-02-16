@@ -11,6 +11,7 @@ import {
   hasPitchDiscrepancy,
 } from '../utils/validation';
 import type { ValidationConfig } from '../types/config';
+import { SECTION_COLORS } from '../utils/colors';
 
 /**
  * Configuration from Step 1 (DmpSelectionDialog).
@@ -107,20 +108,6 @@ type ImportAction =
   | { type: 'REDO' }
   | { type: 'RESET_SECTION' }
   | { type: 'RESTORE_STATE'; sectionConfigs: Map<number, SectionConfig>; placedSections: Set<number>; excludedSections: Set<number>; currentSectionIndex: number };
-
-/**
- * Default section colors for import.
- */
-const SECTION_COLORS = [
-  '#4ecdc4',
-  '#ff6b6b',
-  '#95a5a6',
-  '#3498db',
-  '#9b59b6',
-  '#1abc9c',
-  '#e67e22',
-  '#f39c12',
-];
 
 const MAX_UNDO_HISTORY = 50;
 

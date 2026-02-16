@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { getErrorMessage } from '../../utils/ipc';
+import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile } from '../../types/commands';
@@ -45,7 +47,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
   }, []);
 
   const fileName = useMemo(() => {
-    return filePath.split(/[/\\]/).pop() ?? filePath;
+    return extractFilename(filePath);
   }, [filePath]);
 
   const totalTrackPoints = useMemo(() => {
@@ -104,7 +106,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
       setIsImporting(false);
       openDialog('error', {
         title: 'Import Failed',
-        message: e instanceof Error ? e.message : 'Failed to import GPX file',
+        message: getErrorMessage(e, 'Failed to import GPX file'),
       });
     }
   };

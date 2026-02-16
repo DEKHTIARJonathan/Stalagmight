@@ -2,9 +2,10 @@ import { useEffect, useCallback, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
-import { invoke } from '@tauri-apps/api/core';
 import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
+import { invokeIpc, getErrorMessage } from './utils/ipc';
+import { extractFilename } from './utils/path';
 import { useBeforeUnload, useLoadingProgress, useTheme } from './hooks';
 import i18n from './i18n';
 import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
@@ -229,7 +230,7 @@ function App() {
       if (project) {
         if (project.file_path) {
           // Extract filename from path
-          const filename = project.file_path.split(/[/\\]/).pop() ?? project.file_path;
+          const filename = extractFilename(project.file_path);
           title = `Stalagmight - ${filename}`;
         } else {
           title = `Stalagmight - ${project.name} (unsaved)`;
@@ -267,7 +268,7 @@ function App() {
         if (currentProject) {
           openDialog('gpx-selection', { gpxFile, filePath });
         } else {
-          const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+          const fileName = extractFilename(filePath, /\.gpx$/i) || 'Imported';
           openDialog('new-project-for-import', {
             gpxFile,
             filePath,
@@ -278,7 +279,7 @@ function App() {
       } catch (e) {
         openDialog('error', {
           title: 'Import Failed',
-          message: e instanceof Error ? e.message : 'Failed to parse GPX file',
+          message: getErrorMessage(e, 'Failed to parse GPX file'),
         });
       }
     } else if (isTml) {
@@ -289,7 +290,7 @@ function App() {
         if (currentProject) {
           openDialog('tml-import', { tmlFile, filePath });
         } else {
-          const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+          const fileName = extractFilename(filePath, /\.tmlu?$/i) || 'Imported';
           openDialog('new-project-for-import', {
             tmlFile,
             filePath,
@@ -300,7 +301,7 @@ function App() {
       } catch (e) {
         openDialog('error', {
           title: 'Import Failed',
-          message: e instanceof Error ? e.message : 'Failed to parse TML file',
+          message: getErrorMessage(e, 'Failed to parse TML file'),
         });
       }
     } else {
@@ -316,7 +317,7 @@ function App() {
         } catch (e) {
           openDialog('error', {
             title: 'Import Failed',
-            message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+            message: getErrorMessage(e, 'Failed to parse DMP file'),
           });
         }
       } else {
@@ -325,7 +326,7 @@ function App() {
         try {
           const dmpFile = await importDmp(filePath);
           if (dmpFile) {
-            const fileName = filePath.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+            const fileName = extractFilename(filePath, /\.dmp$/i) || 'Imported';
             openDialog('new-project-for-import', {
               dmpFile,
               filePath,
@@ -335,7 +336,7 @@ function App() {
         } catch (e) {
           openDialog('error', {
             title: 'Import Failed',
-            message: e instanceof Error ? e.message : 'Failed to parse DMP file',
+            message: getErrorMessage(e, 'Failed to parse DMP file'),
           });
         }
       }
@@ -506,9 +507,10 @@ function App() {
           onComplete={async (newSectionIds?: number[]) => {
             if (newSectionIds?.length) {
               try {
-                const suggestions = await invoke<OrphanPlacementSuggestion[]>(
+                const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
                   'suggest_orphan_placements',
-                  { newlyImportedSectionIds: newSectionIds }
+                  { newlyImportedSectionIds: newSectionIds },
+                  { purpose: 'suggest orphan placements after DMP import' }
                 );
                 if (suggestions.length > 0) {
                   openDialog('orphan-placement', { suggestions });

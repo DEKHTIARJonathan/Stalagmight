@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
@@ -39,7 +40,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   }, []);
 
   const fileName = useMemo(() => {
-    return filePath.split(/[/\\]/).pop() ?? filePath;
+    return extractFilename(filePath);
   }, [filePath]);
 
   const stats = useMemo(() => {
@@ -92,9 +93,10 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       // Check for orphan placement opportunities
       if (result.section_ids.length > 0) {
         try {
-          const suggestions = await invoke<OrphanPlacementSuggestion[]>(
+          const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
             'suggest_orphan_placements',
-            { newlyImportedSectionIds: result.section_ids }
+            { newlyImportedSectionIds: result.section_ids },
+            { purpose: 'suggest orphan placements after TML import' }
           );
           if (suggestions.length > 0) {
             openDialog('orphan-placement', { suggestions });
@@ -112,7 +114,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       setIsImporting(false);
       openDialog('error', {
         title: 'Import Failed',
-        message: e instanceof Error ? e.message : 'Failed to import TML file',
+        message: getErrorMessage(e, 'Failed to import TML file'),
       });
     }
   }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, closeDialog, openDialog, setView, triggerFitToBounds]);

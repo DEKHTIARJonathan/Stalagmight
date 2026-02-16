@@ -12,7 +12,32 @@ use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
 use crate::TileFetchStats;
 
-use crate::core::UndoStack;
+use crate::core::{CommandResult, UndoStack};
+
+/// Trait for types that can represent project lock errors.
+/// Enables `with_project_mut` and `with_project` to work with different return types.
+pub(super) trait FromProjectLockError {
+    fn lock_failed() -> Self;
+    fn no_project() -> Self;
+}
+
+impl FromProjectLockError for CommandResult {
+    fn lock_failed() -> Self {
+        CommandResult::failure("Failed to lock project".to_string())
+    }
+    fn no_project() -> Self {
+        CommandResult::failure("No project open".to_string())
+    }
+}
+
+impl<T> FromProjectLockError for Result<T, String> {
+    fn lock_failed() -> Self {
+        Err("Failed to lock project".to_string())
+    }
+    fn no_project() -> Self {
+        Err("No project open".to_string())
+    }
+}
 
 /// Application state managed by Tauri
 pub struct AppState {
@@ -171,5 +196,162 @@ impl AppState {
             }
         }
         // No error if no active load - cancel_loading is idempotent
+    }
+
+    /// Lock the project mutex and pass a mutable reference to the callback.
+    /// Returns the callback's result, or an error if the lock fails or no project is open.
+    pub(super) fn with_project_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Project) -> R,
+        R: FromProjectLockError,
+    {
+        let Ok(mut guard) = self.project.lock() else {
+            return R::lock_failed();
+        };
+        let Some(project) = guard.as_mut() else {
+            return R::no_project();
+        };
+        f(project)
+    }
+
+    /// Lock the project mutex and pass an immutable reference to the callback.
+    /// Returns the callback's result, or an error if the lock fails or no project is open.
+    pub(super) fn with_project<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Project) -> R,
+        R: FromProjectLockError,
+    {
+        let Ok(guard) = self.project.lock() else {
+            return R::lock_failed();
+        };
+        let Some(project) = guard.as_ref() else {
+            return R::no_project();
+        };
+        f(project)
+    }
+
+    // === Snapshot helpers for snapshot-based undo ===
+
+    /// Capture a JSON snapshot of the current project for undo.
+    /// Returns the serialized JSON, or a `CommandResult` failure if unavailable.
+    pub(super) fn capture_project_snapshot(&self) -> Result<String, CommandResult> {
+        let Ok(guard) = self.project.lock() else {
+            return Err(CommandResult::failure("Failed to lock project".to_string()));
+        };
+        let Some(p) = guard.as_ref() else {
+            return Err(CommandResult::failure("No project open".to_string()));
+        };
+        serde_json::to_string(p)
+            .map_err(|e| CommandResult::failure(format!("Failed to serialize project: {e}")))
+    }
+
+    /// Rollback the project to a previously captured snapshot.
+    /// Handles poisoned mutex gracefully (recovery is more important than panic).
+    pub(super) fn rollback_project(&self, snapshot: &str) {
+        match serde_json::from_str::<Project>(snapshot) {
+            Ok(restored) => {
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        *proj = Some(restored);
+                        tracing::info!(
+                            purpose = "restore project after failed command",
+                            "Successfully rolled back to pre-mutation snapshot"
+                        );
+                    }
+                    Err(poisoned) => {
+                        let mut proj = poisoned.into_inner();
+                        *proj = Some(restored);
+                        tracing::warn!(
+                            purpose = "restore project after failed command",
+                            "Rolled back via poisoned mutex"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    purpose = "restore project after failed command",
+                    reason = %e,
+                    "Failed to deserialize snapshot for rollback"
+                );
+            }
+        }
+    }
+
+    /// Capture an "after" snapshot of the project, rolling back on failure.
+    /// Returns the serialized JSON, or rolls back and returns a `CommandResult` failure.
+    pub(super) fn capture_after_snapshot_or_rollback(
+        &self,
+        before_snapshot: &str,
+    ) -> Result<String, CommandResult> {
+        let mut proj_guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!(
+                    purpose = "finalize undo snapshot",
+                    "Project mutex poisoned during after-snapshot; recovering"
+                );
+                poisoned.into_inner()
+            }
+        };
+        let Some(p) = proj_guard.as_ref() else {
+            tracing::error!(
+                purpose = "restore project after mutation error",
+                "Project became None after mutation; rolling back"
+            );
+            match serde_json::from_str::<Project>(before_snapshot) {
+                Ok(restored) => *proj_guard = Some(restored),
+                Err(e) => tracing::error!(
+                    purpose = "restore project after mutation error",
+                    reason = %e,
+                    "Failed to deserialize snapshot for rollback"
+                ),
+            }
+            return Err(CommandResult::failure(
+                "No project for after snapshot".to_string(),
+            ));
+        };
+        match serde_json::to_string(p) {
+            Ok(json) => Ok(json),
+            Err(e) => {
+                tracing::error!(
+                    purpose = "finalize undo snapshot",
+                    reason = %e,
+                    "Failed to serialize after snapshot; rolling back"
+                );
+                match serde_json::from_str::<Project>(before_snapshot) {
+                    Ok(restored) => {
+                        *proj_guard = Some(restored);
+                        tracing::info!(
+                            purpose = "restore project after snapshot failure",
+                            "Successfully rolled back after serialization failure"
+                        );
+                    }
+                    Err(re) => tracing::error!(
+                        purpose = "restore project after snapshot failure",
+                        reason = %re,
+                        "Failed to deserialize snapshot for rollback"
+                    ),
+                }
+                Err(CommandResult::failure(format!(
+                    "Failed to serialize after snapshot: {e}"
+                )))
+            }
+        }
+    }
+
+    /// Push a snapshot-pair undo entry onto the undo stack.
+    pub(super) fn push_snapshot_undo(
+        &self,
+        cmd: crate::core::Command,
+        before: String,
+        after: String,
+    ) {
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            undo_stack.push_with_data(
+                cmd,
+                crate::core::UndoData::ProjectSnapshotPair { before, after },
+            );
+        }
     }
 }

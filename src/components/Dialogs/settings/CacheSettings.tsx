@@ -7,7 +7,7 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createNumericHandler, createToggleHandler, parseIntRadix10 } from './types';
 import type { CacheStats } from '../../../types/cache';
 import { defaultConfig } from '../../../types/config';
 import { formatFixed, formatNumber } from '../../../i18n/format';
@@ -144,14 +144,8 @@ export function CacheSettings({
     }
   };
 
-  const handleCacheEnabledChange = (checked: boolean) => {
-    onChange({
-      cache: {
-        ...config.cache,
-        tile_cache_enabled: checked,
-      },
-    });
-  };
+  const handleCacheEnabledChange = createToggleHandler(onChange,
+    (v) => ({ cache: { ...config.cache, tile_cache_enabled: v } }));
 
   const handleMaxSizeInputChange = (value: string) => {
     setMaxSizeInput(value);
@@ -186,17 +180,8 @@ export function CacheSettings({
     });
   };
 
-  const handleTtlChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        cache: {
-          ...config.cache,
-          tile_ttl_days: num,
-        },
-      });
-    }
-  };
+  const handleTtlChange = createNumericHandler(onChange,
+    (n) => ({ cache: { ...config.cache, tile_ttl_days: n } }), parseIntRadix10);
 
   return (
     <div

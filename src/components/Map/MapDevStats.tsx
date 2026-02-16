@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../../utils/ipc';
 import maplibregl from 'maplibre-gl';
 import { getTileFetchStats, type TileFetchStats } from '../../utils/tileProtocol';
 import { formatFixed, formatNumber } from '../../i18n/format';
@@ -369,7 +369,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const stats = await invoke<CacheStats>('get_cache_stats');
+        const stats = await invokeIpc<CacheStats>('get_cache_stats', undefined, { purpose: 'fetch tile cache stats' });
         setCacheStats(stats);
       } catch (e) {
         console.debug('[MapDevStats] Failed to fetch cache stats:', e);
@@ -389,7 +389,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
   useEffect(() => {
     const fetchNetworkStatus = async () => {
       try {
-        const status = await invoke<boolean>('get_network_status');
+        const status = await invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status for dev stats' });
         setNetworkStatus(status);
       } catch (e) {
         console.debug('[MapDevStats] Failed to fetch network status:', e);

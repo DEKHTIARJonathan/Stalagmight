@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 
@@ -97,11 +97,11 @@ export default function DebugDialog() {
 
   const fetchLogs = useCallback(async () => {
     try {
-      const result = await invoke<string[]>('get_recent_logs');
+      const result = await invokeIpc<string[]>('get_recent_logs', undefined, { purpose: 'fetch recent debug logs' });
       setLogs(result);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(getErrorMessage(e));
     }
   }, []);
 

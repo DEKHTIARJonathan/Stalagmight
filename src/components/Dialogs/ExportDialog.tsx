@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { invokeIpc } from '../../utils/ipc';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -78,9 +78,9 @@ export default function ExportDialog() {
     let active = true;
 
     if (imageOptions.color_mode === 'depth') {
-      invoke<DepthPresetColors>('get_depth_preset_colors', {
+      invokeIpc<DepthPresetColors>('get_depth_preset_colors', {
         preset: imageOptions.depth_preset,
-      })
+      }, { purpose: 'fetch depth preset colors' })
         .then((colors) => {
           if (active) {
             setPresetColors(colors);

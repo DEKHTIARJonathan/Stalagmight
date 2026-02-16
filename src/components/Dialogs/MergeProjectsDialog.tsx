@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { ProjectMetadata } from '../../types/project';
@@ -108,7 +109,7 @@ export default function MergeProjectsDialog() {
         setError(result.error ?? 'Failed to merge projects');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to merge projects');
+      setError(getErrorMessage(e, 'Failed to merge projects'));
     } finally {
       setIsLoading(false);
     }

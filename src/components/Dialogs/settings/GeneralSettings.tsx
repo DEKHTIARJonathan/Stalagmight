@@ -6,7 +6,7 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { defaultConfig } from '../../../types/config';
 import type { ShortcutFeedback } from '../../../types/config';
 
@@ -63,107 +63,37 @@ export function GeneralSettings({
     }
   }, [config.general, onValidationError, t]);
 
-  const handleAutoSaveToggle = (checked: boolean) => {
-    onChange({
-      general: {
-        ...config.general,
-        auto_save: checked,
-      },
-    });
-  };
+  // --- Saving settings ---
+  const handleAutoSaveToggle = createToggleHandler(onChange,
+    (v) => ({ general: { ...config.general, auto_save: v } }));
+  const handleAutoSaveIntervalChange = createNumericHandler(onChange,
+    (n) => ({ general: { ...config.general, auto_save_interval_seconds: n } }), parseIntRadix10);
 
-  const handleAutoSaveIntervalChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        general: {
-          ...config.general,
-          auto_save_interval_seconds: num,
-        },
-      });
-    }
-  };
+  // --- Recent projects ---
+  const handleRecentProjectsChange = createNumericHandler(onChange,
+    (n) => ({ general: { ...config.general, recent_projects_max: n } }), parseIntRadix10);
 
-  const handleRecentProjectsChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        general: {
-          ...config.general,
-          recent_projects_max: num,
-        },
-      });
-    }
-  };
+  // --- Undo history ---
+  const handleUndoHistoryChange = createNumericHandler(onChange,
+    (n) => ({ general: { ...config.general, undo_history_limit: n } }), parseIntRadix10);
+  const handleUndoPersistChange = createNumericHandler(onChange,
+    (n) => ({ general: { ...config.general, undo_persist_limit: n } }), parseIntRadix10);
 
-  const handleUndoHistoryChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        general: {
-          ...config.general,
-          undo_history_limit: num,
-        },
-      });
-    }
-  };
+  // --- Startup ---
+  const handleSplashScreenToggle = createToggleHandler(onChange,
+    (v) => ({ general: { ...config.general, splash_screen: v } }));
 
-  const handleUndoPersistChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        general: {
-          ...config.general,
-          undo_persist_limit: num,
-        },
-      });
-    }
-  };
+  // --- Feedback ---
+  const handleShortcutFeedbackChange = createSelectHandler(onChange,
+    (v) => ({ general: { ...config.general, shortcut_feedback: v as ShortcutFeedback } }));
 
-  const handleSplashScreenToggle = (checked: boolean) => {
-    onChange({
-      general: {
-        ...config.general,
-        splash_screen: checked,
-      },
-    });
-  };
-
-  const handleShortcutFeedbackChange = (value: string) => {
-    onChange({
-      general: {
-        ...config.general,
-        shortcut_feedback: value as ShortcutFeedback,
-      },
-    });
-  };
-
-  const handleLocaleChange = (value: string) => {
-    onChange({
-      general: {
-        ...config.general,
-        locale: value,
-      },
-    });
-  };
-
-  const handleNumberFormatChange = (value: string) => {
-    onChange({
-      general: {
-        ...config.general,
-        number_format: value,
-      },
-    });
-  };
-
-  const handleDateFormatChange = (value: string) => {
-    onChange({
-      general: {
-        ...config.general,
-        date_format: value,
-      },
-    });
-  };
+  // --- Language / format ---
+  const handleLocaleChange = createSelectHandler(onChange,
+    (v) => ({ general: { ...config.general, locale: v } }));
+  const handleNumberFormatChange = createSelectHandler(onChange,
+    (v) => ({ general: { ...config.general, number_format: v } }));
+  const handleDateFormatChange = createSelectHandler(onChange,
+    (v) => ({ general: { ...config.general, date_format: v } }));
 
   return (
     <div

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getThemeColor } from '../../utils/themeColors';
@@ -155,14 +155,14 @@ export default function EditSectionDialog() {
 
   useEffect(() => {
     if (pendingMidDelete && sectionId !== undefined) {
-      invoke<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId: pendingMidDelete.shotId })
+      invokeIpc<DeleteShotImpact>('preview_delete_shot', { sectionId, shotId: pendingMidDelete.shotId }, { purpose: 'preview mid-shot deletion impact' })
         .then((result) => {
           setPendingImpact(result);
           setPendingImpactError(null);
         })
         .catch((e) => {
           setPendingImpact(null);
-          setPendingImpactError(e instanceof Error ? e.message : 'Failed to load shot impacts');
+          setPendingImpactError(getErrorMessage(e, 'Failed to load shot impacts'));
         });
     } else {
       setPendingImpact(null);
@@ -347,7 +347,7 @@ export default function EditSectionDialog() {
 
       closeDialog();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update section');
+      setError(getErrorMessage(e, 'Failed to update section'));
     } finally {
       setIsLoading(false);
     }
