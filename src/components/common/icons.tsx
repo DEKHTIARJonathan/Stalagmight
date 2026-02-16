@@ -34,6 +34,217 @@ function BaseIcon({
   );
 }
 
+function BaseIcon24({
+  size = 16,
+  title,
+  className,
+  children,
+  ...props
+}: IconProps & { children: ReactNode }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      role={title ? 'img' : 'presentation'}
+      aria-hidden={title ? undefined : true}
+      focusable="false"
+      {...props}
+    >
+      {title ? <title>{title}</title> : null}
+      {children}
+    </svg>
+  );
+}
+
+export function SelectToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M5 3L13 17L14 11L19 10Z" />
+      <rect x="15" y="15" width="6" height="6" strokeDasharray="2 1.5" fill="none" />
+    </BaseIcon24>
+  );
+}
+
+export function PanToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M8 13V6.5A1 1 0 0 1 10 6.5V12" />
+      <path d="M10 12V4.5A1 1 0 0 1 12 4.5V12" />
+      <path d="M12 12V5.5A1 1 0 0 1 14 5.5V12" />
+      <path d="M14 12V7.5A1 1 0 0 1 16 7.5V14" />
+      <path d="M8 13L6.5 15.5A4 4 0 0 0 10 20H14A4 4 0 0 0 18 16V14" />
+    </BaseIcon24>
+  );
+}
+
+export function ZoomToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <circle cx="10" cy="10" r="6" />
+      <line x1="14.5" y1="14.5" x2="20" y2="20" strokeWidth="2" />
+      <line x1="10" y1="7.5" x2="10" y2="12.5" />
+      <line x1="7.5" y1="10" x2="12.5" y2="10" />
+    </BaseIcon24>
+  );
+}
+
+export function DrawToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M4 20L5.5 14L14 5.5L18.5 10L10 18.5Z" />
+      <line x1="13" y1="6.5" x2="17.5" y2="11" />
+      <circle cx="4" cy="20" r="1.5" fill="currentColor" stroke="none" />
+    </BaseIcon24>
+  );
+}
+
+export function DeleteToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <line x1="4" y1="7" x2="20" y2="7" />
+      <path d="M8 7V5A1 1 0 0 1 9 4H15A1 1 0 0 1 16 4V7" />
+      <path d="M6 7L7 19A1 1 0 0 0 8 20H16A1 1 0 0 0 17 19L18 7" />
+      <line x1="10" y1="10" x2="10" y2="17" />
+      <line x1="14" y1="10" x2="14" y2="17" />
+    </BaseIcon24>
+  );
+}
+
+export function MergeToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <circle cx="4" cy="8" r="2.5" />
+      <circle cx="4" cy="8" r="0.8" fill="currentColor" stroke="none" />
+      <circle cx="4" cy="16" r="2.5" />
+      <circle cx="4" cy="16" r="0.8" fill="currentColor" stroke="none" />
+      <path d="M7 8L15 12" />
+      <path d="M7 16L15 12" />
+      <path d="M13 10L16 12L13 14" fill="none" />
+      <circle cx="19" cy="12" r="2.5" />
+      <circle cx="19" cy="12" r="0.8" fill="currentColor" stroke="none" />
+    </BaseIcon24>
+  );
+}
+
+export function MeasureToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <rect x="2" y="8" width="20" height="8" rx="1" />
+      <line x1="6" y1="8" x2="6" y2="11" />
+      <line x1="10" y1="8" x2="10" y2="12.5" />
+      <line x1="14" y1="8" x2="14" y2="11" />
+      <line x1="18" y1="8" x2="18" y2="12.5" />
+    </BaseIcon24>
+  );
+}
+
+export function CommentToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M5 4H19A1 1 0 0 1 20 5V15A1 1 0 0 1 19 16H10L6 20V16H5A1 1 0 0 1 4 15V5A1 1 0 0 1 5 4Z" />
+      <line x1="8" y1="8" x2="16" y2="8" />
+      <line x1="8" y1="12" x2="13" y2="12" />
+    </BaseIcon24>
+  );
+}
+
+export function MoveCommentToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M4 4H14A1 1 0 0 1 15 5V12A1 1 0 0 1 14 13H8L5 16V13H4A1 1 0 0 1 3 12V5A1 1 0 0 1 4 4Z" />
+      <line x1="6" y1="8" x2="12" y2="8" />
+      <line x1="17" y1="10" x2="21" y2="14" />
+      <path d="M18 14L21 14L21 11" fill="none" />
+    </BaseIcon24>
+  );
+}
+
+export function MoveStationToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M12 2L14 5H10L12 2Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M12 22L10 19H14L12 22Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M2 12L5 10V14L2 12Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M22 12L19 14V10L22 12Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <rect x="11" y="5" width="2" height="14" fill="currentColor" stroke="none" opacity="0.25" />
+      <rect x="5" y="11" width="14" height="2" fill="currentColor" stroke="none" opacity="0.25" />
+      <circle cx="12" cy="12" r="3" />
+      <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+    </BaseIcon24>
+  );
+}
+
+export function MoveShotToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M12 2L14 5H10L12 2Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M12 22L10 19H14L12 22Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M2 12L5 10V14L2 12Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M22 12L19 14V10L22 12Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <rect x="11" y="5" width="2" height="14" fill="currentColor" stroke="none" opacity="0.25" />
+      <rect x="5" y="11" width="14" height="2" fill="currentColor" stroke="none" opacity="0.25" />
+      <line x1="7" y1="17" x2="17" y2="7" />
+      <circle cx="7" cy="17" r="2" />
+      <circle cx="17" cy="7" r="2" />
+    </BaseIcon24>
+  );
+}
+
+export function MoveSegmentToolIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M12 2L14 5H10L12 2Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M12 22L10 19H14L12 22Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M2 12L5 10V14L2 12Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <path d="M22 12L19 14V10L22 12Z" fill="currentColor" stroke="none" opacity="0.55" />
+      <rect x="11" y="5" width="2" height="14" fill="currentColor" stroke="none" opacity="0.25" />
+      <rect x="5" y="11" width="14" height="2" fill="currentColor" stroke="none" opacity="0.25" />
+      <path d="M7 17L12 10L17 14L20 9" />
+      <path d="M12 10L9 7" />
+      <circle cx="7" cy="17" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="10" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="17" cy="14" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="20" cy="9" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="7" r="1.5" fill="currentColor" stroke="none" />
+    </BaseIcon24>
+  );
+}
+
+export function FitToViewIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <path d="M3 8V4A1 1 0 0 1 4 3H8" fill="none" />
+      <path d="M16 3H20A1 1 0 0 1 21 4V8" fill="none" />
+      <path d="M21 16V20A1 1 0 0 1 20 21H16" fill="none" />
+      <path d="M8 21H4A1 1 0 0 1 3 20V16" fill="none" />
+      <line x1="9" y1="9" x2="5" y2="5" />
+      <line x1="15" y1="9" x2="19" y2="5" />
+      <line x1="15" y1="15" x2="19" y2="19" />
+      <line x1="9" y1="15" x2="5" y2="19" />
+    </BaseIcon24>
+  );
+}
+
+export function CenterMapIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <circle cx="12" cy="12" r="8" />
+      <line x1="12" y1="2" x2="12" y2="7" />
+      <line x1="12" y1="17" x2="12" y2="22" />
+      <line x1="2" y1="12" x2="7" y2="12" />
+      <line x1="17" y1="12" x2="22" y2="12" />
+      <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+    </BaseIcon24>
+  );
+}
+
 export function ChevronDownIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
