@@ -206,109 +206,6 @@ impl CommandResult {
         }
     }
 
-    /// Create a success result with the saved file path
-    pub fn success_with_path(path: String) -> Self {
-        Self {
-            success: true,
-            warnings: Vec::new(),
-            error: None,
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: Some(path),
-        }
-    }
-
-    pub fn success_with_warnings(warnings: Vec<ValidationWarning>) -> Self {
-        Self {
-            success: true,
-            warnings,
-            error: None,
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: None,
-        }
-    }
-
-    /// Create a success result with the created section ID
-    pub fn success_with_section_id(section_id: u32) -> Self {
-        Self {
-            success: true,
-            warnings: Vec::new(),
-            error: None,
-            section_id: Some(section_id),
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: None,
-        }
-    }
-
-    /// Create a success result with the created section ID and warnings
-    pub fn success_with_section_id_and_warnings(section_id: u32, warnings: Vec<ValidationWarning>) -> Self {
-        Self {
-            success: true,
-            warnings,
-            error: None,
-            section_id: Some(section_id),
-            section_ids: Vec::new(),
-            shot_id: None,
-            saved_path: None,
-        }
-    }
-
-    /// Create a success result with multiple section IDs (for batch operations)
-    pub fn success_with_section_ids(section_ids: Vec<u32>) -> Self {
-        Self {
-            success: true,
-            warnings: Vec::new(),
-            error: None,
-            section_id: None,
-            section_ids,
-            shot_id: None,
-            saved_path: None,
-        }
-    }
-
-    /// Create a success result with multiple section IDs and warnings (for batch operations)
-    pub fn success_with_section_ids_and_warnings(section_ids: Vec<u32>, warnings: Vec<ValidationWarning>) -> Self {
-        Self {
-            success: true,
-            warnings,
-            error: None,
-            section_id: None,
-            section_ids,
-            shot_id: None,
-            saved_path: None,
-        }
-    }
-
-    /// Create a success result with the created shot ID
-    pub fn success_with_shot_id(shot_id: u32) -> Self {
-        Self {
-            success: true,
-            warnings: Vec::new(),
-            error: None,
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: Some(shot_id),
-            saved_path: None,
-        }
-    }
-
-    /// Create a success result with the created shot ID and warnings
-    pub fn success_with_shot_id_and_warnings(shot_id: u32, warnings: Vec<ValidationWarning>) -> Self {
-        Self {
-            success: true,
-            warnings,
-            error: None,
-            section_id: None,
-            section_ids: Vec::new(),
-            shot_id: Some(shot_id),
-            saved_path: None,
-        }
-    }
-
     pub fn failure(error: String) -> Self {
         Self {
             success: false,
@@ -319,6 +216,36 @@ impl CommandResult {
             shot_id: None,
             saved_path: None,
         }
+    }
+
+    /// Attach validation warnings to this result.
+    pub fn with_warnings(mut self, warnings: Vec<ValidationWarning>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+
+    /// Attach a created section ID to this result.
+    pub fn with_section_id(mut self, section_id: u32) -> Self {
+        self.section_id = Some(section_id);
+        self
+    }
+
+    /// Attach multiple section IDs to this result (for batch operations).
+    pub fn with_section_ids(mut self, section_ids: Vec<u32>) -> Self {
+        self.section_ids = section_ids;
+        self
+    }
+
+    /// Attach a created shot ID to this result.
+    pub fn with_shot_id(mut self, shot_id: u32) -> Self {
+        self.shot_id = Some(shot_id);
+        self
+    }
+
+    /// Attach the saved file path to this result.
+    pub fn with_path(mut self, path: String) -> Self {
+        self.saved_path = Some(path);
+        self
     }
 }
 
@@ -446,7 +373,7 @@ mod tests {
     use super::CommentHolder;
 
     #[test]
-    fn command_result_constructors_set_fields() {
+    fn command_result_builder_sets_fields() {
         let warning = ValidationWarning {
             code: "test".to_string(),
             message: "warn".to_string(),
@@ -462,55 +389,58 @@ mod tests {
         assert!(success.shot_id.is_none());
         assert!(success.saved_path.is_none());
 
-        let success_with_path = CommandResult::success_with_path("/tmp/test.stalx".to_string());
-        assert!(success_with_path.success);
-        assert_eq!(success_with_path.saved_path.as_deref(), Some("/tmp/test.stalx"));
+        let with_path = CommandResult::success().with_path("/tmp/test.stalx".to_string());
+        assert!(with_path.success);
+        assert_eq!(with_path.saved_path.as_deref(), Some("/tmp/test.stalx"));
 
-        let success_with_warnings = CommandResult::success_with_warnings(vec![warning.clone()]);
-        assert!(success_with_warnings.success);
-        assert_eq!(success_with_warnings.warnings.len(), 1);
-        assert!(success_with_warnings.error.is_none());
-        assert!(success_with_warnings.section_id.is_none());
-        assert!(success_with_warnings.section_ids.is_empty());
-        assert!(success_with_warnings.shot_id.is_none());
+        let with_warnings = CommandResult::success().with_warnings(vec![warning.clone()]);
+        assert!(with_warnings.success);
+        assert_eq!(with_warnings.warnings.len(), 1);
+        assert!(with_warnings.error.is_none());
+        assert!(with_warnings.section_id.is_none());
+        assert!(with_warnings.section_ids.is_empty());
+        assert!(with_warnings.shot_id.is_none());
 
-        let success_with_section = CommandResult::success_with_section_id(7);
-        assert!(success_with_section.success);
-        assert_eq!(success_with_section.section_id, Some(7));
-        assert!(success_with_section.section_ids.is_empty());
-        assert!(success_with_section.shot_id.is_none());
+        let with_section = CommandResult::success().with_section_id(7);
+        assert!(with_section.success);
+        assert_eq!(with_section.section_id, Some(7));
+        assert!(with_section.section_ids.is_empty());
+        assert!(with_section.shot_id.is_none());
 
-        let success_with_section_and_warnings =
-            CommandResult::success_with_section_id_and_warnings(8, vec![warning.clone()]);
-        assert!(success_with_section_and_warnings.success);
-        assert_eq!(success_with_section_and_warnings.section_id, Some(8));
-        assert_eq!(success_with_section_and_warnings.warnings.len(), 1);
-        assert!(success_with_section_and_warnings.shot_id.is_none());
+        let with_section_and_warnings = CommandResult::success()
+            .with_section_id(8)
+            .with_warnings(vec![warning.clone()]);
+        assert!(with_section_and_warnings.success);
+        assert_eq!(with_section_and_warnings.section_id, Some(8));
+        assert_eq!(with_section_and_warnings.warnings.len(), 1);
+        assert!(with_section_and_warnings.shot_id.is_none());
 
-        let success_with_sections = CommandResult::success_with_section_ids(vec![1, 2, 3]);
-        assert!(success_with_sections.success);
-        assert!(success_with_sections.section_id.is_none());
-        assert_eq!(success_with_sections.section_ids, vec![1, 2, 3]);
-        assert!(success_with_sections.shot_id.is_none());
+        let with_sections = CommandResult::success().with_section_ids(vec![1, 2, 3]);
+        assert!(with_sections.success);
+        assert!(with_sections.section_id.is_none());
+        assert_eq!(with_sections.section_ids, vec![1, 2, 3]);
+        assert!(with_sections.shot_id.is_none());
 
-        let success_with_sections_and_warnings =
-            CommandResult::success_with_section_ids_and_warnings(vec![4, 5], vec![warning.clone()]);
-        assert!(success_with_sections_and_warnings.success);
-        assert_eq!(success_with_sections_and_warnings.section_ids, vec![4, 5]);
-        assert_eq!(success_with_sections_and_warnings.warnings.len(), 1);
-        assert!(success_with_sections_and_warnings.shot_id.is_none());
+        let with_sections_and_warnings = CommandResult::success()
+            .with_section_ids(vec![4, 5])
+            .with_warnings(vec![warning.clone()]);
+        assert!(with_sections_and_warnings.success);
+        assert_eq!(with_sections_and_warnings.section_ids, vec![4, 5]);
+        assert_eq!(with_sections_and_warnings.warnings.len(), 1);
+        assert!(with_sections_and_warnings.shot_id.is_none());
 
-        let success_with_shot = CommandResult::success_with_shot_id(42);
-        assert!(success_with_shot.success);
-        assert_eq!(success_with_shot.shot_id, Some(42));
-        assert!(success_with_shot.section_id.is_none());
-        assert!(success_with_shot.section_ids.is_empty());
+        let with_shot = CommandResult::success().with_shot_id(42);
+        assert!(with_shot.success);
+        assert_eq!(with_shot.shot_id, Some(42));
+        assert!(with_shot.section_id.is_none());
+        assert!(with_shot.section_ids.is_empty());
 
-        let success_with_shot_and_warnings =
-            CommandResult::success_with_shot_id_and_warnings(99, vec![warning]);
-        assert!(success_with_shot_and_warnings.success);
-        assert_eq!(success_with_shot_and_warnings.shot_id, Some(99));
-        assert_eq!(success_with_shot_and_warnings.warnings.len(), 1);
+        let with_shot_and_warnings = CommandResult::success()
+            .with_shot_id(99)
+            .with_warnings(vec![warning]);
+        assert!(with_shot_and_warnings.success);
+        assert_eq!(with_shot_and_warnings.shot_id, Some(99));
+        assert_eq!(with_shot_and_warnings.warnings.len(), 1);
 
         let failure = CommandResult::failure("boom".to_string());
         assert!(!failure.success);

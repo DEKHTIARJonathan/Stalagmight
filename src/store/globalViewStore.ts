@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../utils/ipc';
 import type { SurveyGeometry } from '../types/survey';
 
 /**
@@ -123,9 +123,9 @@ export const useGlobalViewStore = create<GlobalViewStore>((set, get) => ({
     }));
 
     try {
-      const geometry = await invoke<SurveyGeometry>('get_survey_geometry_for_file', {
+      const geometry = await invokeIpc<SurveyGeometry>('get_survey_geometry_for_file', {
         path: filePath,
-      });
+      }, { purpose: 'load survey geometry for file' });
 
       // Check if generation changed while in flight (cache was cleared)
       if (get().generation !== startGeneration) {

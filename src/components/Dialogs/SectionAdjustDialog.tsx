@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { SectionId } from '../../types/project';
@@ -107,7 +108,7 @@ export default function SectionAdjustDialog() {
       }
       closeDialog();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to adjust section position');
+      setError(getErrorMessage(e, 'Failed to adjust section position'));
     } finally {
       setIsLoading(false);
     }

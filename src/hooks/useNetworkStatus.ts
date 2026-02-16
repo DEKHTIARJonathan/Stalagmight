@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../utils/ipc';
 
 // Number of consecutive failures before backing off
 const MAX_IPC_FAILURES = 3;
@@ -52,7 +52,7 @@ export function useNetworkStatus(pollInterval = 10000) {
     }
 
     try {
-      const online = await invoke<boolean>('get_network_status');
+      const online = await invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' });
       // Success - reset failure counter and clear backoff
       ipcFailureCountRef.current = 0;
       if (ipcBackedOffRef.current) {

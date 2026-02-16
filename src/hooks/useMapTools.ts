@@ -3,6 +3,7 @@ import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
+import { getErrorMessage } from '../utils/ipc';
 import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 
@@ -137,8 +138,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       } catch (e) {
         if (requestId !== connectivityRequestIdRef.current) return;
-        const message = e instanceof Error ? e.message : String(e);
-        showToast(message, 'merge-error');
+        showToast(getErrorMessage(e), 'merge-error');
         clearMergeStations();
       } finally {
         if (requestId === connectivityRequestIdRef.current) {

@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
@@ -59,7 +60,7 @@ export default function MergeDialog() {
         setError(result.error ?? 'Failed to merge stations');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to merge stations');
+      setError(getErrorMessage(e, 'Failed to merge stations'));
     } finally {
       setIsLoading(false);
     }

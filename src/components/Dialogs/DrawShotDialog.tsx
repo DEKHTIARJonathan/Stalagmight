@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData } from '../../types/project';
@@ -173,7 +174,7 @@ export default function DrawShotDialog() {
         setError(result.error ?? 'Failed to create shot');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create shot');
+      setError(getErrorMessage(e, 'Failed to create shot'));
     } finally {
       setIsLoading(false);
     }

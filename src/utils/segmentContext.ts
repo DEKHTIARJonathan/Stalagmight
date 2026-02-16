@@ -5,11 +5,8 @@
  */
 import type { DmpSection } from '../types/commands';
 import { type ContextSectionGeometry, computeStationsFromDmpShots } from '../components/Dialogs/SectionPreview';
-
-export const SECTION_COLORS = [
-  '#4ecdc4', '#ff6b6b', '#95a5a6', '#3498db',
-  '#9b59b6', '#1abc9c', '#e67e22', '#f39c12',
-];
+import { SECTION_COLORS } from './colors';
+export { SECTION_COLORS } from './colors';
 
 /** A virtual connection recorded by the user — no backend import yet. */
 export type VirtualConnection = {

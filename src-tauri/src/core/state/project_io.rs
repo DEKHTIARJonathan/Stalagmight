@@ -421,7 +421,7 @@ impl AppState {
             purpose = "persist edits safely",
             "Project saved successfully"
         );
-        CommandResult::success_with_path(save_path_str)
+        CommandResult::success().with_path(save_path_str)
     }
 
     pub(super) fn close_project(&self) -> CommandResult {

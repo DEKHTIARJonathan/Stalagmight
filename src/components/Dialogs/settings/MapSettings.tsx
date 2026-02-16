@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../../../utils/ipc';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import type { TileProviderInfo } from '../../../types/tile';
 import { defaultConfig } from '../../../types/config';
 
@@ -45,7 +45,7 @@ export function MapSettings({
   // Load providers from backend on mount
   const loadProviders = useCallback(async () => {
     try {
-      const providers = await invoke<TileProviderInfo[]>('get_tile_providers');
+      const providers = await invokeIpc<TileProviderInfo[]>('get_tile_providers', undefined, { purpose: 'load tile providers' });
       if (mountedRef.current) {
         const options: ProviderOption[] = providers.map((p) => ({
           value: p.name,
@@ -141,289 +141,71 @@ export function MapSettings({
     }
   }, [config.map, onValidationError, t]);
 
-  // Satellite settings
-  const handleProviderChange = (value: string) => {
-    onChange({
-      map: {
-        ...config.map,
-        satellite_provider: value,
-      },
-    });
-  };
+  // --- Satellite settings ---
+  const handleProviderChange = createSelectHandler(onChange,
+    (v) => ({ map: { ...config.map, satellite_provider: v } }));
+  const handleSatelliteEnabledChange = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, satellite_enabled: v } }));
+  const handleLatitudeChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, satellite_gps_origin: { ...config.map.satellite_gps_origin, latitude: n } } }));
+  const handleLongitudeChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, satellite_gps_origin: { ...config.map.satellite_gps_origin, longitude: n } } }));
 
-  const handleSatelliteEnabledChange = (checked: boolean) => {
-    onChange({
-      map: {
-        ...config.map,
-        satellite_enabled: checked,
-      },
-    });
-  };
+  // --- Zoom settings ---
+  const handleZoomDefaultChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, zoom_default: n } }), parseIntRadix10);
+  const handleZoomMinChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, zoom_min: n } }), parseIntRadix10);
+  const handleZoomMaxChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, zoom_max: n } }), parseIntRadix10);
+  const handleZoomStepChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, zoom_step: n } }));
 
-  const handleLatitudeChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          satellite_gps_origin: {
-            ...config.map.satellite_gps_origin,
-            latitude: num,
-          },
-        },
-      });
-    }
-  };
+  // --- Control settings ---
+  const handlePanSpeedChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, controls: { ...config.map.controls, pan_speed: n } } }));
+  const handleZoomSpeedChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, controls: { ...config.map.controls, zoom_speed: n } } }));
+  const handleInvertScrollChange = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, controls: { ...config.map.controls, invert_scroll: v } } }));
 
-  const handleLongitudeChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          satellite_gps_origin: {
-            ...config.map.satellite_gps_origin,
-            longitude: num,
-          },
-        },
-      });
-    }
-  };
+  // --- Station settings ---
+  const handleStationRadiusChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, station: { ...config.map.station, radius: n } } }));
+  const handleStationHitAreaChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, station: { ...config.map.station, hit_area: n } } }));
+  const handleStationHoverRadiusChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, station: { ...config.map.station, hover_radius: n } } }));
+  const handleStationSelectionRadiusChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, station: { ...config.map.station, selection_radius: n } } }));
 
-  // Zoom settings
-  const handleZoomDefaultChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({ map: { ...config.map, zoom_default: num } });
-    }
-  };
+  // --- Shot settings ---
+  const handleShotWidthChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, shot: { ...config.map.shot, width: n } } }));
+  const handleShotHitAreaChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, shot: { ...config.map.shot, hit_area: n } } }));
+  const handleShotHoverWidthChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, shot: { ...config.map.shot, hover_width: n } } }));
+  const handleShotSelectionWidthChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, shot: { ...config.map.shot, selection_width: n } } }));
 
-  const handleZoomMinChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({ map: { ...config.map, zoom_min: num } });
-    }
-  };
+  // --- Snap settings ---
+  const handleSnapThresholdChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, snap: { ...config.map.snap, threshold: n } } }));
+  const handleSnapDrawChange = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, snap: { ...config.map.snap, enabled_draw: v } } }));
+  const handleSnapMergeChange = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, snap: { ...config.map.snap, enabled_merge: v } } }));
+  const handleSnapMeasureChange = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, snap: { ...config.map.snap, enabled_measure: v } } }));
 
-  const handleZoomMaxChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({ map: { ...config.map, zoom_max: num } });
-    }
-  };
-
-  const handleZoomStepChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({ map: { ...config.map, zoom_step: num } });
-    }
-  };
-
-  // Control settings
-  const handlePanSpeedChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          controls: { ...config.map.controls, pan_speed: num },
-        },
-      });
-    }
-  };
-
-  const handleZoomSpeedChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          controls: { ...config.map.controls, zoom_speed: num },
-        },
-      });
-    }
-  };
-
-  const handleInvertScrollChange = (checked: boolean) => {
-    onChange({
-      map: {
-        ...config.map,
-        controls: { ...config.map.controls, invert_scroll: checked },
-      },
-    });
-  };
-
-  // Station settings
-  const handleStationRadiusChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          station: { ...config.map.station, radius: num },
-        },
-      });
-    }
-  };
-
-  const handleStationHitAreaChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          station: { ...config.map.station, hit_area: num },
-        },
-      });
-    }
-  };
-
-  const handleStationHoverRadiusChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          station: { ...config.map.station, hover_radius: num },
-        },
-      });
-    }
-  };
-
-  const handleStationSelectionRadiusChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          station: { ...config.map.station, selection_radius: num },
-        },
-      });
-    }
-  };
-
-  // Shot settings
-  const handleShotWidthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          shot: { ...config.map.shot, width: num },
-        },
-      });
-    }
-  };
-
-  const handleShotHitAreaChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          shot: { ...config.map.shot, hit_area: num },
-        },
-      });
-    }
-  };
-
-  const handleShotHoverWidthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          shot: { ...config.map.shot, hover_width: num },
-        },
-      });
-    }
-  };
-
-  const handleShotSelectionWidthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          shot: { ...config.map.shot, selection_width: num },
-        },
-      });
-    }
-  };
-
-  // Snap settings
-  const handleSnapThresholdChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          snap: { ...config.map.snap, threshold: num },
-        },
-      });
-    }
-  };
-
-  const handleSnapDrawChange = (checked: boolean) => {
-    onChange({
-      map: {
-        ...config.map,
-        snap: { ...config.map.snap, enabled_draw: checked },
-      },
-    });
-  };
-
-  const handleSnapMergeChange = (checked: boolean) => {
-    onChange({
-      map: {
-        ...config.map,
-        snap: { ...config.map.snap, enabled_merge: checked },
-      },
-    });
-  };
-
-  const handleSnapMeasureChange = (checked: boolean) => {
-    onChange({
-      map: {
-        ...config.map,
-        snap: { ...config.map.snap, enabled_measure: checked },
-      },
-    });
-  };
-
-  // Animation settings
-  const handleAnimationEnabledChange = (checked: boolean) => {
-    onChange({
-      map: {
-        ...config.map,
-        animation: { ...config.map.animation, enabled: checked },
-      },
-    });
-  };
-
-  const handleAnimationDurationChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          animation: { ...config.map.animation, duration: num },
-        },
-      });
-    }
-  };
-
-  const handlePointZoomChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        map: {
-          ...config.map,
-          animation: { ...config.map.animation, point_zoom: num },
-        },
-      });
-    }
-  };
+  // --- Animation settings ---
+  const handleAnimationEnabledChange = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, animation: { ...config.map.animation, enabled: v } } }));
+  const handleAnimationDurationChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, animation: { ...config.map.animation, duration: n } } }), parseIntRadix10);
+  const handlePointZoomChange = createNumericHandler(onChange,
+    (n) => ({ map: { ...config.map, animation: { ...config.map.animation, point_zoom: n } } }), parseIntRadix10);
 
   return (
     <div

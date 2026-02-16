@@ -22,6 +22,8 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
 import { importOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
+import { getErrorMessage } from '../utils/ipc';
+import { extractFilename } from '../utils/path';
 import { defaultConfig } from '../types/config';
 import type { ShortcutsConfig } from '../types/config';
 import type { ProjectMetadata } from '../types/project';
@@ -359,7 +361,7 @@ export function useGlobalViewShortcuts({
             } catch (err) {
               useUIStore.getState().openDialog('error', {
                 title: 'Open Failed',
-                message: err instanceof Error ? err.message : 'Failed to open project',
+                message: getErrorMessage(err, 'Failed to open project'),
               });
             }
           })();
@@ -388,7 +390,7 @@ export function useGlobalViewShortcuts({
                 if (currentProject) {
                   openDialog('gpx-selection', { gpxFile, filePath: selected });
                 } else {
-                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.gpx$/i, '') ?? 'Imported';
+                  const fileName = extractFilename(selected, /\.gpx$/i) || 'Imported';
                   openDialog('new-project-for-import', {
                     gpxFile,
                     filePath: selected,
@@ -404,7 +406,7 @@ export function useGlobalViewShortcuts({
                 if (currentProject) {
                   openDialog('tml-import', { tmlFile, filePath: selected });
                 } else {
-                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.tmlu?$/i, '') ?? 'Imported';
+                  const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
                   openDialog('new-project-for-import', {
                     tmlFile,
                     filePath: selected,
@@ -425,7 +427,7 @@ export function useGlobalViewShortcuts({
                   });
                 } else {
                   setImportContext('new-project');
-                  const fileName = selected.split(/[/\\]/).pop()?.replace(/\.dmp$/i, '') ?? 'Imported';
+                  const fileName = extractFilename(selected, /\.dmp$/i) || 'Imported';
                   openDialog('new-project-for-import', {
                     dmpFile,
                     filePath: selected,
@@ -436,7 +438,7 @@ export function useGlobalViewShortcuts({
             } catch (err) {
               useUIStore.getState().openDialog('error', {
                 title: 'Import Failed',
-                message: err instanceof Error ? err.message : 'Failed to import file',
+                message: getErrorMessage(err, 'Failed to import file'),
               });
             }
           })();

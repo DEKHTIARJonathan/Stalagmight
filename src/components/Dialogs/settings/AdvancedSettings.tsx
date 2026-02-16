@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeIpc } from '../../../utils/ipc';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { Button } from '../../common/Button';
@@ -8,7 +8,7 @@ import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
-import { isFieldChanged } from './types';
+import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import { useProjectStore } from '../../../store/projectStore';
@@ -175,126 +175,40 @@ export function AdvancedSettings({
     };
   }, []);
 
-  // Debug settings
-  const handleShowHitboxesChange = (checked: boolean) => {
-    onChange({
-      debug: {
-        ...config.debug,
-        map: {
-          ...config.debug.map,
-          show_hitboxes: checked,
-        },
-      },
-    });
-  };
+  // --- Debug settings ---
+  const handleShowHitboxesChange = createToggleHandler(onChange,
+    (v) => ({ debug: { ...config.debug, map: { ...config.debug.map, show_hitboxes: v } } }));
+  const handleLogHitDetectionChange = createToggleHandler(onChange,
+    (v) => ({ debug: { ...config.debug, map: { ...config.debug.map, log_hit_detection: v } } }));
 
-  const handleLogHitDetectionChange = (checked: boolean) => {
-    onChange({
-      debug: {
-        ...config.debug,
-        map: {
-          ...config.debug.map,
-          log_hit_detection: checked,
-        },
-      },
-    });
-  };
+  // --- Logging settings ---
+  const handleLogLevelChange = createSelectHandler(onChange,
+    (v) => ({ logging: { ...config.logging, level: v } }));
+  const handleMaxLogSizeChange = createNumericHandler(onChange,
+    (n) => ({ logging: { ...config.logging, max_directory_size_mb: n } }), parseIntRadix10);
 
-  // Logging settings
-  const handleLogLevelChange = (value: string) => {
-    onChange({
-      logging: {
-        ...config.logging,
-        level: value,
-      },
-    });
-  };
+  // --- Panel settings ---
+  const handleSectionsPanelWidthChange = createNumericHandler(onChange,
+    (n) => ({ panels: { ...config.panels, sections_panel_width: n } }), parseIntRadix10);
+  const handleDetailPanelWidthChange = createNumericHandler(onChange,
+    (n) => ({ panels: { ...config.panels, detail_panel_width: n } }), parseIntRadix10);
+  const handleDataTableHeightChange = createNumericHandler(onChange,
+    (n) => ({ panels: { ...config.panels, data_table_height: n } }), parseIntRadix10);
 
-  const handleMaxLogSizeChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        logging: {
-          ...config.logging,
-          max_directory_size_mb: num,
-        },
-      });
-    }
-  };
-
-  // Panel settings
-  const handleSectionsPanelWidthChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        panels: {
-          ...config.panels,
-          sections_panel_width: num,
-        },
-      });
-    }
-  };
-
-  const handleDetailPanelWidthChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        panels: {
-          ...config.panels,
-          detail_panel_width: num,
-        },
-      });
-    }
-  };
-
-  const handleDataTableHeightChange = (value: string) => {
-    const num = parseInt(value, 10);
-    if (!isNaN(num)) {
-      onChange({
-        panels: {
-          ...config.panels,
-          data_table_height: num,
-        },
-      });
-    }
-  };
-
-  const updateClosureAdjustment = useCallback((updates: Partial<Config['closure_adjustment']>) => {
-    onChange({
-      closure_adjustment: {
-        ...config.closure_adjustment,
-        ...updates,
-      },
-    });
-  }, [config.closure_adjustment, onChange]);
-
-  const handleSigmaLengthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      updateClosureAdjustment({ base_sigma_length_m: num });
-    }
-  };
-
-  const handleSigmaAzimuthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      updateClosureAdjustment({ base_sigma_azimuth_deg: num });
-    }
-  };
-
-  const handleSigmaDepthChange = (value: string) => {
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      updateClosureAdjustment({ base_sigma_depth_m: num });
-    }
-  };
+  // --- Closure adjustment settings ---
+  const handleSigmaLengthChange = createNumericHandler(onChange,
+    (n) => ({ closure_adjustment: { ...config.closure_adjustment, base_sigma_length_m: n } }));
+  const handleSigmaAzimuthChange = createNumericHandler(onChange,
+    (n) => ({ closure_adjustment: { ...config.closure_adjustment, base_sigma_azimuth_deg: n } }));
+  const handleSigmaDepthChange = createNumericHandler(onChange,
+    (n) => ({ closure_adjustment: { ...config.closure_adjustment, base_sigma_depth_m: n } }));
 
   // Reload config from disk
   const handleReloadConfig = useCallback(async () => {
     setIsReloading(true);
     setReloadMessage(null);
     try {
-      const newConfig = await invoke<Config>('reload_config');
+      const newConfig = await invokeIpc<Config>('reload_config', undefined, { purpose: 'reload config from disk' });
 
       if (!mountedRef.current) return;
 
