@@ -17,8 +17,8 @@ use stalagmight_lib::config::{
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
-    SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig, ThemeMode,
-    UnitsConfig, ValidationConfig,
+    PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
+    StationConfig, ThemeMode, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{CommandResult, CommentHolder, ValidationWarning, WarningSeverity};
 use stalagmight_lib::core::loading::{
@@ -196,6 +196,7 @@ fn main() {
     export::<MapControlsConfig>(&out_dir);
     export::<ValidationConfig>(&out_dir);
     export::<ClosureAdjustmentConfig>(&out_dir);
+    export::<PlacementSuggestionConfig>(&out_dir);
     export::<ExportConfig>(&out_dir);
     export::<LoggingConfig>(&out_dir);
     export::<ShortcutsConfig>(&out_dir);
@@ -319,6 +320,7 @@ fn main() {
         "MapControlsConfig",
         "ValidationConfig",
         "ClosureAdjustmentConfig",
+        "PlacementSuggestionConfig",
         "ExportConfig",
         "LoggingConfig",
         "ShortcutsConfig",

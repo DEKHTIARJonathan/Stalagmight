@@ -10,8 +10,48 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { defaultConfig } from '../../../types/config';
-import type { Config } from '../../../types/config';
+import type { Config, PlacementSuggestionConfig } from '../../../types/config';
 import { useProjectStore } from '../../../store/projectStore';
+
+/** Reusable row for placement suggestion numeric fields. */
+function PsRow({ field, i18nKey, step, min, max, config, changedFields, onChange, onInput, t }: {
+  field: keyof PlacementSuggestionConfig;
+  i18nKey: string;
+  step: number;
+  min: number;
+  max: number;
+  config: Config;
+  changedFields: Set<string>;
+  onChange: (updates: Partial<Config>) => void;
+  onInput: (v: string) => void;
+  t: (key: string) => string;
+}) {
+  const ps = config.placement_suggestion ?? defaultConfig.placement_suggestion;
+  const dps = defaultConfig.placement_suggestion;
+  const path = `placement_suggestion.${field}`;
+  return (
+    <SettingRow
+      label={t(`settings.advanced.placementSuggestion.${i18nKey}.label`)}
+      helpText={t(`settings.advanced.placementSuggestion.${i18nKey}.help`)}
+      isChanged={isFieldChanged(changedFields, path)}
+      onReset={() => onChange({ placement_suggestion: { ...ps, [field]: dps[field] } })}
+      isDefault={ps[field] === dps[field]}
+      data-testid={`setting-ps-${field}`}
+    >
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={ps[field]}
+        onChange={(e) => onInput(e.target.value)}
+        className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+        aria-label={t(`settings.advanced.placementSuggestion.${i18nKey}.aria`)}
+        data-testid={`input-ps-${field}`}
+      />
+    </SettingRow>
+  );
+}
 
 /**
  * Compute differences between two config objects for reload display.
@@ -99,6 +139,28 @@ function computeConfigDiff(
       newValue: String(newConfig.closure_adjustment.base_sigma_depth_m),
     });
   }
+  // Check placement suggestion settings
+  const oldPs = oldConfig.placement_suggestion;
+  const newPs = newConfig.placement_suggestion;
+  if (oldPs && newPs) {
+    const psFields: Array<keyof PlacementSuggestionConfig> = [
+      'azimuth_sigma', 'length_sigma', 'depth_sigma',
+      'azimuth_weight', 'length_weight', 'depth_in_weight', 'depth_out_weight',
+      'min_shot_score', 'min_aggregate_score', 'max_reference_shots', 'max_suggestions',
+      'min_partial_ratio', 'short_shot_threshold', 'single_shot_penalty',
+      'max_azimuth_error_full', 'max_azimuth_error_partial', 'max_depth_error',
+      'max_length_error_fraction', 'max_length_error_floor',
+    ];
+    for (const f of psFields) {
+      if (oldPs[f] !== newPs[f]) {
+        changes.push({
+          path: `placement_suggestion.${f}`,
+          oldValue: String(oldPs[f]),
+          newValue: String(newPs[f]),
+        });
+      }
+    }
+  }
   return changes;
 }
 
@@ -152,12 +214,20 @@ export function AdvancedSettings({
       errors.push(t('settings.advanced.validation.closureSigmaDepth'));
     }
 
+    // Validate placement suggestion sigma values
+    const ps = config.placement_suggestion;
+    if (ps) {
+      if (ps.azimuth_sigma <= 0 || ps.length_sigma <= 0 || ps.depth_sigma <= 0) {
+        errors.push('Placement suggestion sigma values must be positive');
+      }
+    }
+
     const hasError = errors.length > 0;
     if (hasError !== hasErrorRef.current) {
       hasErrorRef.current = hasError;
       onValidationError('advanced', hasError);
     }
-  }, [config.logging, config.panels, config.closure_adjustment, onValidationError, t]);
+  }, [config.logging, config.panels, config.closure_adjustment, config.placement_suggestion, onValidationError, t]);
 
   const logLevelOptions = useMemo(() => [
     { value: 'trace', label: t('settings.advanced.logging.level.options.trace') },
@@ -202,6 +272,30 @@ export function AdvancedSettings({
     (n) => ({ closure_adjustment: { ...config.closure_adjustment, base_sigma_azimuth_deg: n } }));
   const handleSigmaDepthChange = createNumericHandler(onChange,
     (n) => ({ closure_adjustment: { ...config.closure_adjustment, base_sigma_depth_m: n } }));
+
+  // --- Placement suggestion settings ---
+  const psBase = config.placement_suggestion ?? defaultConfig.placement_suggestion;
+  const psUpdate = (field: string, n: number) =>
+    ({ placement_suggestion: { ...psBase, [field]: n } });
+  const handlePsAzimuthWeight = createNumericHandler(onChange, (n) => psUpdate('azimuth_weight', n));
+  const handlePsLengthWeight = createNumericHandler(onChange, (n) => psUpdate('length_weight', n));
+  const handlePsDepthInWeight = createNumericHandler(onChange, (n) => psUpdate('depth_in_weight', n));
+  const handlePsDepthOutWeight = createNumericHandler(onChange, (n) => psUpdate('depth_out_weight', n));
+  const handlePsAzimuthSigma = createNumericHandler(onChange, (n) => psUpdate('azimuth_sigma', n));
+  const handlePsLengthSigma = createNumericHandler(onChange, (n) => psUpdate('length_sigma', n));
+  const handlePsDepthSigma = createNumericHandler(onChange, (n) => psUpdate('depth_sigma', n));
+  const handlePsMinShotScore = createNumericHandler(onChange, (n) => psUpdate('min_shot_score', n));
+  const handlePsMinAggregateScore = createNumericHandler(onChange, (n) => psUpdate('min_aggregate_score', n));
+  const handlePsSingleShotPenalty = createNumericHandler(onChange, (n) => psUpdate('single_shot_penalty', n));
+  const handlePsMaxAzErrorFull = createNumericHandler(onChange, (n) => psUpdate('max_azimuth_error_full', n));
+  const handlePsMaxAzErrorPartial = createNumericHandler(onChange, (n) => psUpdate('max_azimuth_error_partial', n));
+  const handlePsMaxDepthError = createNumericHandler(onChange, (n) => psUpdate('max_depth_error', n));
+  const handlePsMaxLenErrorFrac = createNumericHandler(onChange, (n) => psUpdate('max_length_error_fraction', n));
+  const handlePsMaxLenErrorFloor = createNumericHandler(onChange, (n) => psUpdate('max_length_error_floor', n));
+  const handlePsMaxRefShots = createNumericHandler(onChange, (n) => psUpdate('max_reference_shots', n), parseIntRadix10);
+  const handlePsMaxSuggestions = createNumericHandler(onChange, (n) => psUpdate('max_suggestions', n), parseIntRadix10);
+  const handlePsMinPartialRatio = createNumericHandler(onChange, (n) => psUpdate('min_partial_ratio', n));
+  const handlePsShortShotThresh = createNumericHandler(onChange, (n) => psUpdate('short_shot_threshold', n));
 
   // Reload config from disk
   const handleReloadConfig = useCallback(async () => {
@@ -412,6 +506,61 @@ export function AdvancedSettings({
           />
         </SettingRow>
 
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.advanced.sections.placementSuggestion')} data-testid="section-placement-suggestion">
+        {/* Scoring Weights */}
+        <p className="text-xs text-text-secondary font-medium mt-1 mb-2">Scoring Weights</p>
+        <PsRow field="azimuth_weight" i18nKey="azimuthWeight" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsAzimuthWeight} t={t} />
+        <PsRow field="length_weight" i18nKey="lengthWeight" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsLengthWeight} t={t} />
+        <PsRow field="depth_in_weight" i18nKey="depthInWeight" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsDepthInWeight} t={t} />
+        <PsRow field="depth_out_weight" i18nKey="depthOutWeight" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsDepthOutWeight} t={t} />
+
+        {/* Scoring Sensitivity (Sigma) */}
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Scoring Sensitivity (Sigma)</p>
+        <PsRow field="azimuth_sigma" i18nKey="azimuthSigma" step={1} min={0.1} max={180}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsAzimuthSigma} t={t} />
+        <PsRow field="length_sigma" i18nKey="lengthSigma" step={0.1} min={0.01} max={100}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsLengthSigma} t={t} />
+        <PsRow field="depth_sigma" i18nKey="depthSigma" step={0.05} min={0.01} max={100}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsDepthSigma} t={t} />
+
+        {/* Score Thresholds */}
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Score Thresholds</p>
+        <PsRow field="min_shot_score" i18nKey="minShotScore" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMinShotScore} t={t} />
+        <PsRow field="min_aggregate_score" i18nKey="minAggregateScore" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMinAggregateScore} t={t} />
+        <PsRow field="single_shot_penalty" i18nKey="singleShotPenalty" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsSingleShotPenalty} t={t} />
+
+        {/* Hard Cutoffs */}
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Hard Cutoffs</p>
+        <PsRow field="max_azimuth_error_full" i18nKey="maxAzimuthErrorFull" step={1} min={0} max={180}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxAzErrorFull} t={t} />
+        <PsRow field="max_azimuth_error_partial" i18nKey="maxAzimuthErrorPartial" step={1} min={0} max={180}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxAzErrorPartial} t={t} />
+        <PsRow field="max_depth_error" i18nKey="maxDepthError" step={0.05} min={0} max={100}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxDepthError} t={t} />
+        <PsRow field="max_length_error_fraction" i18nKey="maxLengthErrorFraction" step={0.01} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxLenErrorFrac} t={t} />
+        <PsRow field="max_length_error_floor" i18nKey="maxLengthErrorFloor" step={0.1} min={0} max={100}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxLenErrorFloor} t={t} />
+
+        {/* Limits */}
+        <p className="text-xs text-text-secondary font-medium mt-3 mb-2">Limits</p>
+        <PsRow field="max_reference_shots" i18nKey="maxReferenceShots" step={1} min={1} max={50}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxRefShots} t={t} />
+        <PsRow field="max_suggestions" i18nKey="maxSuggestions" step={1} min={1} max={100}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMaxSuggestions} t={t} />
+        <PsRow field="min_partial_ratio" i18nKey="minPartialRatio" step={0.05} min={0} max={1}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsMinPartialRatio} t={t} />
+        <PsRow field="short_shot_threshold" i18nKey="shortShotThreshold" step={0.1} min={0} max={100}
+          config={config} changedFields={changedFields} onChange={onChange} onInput={handlePsShortShotThresh} t={t} />
       </SettingsSection>
 
       <SettingsSection title={t('settings.advanced.sections.panels')} data-testid="section-panels">

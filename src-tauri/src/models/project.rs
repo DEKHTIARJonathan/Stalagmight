@@ -5472,6 +5472,7 @@ impl Project {
     pub fn suggest_orphan_placements(
         &self,
         newly_imported_section_ids: &[SectionId],
+        ps_config: &crate::config::PlacementSuggestionConfig,
     ) -> Vec<super::placement_suggest::OrphanPlacementSuggestion> {
         use super::placement_suggest::{
             ExistingSection, OrphanPlacementSuggestion, suggest_placements,
@@ -5636,7 +5637,7 @@ impl Project {
 
                     // 5. Run suggest_placements for this leaf against target sections
                     let placement_suggestions =
-                        suggest_placements(&leaf_shots, &target_sections);
+                        suggest_placements(&leaf_shots, &target_sections, ps_config);
 
                     for ps in placement_suggestions {
                         // Only keep matches from the terminal end (import station 0).
