@@ -45,8 +45,6 @@ docs/coverage/
 # WebdriverIO test logs
 wdio-logs/
 
-.flow/.checkpoint-*
-
 # Script build artifacts
 scripts/lib/slice-rs/target/
 scripts/lib/slice-rs/Cargo.lock
