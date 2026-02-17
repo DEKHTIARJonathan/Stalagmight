@@ -10,7 +10,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
-| Import/Export | 17 | 19 | 89% |
+| Import/Export | 19 | 19 | 100% |
 | UI & Polish | 15 | 18 | 83% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
@@ -18,7 +18,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **58** | **65** | **89%** |
+| **Total** | **60** | **65** | **92%** |
 
 ---
 
@@ -79,10 +79,10 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Ariane .tml Export | ✅ | TML (ZIP) and TMLU (plain XML) export |
 | GPX Import | ✅ | Waypoints, tracks, routes; elevation→depth with slope distance; depth sign toggle |
 | Manual Data Input | ✅ | Spreadsheet-style entry with validation, LRUD toggle, placement mode, decimal precision |
-| Automatic Reference Shot Alignment | ❌ | Auto-align imported sections using reference shots |
-| Import Dialog/Shot Placement Refactoring | ❌ | Improve shot placement UX in import workflow |
+| Automatic Reference Shot Alignment | ✅ | Auto-align imported sections using reference shots |
+| Import Dialog/Shot Placement Refactoring | ✅ | Improve shot placement UX in import workflow |
 
-**Subtotals**: ✅ 17 done, ❌ 2 not started
+**Subtotals**: ✅ 19 done, ❌ 0 not started
 
 ### UI & Polish (15/18 done)
 
@@ -185,7 +185,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
-| Import/Export | 19 | 17 | 0 | 2 |
+| Import/Export | 19 | 19 | 0 | 0 |
 | UI & Polish | 18 | 15 | 0 | 3 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
@@ -193,9 +193,9 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **58** | **0** | **7** |
+| **Total** | **65** | **60** | **0** | **5** |
 
-**Overall Progress**: 58 done = ~89% complete
+**Overall Progress**: 60 done = ~92% complete
 
 ---
 
