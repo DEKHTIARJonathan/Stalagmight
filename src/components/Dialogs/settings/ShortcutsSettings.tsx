@@ -14,53 +14,10 @@ import {
   formatActionName,
   isMac,
 } from '../../../utils/shortcuts';
-
-/**
- * Categories for organizing shortcuts in the settings UI.
- */
-interface ShortcutCategory {
-  id: string;
-  labelKey: string;
-  actions: (keyof ShortcutsConfig)[];
-}
-
-const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
-  {
-    id: 'file',
-    labelKey: 'settings.shortcuts.categories.file',
-    actions: ['new_file', 'open_file', 'save', 'save_as', 'import_dmp', 'export'],
-  },
-  {
-    id: 'tools',
-    labelKey: 'settings.shortcuts.categories.tools',
-    actions: ['select', 'pan', 'zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot'],
-  },
-  {
-    id: 'edit',
-    labelKey: 'settings.shortcuts.categories.edit',
-    actions: ['undo', 'redo'],
-  },
-  {
-    id: 'view',
-    labelKey: 'settings.shortcuts.categories.view',
-    actions: [
-      'toggle_depth_gradient',
-      'toggle_grid',
-      'toggle_satellite',
-      'toggle_station_labels',
-      'toggle_shot_labels',
-      'toggle_section_labels',
-      'fit_to_bounds',
-      'zoom_in',
-      'zoom_out',
-    ],
-  },
-  {
-    id: 'panels',
-    labelKey: 'settings.shortcuts.categories.panels',
-    actions: ['toggle_sections_panel', 'toggle_detail_panel', 'toggle_data_table'],
-  },
-];
+import {
+  SHORTCUT_CATEGORIES,
+  RESERVED_DISPLAY_ENTRIES,
+} from '../../../utils/shortcutCategories';
 
 /**
  * Action name label with hover tooltip for truncated names.
@@ -104,22 +61,6 @@ function ShortcutNameLabel({ name }: { name: string }) {
   );
 }
 
-/**
- * Reserved shortcut display entries.
- * Groups related shortcuts into single display rows.
- */
-interface ReservedShortcutEntry {
-  shortcuts: string[];
-  descriptionKey: string;
-}
-
-const RESERVED_DISPLAY_ENTRIES: ReservedShortcutEntry[] = [
-  { shortcuts: ['Escape'], descriptionKey: 'settings.shortcuts.reserved.cancelClose' },
-  { shortcuts: ['Delete', 'Backspace'], descriptionKey: 'settings.shortcuts.reserved.deleteSelection' },
-  { shortcuts: ['Tab', 'Enter'], descriptionKey: 'settings.shortcuts.reserved.uiNavigation' },
-  { shortcuts: ['Ctrl+A'], descriptionKey: 'settings.shortcuts.reserved.selectAll' },
-  { shortcuts: ['Ctrl+,'], descriptionKey: 'settings.shortcuts.reserved.openSettings' },
-];
 
 /**
  * Shortcuts settings category content.

@@ -30,3 +30,4 @@ export { default as GpxPlacementDialog } from './GpxPlacementDialog';
 export { default as ZeroDatumSelectionDialog } from './ZeroDatumSelectionDialog';
 export { default as ZeroDatumConfigDialog } from './ZeroDatumConfigDialog';
 export { default as OrphanPlacementDialog } from './OrphanPlacementDialog';
+export { default as KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';

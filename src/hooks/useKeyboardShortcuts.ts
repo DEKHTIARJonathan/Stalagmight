@@ -306,7 +306,10 @@ export function useKeyboardShortcuts() {
     (event: KeyboardEvent) => {
       const { activeDialog } = useUIStore.getState();
       if (activeDialog && event.key !== 'Escape') {
-        return;
+        // Allow ? to toggle the keyboard shortcuts overlay closed
+        if (!(event.key === '?' && activeDialog === 'keyboard-shortcuts')) {
+          return;
+        }
       }
 
       // Handle Cmd/Ctrl+, to open Settings - works even when focus is in an input
@@ -356,7 +359,8 @@ export function useKeyboardShortcuts() {
       if (
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement ||
-        event.target instanceof HTMLSelectElement
+        event.target instanceof HTMLSelectElement ||
+        (event.target instanceof HTMLElement && event.target.isContentEditable)
       ) {
         return;
       }
@@ -412,6 +416,18 @@ export function useKeyboardShortcuts() {
             stationRef: station.station_ref,
           }));
           selectAll(allStations);
+        }
+        return;
+      }
+
+      // Toggle keyboard shortcuts overlay
+      if (event.key === '?') {
+        event.preventDefault();
+        const { activeDialog: currentDialog } = useUIStore.getState();
+        if (currentDialog === 'keyboard-shortcuts') {
+          useUIStore.getState().closeDialog();
+        } else if (!currentDialog) {
+          openDialog('keyboard-shortcuts');
         }
         return;
       }
