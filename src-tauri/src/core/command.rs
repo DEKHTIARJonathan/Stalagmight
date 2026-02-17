@@ -247,6 +247,16 @@ impl CommandResult {
         self.saved_path = Some(path);
         self
     }
+
+    /// Attach a single warning message to this result.
+    pub fn with_warning(mut self, message: &str) -> Self {
+        self.warnings.push(ValidationWarning {
+            code: "SYSTEM".to_string(),
+            message: message.to_string(),
+            severity: WarningSeverity::Warning,
+        });
+        self
+    }
 }
 
 impl Command {

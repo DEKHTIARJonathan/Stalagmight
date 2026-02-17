@@ -118,14 +118,16 @@ function App() {
       } else {
         // Manual without snap → compute offset
         const alignIdx = placement.type === 'manual' ? placement.alignStationIndex : 0;
+        // Clamp to valid station range to prevent out-of-bounds index reaching the backend
+        const stationCount = sectionConfig.shots.length + 1; // stations = shots + 1
+        const clampedIdx = Math.max(0, Math.min(alignIdx, stationCount - 1));
         if (placement.type === 'manual' && placement.position) {
           const stationPositions = calculateStationPositions(sectionConfig.shots);
-          const clampedIdx = Math.max(0, Math.min(alignIdx, stationPositions.length - 1));
           const alignPos = stationPositions[clampedIdx];
           if (alignPos) {
             backendPlacement = {
               type: 'manual',
-              align_station_index: alignIdx,
+              align_station_index: clampedIdx,
               offset: {
                 x: placement.position.x - alignPos.x,
                 y: placement.position.y - alignPos.y,
@@ -133,10 +135,10 @@ function App() {
               },
             };
           } else {
-            backendPlacement = { type: 'manual', align_station_index: alignIdx, offset: null };
+            backendPlacement = { type: 'manual', align_station_index: clampedIdx, offset: null };
           }
         } else {
-          backendPlacement = { type: 'manual', align_station_index: alignIdx, offset: null };
+          backendPlacement = { type: 'manual', align_station_index: clampedIdx, offset: null };
         }
       }
 
