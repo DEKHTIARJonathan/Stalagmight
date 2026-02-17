@@ -315,8 +315,11 @@ export default function SettingsDialog() {
   // Panel ID base for ARIA associations
   const panelIdBase = useId();
 
-  // Active (selected) category
-  const [activeCategory, setActiveCategory] = useState<SettingsCategory>('general');
+  // Active (selected) category — initialCategory from dialogData (e.g. from "Customize shortcuts" link)
+  const dialogData = useUIStore((s) => s.dialogData);
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>(
+    (dialogData?.initialCategory as SettingsCategory) || 'general'
+  );
   // Focused category index for roving tabindex
   const [focusedIndex, setFocusedIndex] = useState(0);
 

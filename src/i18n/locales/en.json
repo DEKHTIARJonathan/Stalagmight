@@ -691,7 +691,8 @@
         "deleteSelection": "Delete selection",
         "uiNavigation": "UI Navigation",
         "selectAll": "Select all",
-        "openSettings": "Open Settings"
+        "openSettings": "Open Settings",
+        "keyboardShortcuts": "Keyboard shortcuts"
       },
       "search": {
         "placeholder": "Search shortcuts...",
@@ -712,7 +713,41 @@
       "resetOne": {
         "title": "Reset to default"
       },
-      "resetAll": "Reset All Shortcuts"
+      "resetAll": "Reset All Shortcuts",
+      "actions": {
+        "newFile": "New",
+        "openFile": "Open",
+        "save": "Save",
+        "saveAs": "Save As",
+        "importDmp": "Import",
+        "export": "Export",
+        "select": "Select",
+        "pan": "Pan",
+        "zoom": "Zoom",
+        "draw": "Draw",
+        "deleteTool": "Delete",
+        "merge": "Merge",
+        "measure": "Measure",
+        "moveStation": "Move Station",
+        "moveSegment": "Move Segment",
+        "moveShot": "Move Shot",
+        "commentTool": "Comment",
+        "moveCommentTool": "Move Comment",
+        "undo": "Undo",
+        "redo": "Redo",
+        "toggleDepthGradient": "Toggle Depth Gradient",
+        "toggleGrid": "Toggle Grid",
+        "toggleSatellite": "Toggle Satellite",
+        "toggleStationLabels": "Toggle Station Labels",
+        "toggleShotLabels": "Toggle Shot Labels",
+        "toggleSectionLabels": "Toggle Section Labels",
+        "fitToBounds": "Fit to Bounds",
+        "zoomIn": "Zoom In",
+        "zoomOut": "Zoom Out",
+        "toggleSectionsPanel": "Toggle Sections Panel",
+        "toggleDetailPanel": "Toggle Detail Panel",
+        "toggleDataTable": "Toggle Data Table"
+      }
     },
     "map": {
       "title": "Map",
@@ -883,6 +918,18 @@
         "snapThreshold": "Snap threshold must be between 1 and 50",
         "animationDuration": "Animation duration must be between 0 and 2000 ms"
       }
+    }
+  },
+  "keyboardShortcuts": {
+    "title": "Keyboard Shortcuts",
+    "search": {
+      "placeholder": "Filter shortcuts...",
+      "aria": "Filter keyboard shortcuts"
+    },
+    "customize": "Customize shortcuts",
+    "noResults": "No shortcuts match your filter.",
+    "reserved": {
+      "title": "Reserved"
     }
   },
   "dialogs": {

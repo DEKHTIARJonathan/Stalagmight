@@ -335,6 +335,7 @@ export const RESERVED_KEYS: ReadonlySet<string> = new Set([
   'Backspace',
   'Tab',
   'Enter',
+  '?',
 ]);
 
 /**
@@ -385,6 +386,7 @@ export function checkReservedConflict(shortcut: string): { isReserved: boolean; 
       Backspace: 'Delete selection',
       Tab: 'UI Navigation',
       Enter: 'UI Navigation',
+      '?': 'Keyboard shortcuts',
     };
     return {
       isReserved: true,
@@ -524,6 +526,8 @@ const ACTION_NAME_KEYS: Record<string, string> = {
   toggle_sections_panel: 'settings.shortcuts.actions.toggleSectionsPanel',
   toggle_detail_panel: 'settings.shortcuts.actions.toggleDetailPanel',
   toggle_data_table: 'settings.shortcuts.actions.toggleDataTable',
+  comment_tool: 'settings.shortcuts.actions.commentTool',
+  move_comment_tool: 'settings.shortcuts.actions.moveCommentTool',
 };
 
 export function formatActionName(action: string): string {
