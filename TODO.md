@@ -100,7 +100,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Fix Section Hyperlink Highlighting Not Clearing | ✅ | Highlight persists after navigating away from section link |
 | Splash Screen | ✅ | React overlay with branding; opt-in via Settings > General > Startup |
 | About Dialog | ✅ | AlertDialog in Settings footer |
-| Keyboard Shortcuts Overlay | ❌ | Help overlay showing all shortcuts |
+| Keyboard Shortcuts Overlay | ✅ | Help overlay showing all shortcuts |
 | Custom Icons for All Tools/SVGs | ✅ | Custom icon set for toolbar and UI elements |
 | Bug Reporter Dialog | ✅ | Debug log dialog with ring buffer, level filtering, colored output |
 | Release Automation | ✅ | |
