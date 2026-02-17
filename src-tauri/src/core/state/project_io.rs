@@ -155,16 +155,34 @@ impl AppState {
         }
 
         // Load undo/redo stacks from database before replacing database reference
-        let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
-        let undo_entries: Vec<_> = loaded_undo
-            .into_iter()
-            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-            .collect();
-        let loaded_redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
-        let redo_entries: Vec<_> = loaded_redo
-            .into_iter()
-            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-            .collect();
+        let undo_entries = match db.load_undo_stack_with_timestamps() {
+            Ok(loaded) => loaded
+                .into_iter()
+                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "restore edit history",
+                    "Failed to load undo stack from database; starting with empty history"
+                );
+                Vec::new()
+            }
+        };
+        let redo_entries = match db.load_redo_stack_with_timestamps() {
+            Ok(loaded) => loaded
+                .into_iter()
+                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "restore edit history",
+                    "Failed to load redo stack from database; starting with empty redo history"
+                );
+                Vec::new()
+            }
+        };
 
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
@@ -321,15 +339,21 @@ impl AppState {
         let db = match Database::open(&save_path) {
             Ok(db) => db,
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     error = %e,
                     purpose = "reopen saved project for continued editing",
                     "Failed to reopen saved database (file was saved successfully)"
                 );
-                // File was saved, just can't reopen - not a critical failure
+                // File was saved but can't be reopened — subsequent operations
+                // (undo persistence, display settings) will fail. Clear the stale
+                // database handle so callers don't use it.
                 project.file_path = Some(save_path.clone());
                 drop(proj_guard);
-                return CommandResult::success();
+                if let Ok(mut database) = self.database.lock() {
+                    *database = None;
+                }
+                return CommandResult::success()
+                    .with_warning("File saved, but database could not be reopened. Some features may not work until the project is reopened.");
             }
         };
 
@@ -547,6 +571,13 @@ impl AppState {
             for (old_section_id, offset) in &source_project.section_offsets {
                 if let Some(&new_section_id) = section_id_map.get(&(proj_idx, *old_section_id)) {
                     merged_project.section_offsets.insert(new_section_id, *offset);
+                } else {
+                    tracing::warn!(
+                        project = %source_project.name,
+                        section_id = old_section_id,
+                        purpose = "merge section offsets",
+                        "Section offset references unknown section ID; skipping"
+                    );
                 }
             }
 
@@ -555,6 +586,13 @@ impl AppState {
                 if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_station_ref.section_id)) {
                     let new_station_ref = StationRef::new(new_section_id, old_station_ref.station_index);
                     merged_project.station_offsets.insert(new_station_ref, *offset);
+                } else {
+                    tracing::warn!(
+                        project = %source_project.name,
+                        section_id = old_station_ref.section_id,
+                        purpose = "merge station offsets",
+                        "Station offset references unknown section ID; skipping"
+                    );
                 }
             }
 
@@ -573,6 +611,13 @@ impl AppState {
                             source_project.name, e
                         ));
                     }
+                } else {
+                    tracing::warn!(
+                        project = %source_project.name,
+                        section_id = zd.station_ref.section_id,
+                        purpose = "merge zero datums",
+                        "Zero datum references unknown section ID; skipping"
+                    );
                 }
             }
 
@@ -591,6 +636,14 @@ impl AppState {
                         station_b: new_station_b,
                         merged_at: merge.merged_at,
                     });
+                } else {
+                    tracing::warn!(
+                        project = %source_project.name,
+                        station_a_section = merge.station_a.section_id,
+                        station_b_section = merge.station_b.section_id,
+                        purpose = "merge station merges",
+                        "Station merge references unknown section ID; skipping"
+                    );
                 }
             }
 
@@ -616,6 +669,14 @@ impl AppState {
                         strategy: closure.strategy,
                         is_aligned: closure.is_aligned,
                     });
+                } else {
+                    tracing::warn!(
+                        project = %source_project.name,
+                        station_a_section = closure.station_a.section_id,
+                        station_b_section = closure.station_b.section_id,
+                        purpose = "merge loop closures",
+                        "Loop closure references unknown section ID; skipping"
+                    );
                 }
             }
 
@@ -877,16 +938,39 @@ impl AppState {
         check_cancelled!();
 
         // Load undo/redo stacks from database BEFORE storing db
-        let loaded_undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
-        let undo_entries: Vec<_> = loaded_undo
-            .into_iter()
-            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-            .collect();
-        let loaded_redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
-        let redo_entries: Vec<_> = loaded_redo
-            .into_iter()
-            .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
-            .collect();
+        let undo_entries = match db.load_undo_stack_with_timestamps() {
+            Ok(loaded) => loaded
+                .into_iter()
+                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "restore edit history",
+                    "Failed to load undo stack from database; starting with empty history"
+                );
+                Vec::new()
+            }
+        };
+        let redo_entries = match db.load_redo_stack_with_timestamps() {
+            Ok(loaded) => loaded
+                .into_iter()
+                .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "restore edit history",
+                    "Failed to load redo stack from database; starting with empty redo history"
+                );
+                Vec::new()
+            }
+        };
+
+        // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
+        // data is written even if a previous panic poisoned a mutex. This is acceptable
+        // during finalization because the alternative (silently skipping) leads to
+        // inconsistent state that is harder to diagnose.
 
         // Commit 1: Project state mutation
         *self.project.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
@@ -898,7 +982,8 @@ impl AppState {
         self.clear_display_settings_cache();
 
         // Commit 4: Undo/redo stack restore
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+        {
+            let mut undo_stack = self.undo_stack.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
@@ -912,7 +997,8 @@ impl AppState {
         }
 
         // Commit 5: Recent projects update
-        if let Ok(mut recent) = self.recent_projects.lock() {
+        {
+            let mut recent = self.recent_projects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             recent.retain(|p| p != &path);
             recent.insert(0, path.clone());
             if let Ok(mut config) = self.config.lock() {
@@ -1087,6 +1173,9 @@ impl AppState {
         // === FINALIZE: Store in AppState (NON-CANCELLABLE STATE COMMIT) ===
         // Allow cancellation only before any state mutation occurs.
         check_cancelled!();
+        // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
+        // data is written even if a previous panic poisoned a mutex.
+
         // Commit 1: Project state mutation
         *self.project.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
 
@@ -1094,15 +1183,14 @@ impl AppState {
         *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
 
         // Commit 3: Clear undo stack (new project)
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
-            undo_stack.clear();
-        }
+        self.undo_stack.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
 
         // Commit 4: Display settings cache clear
         self.clear_display_settings_cache();
 
         // Commit 5: Add to recent projects
-        if let Ok(mut recent) = self.recent_projects.lock() {
+        {
+            let mut recent = self.recent_projects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             recent.retain(|p| p != &db_path);
             recent.insert(0, db_path.clone());
             if let Ok(mut config) = self.config.lock() {

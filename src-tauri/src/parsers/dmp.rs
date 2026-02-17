@@ -490,6 +490,10 @@ fn parse_section(data: Vec<u8>) -> Result<DmpSection> {
     })
 }
 
+/// Maximum DMP file size (50 MB). DMP files are text-based semicolon-separated
+/// integers and should never be this large for legitimate survey data.
+const MAX_DMP_FILE_SIZE: u64 = 50 * 1024 * 1024;
+
 /// Parse a DMP file
 ///
 /// DMP files are text files with semicolon-separated integers.
@@ -507,6 +511,19 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
 
     if extension.to_lowercase() != "dmp" {
         bail!("File is not a DMP file: {}", path.display());
+    }
+
+    // Check file size before reading into memory
+    let file_size = std::fs::metadata(path)
+        .context("Failed to read DMP file metadata")?
+        .len();
+    if file_size > MAX_DMP_FILE_SIZE {
+        bail!(
+            "DMP file is too large ({:.1} MB, max {:.0} MB): {}",
+            file_size as f64 / (1024.0 * 1024.0),
+            MAX_DMP_FILE_SIZE as f64 / (1024.0 * 1024.0),
+            path.display()
+        );
     }
 
     // Read and parse file content

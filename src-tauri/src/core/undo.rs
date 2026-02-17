@@ -227,9 +227,12 @@ impl UndoStack {
     /// Set the history limit
     pub fn set_history_limit(&mut self, limit: usize) {
         self.history_limit = limit;
-        // Trim stack if needed
+        // Trim both stacks if needed
         while self.undo_stack.len() > self.history_limit {
             self.undo_stack.pop_front();
+        }
+        while self.redo_stack.len() > self.history_limit {
+            self.redo_stack.pop_front();
         }
     }
 
@@ -767,6 +770,27 @@ mod tests {
 
         assert_eq!(stack.len(), 0);
         assert!(!stack.can_undo());
+    }
+
+    #[test]
+    fn test_set_history_limit_trims_redo_stack() {
+        let mut stack = UndoStack::new();
+
+        // Build up a redo stack by pushing then undoing
+        for i in 0..10 {
+            stack.push_redo(UndoEntry {
+                command: test_create_section_command(&format!("Redo {i}")),
+                undo_data: UndoData::None,
+                timestamp: None,
+            });
+        }
+
+        assert_eq!(stack.redo_len(), 10);
+
+        // Reduce limit - should trim redo stack too
+        stack.set_history_limit(3);
+
+        assert_eq!(stack.redo_len(), 3);
     }
 
     // === UndoData Tests ===
