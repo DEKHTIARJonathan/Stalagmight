@@ -1109,6 +1109,43 @@ export default function DmpNewImportDialog({
     sectionIndex: number; stationIndex: number;
   } | null>(saved?.segmentAnchor ?? null);
 
+  // Preview anchor tracks which station the SectionPreview highlights.
+  // Follows dropdown hover; reverts to segmentAnchor on dropdown close.
+  const [previewAnchor, setPreviewAnchor] = useState<{
+    sectionIndex: number; stationIndex: number;
+  } | null>(saved?.segmentAnchor ?? null);
+  const segmentAnchorRef = useRef(segmentAnchor);
+
+  // Commit a new anchor: updates committed value, preview, and ref together.
+  const commitSegmentAnchor = useCallback((anchor: { sectionIndex: number; stationIndex: number } | null) => {
+    setSegmentAnchor(anchor);
+    setPreviewAnchor(anchor);
+    segmentAnchorRef.current = anchor;
+  }, []);
+
+  // When a section dropdown hovers an option, preview it on the map;
+  // when dropdown closes without selection, revert to the committed anchor.
+  // Uses ref (not state) to avoid stale-closure race conditions.
+  const handleAnchorSectionHover = useCallback((value: string | null) => {
+    if (value !== null) {
+      setPreviewAnchor({ sectionIndex: Number(value), stationIndex: 0 });
+    } else {
+      setPreviewAnchor(segmentAnchorRef.current);
+    }
+  }, []);
+
+  // Same for station dropdown hover — reads current section from ref.
+  const handleAnchorStationHover = useCallback((value: string | null) => {
+    if (value !== null) {
+      const current = segmentAnchorRef.current;
+      if (current) {
+        setPreviewAnchor({ sectionIndex: current.sectionIndex, stationIndex: Number(value) });
+      }
+    } else {
+      setPreviewAnchor(segmentAnchorRef.current);
+    }
+  }, []);
+
   // Per-mode state for manual_placing
   const [fromExistingSectionId, setFromExistingSectionId] = useState<number | null>(null);
   const [fromExistingStationIdx, setFromExistingStationIdx] = useState<number>(0);
@@ -1919,7 +1956,7 @@ export default function DmpNewImportDialog({
 
         // Initialize anchor to first section's station 0
         const firstSegment = segments[0]!;
-        setSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+        commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
 
         // Check if the first section has a skipped suggestion
         const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
@@ -2660,7 +2697,7 @@ export default function DmpNewImportDialog({
       }
       // Initialize anchor for next segment
       const firstSegment = next[0]!;
-      setSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+      commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
       const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
       setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
       setFromExistingSectionId(null);
@@ -2753,7 +2790,7 @@ export default function DmpNewImportDialog({
       const next = [...rest, first!];
       // Initialize anchor for next segment
       const nextSeg = next[0]!;
-      setSegmentAnchor({ sectionIndex: nextSeg[0]!, stationIndex: 0 });
+      commitSegmentAnchor({ sectionIndex: nextSeg[0]!, stationIndex: 0 });
       const hasSuggestion = nextSeg.some(idx => skippedSuggestionsRef.current.has(idx));
       setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
       setFromExistingSectionId(null);
@@ -2765,11 +2802,11 @@ export default function DmpNewImportDialog({
   // Station click handler for segment preview
   const handleSegmentStationClick = useCallback((stationIndex: number, sectionIndex?: number) => {
     if (sectionIndex != null) {
-      setSegmentAnchor({ sectionIndex, stationIndex });
+      commitSegmentAnchor({ sectionIndex, stationIndex });
     } else if (currentSegment && currentSegment.length > 0) {
-      setSegmentAnchor({ sectionIndex: currentSegment[0]!, stationIndex });
+      commitSegmentAnchor({ sectionIndex: currentSegment[0]!, stationIndex });
     }
-  }, [currentSegment]);
+  }, [currentSegment, commitSegmentAnchor]);
 
   // Manual map placement for a segment
   const handleStartSegmentPlacement = useCallback(() => {
@@ -3203,8 +3240,8 @@ export default function DmpNewImportDialog({
                 contextSections={fromExistingContextSections}
                 size={340}
                 onStationClick={handleSegmentStationClick}
-                selectedStationIndex={segmentAnchor?.stationIndex ?? null}
-                selectedSectionIndex={segmentAnchor?.sectionIndex ?? null}
+                selectedStationIndex={previewAnchor?.stationIndex ?? null}
+                selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
               />
             </div>
 
@@ -3283,7 +3320,7 @@ export default function DmpNewImportDialog({
                               value={String(segmentAnchor?.sectionIndex ?? '')}
                               onChange={(v) => {
                                 const idx = Number(v);
-                                setSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
+                                commitSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
                               }}
                               options={currentSegment.map((idx): SelectOption => ({
                                 value: String(idx),
@@ -3291,6 +3328,7 @@ export default function DmpNewImportDialog({
                               }))}
                               className="flex-1"
                               data-testid="from-existing-import-section-select"
+                              onOptionHover={handleAnchorSectionHover}
                             />
                           </div>
                         )}
@@ -3299,8 +3337,9 @@ export default function DmpNewImportDialog({
                           <Select
                             value={String(segmentAnchor?.stationIndex ?? 0)}
                             onChange={(v) => {
-                              if (!segmentAnchor) return;
-                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(v) });
+                              const current = segmentAnchorRef.current;
+                              if (!current) return;
+                              commitSegmentAnchor({ sectionIndex: current.sectionIndex, stationIndex: Number(v) });
                             }}
                             options={(() => {
                               const secIdx = segmentAnchor?.sectionIndex;
@@ -3316,6 +3355,7 @@ export default function DmpNewImportDialog({
                             })()}
                             className="flex-1"
                             data-testid="from-existing-import-station-select"
+                            onOptionHover={handleAnchorStationHover}
                           />
                         </div>
 
@@ -3389,7 +3429,7 @@ export default function DmpNewImportDialog({
                               value={String(segmentAnchor?.sectionIndex ?? '')}
                               onChange={(v) => {
                                 const idx = Number(v);
-                                setSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
+                                commitSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
                               }}
                               options={currentSegment.map((idx): SelectOption => ({
                                 value: String(idx),
@@ -3397,6 +3437,7 @@ export default function DmpNewImportDialog({
                               }))}
                               className="flex-1"
                               data-testid="manual-import-section-select"
+                              onOptionHover={handleAnchorSectionHover}
                             />
                           </div>
                         )}
@@ -3405,8 +3446,9 @@ export default function DmpNewImportDialog({
                           <Select
                             value={String(segmentAnchor?.stationIndex ?? 0)}
                             onChange={(v) => {
-                              if (!segmentAnchor) return;
-                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(v) });
+                              const current = segmentAnchorRef.current;
+                              if (!current) return;
+                              commitSegmentAnchor({ sectionIndex: current.sectionIndex, stationIndex: Number(v) });
                             }}
                             options={(() => {
                               const secIdx = segmentAnchor?.sectionIndex;
@@ -3422,6 +3464,7 @@ export default function DmpNewImportDialog({
                             })()}
                             className="flex-1"
                             data-testid="manual-import-station-select"
+                            onOptionHover={handleAnchorStationHover}
                           />
                         </div>
                         <Button
