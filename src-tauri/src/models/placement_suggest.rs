@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::config::PlacementSuggestionConfig;
+
 use super::{SectionId, Shot, ShotData};
 
 /// Direction of match between import and existing shots.
@@ -130,6 +132,7 @@ pub struct ImportSectionForSuggestion {
 pub fn suggest_all_placements(
     import_sections: &[ImportSectionForSuggestion],
     existing_sections: &[ExistingSection],
+    ps_config: &PlacementSuggestionConfig,
 ) -> Vec<CrossSectionSuggestion> {
     let mut all: Vec<CrossSectionSuggestion> = Vec::new();
 
@@ -159,7 +162,7 @@ pub fn suggest_all_placements(
         let fake_self_id = FAKE_ID_BASE + SectionId::from(import.index);
 
         // Match against existing project sections
-        let existing_suggestions = suggest_placements(&import.shots, existing_sections);
+        let existing_suggestions = suggest_placements(&import.shots, existing_sections, ps_config);
         for s in existing_suggestions {
             all.push(CrossSectionSuggestion {
                 existing_station_index: s.existing_station_index,
@@ -186,7 +189,7 @@ pub fn suggest_all_placements(
             .collect();
 
         if !other_imports.is_empty() {
-            let import_suggestions = suggest_placements(&import.shots, &other_imports);
+            let import_suggestions = suggest_placements(&import.shots, &other_imports, ps_config);
             for s in import_suggestions {
                 // Decode the fake ID back to an import index
                 let target_idx = (s.existing_section_id - FAKE_ID_BASE) as u32;
@@ -265,26 +268,32 @@ struct SuggestionConfig {
 
 impl Default for SuggestionConfig {
     fn default() -> Self {
+        Self::from(&PlacementSuggestionConfig::default())
+    }
+}
+
+impl From<&PlacementSuggestionConfig> for SuggestionConfig {
+    fn from(c: &PlacementSuggestionConfig) -> Self {
         Self {
-            azimuth_sigma: 18.0,
-            length_sigma: 0.8,
-            depth_sigma: 0.35,
-            azimuth_weight: 0.35,
-            length_weight: 0.25,
-            depth_in_weight: 0.20,
-            depth_out_weight: 0.20,
-            min_shot_score: 0.15,
-            min_aggregate_score: 0.45,
-            max_reference_shots: 5,
-            max_suggestions: 10,
-            min_partial_ratio: 0.15,
-            short_shot_threshold: 0.5,
-            single_shot_penalty: 0.6,
-            max_azimuth_error_full: 25.0,
-            max_azimuth_error_partial: 35.0,
-            max_depth_error: 0.50,
-            max_length_error_fraction: 0.15,
-            max_length_error_floor: 2.0,
+            azimuth_sigma: c.azimuth_sigma,
+            length_sigma: c.length_sigma,
+            depth_sigma: c.depth_sigma,
+            azimuth_weight: c.azimuth_weight,
+            length_weight: c.length_weight,
+            depth_in_weight: c.depth_in_weight,
+            depth_out_weight: c.depth_out_weight,
+            min_shot_score: c.min_shot_score,
+            min_aggregate_score: c.min_aggregate_score,
+            max_reference_shots: c.max_reference_shots as usize,
+            max_suggestions: c.max_suggestions as usize,
+            min_partial_ratio: c.min_partial_ratio,
+            short_shot_threshold: c.short_shot_threshold,
+            single_shot_penalty: c.single_shot_penalty,
+            max_azimuth_error_full: c.max_azimuth_error_full,
+            max_azimuth_error_partial: c.max_azimuth_error_partial,
+            max_depth_error: c.max_depth_error,
+            max_length_error_fraction: c.max_length_error_fraction,
+            max_length_error_floor: c.max_length_error_floor,
         }
     }
 }
@@ -618,8 +627,9 @@ pub struct ExistingSection {
 pub fn suggest_placements(
     import_shots: &[ShotData],
     existing_sections: &[ExistingSection],
+    ps_config: &PlacementSuggestionConfig,
 ) -> Vec<PlacementSuggestion> {
-    let config = &SuggestionConfig::default();
+    let config = &SuggestionConfig::from(ps_config);
 
     if import_shots.is_empty() || existing_sections.is_empty() {
         return Vec::new();
@@ -1075,7 +1085,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         assert!(!suggestions.is_empty(), "should find at least one suggestion");
 
         let best = &suggestions[0];
@@ -1107,7 +1117,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         assert!(!suggestions.is_empty(), "should find reverse match");
 
         let best = &suggestions[0];
@@ -1138,7 +1148,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
 
         // Should find a match from station N (= 4, last station)
         let station_n_suggestion = suggestions.iter().find(|s| s.import_station_index == 4);
@@ -1150,7 +1160,7 @@ mod tests {
         let import_shots = vec![
             make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0),
         ];
-        let suggestions = suggest_placements(&import_shots, &[]);
+        let suggestions = suggest_placements(&import_shots, &[], &PlacementSuggestionConfig::default());
         assert!(suggestions.is_empty());
     }
 
@@ -1161,7 +1171,7 @@ mod tests {
                 make_shot(0, 90.0, 90.0, 5.0, 3.0, 4.0),
             ]),
         ];
-        let suggestions = suggest_placements(&[], &existing);
+        let suggestions = suggest_placements(&[], &existing, &PlacementSuggestionConfig::default());
         assert!(suggestions.is_empty());
     }
 
@@ -1177,7 +1187,7 @@ mod tests {
                 make_shot(1, 90.0, 90.0, 15.0, 55.0, 60.0),
             ]),
         ];
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         // Should have no good suggestions
         assert!(
             suggestions.is_empty() || suggestions[0].score < 0.45,
@@ -1205,7 +1215,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         assert!(!suggestions.is_empty());
         assert_eq!(suggestions[0].existing_section_id, 2, "should match section 2");
     }
@@ -1225,7 +1235,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         assert!(!suggestions.is_empty());
         assert_eq!(suggestions[0].confidence, SuggestionConfidence::High);
     }
@@ -1242,7 +1252,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         // A single matching shot should still produce a suggestion, but penalized
         assert!(!suggestions.is_empty(), "single shot should still match");
         assert!(suggestions[0].score < 0.7, "single shot should be penalized, got {}", suggestions[0].score);
@@ -1263,7 +1273,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         assert!(!suggestions.is_empty());
         let best = &suggestions[0];
         assert!(best.is_partial, "should detect partial match");
@@ -1384,7 +1394,7 @@ mod tests {
             ]),
         ];
 
-        let suggestions = suggest_placements(&import_shots, &existing);
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         // Should not have duplicate entries for the same position
         let count = suggestions
             .iter()

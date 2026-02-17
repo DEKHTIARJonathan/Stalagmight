@@ -106,6 +106,7 @@ export * from './ipc/MapConfig';
 export * from './ipc/MapControlsConfig';
 export * from './ipc/ValidationConfig';
 export * from './ipc/ClosureAdjustmentConfig';
+export * from './ipc/PlacementSuggestionConfig';
 export * from './ipc/ExportConfig';
 export * from './ipc/LoggingConfig';
 export * from './ipc/ShortcutsConfig';

@@ -1710,7 +1710,7 @@ mod tests {
             })
             .collect();
 
-        let suggestions = suggest_all_placements(&import_sections, &existing_sections);
+        let suggestions = suggest_all_placements(&import_sections, &existing_sections, &crate::config::PlacementSuggestionConfig::default());
 
         // Print all suggestions for debugging
         for (i, s) in suggestions.iter().enumerate() {
@@ -1863,7 +1863,7 @@ mod tests {
             })
             .collect();
 
-        let suggestions = suggest_all_placements(&import_sections, &existing_sections);
+        let suggestions = suggest_all_placements(&import_sections, &existing_sections, &crate::config::PlacementSuggestionConfig::default());
 
         // Simulate applyAllOverlapTreatments import-side logic.
         // deleted_shots: section_index → set of shot IDs marked deleted.

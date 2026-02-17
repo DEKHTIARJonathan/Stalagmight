@@ -11,14 +11,14 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Done | Total | Progress |
 |----------|------|-------|----------|
 | Import/Export | 19 | 19 | 100% |
-| UI & Polish | 16 | 18 | 89% |
+| UI & Polish | 17 | 18 | 94% |
 | Data & Editing | 5 | 5 | 100% |
 | Loop Closure | 5 | 5 | 100% |
 | Accessibility & i18n | 7 | 7 | 100% |
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 1 | 0% |
 | Testing | 0 | 1 | 0% |
-| **Total** | **61** | **65** | **94%** |
+| **Total** | **62** | **65** | **95%** |
 
 ---
 
@@ -84,7 +84,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 
 **Subtotals**: ✅ 19 done, ❌ 0 not started
 
-### UI & Polish (15/18 done)
+### UI & Polish (16/18 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -95,7 +95,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Tool Panel Redesign | ✅ | |
 | Tile Caching Settings | ✅ | CacheSettings.tsx + Rust config |
 | Three-Level Settings Reset | ✅ | Per-setting, per-tab, full reset (SPEC 2.9) |
-| Automatic Reference Shot Alignment Settings | ❌ | Configure auto-alignment behavior in Settings |
+| Automatic Reference Shot Alignment Settings | ✅ | PlacementSuggestionConfig exposed in Advanced Settings with 19 tunable fields |
 | Fix Undo Stack Section Modification Details | ✅ | Only shows changed fields; includes closure adjustment weight |
 | Fix Section Hyperlink Highlighting Not Clearing | ✅ | Highlight persists after navigating away from section link |
 | Splash Screen | ✅ | React overlay with branding; opt-in via Settings > General > Startup |
@@ -107,7 +107,7 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Add Comment Tool | ✅ | Comment + Move Comment tools with atomic undo, swap dialog, visual pickup |
 | Use Best Available Tile Resolution | ✅ | ArcGIS tilemap API + parent tile fallback with upscaling |
 
-**Subtotals**: ✅ 16 done, ❌ 2 not started
+**Subtotals**: ✅ 17 done, ❌ 1 not started
 
 ### Data & Editing (5/5 done)
 
@@ -186,16 +186,16 @@ This document tracks functionality specified in `docs/SPEC.md` and implementatio
 | Category | Tasks | Done | Partial | Remaining |
 |----------|-------|------|---------|-----------|
 | Import/Export | 19 | 19 | 0 | 0 |
-| UI & Polish | 18 | 16 | 0 | 2 |
+| UI & Polish | 18 | 17 | 0 | 1 |
 | Data & Editing | 5 | 5 | 0 | 0 |
 | Loop Closure | 5 | 5 | 0 | 0 |
 | Accessibility & i18n | 7 | 7 | 0 | 0 |
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 1 | 0 | 0 | 1 |
 | Testing | 1 | 0 | 0 | 1 |
-| **Total** | **65** | **61** | **0** | **4** |
+| **Total** | **65** | **62** | **0** | **3** |
 
-**Overall Progress**: 61 done = ~94% complete
+**Overall Progress**: 62 done = ~95% complete
 
 ---
 

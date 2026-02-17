@@ -217,6 +217,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     global_view: { ...base.global_view },
     appearance: { ...base.appearance },
     import: { ...base.import },
+    placement_suggestion: { ...(base.placement_suggestion ?? defaultConfig.placement_suggestion) },
   };
 
   // Apply updates with deep merge for each key
@@ -296,6 +297,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   }
   if (updates.appearance) {
     result.appearance = { ...result.appearance, ...updates.appearance };
+  }
+  if (updates.placement_suggestion) {
+    result.placement_suggestion = { ...result.placement_suggestion, ...updates.placement_suggestion };
   }
 
   return result;

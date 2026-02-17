@@ -474,6 +474,7 @@
         "logging": "Logging",
         "import": "Import",
         "closureAdjustment": "Closure Adjustment",
+        "placementSuggestion": "Placement Suggestion",
         "panels": "Panel Dimensions",
         "configFile": "Configuration File"
       },
@@ -538,6 +539,103 @@
           "aria": "Sequential distribution method",
           "proportional": "Proportional by length",
           "equal": "Equal distribution"
+        }
+      },
+      "placementSuggestion": {
+        "azimuthWeight": {
+          "label": "Azimuth weight",
+          "help": "Weight for azimuth score component (0\u20131)",
+          "aria": "Azimuth weight"
+        },
+        "lengthWeight": {
+          "label": "Length weight",
+          "help": "Weight for length score component (0\u20131)",
+          "aria": "Length weight"
+        },
+        "depthInWeight": {
+          "label": "Depth in weight",
+          "help": "Weight for depth-in score component (0\u20131)",
+          "aria": "Depth in weight"
+        },
+        "depthOutWeight": {
+          "label": "Depth out weight",
+          "help": "Weight for depth-out score component (0\u20131)",
+          "aria": "Depth out weight"
+        },
+        "azimuthSigma": {
+          "label": "Azimuth sigma",
+          "help": "Gaussian sigma for azimuth error tolerance (degrees)",
+          "aria": "Azimuth sigma in degrees"
+        },
+        "lengthSigma": {
+          "label": "Length sigma",
+          "help": "Gaussian sigma for length error tolerance (meters)",
+          "aria": "Length sigma in meters"
+        },
+        "depthSigma": {
+          "label": "Depth sigma",
+          "help": "Gaussian sigma for depth error tolerance (meters)",
+          "aria": "Depth sigma in meters"
+        },
+        "minShotScore": {
+          "label": "Min shot score",
+          "help": "Minimum per-shot score to continue matching (0\u20131)",
+          "aria": "Minimum shot score"
+        },
+        "minAggregateScore": {
+          "label": "Min aggregate score",
+          "help": "Minimum aggregate score to include a suggestion (0\u20131)",
+          "aria": "Minimum aggregate score"
+        },
+        "singleShotPenalty": {
+          "label": "Single shot penalty",
+          "help": "Penalty multiplier for single-shot matches (0\u20131)",
+          "aria": "Single shot penalty"
+        },
+        "maxAzimuthErrorFull": {
+          "label": "Max azimuth error (full)",
+          "help": "Hard cutoff: max azimuth error for full shots (degrees)",
+          "aria": "Max azimuth error for full shots"
+        },
+        "maxAzimuthErrorPartial": {
+          "label": "Max azimuth error (partial)",
+          "help": "Hard cutoff: max azimuth error for partial shots (degrees)",
+          "aria": "Max azimuth error for partial shots"
+        },
+        "maxDepthError": {
+          "label": "Max depth error",
+          "help": "Hard cutoff: max depth error per measurement point (meters)",
+          "aria": "Max depth error in meters"
+        },
+        "maxLengthErrorFraction": {
+          "label": "Max length error fraction",
+          "help": "Length error fraction for dynamic cutoff (0\u20131)",
+          "aria": "Max length error fraction"
+        },
+        "maxLengthErrorFloor": {
+          "label": "Max length error floor",
+          "help": "Minimum length error cutoff regardless of shot length (meters)",
+          "aria": "Max length error floor in meters"
+        },
+        "maxReferenceShots": {
+          "label": "Max reference shots",
+          "help": "Maximum number of reference shots to try from each leaf (1\u201350)",
+          "aria": "Max reference shots"
+        },
+        "maxSuggestions": {
+          "label": "Max suggestions",
+          "help": "Maximum number of suggestions to return (1\u2013100)",
+          "aria": "Max suggestions"
+        },
+        "minPartialRatio": {
+          "label": "Min partial ratio",
+          "help": "Minimum partial shot length ratio (0\u20131)",
+          "aria": "Min partial ratio"
+        },
+        "shortShotThreshold": {
+          "label": "Short shot threshold",
+          "help": "Shots shorter than this get reduced weight (meters)",
+          "aria": "Short shot threshold in meters"
         }
       },
       "panels": {

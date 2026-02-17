@@ -306,7 +306,8 @@ pub fn suggest_import_placement(
         })
         .collect();
 
-    Ok(suggest_placements(&shots, &existing_sections))
+    let config = state.get_config();
+    Ok(suggest_placements(&shots, &existing_sections, &config.placement_suggestion))
 }
 
 /// Suggest placements for ALL import sections against BOTH existing project
@@ -329,7 +330,8 @@ pub fn suggest_all_import_placements(
         None => Vec::new(),
     };
 
-    Ok(suggest_all_placements(&import_sections, &existing_sections))
+    let config = state.get_config();
+    Ok(suggest_all_placements(&import_sections, &existing_sections, &config.placement_suggestion))
 }
 
 /// Suggest placements for orphaned sections' leaf ends against newly imported sections.
@@ -340,5 +342,6 @@ pub fn suggest_orphan_placements(
     newly_imported_section_ids: Vec<u32>,
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
     let project = state.get_project_state().ok_or("No project open")?;
-    Ok(project.suggest_orphan_placements(&newly_imported_section_ids))
+    let config = state.get_config();
+    Ok(project.suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion))
 }
