@@ -73,31 +73,3 @@ Implementation plans are stored in `docs/plans/`.
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
 | [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
-
-<!-- BEGIN FLOW-NEXT -->
-## Flow-Next
-
-This project uses Flow-Next for task tracking. Use `.flow/bin/flowctl` instead of markdown TODOs or TodoWrite.
-
-**Quick commands:**
-```bash
-.flow/bin/flowctl list                # List all epics + tasks
-.flow/bin/flowctl epics               # List all epics
-.flow/bin/flowctl tasks --epic fn-N   # List tasks for epic
-.flow/bin/flowctl ready --epic fn-N   # What's ready
-.flow/bin/flowctl show fn-N.M         # View task
-.flow/bin/flowctl start fn-N.M        # Claim task
-.flow/bin/flowctl done fn-N.M --summary-file s.md --evidence-json e.json
-```
-
-**Rules:**
-- Use `.flow/bin/flowctl` for ALL task tracking
-- Do NOT create markdown TODOs or use TodoWrite
-- Re-anchor (re-read spec + status) before every task
-
-**CRITICAL pitfalls (read `.flow/usage.md` for details):**
-- Always use `--json` flag for programmatic access
-- Use stdin heredocs (`--file -`) not temp files
-
-**More info:** `.flow/bin/flowctl --help` or read `.flow/usage.md`
-<!-- END FLOW-NEXT -->
