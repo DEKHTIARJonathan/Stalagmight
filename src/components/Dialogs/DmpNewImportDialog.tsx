@@ -11,6 +11,7 @@ import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
 import type { OverlapMode } from '../../types/config';
 import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
+import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
@@ -90,6 +91,68 @@ export interface SavedManualPlacingState {
   pendingSegmentImport?: number[];
   /** DMP indices of segments the user chose to discard ("Do not place"). */
   discardedIndices?: number[];
+}
+
+// ─── Effective section helpers ────────────────────────────────────────────────
+
+/**
+ * Build a DmpSection reflecting edits (deleted shots removed, interpolated
+ * values applied). Falls back to the raw section when no edits exist.
+ */
+function buildEffectiveDmpSection(raw: DmpSection, edits: SectionEditState | undefined): DmpSection {
+  if (!edits) return raw;
+  return {
+    ...raw,
+    name: edits.name,
+    direction: edits.direction,
+    shots: edits.shots
+      .filter(s => !s.isDeleted)
+      .map(s => ({
+        shot_type: 'Standard' as const,
+        heading_in: s.azimuth_in,
+        heading_out: s.azimuth_out,
+        length: s.length,
+        depth_in: s.depth_in,
+        depth_out: s.depth_out,
+        pitch_in: s.pitch_in ?? 0,
+        pitch_out: s.pitch_out ?? 0,
+        left: s.left ?? 0,
+        right: s.right ?? 0,
+        up: s.up ?? 0,
+        down: s.down ?? 0,
+        temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
+        ...(s.comment != null ? { comment: s.comment } : {}),
+      })),
+  };
+}
+
+/**
+ * Adjust VirtualConnection station indices to account for deleted shots in
+ * edited sections (so layout offsets align with post-treatment geometry).
+ */
+function adjustConnectionsForEdits(
+  connections: VirtualConnection[],
+  sectionEdits: Map<number, SectionEditState>,
+): VirtualConnection[] {
+  return connections.map(conn => {
+    const importEdits = sectionEdits.get(conn.importSectionIndex);
+    const adjustedImport = importEdits
+      ? adjustStationForDeletedShots(importEdits.shots, conn.importStationIndex)
+      : conn.importStationIndex;
+
+    const adjustedTarget =
+      conn.targetType === 'importing' && conn.targetImportIndex != null && conn.targetImportStationIndex != null
+        ? (sectionEdits.get(conn.targetImportIndex)
+            ? adjustStationForDeletedShots(sectionEdits.get(conn.targetImportIndex)!.shots, conn.targetImportStationIndex)
+            : conn.targetImportStationIndex)
+        : conn.targetImportStationIndex;
+
+    return {
+      ...conn,
+      importStationIndex: adjustedImport,
+      ...(adjustedTarget != null ? { targetImportStationIndex: adjustedTarget } : {}),
+    };
+  });
 }
 
 // ─── Graph helpers ───────────────────────────────────────────────────────────
@@ -2453,12 +2516,22 @@ export default function DmpNewImportDialog({
     return fromExistingTargetSection.shots.length + 1;
   }, [fromExistingTargetSection]);
 
-  // Compute segment preview for manual_placing
+  // Compute segment preview for manual_placing.
+  // Uses effective (post-treatment) sections so the preview reflects deleted
+  // shots and interpolated values — matching what will be imported.
   const segmentPreviewSections = useMemo(() => {
     if (!currentSegment) return null;
-    const layout = computeSegmentLayout(currentSegment, connections, dmpFile.sections);
+
+    // Build effective DmpSections with edits applied
+    const effectiveSections = dmpFile.sections.map((sec, idx) =>
+      buildEffectiveDmpSection(sec, sectionEditsRef.current.get(idx)),
+    );
+    // Adjust connection station indices to match post-deletion geometry
+    const effectiveConns = adjustConnectionsForEdits(connections, sectionEditsRef.current);
+    const layout = computeSegmentLayout(currentSegment, effectiveConns, effectiveSections);
+
     return layout.map((entry) => {
-      const section = dmpFile.sections[entry.sectionIndex];
+      const section = effectiveSections[entry.sectionIndex];
       if (!section) return null;
       const edits = sectionEditsRef.current.get(entry.sectionIndex);
       const selectedPos = selectedIndices.indexOf(entry.sectionIndex);
@@ -2721,30 +2794,43 @@ export default function DmpNewImportDialog({
       shots,
     };
 
-    // Build additional sections for segment shadow
-    const layout = computeSegmentLayout(currentSegment, connections, dmpFile.sections);
+    // Build additional sections for segment shadow using effective (post-treatment)
+    // sections so the overlay reflects deleted shots and interpolated values.
+    const effectiveSections = dmpFile.sections.map((sec, idx) =>
+      buildEffectiveDmpSection(sec, sectionEditsRef.current.get(idx)),
+    );
+    const effectiveConns = adjustConnectionsForEdits(connections, sectionEditsRef.current);
+    const layout = computeSegmentLayout(currentSegment, effectiveConns, effectiveSections);
+    // Offsets from computeSegmentLayout are relative to station 0 of the root
+    // section (segmentIndices[0]). Re-base them relative to the anchor section's
+    // station 0 so PlacementOverlay positions them correctly.
+    const anchorLayoutEntry = layout.find(e => e.sectionIndex === segmentAnchor.sectionIndex);
+    const anchorLayoutOffsetX = anchorLayoutEntry?.offsetX ?? 0;
+    const anchorLayoutOffsetY = anchorLayoutEntry?.offsetY ?? 0;
     const additionalSections = layout
       .filter(entry => entry.sectionIndex !== segmentAnchor.sectionIndex)
       .map(entry => {
-        const sec = dmpFile.sections[entry.sectionIndex];
+        const sec = effectiveSections[entry.sectionIndex];
         if (!sec) return null;
         const secEdits = sectionEditsRef.current.get(entry.sectionIndex);
         const secSelectedPos = selectedIndices.indexOf(entry.sectionIndex);
         const secColor = (secEdits?.color || null) ?? SECTION_COLORS[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % SECTION_COLORS.length] ?? '#95a5a6';
-        const secShots = convertToEditableShots(sec.shots).map(editableShotToShotData);
+        const secShots = secEdits
+          ? secEdits.shots.filter(s => !s.isDeleted).map(editableShotToShotData)
+          : convertToEditableShots(sec.shots).map(editableShotToShotData);
         return {
           sectionData: {
-            name: sec.name,
+            name: secEdits?.name ?? sec.name,
             surveyor: null,
             date: null,
             color: secColor,
-            direction: sec.direction,
-            quality: 1.0,
+            direction: secEdits?.direction ?? sec.direction,
+            quality: secEdits?.quality ?? 1.0,
             shots: secShots,
           },
           color: secColor,
-          offsetX: entry.offsetX,
-          offsetY: entry.offsetY,
+          offsetX: entry.offsetX - anchorLayoutOffsetX,
+          offsetY: entry.offsetY - anchorLayoutOffsetY,
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -3141,7 +3227,7 @@ export default function DmpNewImportDialog({
               <div className="text-xs text-text-secondary">
                 {segmentAnchor ? (
                   t('dialogs.dmpNewImport.manualPlacing.anchorStation', {
-                    section: dmpFile.sections[segmentAnchor.sectionIndex]?.name ?? `Section ${segmentAnchor.sectionIndex}`,
+                    section: sectionEditsRef.current.get(segmentAnchor.sectionIndex)?.name ?? dmpFile.sections[segmentAnchor.sectionIndex]?.name ?? `Section ${segmentAnchor.sectionIndex}`,
                     station: segmentAnchor.stationIndex,
                   })
                 ) : (
@@ -3193,45 +3279,44 @@ export default function DmpNewImportDialog({
                         {currentSegment && currentSegment.length > 1 && (
                           <div className="flex items-center gap-2">
                             <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
-                            <select
-                              value={segmentAnchor?.sectionIndex ?? ''}
-                              onChange={(e) => {
-                                const idx = Number(e.target.value);
+                            <Select
+                              value={String(segmentAnchor?.sectionIndex ?? '')}
+                              onChange={(v) => {
+                                const idx = Number(v);
                                 setSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
                               }}
-                              className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                              options={currentSegment.map((idx): SelectOption => ({
+                                value: String(idx),
+                                label: sectionEditsRef.current.get(idx)?.name ?? dmpFile.sections[idx]?.name ?? `Section ${idx}`,
+                              }))}
+                              className="flex-1"
                               data-testid="from-existing-import-section-select"
-                            >
-                              {currentSegment.map((idx) => (
-                                <option key={idx} value={idx}>
-                                  {dmpFile.sections[idx]?.name ?? `Section ${idx}`}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           </div>
                         )}
                         <div className="flex items-center gap-2">
-                          <label className="text-xs text-text-secondary whitespace-nowrap">
-                            {currentSegment && currentSegment.length <= 1 ? 'Station' : 'Station'}
-                          </label>
-                          <select
-                            value={segmentAnchor?.stationIndex ?? 0}
-                            onChange={(e) => {
+                          <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
+                          <Select
+                            value={String(segmentAnchor?.stationIndex ?? 0)}
+                            onChange={(v) => {
                               if (!segmentAnchor) return;
-                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(e.target.value) });
+                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(v) });
                             }}
-                            className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
-                            data-testid="from-existing-import-station-select"
-                          >
-                            {(() => {
+                            options={(() => {
                               const secIdx = segmentAnchor?.sectionIndex;
+                              const secEdits = secIdx != null ? sectionEditsRef.current.get(secIdx) : undefined;
                               const sec = secIdx != null ? dmpFile.sections[secIdx] : null;
-                              const count = sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
-                              return Array.from({ length: count }, (_, i) => (
-                                <option key={i} value={i}>Station {i}</option>
-                              ));
+                              const count = secEdits
+                                ? secEdits.shots.filter(s => !s.isDeleted).length + 1
+                                : sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
+                              return Array.from({ length: count }, (_, i): SelectOption => ({
+                                value: String(i),
+                                label: `Station ${i}`,
+                              }));
                             })()}
-                          </select>
+                            className="flex-1"
+                            data-testid="from-existing-import-station-select"
+                          />
                         </div>
 
                         {/* Target side: existing project section + station */}
@@ -3240,35 +3325,37 @@ export default function DmpNewImportDialog({
                           <>
                             <div className="flex items-center gap-2">
                               <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
-                              <select
-                                value={fromExistingSectionId ?? ''}
-                                onChange={(e) => {
-                                  const val = e.target.value ? Number(e.target.value) : null;
+                              <Select
+                                value={fromExistingSectionId != null ? String(fromExistingSectionId) : ''}
+                                onChange={(v) => {
+                                  const val = v ? Number(v) : null;
                                   setFromExistingSectionId(val);
                                   setFromExistingStationIdx(0);
                                 }}
-                                className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                                options={[
+                                  { value: '', label: '—' } as SelectOption,
+                                  ...projectSections.map((s): SelectOption => ({
+                                    value: String(s.id),
+                                    label: s.name ?? `Section ${s.id}`,
+                                  })),
+                                ]}
+                                className="flex-1"
                                 data-testid="from-existing-section-select"
-                              >
-                                <option value="">—</option>
-                                {projectSections.map((s) => (
-                                  <option key={s.id} value={s.id}>{s.name}</option>
-                                ))}
-                              </select>
+                              />
                             </div>
                             {fromExistingSectionId != null && (
                               <div className="flex items-center gap-2">
                                 <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
-                                <select
-                                  value={fromExistingStationIdx}
-                                  onChange={(e) => setFromExistingStationIdx(Number(e.target.value))}
-                                  className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                                <Select
+                                  value={String(fromExistingStationIdx)}
+                                  onChange={(v) => setFromExistingStationIdx(Number(v))}
+                                  options={Array.from({ length: fromExistingStationCount }, (_, i): SelectOption => ({
+                                    value: String(i),
+                                    label: `Station ${i}`,
+                                  }))}
+                                  className="flex-1"
                                   data-testid="from-existing-station-select"
-                                >
-                                  {Array.from({ length: fromExistingStationCount }, (_, i) => (
-                                    <option key={i} value={i}>Station {i}</option>
-                                  ))}
-                                </select>
+                                />
                               </div>
                             )}
                           </>
@@ -3298,43 +3385,44 @@ export default function DmpNewImportDialog({
                         {currentSegment && currentSegment.length > 1 && (
                           <div className="flex items-center gap-2">
                             <label className="text-xs text-text-secondary whitespace-nowrap">Section</label>
-                            <select
-                              value={segmentAnchor?.sectionIndex ?? ''}
-                              onChange={(e) => {
-                                const idx = Number(e.target.value);
+                            <Select
+                              value={String(segmentAnchor?.sectionIndex ?? '')}
+                              onChange={(v) => {
+                                const idx = Number(v);
                                 setSegmentAnchor({ sectionIndex: idx, stationIndex: 0 });
                               }}
-                              className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
+                              options={currentSegment.map((idx): SelectOption => ({
+                                value: String(idx),
+                                label: sectionEditsRef.current.get(idx)?.name ?? dmpFile.sections[idx]?.name ?? `Section ${idx}`,
+                              }))}
+                              className="flex-1"
                               data-testid="manual-import-section-select"
-                            >
-                              {currentSegment.map((idx) => (
-                                <option key={idx} value={idx}>
-                                  {dmpFile.sections[idx]?.name ?? `Section ${idx}`}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           </div>
                         )}
                         <div className="flex items-center gap-2">
                           <label className="text-xs text-text-secondary whitespace-nowrap">Station</label>
-                          <select
-                            value={segmentAnchor?.stationIndex ?? 0}
-                            onChange={(e) => {
+                          <Select
+                            value={String(segmentAnchor?.stationIndex ?? 0)}
+                            onChange={(v) => {
                               if (!segmentAnchor) return;
-                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(e.target.value) });
+                              setSegmentAnchor({ ...segmentAnchor, stationIndex: Number(v) });
                             }}
-                            className="px-2 py-1 bg-background border border-border rounded text-xs flex-1"
-                            data-testid="manual-import-station-select"
-                          >
-                            {(() => {
+                            options={(() => {
                               const secIdx = segmentAnchor?.sectionIndex;
+                              const secEdits = secIdx != null ? sectionEditsRef.current.get(secIdx) : undefined;
                               const sec = secIdx != null ? dmpFile.sections[secIdx] : null;
-                              const count = sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
-                              return Array.from({ length: count }, (_, i) => (
-                                <option key={i} value={i}>Station {i}</option>
-                              ));
+                              const count = secEdits
+                                ? secEdits.shots.filter(s => !s.isDeleted).length + 1
+                                : sec ? sec.shots.filter(s => s.shot_type === 'Standard').length + 1 : 0;
+                              return Array.from({ length: count }, (_, i): SelectOption => ({
+                                value: String(i),
+                                label: `Station ${i}`,
+                              }));
                             })()}
-                          </select>
+                            className="flex-1"
+                            data-testid="manual-import-station-select"
+                          />
                         </div>
                         <Button
                           size="sm"
