@@ -251,10 +251,15 @@ export function Select({
     });
   }, [isOpen, triggerRect]);
 
-  // Reset highlighted index when dropdown opens/closes
+  // Reset highlighted index only on open/close transitions — NOT on every
+  // re-render while the dropdown is open.  Parent re-renders (e.g. from hover
+  // preview state changes) can create new option array references; without
+  // the transition guard, highlighted index and scroll position would snap
+  // back to the selected item on every hover.
+  const prevIsOpenRef = useRef(false);
   useEffect(() => {
-    if (isOpen) {
-      // When opening, highlight the currently selected option if enabled, otherwise first enabled option
+    if (isOpen && !prevIsOpenRef.current) {
+      // Dropdown just opened — highlight the currently selected option if enabled
       const selectedIdx = findSelectedIndex();
       const selectedOpt = selectedIdx >= 0 ? flatOptions[selectedIdx] : null;
       if (selectedIdx >= 0 && selectedOpt && !selectedOpt.disabled) {
@@ -264,9 +269,10 @@ export function Select({
         const firstEnabled = flatOptions.findIndex(opt => opt && !opt.disabled);
         setHighlightedIndex(firstEnabled);
       }
-    } else {
+    } else if (!isOpen && prevIsOpenRef.current) {
       setHighlightedIndex(-1);
     }
+    prevIsOpenRef.current = isOpen;
   }, [isOpen, findSelectedIndex, flatOptions]);
 
   // Scroll highlighted option into view
@@ -578,6 +584,12 @@ export function Select({
           aria-labelledby={ariaLabelledBy}
           className="bg-panel border border-border rounded shadow-lg max-h-60 overflow-auto"
           style={dropdownStyle}
+          onMouseLeave={() => {
+            // Revert preview to the committed selection when cursor leaves
+            const selectedIdx = findSelectedIndex();
+            setHighlightedIndex(selectedIdx >= 0 ? selectedIdx : -1);
+            onOptionHover?.(null);
+          }}
         >
           {renderOptions()}
         </div>,
