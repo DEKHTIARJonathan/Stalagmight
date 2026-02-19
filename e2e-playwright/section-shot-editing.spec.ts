@@ -208,10 +208,21 @@ test.describe('Section and Shot Editing', () => {
     const upInput = dialog.getByTestId('shot-up-0');
     const downInput = dialog.getByTestId('shot-down-0');
 
-    await leftInput.fill('2.2');
-    await rightInput.fill('3.1');
-    await upInput.fill('4.4');
-    await downInput.fill('1.7');
+    await leftInput.click();
+    await leftInput.press('ControlOrMeta+a');
+    await leftInput.type('2.2');
+
+    await rightInput.click();
+    await rightInput.press('ControlOrMeta+a');
+    await rightInput.type('3.1');
+
+    await upInput.click();
+    await upInput.press('ControlOrMeta+a');
+    await upInput.type('4.4');
+
+    await downInput.click();
+    await downInput.press('ControlOrMeta+a');
+    await downInput.type('1.7');
 
     await expect(leftInput).toHaveValue('2.2');
     await expect(rightInput).toHaveValue('3.1');

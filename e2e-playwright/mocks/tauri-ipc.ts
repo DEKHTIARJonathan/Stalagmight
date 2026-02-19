@@ -195,6 +195,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Duplicate import mock state - configurable for hash-tracking tests
       let mockCheckDuplicateResult = false; // Default: no duplicate
       let trackImportedFileCalls: Array<{ hash: string }> = [];
+      let mergeStationCalls: Array<{
+        stationA: { section_id: number; station_index: number };
+        stationB: { section_id: number; station_index: number };
+      }> = [];
+      let mockOrphanPlacementSuggestions: unknown[] = [];
+      let mockImportPlacementSuggestions: unknown[] = [];
 
       (window as unknown as Record<string, unknown>).__MOCK_SET_CHECK_DUPLICATE_RESULT__ = (result: boolean) => {
         mockCheckDuplicateResult = result;
@@ -202,6 +208,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
         trackImportedFileCalls = [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_MERGE_STATION_CALLS__ = () => [...mergeStationCalls];
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_MERGE_STATION_CALLS__ = () => {
+        mergeStationCalls = [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_ORPHAN_SUGGESTIONS__ = (suggestions: unknown[]) => {
+        mockOrphanPlacementSuggestions = Array.isArray(suggestions) ? [...suggestions] : [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_ORPHAN_SUGGESTIONS__ = () => {
+        mockOrphanPlacementSuggestions = [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__ = (suggestions: unknown[]) => {
+        mockImportPlacementSuggestions = Array.isArray(suggestions) ? [...suggestions] : [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_IMPORT_PLACEMENT_SUGGESTIONS__ = () => {
+        mockImportPlacementSuggestions = [];
       };
 
       // Expose config override for testing config reload
@@ -238,6 +260,98 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         showShots: 'true',
         showSectionNames: 'true',
         showDepthGradient: 'false',
+      };
+
+      interface MockGpxPoint {
+        latitude: number;
+        longitude: number;
+        elevation: number | null;
+        time: string | null;
+      }
+
+      const buildMockGpxFile = (path: string | null | undefined) => {
+        const normalized = (path ?? '').toLowerCase();
+        const now = new Date();
+        const iso = now.toISOString();
+
+        const waypointOnlyFile = {
+          name: 'Waypoint Check Dive',
+          waypoints: [
+            { name: 'Entry Bell', comment: 'Main entry', latitude: 24.55, longitude: -81.78, elevation: 1.2, time: iso },
+            { name: 'Jump Reel', comment: null, latitude: 24.5504, longitude: -81.7794, elevation: 3.4, time: iso },
+          ],
+          tracks: [],
+          routes: [],
+        };
+
+        if (normalized.includes('waypoints-only')) {
+          return waypointOnlyFile;
+        }
+
+        return {
+          name: 'Reef Traverse',
+          waypoints: waypointOnlyFile.waypoints,
+          tracks: [
+            {
+              name: 'Main Line',
+              comment: 'Primary track',
+              segments: [
+                {
+                  points: [
+                    { latitude: 24.55, longitude: -81.78, elevation: 2.0, time: iso },
+                    { latitude: 24.5502, longitude: -81.7798, elevation: 2.6, time: iso },
+                    { latitude: 24.55045, longitude: -81.7795, elevation: 3.1, time: iso },
+                  ],
+                },
+              ],
+            },
+          ],
+          routes: [
+            {
+              name: 'Exit Route',
+              comment: null,
+              points: [
+                { name: 'Route Start', latitude: 24.55045, longitude: -81.7795, elevation: 3.1, time: iso },
+                { name: 'Route Mid', latitude: 24.55065, longitude: -81.7792, elevation: 2.8, time: iso },
+                { name: 'Route End', latitude: 24.5508, longitude: -81.7789, elevation: 2.5, time: iso },
+              ],
+            },
+          ],
+        };
+      };
+
+      const toShot = (
+        pointA: MockGpxPoint,
+        pointB: MockGpxPoint,
+        shotId: number,
+        depthInverted: boolean
+      ) => {
+        const dLat = pointB.latitude - pointA.latitude;
+        const dLon = pointB.longitude - pointA.longitude;
+        const horizontalMeters = Math.max(0.1, Math.hypot(dLat, dLon) * 111_000);
+        const azimuth = ((Math.atan2(dLon, dLat) * 180) / Math.PI + 360) % 360;
+        const toDepth = (value: number | null): number => {
+          if (value == null || !Number.isFinite(value)) return 0;
+          return depthInverted ? -Math.abs(value) : -value;
+        };
+        return {
+          id: shotId,
+          azimuth_in: azimuth,
+          azimuth_out: azimuth,
+          length: Number(horizontalMeters.toFixed(2)),
+          depth_in: toDepth(pointA.elevation),
+          depth_out: toDepth(pointB.elevation),
+          pitch_in: null,
+          pitch_out: null,
+          left: null,
+          right: null,
+          up: null,
+          down: null,
+          comment: null,
+          is_reference: false,
+          marker_index: null,
+          temperature: null,
+        };
       };
 
       return function mockCommand(
@@ -740,7 +854,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               currentProject?.sections.push(section);
               return section;
             });
-            return { success: true, sections: importedSections };
+            const sectionIds = importedSections.map((section) => section.id as number);
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: sectionIds,
+              ...(sectionIds[0] != null ? { section_id: sectionIds[0] } : {}),
+              sections: importedSections,
+            };
           }
 
           // File hash tracking for duplicate detection
@@ -756,6 +878,194 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] track_imported_file called with:', args);
             trackImportedFileCalls.push({ hash: (args?.hash as string) ?? '' });
             return { success: true };
+
+          case 'parse_gpx': {
+            return buildMockGpxFile(args?.path as string | undefined);
+          }
+
+          case 'execute_gpx_import': {
+            const importWaypoints = (args?.importWaypoints as boolean | undefined) ?? false;
+            const importTracks = (args?.importTracks as boolean | undefined) ?? false;
+            const importRoutes = (args?.importRoutes as boolean | undefined) ?? false;
+            const depthInverted = (args?.depthInverted as boolean | undefined) ?? false;
+            const filePath = (args?.path as string | undefined) ?? null;
+            const sectionPlacements = (Array.isArray(args?.sectionPlacements) ? args?.sectionPlacements : []) as Array<{
+              section_index?: number;
+              placement?: {
+                type?: string;
+                station_index?: number;
+                coordinates?: { latitude: number; longitude: number; depth_reference: number };
+              };
+              name?: string | null;
+              color?: string;
+            }>;
+
+            if (!currentProject) {
+              const now = new Date().toISOString();
+              sectionCounter = 0;
+              currentProject = {
+                id: 1,
+                name: 'Imported Project',
+                location: null,
+                created_at: now,
+                modified_at: now,
+                file_path: null,
+                sections: [],
+                station_merges: [],
+                zero_datums: [],
+                loop_closures: [],
+                section_offsets: {},
+              };
+            }
+
+            const gpxFile = buildMockGpxFile(filePath);
+            const placementMap = new Map<number, typeof sectionPlacements[number]>();
+            for (const placement of sectionPlacements) {
+              const sectionIndex = placement.section_index;
+              if (typeof sectionIndex === 'number') {
+                placementMap.set(sectionIndex, placement);
+              }
+            }
+
+            const createdSectionIds: number[] = [];
+            let backendSectionIndex = 0;
+
+            const appendSection = (
+              name: string,
+              shots: Array<Record<string, unknown>>,
+              color: string,
+              datum:
+                | {
+                    stationIndex: number;
+                    gps: { latitude: number; longitude: number; depth_reference: number };
+                  }
+                | null
+            ) => {
+              sectionCounter += 1;
+              const sectionId = sectionCounter;
+              const section = {
+                id: sectionId,
+                name,
+                surveyor: 'GPX Import',
+                date: new Date().toISOString().split('T')[0] ?? '',
+                color,
+                direction: 'in',
+                shots,
+              };
+              currentProject?.sections.push(section);
+              createdSectionIds.push(sectionId);
+              if (datum) {
+                (currentProject?.zero_datums as Array<{
+                  station_ref: { section_id: number; station_index: number };
+                  gps: { latitude: number; longitude: number; depth_reference: number };
+                }>).push({
+                  station_ref: { section_id: sectionId, station_index: datum.stationIndex },
+                  gps: datum.gps,
+                });
+              }
+            };
+
+            if (importWaypoints) {
+              gpxFile.waypoints.forEach((wpt, index) => {
+                appendSection(
+                  wpt.name ?? `Waypoint ${index + 1}`,
+                  [],
+                  '#4a90d9',
+                  {
+                    stationIndex: 0,
+                    gps: {
+                      latitude: wpt.latitude,
+                      longitude: wpt.longitude,
+                      depth_reference: 0,
+                    },
+                  }
+                );
+                backendSectionIndex += 1;
+              });
+            }
+
+            if (importTracks) {
+              gpxFile.tracks.forEach((track, trackIndex) => {
+                track.segments.forEach((segment, segmentIndex) => {
+                  const shots = segment.points.slice(1).map((point, idx) =>
+                    toShot(segment.points[idx]!, point, idx + 1, depthInverted)
+                  );
+                  const placement = placementMap.get(backendSectionIndex);
+                  const placementDatum =
+                    placement?.placement?.type === 'zero_datum' && placement.placement.coordinates
+                      ? {
+                          stationIndex: placement.placement.station_index ?? 0,
+                          gps: placement.placement.coordinates,
+                        }
+                      : segment.points[0]
+                        ? {
+                            stationIndex: 0,
+                            gps: {
+                              latitude: segment.points[0].latitude,
+                              longitude: segment.points[0].longitude,
+                              depth_reference: 0,
+                            },
+                          }
+                        : null;
+
+                  appendSection(
+                    placement?.name ??
+                      track.name ??
+                      `Track ${trackIndex + 1}${track.segments.length > 1 ? ` - Seg ${segmentIndex + 1}` : ''}`,
+                    shots,
+                    placement?.color ?? '#3b82f6',
+                    placementDatum
+                  );
+                  backendSectionIndex += 1;
+                });
+              });
+            }
+
+            if (importRoutes) {
+              gpxFile.routes.forEach((route, routeIndex) => {
+                const shots = route.points.slice(1).map((point, idx) =>
+                  toShot(route.points[idx]!, point, idx + 1, depthInverted)
+                );
+                const placement = placementMap.get(backendSectionIndex);
+                const placementDatum =
+                  placement?.placement?.type === 'zero_datum' && placement.placement.coordinates
+                    ? {
+                        stationIndex: placement.placement.station_index ?? 0,
+                        gps: placement.placement.coordinates,
+                      }
+                    : route.points[0]
+                      ? {
+                          stationIndex: 0,
+                          gps: {
+                            latitude: route.points[0].latitude,
+                            longitude: route.points[0].longitude,
+                            depth_reference: 0,
+                          },
+                        }
+                      : null;
+
+                appendSection(
+                  placement?.name ?? route.name ?? `Route ${routeIndex + 1}`,
+                  shots,
+                  placement?.color ?? '#22c55e',
+                  placementDatum
+                );
+                backendSectionIndex += 1;
+              });
+            }
+
+            if (currentProject) {
+              currentProject.modified_at = new Date().toISOString();
+            }
+
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: createdSectionIds,
+              ...(createdSectionIds[0] != null ? { section_id: createdSectionIds[0] } : {}),
+            };
+          }
 
           case 'import_dmp':
           case 'parse_dmp': {
@@ -1083,10 +1393,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
-          case 'merge_stations':
-            // Mock merge stations - just return success
+          case 'merge_stations': {
             console.log('[Mock IPC] merge_stations called with:', args);
+            const stationA = (args?.stationA ?? args?.station_a) as
+              | { section_id: number; station_index: number }
+              | undefined;
+            const stationB = (args?.stationB ?? args?.station_b) as
+              | { section_id: number; station_index: number }
+              | undefined;
+            if (stationA && stationB) {
+              mergeStationCalls.push({ stationA, stationB });
+              if (currentProject) {
+                (currentProject.station_merges as Array<{
+                  station_a: { section_id: number; station_index: number };
+                  station_b: { section_id: number; station_index: number };
+                }>).push({
+                  station_a: stationA,
+                  station_b: stationB,
+                });
+              }
+            }
             return { success: true };
+          }
 
           case 'execute_batch': {
             // Mock execute batch - track calls for assertions and return success
@@ -1206,6 +1534,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             return { success: true };
           }
+
+          case 'check_section_hashes': {
+            const hashes = (Array.isArray(args?.hashes) ? args?.hashes : []) as string[];
+            return hashes.map(() => false);
+          }
+
+          case 'suggest_import_placement':
+            return [];
+
+          case 'suggest_all_import_placements':
+            return [...mockImportPlacementSuggestions];
+
+          case 'suggest_orphan_placements':
+            return [...mockOrphanPlacementSuggestions];
+
+          case 'get_segment_geometry':
+            return {
+              sections: [
+                {
+                  section_id: (args?.sectionId as number | undefined) ?? 1,
+                  color: '#4a90d9',
+                  shot_lines: [[[0, 0], [10, 0]]],
+                },
+              ],
+            };
 
           case 'undo':
           case 'redo':

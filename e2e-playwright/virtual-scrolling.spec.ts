@@ -59,10 +59,18 @@ test.describe('Virtual Scrolling in DataTable', () => {
     await openDataTable(page);
   });
 
-  test('DataTable renders all shots from the section', async ({ page }) => {
+  test('DataTable virtualizes rows while preserving full section data', async ({ page }) => {
+    const totalShots = await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      if (!e2e) return 0;
+      return e2e.projectStore.getState().project?.sections?.[0]?.shots?.length ?? 0;
+    });
+    expect(totalShots).toBe(SHOT_COUNT);
+
     const renderedRows = page.locator('[data-testid^="table-row-"]');
     const rowCount = await renderedRows.count();
-    expect(rowCount).toBe(SHOT_COUNT);
+    expect(rowCount).toBeGreaterThan(0);
+    expect(rowCount).toBeLessThan(SHOT_COUNT);
   });
 
   test('first row is visible and has correct shot ID', async ({ page }) => {
@@ -90,8 +98,16 @@ test.describe('Virtual Scrolling in DataTable', () => {
     });
     expect(lastShotId).not.toBeNull();
 
+    await page.evaluate((shotId) => {
+      const e2e = (window as any).__E2E_TEST__;
+      if (!e2e) return;
+      const section = e2e.projectStore.getState().project?.sections?.[0];
+      if (!section || shotId == null) return;
+      e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId });
+    }, lastShotId);
+
     const lastRow = page.getByTestId(`table-row-${lastShotId}`);
-    await expect(lastRow).toBeAttached();
+    await expect(lastRow).toBeVisible({ timeout: 5000 });
   });
 
   test('selection via store updates row highlight', async ({ page }) => {

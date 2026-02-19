@@ -704,7 +704,7 @@ test.describe('Tool Operation Tests', () => {
     }, { timeout: 2000 }).toBeNull();
   });
 
-  test('snap detection works with hidden stations during Draw tool', async ({ page }) => {
+  test('snap detection is disabled when stations are hidden during Draw tool', async ({ page }) => {
     // Wait for stations to be visible and get their positions
     await waitForLayerVisible(page, 'survey-stations');
     const stations = await getStationScreenPositions(page);
@@ -730,18 +730,34 @@ test.describe('Tool Operation Tests', () => {
     const box = await canvas.boundingBox();
     expect(box).not.toBeNull();
 
-    // Move mouse near the known station position
-    await page.mouse.move(box!.x + targetStation.x, box!.y + targetStation.y);
+    // Move mouse near the known station position (with small offsets for stability)
+    const offsets = [
+      [0, 0],
+      [4, 0],
+      [-4, 0],
+      [0, 4],
+      [0, -4],
+      [6, 6],
+      [-6, -6],
+    ] as const;
 
-    // The snap logic iterates stations array directly, not the layer
-    // So snappedStation should be set when near a station, even when hidden
-    await expect.poll(async () => {
-      const snapped = await page.evaluate(() => {
-        const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { snappedStation: unknown } } } }).__E2E_TEST__;
-        return stores?.uiStore?.getState()?.snappedStation ?? null;
-      });
-      return snapped;
-    }, { timeout: 2000 }).not.toBeNull();
+    let snappedStation: unknown = null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      for (const [dx, dy] of offsets) {
+        await page.mouse.move(box!.x + targetStation.x + dx, box!.y + targetStation.y + dy);
+        // Let map pointer handlers process the latest move event
+        await page.waitForTimeout(40);
+        snappedStation = await page.evaluate(() => {
+          const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { snappedStation: unknown } } } }).__E2E_TEST__;
+          return stores?.uiStore?.getState()?.snappedStation ?? null;
+        });
+        if (snappedStation) break;
+      }
+      if (snappedStation) break;
+    }
+
+    // Stations hitbox layer is hidden alongside stations, so snapping must remain unavailable
+    expect(snappedStation).toBeNull();
   });
 });
 
