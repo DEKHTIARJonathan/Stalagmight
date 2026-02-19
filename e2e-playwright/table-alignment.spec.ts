@@ -111,8 +111,16 @@ test.describe('Table Numeric Column Alignment', () => {
       expect(header!.align).toBe('right');
     }
 
+    // ID header is intentionally centered
+    const centeredHeaders = ['ID'];
+    for (const name of centeredHeaders) {
+      const header = headerInfo.find((h) => h.text === name);
+      expect(header, `Header "${name}" should exist`).toBeDefined();
+      expect(header!.align).toBe('center');
+    }
+
     // Text columns should be left-aligned (browsers may report 'start' or 'left')
-    const textHeaders = ['ID', 'Comment'];
+    const textHeaders = ['Comment'];
     for (const name of textHeaders) {
       const header = headerInfo.find((h) => h.text === name);
       expect(header, `Header "${name}" should exist`).toBeDefined();

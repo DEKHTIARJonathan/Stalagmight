@@ -25,6 +25,14 @@ test.describe('Window Close Protection', () => {
     await setupMockedPage(page);
   });
 
+  async function cancelFromStep2(page: import('@playwright/test').Page): Promise<void> {
+    await page.getByTestId('cancel-button').click();
+    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible();
+    await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible();
+    await page.getByTestId('confirm-cancel-button').click();
+    await expect(page.getByTestId('cancel-confirm-dialog')).not.toBeVisible({ timeout: 3000 });
+  }
+
   /**
    * Test 1: Dialog navigation prevents accidental data loss
    *
@@ -53,10 +61,12 @@ test.describe('Window Close Protection', () => {
     const cancelButton = page.getByTestId('cancel-button');
     await expect(cancelButton).toBeVisible();
 
-    // Click Cancel to close
+    // Click Cancel, then confirm cancel in the safety dialog
     await cancelButton.click();
+    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible();
+    await page.getByTestId('confirm-cancel-button').click();
 
-    // Dialog should close
+    // Dialog should close after explicit confirmation
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
   });
 
@@ -127,8 +137,8 @@ test.describe('Window Close Protection', () => {
     await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible();
     await expect(page.getByTestId('dmp-selection-dialog')).not.toBeVisible();
 
-    // Cancel Step 2
-    await page.getByTestId('cancel-button').click();
+    // Cancel Step 2 (requires confirmation)
+    await cancelFromStep2(page);
 
     // Both dialogs should be closed
     await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({
@@ -161,10 +171,8 @@ test.describe('Window Close Protection', () => {
     await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', {
       timeout: 10000,
     });
-    await page.getByTestId('cancel-button').click();
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({
-      timeout: 3000,
-    });
+    await cancelFromStep2(page);
+    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({ timeout: 3000 });
 
     // Third cycle: complete the import
     await openDmpSelectionDialog(page);
@@ -208,10 +216,10 @@ test.describe('Window Close Protection', () => {
     await expect(cancelButton).toBeVisible();
     await expect(cancelButton).toBeEnabled();
 
-    // Verify clicking Cancel works
+    // Verify clicking Cancel shows confirmation and can close explicitly
     await cancelButton.click();
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({
-      timeout: 3000,
-    });
+    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible();
+    await page.getByTestId('confirm-cancel-button').click();
+    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({ timeout: 3000 });
   });
 });

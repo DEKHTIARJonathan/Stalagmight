@@ -386,12 +386,12 @@ test.describe('Zero Datum Update - Single Undo Entry', () => {
     const checkbox = dialog.locator('#zeroDatum');
     await expect(checkbox).toBeChecked();
 
-    // Verify GPS fields are populated; use data-testid for stability
-    const latInput = dialog.getByTestId('station-latitude-input');
-    await expect(latInput).toHaveValue('25');
+    // Verify GPS field is populated; dialog now uses a single combined input
+    const gpsInput = dialog.getByTestId('station-gps-input');
+    await expect(gpsInput).toHaveValue('25, -80');
 
     // Change latitude from 25.0 to 26.0
-    await latInput.fill('26');
+    await gpsInput.fill('26, -80');
 
     // Click Save
     const saveButton = dialog.locator('button:has-text("Save")');

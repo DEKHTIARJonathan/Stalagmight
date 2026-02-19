@@ -205,9 +205,12 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await qualityInput.fill('2.5');
     await colorHexInput.fill('#123456');
     await dateInput.fill('2026-02-01');
+    await page.keyboard.press('Escape');
 
     const lengthInput = dialog.getByTestId('shot-length-0');
-    await lengthInput.fill('9.5');
+    await lengthInput.focus();
+    await lengthInput.press('ControlOrMeta+a');
+    await lengthInput.type('9.5');
     await lengthInput.press('Enter');
 
     await dialog.getByTestId('add-shot-button').click();
@@ -426,21 +429,17 @@ test.describe('Dialog Coverage - Edit Station', () => {
     const zeroDatumToggle = dialog.locator('#zeroDatum');
     await zeroDatumToggle.check();
 
-    const latInput = dialog.getByTestId('station-latitude-input');
-    const lonInput = dialog.locator('input[placeholder="e.g., -77.4010"]');
+    const gpsInput = dialog.getByTestId('station-gps-input');
+    const gpsError = dialog.getByTestId('station-gps-error');
 
-    await latInput.fill('200');
-    await lonInput.fill('-80');
-    await dialog.getByRole('button', { name: 'Save' }).click();
-    await expect(dialog.locator('text=Latitude must be between -90 and 90')).toBeVisible();
+    await gpsInput.fill('200, -80');
+    await expect(gpsError).toContainText('Latitude must be between -90 and 90');
 
-    await latInput.fill('25');
-    await lonInput.fill('-200');
-    await dialog.getByRole('button', { name: 'Save' }).click();
-    await expect(dialog.locator('text=Longitude must be between -180 and 180')).toBeVisible();
+    await gpsInput.fill('25, -200');
+    await expect(gpsError).toContainText('Longitude must be between -180 and 180');
 
-    await latInput.fill('25');
-    await lonInput.fill('-80');
+    await gpsInput.fill('25, -80');
+    await expect(gpsError).toHaveCount(0);
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
   });

@@ -631,7 +631,61 @@ export async function createNewProject(projectName: string): Promise<void> {
  *
  * @param filePath - Path to the DMP file to parse (defaults to test_v5.dmp fixture)
  */
+type DmpImportWorkflow = 'legacy' | 'new';
+
+/**
+ * Configure which DMP import workflow is active in UI tests.
+ * Most WDIO specs currently assert the legacy Step-2 dialog flow.
+ */
+export async function setDmpImportWorkflow(workflow: DmpImportWorkflow): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(() => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore?: {
+              getState: () => { config: unknown | null };
+            };
+          };
+        }).__E2E_TEST__;
+        return Boolean(e2e?.projectStore?.getState().config);
+      }),
+    {
+      timeout: 10000,
+      timeoutMsg: 'Project config not available for DMP workflow setup',
+    }
+  );
+
+  await browser.execute((useLegacy: boolean) => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore?: {
+          getState: () => {
+            config: { general: { legacy_dmp_import: boolean } } | null;
+            setConfig: (config: unknown) => void;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+
+    const store = e2e?.projectStore?.getState();
+    if (!store?.config) {
+      throw new Error('projectStore config is not available');
+    }
+
+    store.setConfig({
+      ...store.config,
+      general: {
+        ...store.config.general,
+        legacy_dmp_import: useLegacy,
+      },
+    });
+  }, workflow === 'legacy');
+}
+
 export async function openDmpImportDialog(filePath?: string): Promise<void> {
+  await setDmpImportWorkflow('legacy');
+
   // Use default fixture if no path provided
   const resolvedPath = filePath ?? `${process.cwd()}/e2e/fixtures/test_v5.dmp`;
 
@@ -1189,6 +1243,8 @@ export async function importDmpFile(path: string): Promise<{ success: boolean; e
  * @param filePath - Absolute path to the DMP file to import
  */
 export async function openDmpImportWithFile(filePath: string): Promise<void> {
+  await setDmpImportWorkflow('legacy');
+
   // Close any existing dialog first to ensure clean state
   await browser.execute(() => {
     const e2e = (window as unknown as {
