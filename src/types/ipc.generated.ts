@@ -121,3 +121,4 @@ export * from './ipc/LengthUnit';
 export * from './ipc/AngleUnit';
 export * from './ipc/ShortcutFeedback';
 export * from './ipc/ThemeMode';
+export * from './ipc/ColorTheme';

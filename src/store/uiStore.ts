@@ -10,7 +10,7 @@ export interface CommentTarget {
   screenPos: { x: number; y: number };
   currentComment: string;
 }
-import type { PanelsConfig, ThemeMode } from '../types/config';
+import type { AppearanceConfig, PanelsConfig } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
@@ -19,7 +19,7 @@ import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils'
 import { getGroupForTool } from '../utils/toolGroups';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
-export type ResolvedTheme = 'dark' | 'light';
+export type ResolvedTheme = 'dark' | 'light' | 'cave' | 'dracula' | 'one_dark' | 'solarized_light' | 'catppuccin_latte' | 'nord' | 'catppuccin_mocha';
 
 export type ViewType = 'global' | 'single';
 
@@ -271,8 +271,8 @@ interface UIStore {
   resolvedTheme: ResolvedTheme;
   setResolvedTheme: (theme: ResolvedTheme) => void;
   /** Temporary theme override for live preview in Settings dialog */
-  themePreview: ThemeMode | null;
-  setThemePreview: (theme: ThemeMode | null) => void;
+  themePreview: AppearanceConfig | null;
+  setThemePreview: (appearance: AppearanceConfig | null) => void;
 
   // Comment tool state
   commentTarget: CommentTarget | null;

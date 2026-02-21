@@ -7,6 +7,7 @@ export type {
   DecimalPrecision,
   ShortcutFeedback,
   ThemeMode,
+  ColorTheme,
   AppearanceConfig,
   ImportConfig,
   OverlapMode,
@@ -211,6 +212,8 @@ export const defaultConfig: Config = {
   },
   appearance: {
     theme: 'dark',
+    day_color_theme: 'light',
+    night_color_theme: 'cave',
   },
   import: {
     overlap_mode: 'import_data' as const,
@@ -275,12 +278,15 @@ export const lightSectionColorDefaults: SectionColorsConfig = {
   ],
 };
 
+/** Themes that use light-mode display defaults (light backgrounds). */
+const LIGHT_THEMES = new Set(['light', 'solarized_light', 'catppuccin_latte']);
+
 /**
  * Get theme-appropriate display defaults.
- * Returns dark-theme defaults for 'dark', light-theme defaults for 'light'.
+ * Returns light-theme defaults for light-type themes, dark defaults otherwise.
  */
-export function getThemedDisplayDefaults(resolvedTheme: 'dark' | 'light'): DisplayConfig {
-  if (resolvedTheme === 'light') {
+export function getThemedDisplayDefaults(resolvedTheme: string): DisplayConfig {
+  if (LIGHT_THEMES.has(resolvedTheme)) {
     return { ...lightDisplayDefaults, depth_gradient: { ...lightDisplayDefaults.depth_gradient } };
   }
   return {
@@ -291,10 +297,10 @@ export function getThemedDisplayDefaults(resolvedTheme: 'dark' | 'light'): Displ
 
 /**
  * Get theme-appropriate section color defaults.
- * Returns dark-theme palette for 'dark', light-theme palette for 'light'.
+ * Returns light-theme palette for light-type themes, dark palette otherwise.
  */
-export function getThemedSectionColorDefaults(resolvedTheme: 'dark' | 'light'): SectionColorsConfig {
-  if (resolvedTheme === 'light') {
+export function getThemedSectionColorDefaults(resolvedTheme: string): SectionColorsConfig {
+  if (LIGHT_THEMES.has(resolvedTheme)) {
     return { palette: [...lightSectionColorDefaults.palette] };
   }
   return { palette: [...defaultConfig.section_colors.palette] };

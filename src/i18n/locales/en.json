@@ -170,8 +170,48 @@
       "theme": {
         "title": "Theme",
         "label": "Application theme",
+        "mode": "Theme mode",
         "help": "Choose how Stalagmight looks",
         "aria": "Application theme",
+        "active": "Active",
+        "dayTheme": "Day theme",
+        "nightTheme": "Night theme",
+        "lightCard": {
+          "title": "Light",
+          "description": "This theme will be active when your system is set to \"light mode\""
+        },
+        "darkCard": {
+          "title": "Dark",
+          "description": "This theme will be active when your system is set to \"dark mode\""
+        },
+        "caveCard": {
+          "title": "Cave",
+          "description": "Brand-inspired dark theme with warm cave-earth tones"
+        },
+        "draculaCard": {
+          "title": "Dracula",
+          "description": "Popular dark theme with purple accents"
+        },
+        "oneDarkCard": {
+          "title": "One Dark",
+          "description": "Atom-inspired dark theme with blue accents"
+        },
+        "solarizedLightCard": {
+          "title": "Solarized Light",
+          "description": "Warm light theme with precise color relationships"
+        },
+        "catppuccinLatteCard": {
+          "title": "Catppuccin Latte",
+          "description": "Pastel light theme with blue accents"
+        },
+        "nordCard": {
+          "title": "Nord",
+          "description": "Arctic dark theme with cool blue tones"
+        },
+        "catppuccinMochaCard": {
+          "title": "Catppuccin Mocha",
+          "description": "Pastel dark theme with blue accents"
+        },
         "options": {
           "dark": {
             "label": "Dark",

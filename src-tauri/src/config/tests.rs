@@ -1357,22 +1357,22 @@ fn test_theme_mode_deserialize_unknown_value() {
 
 #[test]
 fn test_appearance_normalize_unknown_to_dark() {
-    let mut config = AppearanceConfig { theme: ThemeMode::Unknown };
+    let mut config = AppearanceConfig { theme: ThemeMode::Unknown, ..Default::default() };
     config.normalize();
     assert_eq!(config.theme, ThemeMode::Dark);
 }
 
 #[test]
 fn test_appearance_normalize_valid_themes_unchanged() {
-    let mut dark = AppearanceConfig { theme: ThemeMode::Dark };
+    let mut dark = AppearanceConfig { theme: ThemeMode::Dark, ..Default::default() };
     dark.normalize();
     assert_eq!(dark.theme, ThemeMode::Dark);
 
-    let mut light = AppearanceConfig { theme: ThemeMode::Light };
+    let mut light = AppearanceConfig { theme: ThemeMode::Light, ..Default::default() };
     light.normalize();
     assert_eq!(light.theme, ThemeMode::Light);
 
-    let mut auto = AppearanceConfig { theme: ThemeMode::Auto };
+    let mut auto = AppearanceConfig { theme: ThemeMode::Auto, ..Default::default() };
     auto.normalize();
     assert_eq!(auto.theme, ThemeMode::Auto);
 }

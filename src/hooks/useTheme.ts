@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore, type ResolvedTheme } from '../store/uiStore';
+import type { ColorTheme } from '../types/config';
 
 /**
  * Subscribe to a MediaQueryList change event, with fallback for older
@@ -28,10 +29,19 @@ function subscribeMediaQuery(
 }
 
 /**
+ * Resolve a ColorTheme value ('dark' | 'light') to a ResolvedTheme.
+ */
+function colorThemeToResolved(ct: ColorTheme): ResolvedTheme {
+  // Each ColorTheme maps 1:1 to a ResolvedTheme (data-theme attribute value)
+  return ct as ResolvedTheme;
+}
+
+/**
  * Hook that reads the theme preference from config, resolves 'auto' mode
- * via OS prefers-color-scheme, applies the resolved theme by setting
- * data-theme attribute on document.documentElement, and stores the
- * resolved theme in uiStore for MapLibre and canvas components.
+ * via OS prefers-color-scheme, looks up the per-mode color theme, applies
+ * the resolved color theme by setting data-theme attribute on
+ * document.documentElement, and stores the resolved theme in uiStore for
+ * MapLibre and canvas components.
  *
  * Uses useLayoutEffect so the data-theme attribute is committed before
  * paint, preventing a flash of the wrong theme.
@@ -44,15 +54,18 @@ function subscribeMediaQuery(
  *   the CSS :root defaults to dark so there is no visual mismatch.
  */
 export function useTheme(): ResolvedTheme {
-  const configTheme = useProjectStore(
-    (s) => s.config?.appearance?.theme ?? 'dark'
+  const configAppearance = useProjectStore(
+    (s) => s.config?.appearance ?? null
   );
   const themePreview = useUIStore((s) => s.themePreview);
   const setResolvedTheme = useUIStore((s) => s.setResolvedTheme);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
 
   // Use preview override when Settings dialog is live-previewing a theme
-  const themePreference = themePreview ?? configTheme;
+  const appearance = themePreview ?? configAppearance;
+  const themePreference = appearance?.theme ?? 'dark';
+  const dayColorTheme: ColorTheme = appearance?.day_color_theme ?? 'light';
+  const nightColorTheme: ColorTheme = appearance?.night_color_theme ?? 'dark';
 
   // Track media query listener cleanup
   const mediaListenerCleanupRef = useRef<(() => void) | null>(null);
@@ -73,28 +86,37 @@ export function useTheme(): ResolvedTheme {
       setResolvedTheme(theme);
     }
 
+    /**
+     * Given a resolved mode ('dark' = night, 'light' = day), look up the
+     * configured color theme for that mode and apply it.
+     */
+    function applyForMode(mode: 'dark' | 'light') {
+      const colorTheme = mode === 'light' ? dayColorTheme : nightColorTheme;
+      applyTheme(colorThemeToResolved(colorTheme));
+    }
+
     if (themePreference === 'auto') {
       // Guard against environments where matchMedia is unavailable
       if (typeof window.matchMedia !== 'function') {
-        applyTheme('dark');
+        applyForMode('dark');
         return;
       }
 
       // Resolve from OS preference
       const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-      const resolved: ResolvedTheme = mediaQuery.matches ? 'dark' : 'light';
-      applyTheme(resolved);
+      const resolvedMode: 'dark' | 'light' = mediaQuery.matches ? 'dark' : 'light';
+      applyForMode(resolvedMode);
 
       // Listen for OS theme changes
       const handler = (e: MediaQueryListEvent) => {
-        const newTheme: ResolvedTheme = e.matches ? 'dark' : 'light';
-        applyTheme(newTheme);
+        const newMode: 'dark' | 'light' = e.matches ? 'dark' : 'light';
+        applyForMode(newMode);
       };
       mediaListenerCleanupRef.current = subscribeMediaQuery(mediaQuery, handler);
     } else {
       // Direct theme: 'dark' or 'light'
-      const resolved: ResolvedTheme = themePreference === 'light' ? 'light' : 'dark';
-      applyTheme(resolved);
+      const mode: 'dark' | 'light' = themePreference === 'light' ? 'light' : 'dark';
+      applyForMode(mode);
     }
 
     return () => {
@@ -103,7 +125,7 @@ export function useTheme(): ResolvedTheme {
         mediaListenerCleanupRef.current = null;
       }
     };
-  }, [themePreference, setResolvedTheme]);
+  }, [themePreference, dayColorTheme, nightColorTheme, setResolvedTheme]);
 
   return resolvedTheme;
 }
