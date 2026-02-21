@@ -5,9 +5,11 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { hasLiveStyle } from './mapUtils';
 import { getThemeColor } from '../../utils/themeColors';
+import type { GpsOrigin } from '../../types/config';
 
 interface GridOverlayProps {
   map: maplibregl.Map;
+  gpsOrigin: GpsOrigin | null;
 }
 
 /** Available grid spacing options in meters */
@@ -17,13 +19,15 @@ export const GRID_SPACING_OPTIONS = [1, 5, 10, 25, 50, 100] as const;
  * GridOverlay renders a coordinate grid on the map that scales with the survey data.
  * Grid lines are rendered in map coordinates (meters) and update when the map view changes.
  */
-export default function GridOverlay({ map }: GridOverlayProps) {
+export default function GridOverlay({ map, gpsOrigin }: GridOverlayProps) {
   const layerAdded = useRef(false);
   const showGrid = useUIStore((s) => s.showGrid);
   const gridSpacing = useUIStore((s) => s.gridSpacing);
-  const { stations, config } = useProjectStore();
+  // Subscribe to resolvedTheme so gridColor re-reads the CSS variable on theme change
+  useUIStore((s) => s.resolvedTheme);
+  const { stations } = useProjectStore();
 
-  const gridColor = config?.display.grid_color ?? getThemeColor('--cc-grid-default');
+  const gridColor = getThemeColor('--cc-grid-default');
 
   // Generate grid GeoJSON based on current station bounds
   const generateGridGeoJSON = useCallback((): GeoJSON.FeatureCollection => {
@@ -43,10 +47,10 @@ export default function GridOverlay({ map }: GridOverlayProps) {
       if (y > maxY) maxY = y;
     }
 
-    // Expand bounds by 20% for padding
+    // Expand bounds generously so grid extends well beyond the survey
     const width = maxX - minX;
     const height = maxY - minY;
-    const padding = Math.max(width, height) * 0.2;
+    const padding = Math.max(width, height) * 1.0;
     minX -= padding;
     maxX += padding;
     minY -= padding;
@@ -62,8 +66,8 @@ export default function GridOverlay({ map }: GridOverlayProps) {
 
     // Vertical lines (constant X)
     for (let x = gridMinX; x <= gridMaxX; x += gridSpacing) {
-      const start = metersToMapCoords(x, gridMinY);
-      const end = metersToMapCoords(x, gridMaxY);
+      const start = metersToMapCoords(x, gridMinY, gpsOrigin);
+      const end = metersToMapCoords(x, gridMaxY, gpsOrigin);
       features.push({
         type: 'Feature',
         properties: { type: 'grid-line' },
@@ -76,8 +80,8 @@ export default function GridOverlay({ map }: GridOverlayProps) {
 
     // Horizontal lines (constant Y)
     for (let y = gridMinY; y <= gridMaxY; y += gridSpacing) {
-      const start = metersToMapCoords(gridMinX, y);
-      const end = metersToMapCoords(gridMaxX, y);
+      const start = metersToMapCoords(gridMinX, y, gpsOrigin);
+      const end = metersToMapCoords(gridMaxX, y, gpsOrigin);
       features.push({
         type: 'Feature',
         properties: { type: 'grid-line' },
@@ -89,7 +93,7 @@ export default function GridOverlay({ map }: GridOverlayProps) {
     }
 
     return { type: 'FeatureCollection', features };
-  }, [stations, gridSpacing]);
+  }, [stations, gridSpacing, gpsOrigin]);
 
   // Add/update grid layer
   useEffect(() => {
@@ -127,8 +131,8 @@ export default function GridOverlay({ map }: GridOverlayProps) {
             source: sourceId,
             paint: {
               'line-color': gridColor,
-              'line-width': 0.5,
-              'line-opacity': 0.4,
+              'line-width': 1,
+              'line-opacity': 0.8,
             },
           },
           surveyLayer ? 'survey-shots' : undefined
