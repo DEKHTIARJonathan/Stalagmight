@@ -2758,7 +2758,7 @@ export default function MapCanvas() {
       )}
 
       {/* Grid overlay using MapLibre layer */}
-      {mapLoaded && map.current && <GridOverlay map={map.current} />}
+      {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
 
       {/* Depth legend when depth gradient is enabled */}
       {showDepthGradient && (
