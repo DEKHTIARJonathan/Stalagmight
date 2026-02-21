@@ -358,10 +358,10 @@ export default function SettingsDialog() {
   // Live-preview theme changes: apply immediately on selection, revert on unmount/cancel
   useEffect(() => {
     if (localConfig) {
-      setThemePreview(localConfig.appearance.theme);
+      setThemePreview(localConfig.appearance);
     }
     return () => setThemePreview(null);
-  }, [localConfig?.appearance.theme, setThemePreview]);
+  }, [localConfig?.appearance.theme, localConfig?.appearance.day_color_theme, localConfig?.appearance.night_color_theme, setThemePreview]);
 
   // Compute changed fields from original config
   const changedFields = useMemo(() => {

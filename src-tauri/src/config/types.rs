@@ -376,12 +376,51 @@ pub enum ThemeMode {
     Unknown,
 }
 
+/// Color theme (palette) for a given mode.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ColorTheme {
+    Dark,
+    Light,
+    Cave,
+    Dracula,
+    OneDark,
+    SolarizedLight,
+    CatppuccinLatte,
+    Nord,
+    CatppuccinMocha,
+}
+
 /// Appearance configuration
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[derive(Default)]
 pub struct AppearanceConfig {
     #[serde(default)]
     pub theme: ThemeMode,
+    /// Color palette used when day (light) mode is active
+    #[serde(default = "default_day_color_theme")]
+    pub day_color_theme: ColorTheme,
+    /// Color palette used when night (dark) mode is active
+    #[serde(default = "default_night_color_theme")]
+    pub night_color_theme: ColorTheme,
+}
+
+fn default_day_color_theme() -> ColorTheme {
+    ColorTheme::Light
+}
+
+fn default_night_color_theme() -> ColorTheme {
+    ColorTheme::Cave
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self {
+            theme: ThemeMode::default(),
+            day_color_theme: default_day_color_theme(),
+            night_color_theme: default_night_color_theme(),
+        }
+    }
 }
 
 impl AppearanceConfig {

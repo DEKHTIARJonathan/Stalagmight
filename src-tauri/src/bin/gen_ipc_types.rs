@@ -13,8 +13,8 @@ use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
 use stalagmight_lib::persistence::{BackupInfo, RepairResult, SalvagedData};
 use stalagmight_lib::config::{
-    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
-    DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
+    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
+    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
     PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
@@ -211,6 +211,7 @@ fn main() {
     export::<AngleUnit>(&out_dir);
     export::<ShortcutFeedback>(&out_dir);
     export::<ThemeMode>(&out_dir);
+    export::<ColorTheme>(&out_dir);
 
     let export_list = [
         "CommandResult",
@@ -335,6 +336,7 @@ fn main() {
         "AngleUnit",
         "ShortcutFeedback",
         "ThemeMode",
+        "ColorTheme",
     ];
 
     let mut generated = String::from(

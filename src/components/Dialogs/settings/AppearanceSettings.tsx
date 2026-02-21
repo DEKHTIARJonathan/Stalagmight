@@ -1,4 +1,3 @@
-import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
@@ -6,38 +5,22 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 import { defaultConfig } from '../../../types/config';
-import type { ThemeMode } from '../../../types/config';
+import type { ThemeMode, ColorTheme } from '../../../types/config';
+import { ThemePreviewCard, ColorThemeCircle } from './ThemePreviewCard';
+import { Select } from '../../common/Select';
+import type { SelectOption } from '../../common/Select';
 
-/**
- * Theme option descriptor for the radio group.
- */
-interface ThemeOption {
-  value: ThemeMode;
-  labelKey: string;
-  descriptionKey: string;
-}
-
-const THEME_OPTIONS: ThemeOption[] = [
-  {
-    value: 'dark',
-    labelKey: 'settings.appearance.theme.options.dark.label',
-    descriptionKey: 'settings.appearance.theme.options.dark.description',
-  },
-  {
-    value: 'light',
-    labelKey: 'settings.appearance.theme.options.light.label',
-    descriptionKey: 'settings.appearance.theme.options.light.description',
-  },
-  {
-    value: 'auto',
-    labelKey: 'settings.appearance.theme.options.auto.label',
-    descriptionKey: 'settings.appearance.theme.options.auto.description',
-  },
+const THEME_MODE_OPTIONS: SelectOption[] = [
+  { value: 'dark', label: '' },
+  { value: 'light', label: '' },
+  { value: 'auto', label: '' },
 ];
+
+const COLOR_THEMES: ColorTheme[] = ['dark', 'cave', 'dracula', 'one_dark', 'nord', 'catppuccin_mocha', 'light', 'solarized_light', 'catppuccin_latte'];
 
 /**
  * Appearance settings category content.
- * Maps to config.appearance: theme.
+ * Maps to config.appearance: theme, day_color_theme, night_color_theme.
  */
 export function AppearanceSettings({
   config,
@@ -47,7 +30,16 @@ export function AppearanceSettings({
   panelIdBase,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
-  const radioGroupId = useId();
+
+  const currentMode = config.appearance.theme;
+  const dayColorTheme = config.appearance.day_color_theme;
+  const nightColorTheme = config.appearance.night_color_theme;
+
+  // Build translated options (labels depend on t() which can't be called at module level)
+  const translatedOptions: SelectOption[] = THEME_MODE_OPTIONS.map((opt) => ({
+    ...opt,
+    label: t(`settings.appearance.theme.options.${opt.value}.label`),
+  }));
 
   const handleThemeChange = (value: ThemeMode) => {
     onChange({
@@ -57,6 +49,42 @@ export function AppearanceSettings({
       },
     });
   };
+
+  const handleDayColorThemeChange = (value: ColorTheme) => {
+    onChange({
+      appearance: {
+        ...config.appearance,
+        day_color_theme: value,
+      },
+    });
+  };
+
+  const handleNightColorThemeChange = (value: ColorTheme) => {
+    onChange({
+      appearance: {
+        ...config.appearance,
+        night_color_theme: value,
+      },
+    });
+  };
+
+  // Determine which mode is currently active (resolved from mode + OS)
+  const resolvedMode: 'dark' | 'light' =
+    currentMode === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : currentMode === 'light'
+        ? 'light'
+        : 'dark';
+
+  // Description text for each section — only shown in auto mode
+  const dayDescription =
+    currentMode === 'auto'
+      ? t('settings.appearance.theme.lightCard.description')
+      : undefined;
+  const nightDescription =
+    currentMode === 'auto'
+      ? t('settings.appearance.theme.darkCard.description')
+      : undefined;
 
   return (
     <div
@@ -69,57 +97,66 @@ export function AppearanceSettings({
 
       <SettingsSection title={t('settings.appearance.theme.title')} data-testid="section-theme">
         <SettingRow
-          label={t('settings.appearance.theme.label')}
+          label={t('settings.appearance.theme.mode')}
           helpText={t('settings.appearance.theme.help')}
           isChanged={isFieldChanged(changedFields, 'appearance.theme')}
           onReset={() => onChange({ appearance: { ...config.appearance, theme: defaultConfig.appearance.theme } })}
           isDefault={config.appearance.theme === defaultConfig.appearance.theme}
           data-testid="setting-theme"
         >
-          <div
-            role="radiogroup"
+          <Select
+            value={currentMode}
+            onChange={(value) => handleThemeChange(value as ThemeMode)}
+            options={translatedOptions}
             aria-label={t('settings.appearance.theme.aria')}
-            className="flex flex-col gap-2"
-            id={radioGroupId}
-          >
-            {THEME_OPTIONS.map((option) => {
-              const optionId = `${radioGroupId}-${option.value}`;
-              const isSelected = config.appearance.theme === option.value;
-
-              return (
-                <label
-                  key={option.value}
-                  htmlFor={optionId}
-                  className={`
-                    flex items-start gap-3 p-2 rounded cursor-pointer
-                    border transition-colors
-                    ${isSelected ? 'border-accent bg-accent-10' : 'border-transparent hover:bg-accent-5'}
-                  `}
-                  data-testid={`theme-option-${option.value}`}
-                >
-                  <input
-                    type="radio"
-                    id={optionId}
-                    name={radioGroupId}
-                    value={option.value}
-                    checked={isSelected}
-                    onChange={() => handleThemeChange(option.value)}
-                    className="mt-0.5 accent-accent"
-                    data-testid={`theme-radio-${option.value}`}
-                  />
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium text-text-primary">
-                      {t(option.labelKey)}
-                    </span>
-                    <span className="text-xs text-text-secondary">
-                      {t(option.descriptionKey)}
-                    </span>
-                  </div>
-                </label>
-              );
-            })}
-          </div>
+            data-testid="theme-mode-select"
+          />
         </SettingRow>
+
+        {/* Side-by-side theme cards */}
+        <div className="flex gap-3 mt-3" data-testid="theme-preview-cards">
+          {/* Day theme section */}
+          <div className="flex-1 min-w-0" data-testid="theme-section-day">
+            <ThemePreviewCard
+              mode="day"
+              colorTheme={dayColorTheme}
+              isActive={resolvedMode === 'light'}
+              description={dayDescription}
+            />
+            {/* Color theme circles */}
+            <div className="flex flex-wrap gap-2 mt-2">
+              {COLOR_THEMES.map((ct) => (
+                <ColorThemeCircle
+                  key={ct}
+                  colorTheme={ct}
+                  isSelected={dayColorTheme === ct}
+                  onClick={() => handleDayColorThemeChange(ct)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Night theme section */}
+          <div className="flex-1 min-w-0" data-testid="theme-section-night">
+            <ThemePreviewCard
+              mode="night"
+              colorTheme={nightColorTheme}
+              isActive={resolvedMode === 'dark'}
+              description={nightDescription}
+            />
+            {/* Color theme circles */}
+            <div className="flex flex-wrap gap-2 mt-2">
+              {COLOR_THEMES.map((ct) => (
+                <ColorThemeCircle
+                  key={ct}
+                  colorTheme={ct}
+                  isSelected={nightColorTheme === ct}
+                  onClick={() => handleNightColorThemeChange(ct)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
       </SettingsSection>
     </div>
   );

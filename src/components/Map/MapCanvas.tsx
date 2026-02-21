@@ -1298,7 +1298,7 @@ export default function MapCanvas() {
             id: 'background',
             type: 'background',
             paint: {
-              'background-color': config?.display.default_background ?? getMapThemeColors().background,
+              'background-color': getMapThemeColors().background,
             },
           },
         ],
@@ -1445,11 +1445,11 @@ export default function MapCanvas() {
     if (surveyLayerRef.current) {
       surveyLayerRef.current.applyThemeColors(colors);
     }
-    // Re-apply map background color (only if no custom color is configured)
-    if (map.current && mapLoaded && !config?.display.default_background) {
+    // Re-apply map background color to match the active theme
+    if (map.current && mapLoaded) {
       map.current.setPaintProperty('background', 'background-color', colors.background);
     }
-  }, [resolvedTheme, mapLoaded, config?.display.default_background]);
+  }, [resolvedTheme, mapLoaded]);
 
   // Sync selection state with SurveyLayer for visual feedback
   useEffect(() => {

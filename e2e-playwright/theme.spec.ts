@@ -77,6 +77,21 @@ async function navigateToAppearance(page: Page): Promise<void> {
 }
 
 /**
+ * Helper to select a theme mode via the custom Select dropdown.
+ * Clicks the combobox trigger, then clicks the matching option.
+ */
+async function selectThemeMode(page: Page, label: string): Promise<void> {
+  const selectContainer = page.locator('[data-testid="theme-mode-select"]');
+  const trigger = selectContainer.locator('button[role="combobox"]');
+  await trigger.click();
+
+  // The dropdown is portaled to document.body — find the option there
+  const option = page.locator(`[role="option"]:has-text("${label}")`);
+  await expect(option).toBeVisible({ timeout: 3000 });
+  await option.click();
+}
+
+/**
  * Parse a CSS color string into { r, g, b } components.
  * Handles both comma-separated (CSS Color 3) and space-separated (CSS Color 4)
  * rgb/rgba forms, as well as hex #rrggbb notation.
@@ -137,6 +152,20 @@ function assertColorsApproximatelyEqual(
 const DARK_BG = { r: 26, g: 26, b: 46 };
 // Light theme --cc-background is #f5f0e8 -> rgb(245, 240, 232)
 const LIGHT_BG = { r: 245, g: 240, b: 232 };
+// Cave theme --cc-background is #0e0d0c -> rgb(14, 13, 12)
+const CAVE_BG = { r: 14, g: 13, b: 12 };
+// Dracula theme --cc-background is #282a36 -> rgb(40, 42, 54)
+const DRACULA_BG = { r: 40, g: 42, b: 54 };
+// One Dark theme --cc-background is #282c34 -> rgb(40, 44, 52)
+const ONE_DARK_BG = { r: 40, g: 44, b: 52 };
+// Solarized Light theme --cc-background is #fdf6e3 -> rgb(253, 246, 227)
+const SOLARIZED_LIGHT_BG = { r: 253, g: 246, b: 227 };
+// Catppuccin Latte theme --cc-background is #eff1f5 -> rgb(239, 241, 245)
+const CATPPUCCIN_LATTE_BG = { r: 239, g: 241, b: 245 };
+// Nord theme --cc-background is #2e3440 -> rgb(46, 52, 64)
+const NORD_BG = { r: 46, g: 52, b: 64 };
+// Catppuccin Mocha theme --cc-background is #1e1e2e -> rgb(30, 30, 46)
+const CATPPUCCIN_MOCHA_BG = { r: 30, g: 30, b: 46 };
 
 test.describe('Theme Switching - Default Dark Theme', () => {
   test.beforeEach(async ({ page }) => {
@@ -187,17 +216,8 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    // Verify dark is currently selected
-    const darkRadio = page.locator('[data-testid="theme-radio-dark"]');
-    await expect(darkRadio).toBeChecked();
-
-    // Select light theme
-    const lightOption = page.locator('[data-testid="theme-option-light"]');
-    await lightOption.click();
-
-    // Verify light radio is now checked
-    const lightRadio = page.locator('[data-testid="theme-radio-light"]');
-    await expect(lightRadio).toBeChecked();
+    // Use the custom Select dropdown to switch to Light mode
+    await selectThemeMode(page, 'Light');
 
     // Save settings
     const saveButton = page.locator(
@@ -212,6 +232,7 @@ test.describe('Theme Switching - Via Settings UI', () => {
     ).not.toBeVisible({ timeout: 5000 });
 
     // Verify data-theme attribute changed to light
+    // (default day color theme is 'light')
     const dataTheme = await page.evaluate(
       () => document.documentElement.dataset.theme
     );
@@ -224,9 +245,8 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    // Select light theme
-    const lightOption = page.locator('[data-testid="theme-option-light"]');
-    await lightOption.click();
+    // Use the custom Select dropdown to switch to Light mode
+    await selectThemeMode(page, 'Light');
 
     // Save
     const saveButton = page.locator(
@@ -262,9 +282,8 @@ test.describe('Theme Switching - Via Settings UI', () => {
     );
     expect(dataThemeBefore).toBe('dark');
 
-    // Select light theme (but do NOT save)
-    const lightOption = page.locator('[data-testid="theme-option-light"]');
-    await lightOption.click();
+    // Use the custom Select dropdown to switch to Light (but do NOT save)
+    await selectThemeMode(page, 'Light');
 
     // Theme should apply immediately (live preview)
     const dataThemeAfter = await page.evaluate(
@@ -285,9 +304,8 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    // Select light theme (do NOT save)
-    const lightOption = page.locator('[data-testid="theme-option-light"]');
-    await lightOption.click();
+    // Use the custom Select dropdown to switch to Light (do NOT save)
+    await selectThemeMode(page, 'Light');
 
     // Verify live preview is active
     const dataThemeDuring = await page.evaluate(
@@ -325,12 +343,11 @@ test.describe('Theme Switching - Via Settings UI', () => {
   test('theme persists across Settings dialog close and reopen', async ({
     page,
   }) => {
-    // Switch to light theme
+    // Switch to light mode
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    const lightOption = page.locator('[data-testid="theme-option-light"]');
-    await lightOption.click();
+    await selectThemeMode(page, 'Light');
 
     // Save and close
     const saveButton = page.locator(
@@ -352,12 +369,69 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    // Verify light is still selected
-    const lightRadio = page.locator('[data-testid="theme-radio-light"]');
-    await expect(lightRadio).toBeChecked();
+    // In light (day) mode, the day section should show the Active badge
+    await expect(
+      page.locator('[data-testid="theme-active-badge-day"]')
+    ).toBeVisible();
 
-    // Verify dark is NOT selected
-    const darkRadio = page.locator('[data-testid="theme-radio-dark"]');
-    await expect(darkRadio).not.toBeChecked();
+    // Night section should not have an active badge (night mode is not active)
+    await expect(
+      page.locator('[data-testid="theme-active-badge-night"]')
+    ).not.toBeVisible();
+  });
+
+  test('color theme can be changed via circle selectors', async ({
+    page,
+  }) => {
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+
+    // Default: night mode active with dark color theme
+    // Click the light color circle in the night section to change night color theme
+    const nightLightCircle = page.locator(
+      '[data-testid="theme-section-night"] [data-testid="color-theme-circle-light"]'
+    );
+    await nightLightCircle.click();
+
+    // Should apply light color theme even in dark/night mode (live preview)
+    const dataTheme = await page.evaluate(
+      () => document.documentElement.dataset.theme
+    );
+    expect(dataTheme).toBe('light');
+
+    // CSS variables should resolve to light values
+    const bgColor = await page.evaluate(() => {
+      return getComputedStyle(document.documentElement)
+        .getPropertyValue('--cc-background')
+        .trim();
+    });
+    assertColorsApproximatelyEqual(bgColor, LIGHT_BG);
+  });
+
+  test('cave color theme can be selected via circle selector', async ({
+    page,
+  }) => {
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+
+    // Click the cave color circle in the night section
+    const nightCaveCircle = page.locator(
+      '[data-testid="theme-section-night"] [data-testid="color-theme-circle-cave"]'
+    );
+    await nightCaveCircle.click();
+
+    // Should apply cave color theme (live preview)
+    const dataTheme = await page.evaluate(
+      () => document.documentElement.dataset.theme
+    );
+    expect(dataTheme).toBe('cave');
+
+    // CSS variables should resolve to cave values
+    const bgColor = await page.evaluate(() => {
+      return getComputedStyle(document.documentElement)
+        .getPropertyValue('--cc-background')
+        .trim();
+    });
+    assertColorsApproximatelyEqual(bgColor, CAVE_BG);
   });
 });

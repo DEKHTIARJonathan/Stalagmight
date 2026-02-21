@@ -44,6 +44,31 @@ function sortedKeys(tokens: Record<string, string>): string[] {
 
 const cssDarkTokens = extractTokens(extractBlock(cssSource, ':root,'));
 const cssLightTokens = extractTokens(extractBlock(cssSource, '[data-theme="light"]'));
+const cssCaveTokens = extractTokens(extractBlock(cssSource, '[data-theme="cave"]'));
+const cssDraculaTokens = extractTokens(extractBlock(cssSource, '[data-theme="dracula"]'));
+const cssOneDarkTokens = extractTokens(extractBlock(cssSource, '[data-theme="one_dark"]'));
+const cssSolarizedLightTokens = extractTokens(extractBlock(cssSource, '[data-theme="solarized_light"]'));
+const cssCatppuccinLatteTokens = extractTokens(extractBlock(cssSource, '[data-theme="catppuccin_latte"]'));
+const cssNordTokens = extractTokens(extractBlock(cssSource, '[data-theme="nord"]'));
+const cssCatppuccinMochaTokens = extractTokens(extractBlock(cssSource, '[data-theme="catppuccin_mocha"]'));
+
+/** Dark themes must include all dark token keys (including map visualization). */
+const FULL_DARK_THEMES = ['cave', 'dracula', 'one_dark', 'nord', 'catppuccin_mocha'] as const;
+
+/** Light themes only override UI chrome + controls (no map viz tokens). */
+const LIGHT_THEMES = ['light', 'solarized_light', 'catppuccin_latte'] as const;
+
+const cssTokensByTheme: Record<string, Record<string, string>> = {
+  dark: cssDarkTokens,
+  light: cssLightTokens,
+  cave: cssCaveTokens,
+  dracula: cssDraculaTokens,
+  one_dark: cssOneDarkTokens,
+  solarized_light: cssSolarizedLightTokens,
+  catppuccin_latte: cssCatppuccinLatteTokens,
+  nord: cssNordTokens,
+  catppuccin_mocha: cssCatppuccinMochaTokens,
+};
 
 describe('theme tokens', () => {
   it('dark tokens match CSS :root block', () => {
@@ -60,15 +85,43 @@ describe('theme tokens', () => {
     }
   });
 
-  it('light tokens only override UI chrome and controls', () => {
-    const lightKeys = new Set(Object.keys(themeTokens.light));
-    const missingInLight = Object.keys(themeTokens.dark).filter((key) => !lightKeys.has(key));
+  it('cave tokens match CSS cave block', () => {
+    expect(sortedKeys(cssCaveTokens)).toEqual(sortedKeys(themeTokens.cave));
+    for (const [key, value] of Object.entries(themeTokens.cave)) {
+      expect(cssCaveTokens[key]).toBe(value);
+    }
+  });
 
-    expect(missingInLight.sort()).toEqual([...darkOnlyTokenNames].sort());
+  it.each(FULL_DARK_THEMES)('%s tokens include all dark token keys (full dark theme)', (theme) => {
+    expect(sortedKeys(themeTokens[theme])).toEqual(sortedKeys(themeTokens.dark));
+  });
 
+  it.each(FULL_DARK_THEMES)('%s tokens match CSS block', (theme) => {
+    const cssTokens = cssTokensByTheme[theme]!;
+    expect(sortedKeys(cssTokens)).toEqual(sortedKeys(themeTokens[theme]));
+    for (const [key, value] of Object.entries(themeTokens[theme])) {
+      expect(cssTokens[key]).toBe(value);
+    }
+  });
+
+  it.each(LIGHT_THEMES)('%s tokens only override UI chrome and controls', (theme) => {
+    const themeKeys = new Set(Object.keys(themeTokens[theme]));
+    const missingKeys = Object.keys(themeTokens.dark).filter((key) => !themeKeys.has(key));
+
+    expect(missingKeys.sort()).toEqual([...darkOnlyTokenNames].sort());
+
+    const cssTokens = cssTokensByTheme[theme]!;
     for (const key of darkOnlyTokenNames) {
-      expect(lightKeys.has(key)).toBe(false);
-      expect(Object.prototype.hasOwnProperty.call(cssLightTokens, key)).toBe(false);
+      expect(themeKeys.has(key)).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(cssTokens, key)).toBe(false);
+    }
+  });
+
+  it.each(LIGHT_THEMES)('%s tokens match CSS block', (theme) => {
+    const cssTokens = cssTokensByTheme[theme]!;
+    expect(sortedKeys(cssTokens)).toEqual(sortedKeys(themeTokens[theme]));
+    for (const [key, value] of Object.entries(themeTokens[theme])) {
+      expect(cssTokens[key]).toBe(value);
     }
   });
 });
