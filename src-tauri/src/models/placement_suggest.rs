@@ -471,7 +471,7 @@ fn try_partial_match(
 fn try_partial_one_direction(
     import: &MatchShot,
     eff_az: f64,
-    eff_length: f64,
+    _eff_length: f64,
     eff_depth_in: f64,
     eff_depth_out: f64,
     length_ratio: f64,
