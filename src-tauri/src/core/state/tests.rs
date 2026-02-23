@@ -11147,25 +11147,23 @@ fn test_triangle_topology_with_loop_closure() {
     });
     assert!(!third_merge.success, "third merge should fail — stations already connected");
 
-    // Instead, use a loop closure for the C→A leg.
-    // Loop closures require non-merged (i.e. not transitively merged) endpoint pairs.
-    // C:2 and A:0 are in the same connected group but NOT merged, so this should work.
-    // However, the system tracks transitive merges through merge_stations, so
-    // are_stations_merged(C:2, A:0) returns true. We need to verify this is handled:
-    // the closure should either succeed or fail with a clear message.
+    // Close the triangle with a loop closure C:2 ↔ A:0.
+    // These are the free endpoints of their sections — the merge graph only has
+    // edges A:2↔B:0 and B:2↔C:0, so are_stations_merged(C:2, A:0) is false.
+    // The sections are connected (same group), so the closure succeeds and
+    // measures the survey error around the A→B→C→A triangle.
     let closure_result = state.execute(Command::CreateLoopClosure {
         station_a: StationRef::new(sec_c, 2),
         station_b: StationRef::new(sec_a, 0),
         closure_strategy: ClosureStrategy::Batch,
     });
+    assert!(closure_result.success, "loop closure between free endpoints should succeed");
 
-    // The system considers C:2 and A:0 as "merged" via the transitive chain
-    // C:0↔B:2, B:0↔A:2, so the closure is rejected. This is by design:
-    // only physically distinct endpoints can form a closure.
-    // Verify the project is still in a consistent state with 2 merges.
+    // Verify the project is in a consistent state: 2 merges + 1 closure.
     let project = state.get_project_state().unwrap();
     assert_eq!(project.sections.len(), 3, "all 3 sections should exist");
     assert_eq!(project.station_merges.len(), 2, "two merges should exist");
+    assert_eq!(project.loop_closures.len(), 1, "one loop closure should exist");
 
     // All merges reference valid stations
     for merge in &project.station_merges {
@@ -11180,4 +11178,15 @@ fn test_triangle_topology_with_loop_closure() {
         assert!(valid_a, "merge station_a {:?} should be valid", merge.station_a);
         assert!(valid_b, "merge station_b {:?} should be valid", merge.station_b);
     }
+
+    // Loop closure references valid stations
+    let lc = &project.loop_closures[0];
+    assert!(project.sections.iter().any(|s|
+        s.id == lc.station_a.section_id &&
+        (lc.station_a.station_index as usize) <= s.shots.len()
+    ), "closure station_a should be valid");
+    assert!(project.sections.iter().any(|s|
+        s.id == lc.station_b.section_id &&
+        (lc.station_b.station_index as usize) <= s.shots.len()
+    ), "closure station_b should be valid");
 }

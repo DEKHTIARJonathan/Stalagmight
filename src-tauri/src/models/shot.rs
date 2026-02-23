@@ -34,14 +34,14 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 }
 
 /// Convert horizontal + vertical components into slope length.
-#[expect(dead_code)]
+#[allow(dead_code)]
 pub(crate) fn slope_length_from_components(horizontal: f64, dz: f64) -> f64 {
     (horizontal * horizontal + dz * dz).sqrt()
 }
 
 /// Compute pitch (degrees) from horizontal + vertical components.
 /// Positive pitch corresponds to increasing depth (downwards).
-#[expect(dead_code)]
+#[allow(dead_code)]
 pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
     dz.atan2(horizontal).to_degrees()
 }
