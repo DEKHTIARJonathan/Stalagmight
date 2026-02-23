@@ -357,14 +357,14 @@ impl AppState {
             }
         };
 
-        // Collect undo/redo entries for background persistence
+        // Persist undo/redo stacks (best-effort, synchronous to avoid race with readers)
         let persist_limit = self
             .config
             .lock()
             .map(|c| c.general.undo_persist_limit)
             .unwrap_or(20);
 
-        let undo_redo_entries = if let Ok(undo_stack) = self.undo_stack.lock() {
+        if let Ok(undo_stack) = self.undo_stack.lock() {
             let undo_entries: Vec<_> = undo_stack
                 .entries_to_persist(persist_limit)
                 .filter_map(UndoStack::serialize_entry_with_timestamp)
@@ -373,10 +373,22 @@ impl AppState {
                 .redo_entries_to_persist(persist_limit)
                 .filter_map(UndoStack::serialize_entry_with_timestamp)
                 .collect();
-            Some((undo_entries, redo_entries))
-        } else {
-            None
-        };
+
+            if let Err(e) = db.save_undo_stack_with_timestamps(undo_entries) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve undo history",
+                    "Failed to persist undo stack"
+                );
+            }
+            if let Err(e) = db.save_redo_stack_with_timestamps(redo_entries) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve redo history",
+                    "Failed to persist redo stack"
+                );
+            }
+        }
 
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
@@ -385,38 +397,6 @@ impl AppState {
         drop(proj_guard);
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
-        }
-
-        // Persist undo/redo stacks in background thread (best-effort)
-        if let Some((undo_entries, redo_entries)) = undo_redo_entries {
-            let bg_save_path = save_path.clone();
-            std::thread::spawn(move || {
-                let bg_db = match Database::open(&bg_save_path) {
-                    Ok(db) => db,
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            purpose = "preserve undo history",
-                            "Background: failed to open database for undo persistence"
-                        );
-                        return;
-                    }
-                };
-                if let Err(e) = bg_db.save_undo_stack_with_timestamps(undo_entries) {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve undo history",
-                        "Background: failed to persist undo stack"
-                    );
-                }
-                if let Err(e) = bg_db.save_redo_stack_with_timestamps(redo_entries) {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve redo history",
-                        "Background: failed to persist redo stack"
-                    );
-                }
-            });
         }
 
         // Clear in-memory cache since settings are now persisted to DB
