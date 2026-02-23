@@ -104,13 +104,17 @@ impl IntBuffer {
         Ok(values)
     }
 
-    /// Read big-endian signed 16-bit integer (matches Python readInt16BE)
-    /// Format: first byte is LSB * 256, second byte is MSB masked
+    /// Read signed 16-bit integer from two bytes (high byte first, low byte second).
+    ///
+    /// The DMP file stores each byte as a signed decimal (-128..127) in the CSV.
+    /// After parsing into `Vec<u8>`, bytes are unsigned (0..255).  We combine them
+    /// into a `u16` then reinterpret as `i16` for correct two's complement sign
+    /// extension -- matching Python `readInt16BE` and Dart `getInt16(Endian.big)`.
     fn read_int16_be(&mut self) -> Result<i32> {
-        let lsb = i32::from(self.read()?);
-        let msb = i32::from(self.read()?);
-        // Matches Python: (lsb * 2**8) + (msb & 0xFF)
-        Ok((lsb << 8) + (msb & 0xFF))
+        let hi = self.read()?;
+        let lo = self.read()?;
+        let raw = (u16::from(hi) << 8) | u16::from(lo);
+        Ok(i32::from(raw as i16))
     }
 
     /// Check if we have at least n bytes remaining
@@ -686,16 +690,126 @@ mod tests {
     }
 
     #[test]
-    fn test_int_buffer_read_int16_be() {
-        // Test big-endian reading: (lsb << 8) + (msb & 0xFF)
-        let mut buffer = IntBuffer::new(vec![0, 100]); // 0 * 256 + 100 = 100
+    fn test_int_buffer_read_int16_be_positive() {
+        let mut buffer = IntBuffer::new(vec![0, 100]);
         assert_eq!(buffer.read_int16_be().unwrap(), 100);
 
-        let mut buffer = IntBuffer::new(vec![1, 0]); // 1 * 256 + 0 = 256
+        let mut buffer = IntBuffer::new(vec![1, 0]);
         assert_eq!(buffer.read_int16_be().unwrap(), 256);
 
         let mut buffer = IntBuffer::new(vec![14, 16]); // 14 * 256 + 16 = 3600
         assert_eq!(buffer.read_int16_be().unwrap(), 3600);
+    }
+
+    #[test]
+    fn test_int_buffer_read_int16_be_negative() {
+        // -50: two's complement 0xFFCE = [0xFF, 0xCE] = [255, 206]
+        let mut buffer = IntBuffer::new(vec![255, 206]);
+        assert_eq!(buffer.read_int16_be().unwrap(), -50);
+
+        // -1: 0xFFFF = [255, 255]
+        let mut buffer = IntBuffer::new(vec![255, 255]);
+        assert_eq!(buffer.read_int16_be().unwrap(), -1);
+
+        // -17: 0xFFEF = [255, 239]
+        // From real v5 fixture: pitch bytes "-1;-17" → u8 [255, 239]
+        let mut buffer = IntBuffer::new(vec![255, 239]);
+        assert_eq!(buffer.read_int16_be().unwrap(), -17);
+
+        // -256: 0xFF00 = [255, 0]
+        let mut buffer = IntBuffer::new(vec![255, 0]);
+        assert_eq!(buffer.read_int16_be().unwrap(), -256);
+
+        // -285: 0xFED3 = [254, 211]
+        // From real v2 fixture: pitch "-2;-29" → u8 [254, 227]
+        // Python: (-2 * 256) + (-29 & 0xFF) = -512 + 227 = -285
+        let mut buffer = IntBuffer::new(vec![254, 227]);
+        assert_eq!(buffer.read_int16_be().unwrap(), -285);
+    }
+
+    #[test]
+    fn test_int_buffer_read_int16_be_boundaries() {
+        // Zero
+        let mut buffer = IntBuffer::new(vec![0, 0]);
+        assert_eq!(buffer.read_int16_be().unwrap(), 0);
+
+        // +1
+        let mut buffer = IntBuffer::new(vec![0, 1]);
+        assert_eq!(buffer.read_int16_be().unwrap(), 1);
+
+        // i16::MAX = 32767 = 0x7FFF
+        let mut buffer = IntBuffer::new(vec![127, 255]);
+        assert_eq!(buffer.read_int16_be().unwrap(), 32767);
+
+        // i16::MIN = -32768 = 0x8000
+        let mut buffer = IntBuffer::new(vec![128, 0]);
+        assert_eq!(buffer.read_int16_be().unwrap(), -32768);
+
+        // Boundary between positive and negative: 32767 → -32768
+        let mut buffer = IntBuffer::new(vec![127, 255]); // 32767
+        assert_eq!(buffer.read_int16_be().unwrap(), 32767);
+        let mut buffer = IntBuffer::new(vec![128, 0]); // -32768
+        assert_eq!(buffer.read_int16_be().unwrap(), -32768);
+    }
+
+    #[test]
+    fn test_int_buffer_read_int16_be_sequential() {
+        // Read multiple int16s from one buffer: +900, -50, +150
+        // 900  = 0x0384 = [3, 132]
+        // -50  = 0xFFCE = [255, 206]
+        // 150  = 0x0096 = [0, 150]
+        let mut buffer = IntBuffer::new(vec![3, 132, 255, 206, 0, 150]);
+        assert_eq!(buffer.read_int16_be().unwrap(), 900);
+        assert_eq!(buffer.read_int16_be().unwrap(), -50);
+        assert_eq!(buffer.read_int16_be().unwrap(), 150);
+    }
+
+    /// Cross-validate against Python pytool_mnemo_lib readInt16BE.
+    /// Python stores signed ints in the buffer; the formula
+    ///   (lsb * 256) + (msb & 0xFF)
+    /// naturally produces signed results because lsb can be negative.
+    /// Our Rust version stores u8s and sign-extends via `as i16`.
+    /// Both must produce identical results for the same on-disk bytes.
+    #[test]
+    fn test_int16_be_matches_python_reference() {
+        /// Simulate Python readInt16BE: file values are signed ints.
+        fn python_read_int16_be(signed_hi: i32, signed_lo: i32) -> i32 {
+            (signed_hi * 256) + (signed_lo & 0xFF)
+        }
+
+        /// Convert signed file value to u8 (same as `parse::<i32>().map(|v| v as u8)`)
+        fn to_u8(signed: i32) -> u8 {
+            signed as u8
+        }
+
+        // Test cases: (signed_hi_from_file, signed_lo_from_file)
+        let cases: &[(i32, i32)] = &[
+            (0, 100),      // +100
+            (0, 0),        // 0
+            (3, 132),      // +900 (heading)
+            (1, 244),      // +500 (length)
+            (0, 50),       // +50 (pitch +5.0°)
+            (-1, -17),     // -17 (pitch -1.7°, from real v5 fixture)
+            (-1, -18),     // -18 (pitch -1.8°, from real v5 fixture)
+            (-1, -50),     // -50 (pitch -5.0°)
+            (-1, -27),     // -27 (pitch -2.7°, from real v2 fixture)
+            (-1, -1),      // -1  (pitch -0.1°, from real v2 fixture)
+            (-1, -73),     // -73 (pitch -7.3°, from real v2 fixture)
+            (-2, -29),     // -285 (pitch -28.5°, steep descent in v2)
+            (-2, 64),      // -448 (pitch -44.8°, from real v2 fixture)
+            (127, 255),    // +32767 (i16::MAX)
+            (-128, 0),     // -32768 (i16::MIN)
+        ];
+
+        for &(hi, lo) in cases {
+            let python_result = python_read_int16_be(hi, lo);
+            let mut buffer = IntBuffer::new(vec![to_u8(hi), to_u8(lo)]);
+            let rust_result = buffer.read_int16_be().unwrap();
+            assert_eq!(
+                rust_result, python_result,
+                "Mismatch for file bytes ({hi}, {lo}): Rust={rust_result}, Python={python_result}"
+            );
+        }
     }
 
     #[test]
@@ -1067,8 +1181,12 @@ mod tests {
 
         // Basic shot data
         assert_eq!(shot.heading_in, 90.0, "Heading in should be 90.0°");
+        assert_eq!(shot.heading_out, 91.0, "Heading out should be 91.0°");
         assert_eq!(shot.length, 5.0, "Length should be 5.0m");
+        assert_eq!(shot.depth_in, 1.0, "Depth in should be 1.0m");
+        assert_eq!(shot.depth_out, 1.5, "Depth out should be 1.5m");
         assert_eq!(shot.pitch_in, 5.0, "Pitch in should be 5.0°");
+        assert_eq!(shot.pitch_out, -5.0, "Pitch out should be -5.0° (negative)");
     }
 
     /// Test 4.3: Verify graceful error handling for files with invalid magic bytes or corrupted headers
@@ -1993,6 +2111,371 @@ mod tests {
         assert_eq!(std_002[180].heading_in, 329.7, "002 shot 180 raw azimuth");
         assert_eq!(std_002[181].length, 12.71, "002 shot 181 raw length");
         assert_eq!(std_002[181].heading_in, 355.8, "002 shot 181 raw azimuth");
+    }
+
+    // ============================================================================
+    // Signed int16 / negative pitch tests
+    // ============================================================================
+
+    /// Helper: build a v4 DMP section from field-level values (as signed i16).
+    /// Encodes each i16 as two unsigned bytes [hi, lo] matching the on-disk format.
+    fn build_v4_shot_section(
+        name: [u8; 3],
+        heading_in: i16,
+        heading_out: i16,
+        length: i16,
+        depth_in: i16,
+        depth_out: i16,
+        pitch_in: i16,
+        pitch_out: i16,
+    ) -> String {
+        fn push_i16(v: &mut Vec<i32>, val: i16) {
+            let bytes = val.to_be_bytes(); // [hi, lo]
+            v.push(i32::from(bytes[0]));
+            v.push(i32::from(bytes[1]));
+        }
+
+        let mut values: Vec<i32> = Vec::new();
+
+        // V4 header
+        values.push(4);
+        values.extend(&[68, 89, 101]); // magic
+        values.extend(&[25, 1, 15, 9, 0]); // date: 2025-01-15 09:00
+        values.extend(&[i32::from(name[0]), i32::from(name[1]), i32::from(name[2])]);
+        values.push(0); // direction In
+
+        // Shot (29 bytes for v4)
+        values.push(2); // Standard
+        push_i16(&mut values, heading_in);
+        push_i16(&mut values, heading_out);
+        push_i16(&mut values, length);
+        push_i16(&mut values, depth_in);
+        push_i16(&mut values, depth_out);
+        push_i16(&mut values, pitch_in);
+        push_i16(&mut values, pitch_out);
+        // LRUD
+        push_i16(&mut values, 100);
+        push_i16(&mut values, 150);
+        push_i16(&mut values, 200);
+        push_i16(&mut values, 80);
+        // Temperature
+        push_i16(&mut values, 185);
+        // Time
+        values.extend(&[10, 30, 0]);
+        // Marker
+        values.push(0);
+
+        // EOS
+        values.push(3);
+        values.extend(vec![0; 28]);
+
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Full integration test: negative pitch values parsed through the entire DMP pipeline.
+    #[test]
+    fn test_parse_dmp_negative_pitch() {
+        let content = build_v4_shot_section(
+            *b"NEG",
+            900,  // heading_in 90.0°
+            910,  // heading_out 91.0°
+            500,  // length 5.00m
+            100,  // depth_in 1.00m
+            150,  // depth_out 1.50m
+            -150, // pitch_in -15.0°
+            -300, // pitch_out -30.0°
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse DMP with negative pitch");
+        std::fs::remove_file(&path).ok();
+
+        let shot = &dmp.sections[0].shots[0];
+        assert_eq!(shot.heading_in, 90.0);
+        assert_eq!(shot.heading_out, 91.0);
+        assert_eq!(shot.length, 5.0);
+        assert_eq!(shot.depth_in, 1.0);
+        assert_eq!(shot.depth_out, 1.5);
+        assert_eq!(shot.pitch_in, -15.0, "Negative pitch_in must be preserved");
+        assert_eq!(shot.pitch_out, -30.0, "Negative pitch_out must be preserved");
+    }
+
+    /// Steep downward pitch near the -90° limit.
+    #[test]
+    fn test_parse_dmp_steep_negative_pitch() {
+        let content = build_v4_shot_section(
+            *b"STP",
+            1800, // heading_in 180.0°
+            1810, // heading_out 181.0°
+            200,  // length 2.00m
+            500,  // depth_in 5.00m
+            800,  // depth_out 8.00m
+            -850, // pitch_in -85.0° (nearly vertical down)
+            -900, // pitch_out -90.0° (straight down)
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse steep negative pitch");
+        std::fs::remove_file(&path).ok();
+
+        let shot = &dmp.sections[0].shots[0];
+        assert_eq!(shot.pitch_in, -85.0, "Steep downward pitch_in");
+        assert_eq!(shot.pitch_out, -90.0, "Vertical downward pitch_out");
+    }
+
+    /// Positive pitch (upward-sloping passage).
+    #[test]
+    fn test_parse_dmp_positive_pitch() {
+        let content = build_v4_shot_section(
+            *b"UPP",
+            450,  // heading_in 45.0°
+            460,  // heading_out 46.0°
+            1000, // length 10.00m
+            200,  // depth_in 2.00m
+            100,  // depth_out 1.00m
+            450,  // pitch_in +45.0°
+            300,  // pitch_out +30.0°
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse positive pitch");
+        std::fs::remove_file(&path).ok();
+
+        let shot = &dmp.sections[0].shots[0];
+        assert_eq!(shot.pitch_in, 45.0, "Positive pitch_in");
+        assert_eq!(shot.pitch_out, 30.0, "Positive pitch_out");
+    }
+
+    /// Zero pitch (horizontal passage).
+    #[test]
+    fn test_parse_dmp_zero_pitch() {
+        let content = build_v4_shot_section(
+            *b"ZRO",
+            2700, 2710, 300, 100, 100,
+            0,    // pitch_in 0.0°
+            0,    // pitch_out 0.0°
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse zero pitch");
+        std::fs::remove_file(&path).ok();
+
+        let shot = &dmp.sections[0].shots[0];
+        assert_eq!(shot.pitch_in, 0.0);
+        assert_eq!(shot.pitch_out, 0.0);
+    }
+
+    /// Mixed positive/negative pitch within a single shot.
+    #[test]
+    fn test_parse_dmp_mixed_pitch() {
+        let content = build_v4_shot_section(
+            *b"MIX",
+            900, 910, 500, 200, 300,
+            50,   // pitch_in +5.0°
+            -50,  // pitch_out -5.0°
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse mixed pitch");
+        std::fs::remove_file(&path).ok();
+
+        let shot = &dmp.sections[0].shots[0];
+        assert_eq!(shot.pitch_in, 5.0, "Positive pitch_in");
+        assert_eq!(shot.pitch_out, -5.0, "Negative pitch_out");
+    }
+
+    /// Small negative pitch values (-0.1° to -0.9°) that sit near zero.
+    #[test]
+    fn test_parse_dmp_small_negative_pitch() {
+        let content = build_v4_shot_section(
+            *b"SML",
+            900, 910, 500, 100, 100,
+            -1,   // pitch_in -0.1°
+            -9,   // pitch_out -0.9°
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse small negative pitch");
+        std::fs::remove_file(&path).ok();
+
+        let shot = &dmp.sections[0].shots[0];
+        assert!(
+            (shot.pitch_in - (-0.1)).abs() < 1e-9,
+            "pitch_in should be -0.1°, got {}",
+            shot.pitch_in
+        );
+        assert!(
+            (shot.pitch_out - (-0.9)).abs() < 1e-9,
+            "pitch_out should be -0.9°, got {}",
+            shot.pitch_out
+        );
+    }
+
+    /// Negative heading values (headings are 0-3600 so this shouldn't normally
+    /// occur, but the int16 reader must not break on high unsigned values that
+    /// sit below i16::MAX -- e.g. heading 350.0° = 3500 = 0x0DAC, positive).
+    #[test]
+    fn test_parse_dmp_large_positive_heading() {
+        let content = build_v4_shot_section(
+            *b"HDG",
+            3500, // heading_in 350.0°
+            3590, // heading_out 359.0°
+            500, 100, 100, 0, 0,
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse large headings");
+        std::fs::remove_file(&path).ok();
+
+        let shot = &dmp.sections[0].shots[0];
+        assert_eq!(shot.heading_in, 350.0);
+        assert_eq!(shot.heading_out, 359.0);
+    }
+
+    /// End-to-end: negative pitch values survive through to ShotData conversion.
+    #[test]
+    fn test_negative_pitch_through_to_shot_data() {
+        let content = build_v4_shot_section(
+            *b"E2E",
+            900, 910, 500, 100, 150,
+            -200, // pitch_in -20.0°
+            -350, // pitch_out -35.0°
+        );
+        let (_file, path) = create_dmp_file(&content);
+        let dmp = parse_dmp(&path).expect("should parse");
+        std::fs::remove_file(&path).ok();
+
+        let section_data = dmp.sections[0].to_section_data(String::new());
+        let shot_data = &section_data.shots[0];
+        assert_eq!(shot_data.pitch_in, Some(-20.0), "ShotData pitch_in");
+        assert_eq!(shot_data.pitch_out, Some(-35.0), "ShotData pitch_out");
+    }
+
+    /// Cross-validate CaveChef's parser against known values from pytool_mnemo_lib's
+    /// test_v5.dmp fixture. Both codebases must produce identical results.
+    #[test]
+    fn test_parse_v5_fixture_pitch_values() {
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/test_v5.dmp");
+        if !test_file.exists() {
+            eprintln!("Skipping: fixture not found at {}", test_file.display());
+            return;
+        }
+
+        let dmp = parse_dmp(&test_file).expect("should parse v5 fixture");
+
+        // Section 0 ("BAS"), shot 0:
+        // File bytes for pitch: -1;-17 and -1;-18
+        // Python: (-1*256)+(-17&0xFF) = -17, (-1*256)+(-18&0xFF) = -18
+        // Expected: pitch_in=-1.7°, pitch_out=-1.8°
+        let s0 = &dmp.sections[0];
+        assert_eq!(s0.name, "BAS", "First section name");
+        let shot0 = &s0.shots[0];
+        assert!(
+            (shot0.pitch_in - (-1.7)).abs() < 0.01,
+            "v5 s0 shot0 pitch_in: expected -1.7, got {}",
+            shot0.pitch_in
+        );
+        assert!(
+            (shot0.pitch_out - (-1.8)).abs() < 0.01,
+            "v5 s0 shot0 pitch_out: expected -1.8, got {}",
+            shot0.pitch_out
+        );
+    }
+
+    /// Cross-validate against known values from pytool_mnemo_lib's test_v2.dmp fixture.
+    /// V2 format has many shots with negative pitch.
+    #[test]
+    fn test_parse_v2_fixture_pitch_values() {
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/test_v2.dmp");
+        if !test_file.exists() {
+            eprintln!("Skipping: fixture not found at {}", test_file.display());
+            return;
+        }
+
+        let dmp = parse_dmp(&test_file).expect("should parse v2 fixture");
+
+        let s0 = &dmp.sections[0];
+        assert_eq!(s0.name, "BAS", "First section name");
+
+        // V2 section 0, shot 0: file bytes for pitch_in are 0;-123 and pitch_out is 0;14
+        // Python: (0*256)+(-123&0xFF) = 133, (0*256)+(14&0xFF) = 14
+        // Expected: pitch_in=13.3°, pitch_out=1.4°
+        let shot0 = &s0.shots[0];
+        assert!(
+            (shot0.pitch_in - 13.3).abs() < 0.01,
+            "v2 s0 shot0 pitch_in: expected 13.3, got {}",
+            shot0.pitch_in
+        );
+        assert!(
+            (shot0.pitch_out - 1.4).abs() < 0.01,
+            "v2 s0 shot0 pitch_out: expected 1.4, got {}",
+            shot0.pitch_out
+        );
+
+        // Find a shot with negative pitch in the v2 fixture.
+        // Shot 2 has pitch bytes: 0;-125 and -1;-27
+        // Python: (0*256)+(-125&0xFF) = 131, (-1*256)+(-27&0xFF) = -27
+        // Expected: pitch_in=13.1°, pitch_out=-2.7°
+        if s0.shots.len() > 2 {
+            let shot2 = &s0.shots[2];
+            assert!(
+                (shot2.pitch_out - (-2.7)).abs() < 0.01,
+                "v2 s0 shot2 pitch_out: expected -2.7, got {}",
+                shot2.pitch_out
+            );
+        }
+    }
+
+    /// Verify that pitch values from DMP files always fall within physical limits.
+    /// Any value outside [-90, +90] indicates a parsing error.
+    #[test]
+    fn test_fixture_pitch_in_physical_range() {
+        for fixture in &["test_v2.dmp", "test_v5.dmp"] {
+            let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../e2e/fixtures")
+                .join(fixture);
+            if !test_file.exists() {
+                eprintln!("Skipping: fixture not found at {}", test_file.display());
+                continue;
+            }
+
+            let dmp = parse_dmp(&test_file).expect("should parse fixture");
+            for (si, section) in dmp.sections.iter().enumerate() {
+                for (shi, shot) in section.shots.iter().enumerate() {
+                    if shot.shot_type != DmpShotType::Standard {
+                        continue;
+                    }
+                    assert!(
+                        (-90.0..=90.0).contains(&shot.pitch_in),
+                        "{fixture} section {si} shot {shi}: pitch_in={} out of [-90,90] range",
+                        shot.pitch_in,
+                    );
+                    assert!(
+                        (-90.0..=90.0).contains(&shot.pitch_out),
+                        "{fixture} section {si} shot {shi}: pitch_out={} out of [-90,90] range",
+                        shot.pitch_out,
+                    );
+                }
+            }
+        }
+    }
+
+    /// DMP files use signed decimal values on disk (e.g. "-1;-17;").
+    /// Verify that the initial parse step `i32 -> u8` correctly converts
+    /// negative file values to unsigned bytes for the buffer.
+    #[test]
+    fn test_signed_file_values_produce_correct_bytes() {
+        // Simulate what parse_dmp does: parse semicolons, cast to u8, then read_int16_be.
+        // File content for pitch=-17: signed bytes are -1 and -17.
+        let file_content = "-1;-17";
+        let data: Vec<u8> = file_content
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim().parse::<i32>().unwrap() as u8)
+            .collect();
+        assert_eq!(data, vec![255, 239], "signed -1,-17 → unsigned 255,239");
+
+        let mut buffer = IntBuffer::new(data);
+        assert_eq!(buffer.read_int16_be().unwrap(), -17, "should reconstruct -17");
     }
 
 }
