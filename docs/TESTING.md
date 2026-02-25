@@ -74,7 +74,11 @@ e2e-playwright/
 ├── fixtures/              # Test data files
 ├── project-crud.spec.ts   # Project CRUD operation tests
 ├── ui-components.spec.ts  # UI interaction tests
-└── debug.spec.ts          # Debugging helper test
+├── theme.spec.ts          # Color theme switching tests
+├── settings-shortcuts.spec.ts  # Shortcut configuration tests
+├── dmp-import.spec.ts     # DMP import dialog tests
+├── debug.spec.ts          # Debugging helper test
+└── ...                    # 67 spec files total
 ```
 
 ### Configuration
@@ -1206,6 +1210,27 @@ await page.fill('[data-testid="globalview-search-input"]', 'sistema');
 await page.click('[data-testid="globalview-search-clear"]');
 await expect(page.locator('[data-testid="globalview-search-input"]')).toHaveValue('');
 ```
+
+## Color Theme Testing
+
+Theme tests are in `e2e-playwright/theme.spec.ts`. They verify:
+
+- Theme switching between all 9 color themes (dark, light, cave, dracula, one_dark, solarized_light, catppuccin_latte, nord, catppuccin_mocha)
+- Day/night palette independence
+- Auto mode follows OS `prefers-color-scheme`
+- CSS custom properties (`--cc-*`) are applied correctly
+- Theme preview cards in Settings > Appearance render without errors
+- Grid overlay picks up theme-aware colors
+
+## Keyboard Shortcuts Overlay Testing
+
+The `?` key opens `KeyboardShortcutsDialog`. Tests verify:
+
+- Dialog opens on `?` key press and closes on Escape
+- Search/filter functionality narrows displayed shortcuts
+- All shortcut categories (Tools, Edit, View, Panels, File) are rendered
+- "Customize" button navigates to Settings > Shortcuts
+- Reserved shortcuts section is displayed
 
 ## Focus Management Test Patterns
 

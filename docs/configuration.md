@@ -26,6 +26,29 @@ angle = "degrees"                   # degrees, gradians
 [display]
 default_background = "#1a1a2e"      # Map background color
 
+[appearance]
+theme = "auto"                      # "dark", "light", or "auto" (follows OS preference)
+day_color_theme = "light"           # Color palette for light/day mode
+night_color_theme = "dark"          # Color palette for dark/night mode
+# Available color themes:
+#   dark, light, cave, dracula, one_dark,
+#   solarized_light, catppuccin_latte, nord, catppuccin_mocha
+
+[import]
+overlap_mode = "skip"               # How to handle overlapping shots during import: "skip", "replace", "append"
+
+[placement_suggestion]
+azimuth_sigma = 5.0                 # Sigma for azimuth error (degrees)
+length_sigma = 0.3                  # Sigma for length error (meters)
+depth_sigma = 0.3                   # Sigma for depth error (meters)
+azimuth_weight = 1.0                # Weight for azimuth score component
+length_weight = 1.0                 # Weight for length score component
+depth_in_weight = 1.0               # Weight for depth_in score component
+depth_out_weight = 1.0              # Weight for depth_out score component
+min_shot_score = 0.1                # Minimum per-shot score to continue matching
+min_aggregate_score = 0.3           # Minimum aggregate score to include a suggestion
+max_reference_shots = 5             # Maximum reference shots to try from each leaf
+
 [map]
 satellite_provider = "esri"         # Tile provider (selects from backend registry via get_tile_providers IPC)
 satellite_enabled = false           # Show satellite imagery

@@ -15,14 +15,13 @@ Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. S
 4. Copy display settings to temp database
 5. Close temp database, atomically rename to final path
 6. Reopen database at final path
-7. Collect undo/redo entries (while holding lock)
-8. Spawn background thread for undo/redo persistence
-9. Update project.file_path and database handle
-10. Update recent projects list in config
-11. Return CommandResult with saved_path
+7. Persist undo/redo stacks synchronously to the database
+8. Update project.file_path and database handle
+9. Update recent projects list in config
+10. Return CommandResult with saved_path
 ```
 
-Steps 1-6 are the critical path for data safety. Step 8 runs in a background thread so the IPC response returns immediately after the project data is safely written.
+Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stacks synchronously to avoid race conditions with concurrent readers.
 
 ### Frontend (`saveProject` in `projectStore.ts`)
 
@@ -84,12 +83,12 @@ A manual Ctrl+S while a timer is pending cancels the auto-save timer (since `isD
 
 ## Undo/Redo Persistence
 
-Undo and redo stacks are persisted to the SQLite database on each save, but this runs in a **background thread** to avoid blocking the save response.
+Undo and redo stacks are persisted to the SQLite database synchronously on each save, using the same database connection.
 
 ### Flow
 
 1. While the undo stack lock is held, entries are collected and serialized
-2. A `std::thread::spawn` opens a second database connection and writes the entries
+2. Entries are written to the database synchronously (no background thread)
 3. Errors are logged via `tracing::warn` but don't affect the save result
 
 ### Details

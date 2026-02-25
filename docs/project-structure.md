@@ -48,11 +48,22 @@ stalagmight/
 │   │   │   └── SystemCard.tsx        # System list item
 │   │   ├── SingleSystemView/     # Main editing view
 │   │   ├── Map/                  # MapLibre integration
+│   │   │   ├── MapCanvas.tsx         # MapLibre map initialization
+│   │   │   ├── SurveyLayer.tsx       # Survey rendering on map
+│   │   │   └── GridOverlay.tsx       # Theme-aware coordinate grid overlay
 │   │   ├── Dialogs/              # All dialog components
+│   │   │   ├── KeyboardShortcutsDialog.tsx  # Shortcuts overlay (? key)
+│   │   │   └── settings/        # Settings dialog tabs
+│   │   │       ├── AppearanceSettings.tsx   # Theme mode & color theme selection
+│   │   │       ├── ThemePreviewCard.tsx     # Mini app mockup preview cards
+│   │   │       ├── AdvancedSettings.tsx     # Placement suggestion constants
+│   │   │       └── ...
 │   │   └── common/               # Button, Panel, Table
+│   ├── theme/                    # Color theme system
+│   │   └── tokens.ts                 # 9 color theme token definitions
 │   ├── store/                    # Zustand stores
 │   │   ├── projectStore.ts           # Project state
-│   │   ├── uiStore.ts                # UI state
+│   │   ├── uiStore.ts                # UI state (incl. resolvedTheme)
 │   │   └── globalViewStore.ts        # Global View state
 │   ├── hooks/                    # Custom React hooks
 │   │   ├── useFocusTrap.ts           # Focus trap for modal dialogs
@@ -67,13 +78,16 @@ stalagmight/
 │   ├── fixtures/                 # Test data (DMP files)
 │   └── helpers/                  # Test utilities
 │
-├── e2e-playwright/               # Playwright E2E tests (mocked IPC)
+├── e2e-playwright/               # Playwright E2E tests (mocked IPC, 67 spec files)
 │   ├── mocks/                    # Tauri IPC mocks
 │   │   └── tauri-ipc.ts          # Mock command handlers
 │   ├── fixtures/                 # Test data
-│   ├── import-dialog.spec.ts     # Import DMP dialog tests (Ctrl+I)
+│   ├── dmp-import.spec.ts        # Import DMP dialog tests
 │   ├── project-crud.spec.ts      # Project operations tests
-│   └── ui-components.spec.ts     # UI interaction tests
+│   ├── theme.spec.ts             # Color theme switching tests
+│   ├── settings-shortcuts.spec.ts # Shortcut configuration tests
+│   ├── ui-components.spec.ts     # UI interaction tests
+│   └── ...                       # 60+ additional spec files
 │
 ├── docs/                         # Documentation
 │   ├── plans/                    # Implementation plans
@@ -82,7 +96,18 @@ stalagmight/
 │   ├── architecture.md           # System design
 │   ├── project-structure.md      # This file
 │   ├── configuration.md          # Config options
-│   └── roadmap.md                # v1.0 features
+│   ├── roadmap.md                # v1.0 features
+│   ├── saving.md                 # Save pipeline & auto-save
+│   ├── undo-redo.md              # Undo/redo system details
+│   ├── performance.md            # Algorithm choices & profiling
+│   ├── ipc-typegen.md            # IPC type generation
+│   ├── dmp-import.md             # DMP import format details
+│   ├── ariane-import.md          # Ariane import format
+│   ├── ariane-export.md          # Ariane export format
+│   ├── closures.md               # Loop closure system
+│   ├── move-tools.md             # Move station/segment tools
+│   ├── releasing.md              # Release process
+│   └── style-guide.md            # UI style guide
 │
 ├── prd/                          # PRD markdown files for v1.0 tasks
 │   ├── 01-lrud-fields.md
