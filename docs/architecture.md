@@ -51,6 +51,52 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
 | `src/hooks/useFpsMonitor.ts` | FPS monitoring for auto-throttle |
+| `src/theme/tokens.ts` | Color theme token definitions (9 themes) |
+| `src/components/Map/GridOverlay.tsx` | Theme-aware coordinate grid overlay |
+| `src/components/Dialogs/KeyboardShortcutsDialog.tsx` | Keyboard shortcuts overlay (`?` key) |
+| `src/components/Dialogs/settings/AppearanceSettings.tsx` | Theme mode & color theme selection UI |
+| `src/components/Dialogs/settings/ThemePreviewCard.tsx` | Mini app mockup preview cards for themes |
+| `src-tauri/src/config/types.rs` | Config types incl. `AppearanceConfig`, `PlacementSuggestionConfig`, `ImportConfig` |
+
+## Color Theme System
+
+Stalagmight supports 9 color themes with independent day (light) and night (dark) palettes:
+
+| Theme | Type | Description |
+|-------|------|-------------|
+| `dark` | Dark | Default dark blue/purple with teal accent |
+| `light` | Light | Default warm beige/paper with teal accent |
+| `cave` | Dark | Very dark, desaturated with gold accent |
+| `dracula` | Dark | Dracula-inspired with purple accent |
+| `one_dark` | Dark | Atom One Dark-inspired with blue accent |
+| `solarized_light` | Light | Solarized light with blue accent |
+| `catppuccin_latte` | Light | Catppuccin Latte (light) with blue accent |
+| `nord` | Dark | Nord-inspired with cyan accent |
+| `catppuccin_mocha` | Dark | Catppuccin Mocha (dark) with blue accent |
+
+### Theme Architecture
+
+```
+AppearanceConfig (Rust)          UIStore (Zustand)           CSS
+  theme: ThemeMode          →    resolvedTheme: ResolvedTheme  →  CSS custom properties
+  day_color_theme: ColorTheme        ↑                              (--cc-* vars)
+  night_color_theme: ColorTheme      │
+                               OS prefers-color-scheme
+                               (when theme = "auto")
+```
+
+- **Backend**: `AppearanceConfig` in `config/types.rs` stores `ThemeMode` (dark/light/auto) and separate `ColorTheme` values for day and night
+- **Frontend**: `uiStore.resolvedTheme` resolves the active theme. When `theme = "auto"`, the OS preference selects day or night palette
+- **Tokens**: `src/theme/tokens.ts` maps each theme name to a set of CSS custom properties (`--cc-*`) covering UI chrome, map visualization, and map controls
+- **Preview**: `ThemePreviewCard` renders mini app mockups; `ColorThemeCircle` shows 3-segment color swatches for quick selection
+
+## Keyboard Shortcuts Overlay
+
+Pressing `?` opens the `KeyboardShortcutsDialog`, a filterable grid showing all shortcuts grouped by category (Tools, Edit, View, Panels, File) plus reserved shortcuts. Includes a "Customize" button linking to Settings > Shortcuts.
+
+## Grid Overlay
+
+`GridOverlay.tsx` renders a coordinate grid on the map that scales with survey data. Grid spacing auto-selects from `[1, 5, 10, 25, 50, 100]` meters based on zoom level. The grid subscribes to `resolvedTheme` for theme-aware colors via the `--cc-grid-default` CSS variable.
 
 ## Rust Backend Patterns
 

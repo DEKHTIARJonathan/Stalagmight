@@ -753,7 +753,7 @@ When an action is performed while the dropdown is open:
 - Shot data (azimuth, length, depth)
 - Reference shots (dotted lines)
 - Zero datum (golden star)
-- Grid overlay
+- Grid overlay (theme-aware, auto-spacing from 1–100m based on zoom)
 - Scale bar
 - Satellite imagery
 - Depth color gradient (configurable palette)
@@ -1596,9 +1596,31 @@ Later sources override earlier ones.
 [general]
 auto_save_delay_ms = 2000  # Debounce delay for auto-save
 
+[appearance]
+theme = "auto"                      # "dark", "light", or "auto" (follows OS preference)
+day_color_theme = "light"           # Color palette for light/day mode
+night_color_theme = "dark"          # Color palette for dark/night mode
+# Available color themes:
+#   dark, light, cave, dracula, one_dark,
+#   solarized_light, catppuccin_latte, nord, catppuccin_mocha
+
 [display]
 font_family = "system"  # "system" | "monospace" | "sans-serif" | "serif"
-color_palette = "default"  # "default" | "ocean" | "forest" | "desert" | "colorblind"
+
+[import]
+overlap_mode = "skip"  # How to handle overlapping shots: "skip", "replace", "append"
+
+[placement_suggestion]
+azimuth_sigma = 5.0                 # Sigma for azimuth error (degrees)
+length_sigma = 0.3                  # Sigma for length error (meters)
+depth_sigma = 0.3                   # Sigma for depth error (meters)
+azimuth_weight = 1.0                # Weight for azimuth score component
+length_weight = 1.0                 # Weight for length score component
+depth_in_weight = 1.0               # Weight for depth_in score component
+depth_out_weight = 1.0              # Weight for depth_out score component
+min_shot_score = 0.1                # Minimum per-shot score to continue matching
+min_aggregate_score = 0.3           # Minimum aggregate score to include a suggestion
+max_reference_shots = 5             # Maximum reference shots to try from each leaf
 
 [validation]
 closure_error_threshold = 5.0  # Percentage threshold for warnings
@@ -1635,11 +1657,12 @@ Modal dialog with sidebar navigation, accessible via the Settings button in the 
 
 ### 10.2 Categories
 
-The sidebar displays 9 settings categories, with a visual separator before the Advanced category:
+The sidebar displays 10 settings categories, with a visual separator before the Advanced category:
 
 | Category | Contents |
 |----------|----------|
 | General | Auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference |
+| Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 9 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
 | Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
@@ -1647,7 +1670,7 @@ The sidebar displays 9 settings categories, with a visual separator before the A
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
 | Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
 | Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
-| Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, panel dimensions, reload config from disk |
+| Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, placement suggestion heuristic constants, panel dimensions, reload config from disk |
 
 ### 10.3 Navigation
 
@@ -2679,10 +2702,17 @@ stalagmight/
 | Zoom In | + / = |
 | Zoom Out | - |
 | Fit to View | F |
+| Toggle Depth Gradient | G |
+| Toggle Grid | Shift+G |
+| Toggle Satellite | B |
+| Toggle Station Labels | L |
+| Toggle Shot Labels | Shift+L |
+| Toggle Section Labels | Ctrl+L |
 | Toggle Sections Panel | Ctrl+1 |
 | Toggle Detail Panel | Ctrl+2 |
 | Toggle Data Table | Ctrl+3 |
 | Open Settings | Ctrl+, (Cmd+, on macOS) |
+| Keyboard Shortcuts Overlay | ? |
 
 **Note**: Import DMP (Ctrl+I) and Export (Ctrl+E) shortcuts are user-configurable via the Settings dialog. The defaults shown above can be reassigned to any available key combination.
 
@@ -2733,7 +2763,25 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 
 ---
 
-## Appendix C: Color Palette (Default)
+## Appendix C: Color Themes
+
+Stalagmight supports 9 color themes, selectable independently for day (light) and night (dark) modes:
+
+| Theme | Type | Description |
+|-------|------|-------------|
+| `dark` | Dark | Default dark blue/purple with teal accent |
+| `light` | Light | Default warm beige/paper with teal accent |
+| `cave` | Dark | Very dark, desaturated with gold accent |
+| `dracula` | Dark | Dracula-inspired with purple accent |
+| `one_dark` | Dark | Atom One Dark-inspired with blue accent |
+| `solarized_light` | Light | Solarized light with blue accent |
+| `catppuccin_latte` | Light | Catppuccin Latte (light) with blue accent |
+| `nord` | Dark | Nord-inspired with cyan accent |
+| `catppuccin_mocha` | Dark | Catppuccin Mocha (dark) with blue accent |
+
+Theme tokens are defined in `src/theme/tokens.ts` as CSS custom properties (`--cc-*`). Each theme provides tokens for UI chrome, map visualization, map controls, canvas preview, and opacity variants.
+
+When `appearance.theme` is set to `"auto"`, the OS `prefers-color-scheme` media query selects between `day_color_theme` and `night_color_theme`.
 
 ```
 Section Colors (auto-assigned):
@@ -2745,17 +2793,6 @@ Section Colors (auto-assigned):
 #fcbad3 - Pink
 #a8d8ea - Sky Blue
 #ffcb77 - Peach
-
-UI Colors:
-Background: #1a1a2e
-Panel Background: #16213e
-Border: #0f3460
-Text Primary: #f5f5f5
-Text Secondary: #a0a0a0
-Accent: #4ecdc4
-Warning: #ffcb77
-Error: #ff6b6b
-Success: #95e1d3
 
 Map Colors:
 Grid: #333366

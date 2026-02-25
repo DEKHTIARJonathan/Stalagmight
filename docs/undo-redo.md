@@ -74,10 +74,11 @@ The `shot_display_position(shot_id, section_id)` helper in `models/shot.rs` conv
 
 ## Persistence
 
-Undo and redo stacks are serialized to the SQLite database on project save and restored on project open.
+Undo and redo stacks are serialized to the SQLite database synchronously on project save and restored on project open.
 
 - Each entry is stored as `(command_json, undo_data_json, timestamp_iso8601)`
 - Only the last N entries are persisted (configurable limit)
+- Persistence is synchronous to avoid race conditions with concurrent readers
 - Serialization failures are logged but don't block the save
 - Deserialization failures skip invalid entries and load whatever is valid
 - On project close, stacks are cleared from memory (DB retains persisted entries)
