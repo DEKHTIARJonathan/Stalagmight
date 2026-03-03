@@ -134,6 +134,14 @@ info "Building production macOS app"
 (cd "$PROJECT_DIR" && CI=true pnpm tauri build)
 ok "Production build complete"
 
+# ── Step 6a: Ad-hoc code sign ────────────────────────────────────────────────
+APP_BUNDLE="$PROJECT_DIR/src-tauri/target/release/bundle/macos/Stalagmight.app"
+if [[ -d "$APP_BUNDLE" ]]; then
+  info "Ad-hoc signing Stalagmight.app"
+  codesign --force --deep -s - "$APP_BUNDLE"
+  ok "Ad-hoc signed (users can right-click → Open to bypass Gatekeeper)"
+fi
+
 # ── Step 7: Report artifacts ────────────────────────────────────────────────
 BUNDLE_DIR="$PROJECT_DIR/src-tauri/target/release/bundle/macos"
 info "Build artifacts in $BUNDLE_DIR:"
