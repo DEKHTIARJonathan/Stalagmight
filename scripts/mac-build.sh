@@ -12,6 +12,7 @@ die()   { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 PROJECT_DIR=""
 TEST_UI=false
 TEST_UI_HEADED=false
+TEST_E2E=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-dir)
@@ -24,6 +25,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --test-ui-headed)
       TEST_UI_HEADED=true
+      shift
+      ;;
+    --test-e2e)
+      TEST_E2E=true
       shift
       ;;
     *)
@@ -103,6 +108,23 @@ if cargo test --manifest-path "$PROJECT_DIR/src-tauri/Cargo.toml"; then
   ok "Rust tests passed"
 else
   warn "Some Rust tests failed (continuing with build)"
+fi
+
+# ── Step 5a: Build debug binary for E2E (optional) ────────────────────
+if [[ "$TEST_E2E" == true ]]; then
+  # Ensure CARGO_TARGET_DIR matches what wdio.conf.ts expects
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo_build}"
+  info "Building debug binary with e2e feature for WebDriverIO tests"
+  info "  CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+  (cd "$PROJECT_DIR" && VITE_E2E=1 pnpm tauri build --debug --no-bundle -- --features e2e)
+  ok "E2E debug binary built"
+fi
+
+# ── Step 5b: Run WebDriverIO E2E tests (optional) ────────────────────
+if [[ "$TEST_E2E" == true ]]; then
+  info "Running WebDriverIO E2E tests"
+  (cd "$PROJECT_DIR" && ./scripts/wdio.sh --skip-build)
+  ok "WebDriverIO E2E tests passed"
 fi
 
 # ── Step 6: Production build ────────────────────────────────────────────────

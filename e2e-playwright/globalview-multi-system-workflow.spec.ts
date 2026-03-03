@@ -18,7 +18,7 @@ test.describe('GlobalView Multi-System Workflow', () => {
     const gammaCard = page.getByTestId(`system-card-${GAMMA}`);
 
     await alphaCard.click();
-    await betaCard.click({ modifiers: ['Control'] });
+    await betaCard.click({ modifiers: ['ControlOrMeta'] });
 
     await expect(page.getByTestId('merge-projects-button')).toBeVisible();
     await page.getByTestId('merge-projects-button').click();

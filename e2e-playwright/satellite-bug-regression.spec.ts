@@ -39,6 +39,22 @@ async function waitForMapLayer(page: Page, layerId: string): Promise<boolean> {
   }, { timeout: 5000 }).toBe(true).then(() => true).catch(() => false);
 }
 
+/**
+ * Helper to get the tile URL from the map style spec for a raster source.
+ * Uses getStyle().sources which returns the spec object (with .tiles array),
+ * rather than getSource() which returns a MapLibre Source class instance
+ * that may not expose .tiles as a direct property.
+ */
+async function getTileUrl(page: Page, sourceId: string): Promise<string | null> {
+  return await page.evaluate((id) => {
+    const map = (window as unknown as { __stalagmight_map__?: { getStyle: () => { sources: Record<string, { tiles?: string[] }> } } }).__stalagmight_map__;
+    if (!map) return null;
+    const source = map.getStyle().sources[id];
+    if (!source || !source.tiles) return null;
+    return source.tiles[0] ?? null;
+  }, sourceId);
+}
+
 test.describe('Satellite Bug Regressions', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -250,13 +266,7 @@ test.describe('Satellite Bug Regressions', () => {
       await waitForMapLayer(page, 'satellite-tiles');
 
       // Verify the source uses custom protocol
-      const tileUrl = await page.evaluate(() => {
-        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
-        if (!map) return null;
-        const source = map.getSource('satellite-tiles');
-        if (!source || !('tiles' in source)) return null;
-        return source.tiles?.[0] ?? null;
-      });
+      const tileUrl = await getTileUrl(page, 'satellite-tiles');
 
       // Must use custom protocol, not https://
       expect(tileUrl).toMatch(/^stalagmight-tiles:\/\//);
@@ -277,13 +287,7 @@ test.describe('Satellite Bug Regressions', () => {
       await waitForMapLayer(page, 'satellite-tiles');
 
       // Verify tile URL includes provider
-      const tileUrl = await page.evaluate(() => {
-        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
-        if (!map) return null;
-        const source = map.getSource('satellite-tiles');
-        if (!source || !('tiles' in source)) return null;
-        return source.tiles?.[0] ?? null;
-      });
+      const tileUrl = await getTileUrl(page, 'satellite-tiles');
 
       // Should include esri provider
       expect(tileUrl).toContain('esri');
@@ -335,15 +339,9 @@ test.describe('Satellite Bug Regressions', () => {
       expect(orderCheck).toBe(true);
 
       // Verify custom protocol
-      const protocolCheck = await page.evaluate(() => {
-        const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { tiles?: string[] } | null } }).__stalagmight_map__;
-        if (!map) return false;
-        const source = map.getSource('satellite-tiles');
-        if (!source || !('tiles' in source)) return false;
-        const url = source.tiles?.[0] ?? '';
-        return url.startsWith('stalagmight-tiles://');
-      });
-      expect(protocolCheck).toBe(true);
+      const protocolTileUrl = await getTileUrl(page, 'satellite-tiles');
+      expect(protocolTileUrl).toBeTruthy();
+      expect(protocolTileUrl).toMatch(/^stalagmight-tiles:\/\//);
 
       // App should be stable
       await expect(page.getByTestId('map-canvas')).toBeVisible();

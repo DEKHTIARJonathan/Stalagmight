@@ -15,6 +15,9 @@ bash scripts/mac-build.sh
 
 # Build + test with Playwright UI tests (headless)
 bash scripts/mac-build.sh --test-ui
+
+# Build + test with WebDriverIO E2E tests
+bash scripts/mac-build.sh --test-e2e
 ```
 
 ### Remote Scaleway Build
@@ -25,6 +28,9 @@ bash scripts/mac-remote-build.sh
 
 # Include Playwright UI tests
 bash scripts/mac-remote-build.sh --test-ui
+
+# Include WebDriverIO E2E tests
+bash scripts/mac-remote-build.sh --test-e2e
 ```
 
 Artifacts are placed in `build/macos/`.
@@ -33,7 +39,7 @@ Artifacts are placed in `build/macos/`.
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/mac-setup.sh` | Install dev tools on macOS (Xcode CLI, Homebrew, Node 22, pnpm 9, Rust) |
+| `scripts/mac-setup.sh` | Install dev tools on macOS (Xcode CLI, Homebrew, Node 22, pnpm 9, Rust, tauri-wd) |
 | `scripts/mac-build.sh` | Run the full build pipeline (deps, tsc, cargo test, tauri build) |
 | `scripts/mac-remote-build.sh` | Orchestrate a build on a Scaleway Apple Silicon cloud instance |
 
@@ -48,6 +54,7 @@ Installs all required development tools, skipping anything already present. Safe
 3. **Node.js 22** — via `brew install node@22`, with PATH fix for keg-only installs
 4. **pnpm 9** — via `npm install -g pnpm@9`, with CA cert fix for Homebrew's OpenSSL
 5. **Rust stable** — via rustup
+6. **tauri-wd** — via `cargo install tauri-webdriver-automation` (WebDriver for macOS E2E tests)
 
 ### Homebrew PATH detection
 
@@ -70,6 +77,7 @@ Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already be
 | `--project-dir <path>` | Override project root (defaults to parent of `scripts/`) |
 | `--test-ui` | Install Playwright browsers + run headless UI tests |
 | `--test-ui-headed` | Install Playwright browsers + run headed UI tests (needs display) |
+| `--test-e2e` | Build debug binary with e2e feature + run WebDriverIO E2E tests |
 
 ### Build steps
 
@@ -78,6 +86,8 @@ Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already be
 3. `playwright install chromium` — install Playwright browsers *(only with `--test-ui*`)*
 4. `pnpm test:ui` / `pnpm test:ui:headed` — Playwright tests *(only with `--test-ui*`)*
 5. `cargo test` — Rust test suite (with `ulimit -n 4096`)
+5a. `pnpm tauri build --debug --no-bundle -- --features e2e` — E2E debug binary *(only with `--test-e2e`)*
+5b. `./scripts/wdio.sh --skip-build` — WebDriverIO E2E tests *(only with `--test-e2e`)*
 6. `CI=true pnpm tauri build` — production build (`.app` bundle + `.dmg`)
 
 ### Build artifacts
@@ -100,6 +110,30 @@ On Scaleway instances with a VNC session running, headed mode can use the existi
 
 Test results (screenshots, traces on failure) are saved to `test-results/`. When using `mac-remote-build.sh`, this directory is automatically retrieved alongside build artifacts into `build/macos/test-results/`.
 
+### WebDriverIO Tests
+
+The `--test-e2e` flag runs WebDriverIO E2E tests against the Tauri app. On macOS, this uses `tauri-wd` (from the `tauri-webdriver-automation` crate) instead of `tauri-driver`, which only supports Linux/Windows.
+
+#### How it works
+
+1. The app is built with `--features e2e`, which compiles in `tauri-plugin-webdriver-automation` — a Tauri plugin that exposes W3C WebDriver protocol for WKWebView
+2. `tauri-wd` is spawned as the WebDriver server (instead of `tauri-driver`)
+3. WebDriverIO connects to `tauri-wd` and runs tests as normal
+
+The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]` in `Cargo.toml`), so it is **never compiled** in normal or release builds — zero impact on the production binary.
+
+#### Prerequisites
+
+- `tauri-wd` must be installed: `cargo install tauri-webdriver-automation` (handled by `mac-setup.sh`)
+
+#### Artifacts
+
+| Artifact | Location |
+|----------|----------|
+| Per-spec logs | `wdio-logs/` |
+
+When using `mac-remote-build.sh --test-e2e`, the `wdio-logs/` directory is automatically retrieved into `build/macos/wdio-logs/`.
+
 ## `mac-remote-build.sh` — Scaleway Orchestrator
 
 Manages the full lifecycle of a remote macOS build on Scaleway Apple Silicon infrastructure.
@@ -118,6 +152,7 @@ Manages the full lifecycle of a remote macOS build on Scaleway Apple Silicon inf
 |------|-------------|
 | `--test-ui` | Pass through to `mac-build.sh` — run headless Playwright tests |
 | `--test-ui-headed` | Pass through to `mac-build.sh` — run headed Playwright tests |
+| `--test-e2e` | Pass through to `mac-build.sh` — run WebDriverIO E2E tests |
 
 ### Instance lifecycle
 

@@ -7,6 +7,19 @@ import { setupTauriMocks } from './mocks/tauri-ipc';
  * save/cancel behavior, and shortcut functionality after save.
  */
 
+/** Platform-aware key display names (macOS uses symbols, Linux/Windows uses text) */
+const IS_MAC = process.platform === 'darwin';
+const KEY = {
+  Ctrl: IS_MAC ? '\u2318' : 'Ctrl',       // ⌘ or Ctrl
+  Alt: IS_MAC ? '\u2325' : 'Alt',          // ⌥ or Alt
+  Shift: IS_MAC ? '\u21E7' : 'Shift',      // ⇧ or Shift
+  Escape: IS_MAC ? '\u238B' : 'Escape',    // ⎋ or Escape
+  Delete: IS_MAC ? '\u2326' : 'Delete',    // ⌦ or Delete
+  Backspace: IS_MAC ? '\u232B' : 'Backspace', // ⌫ or Backspace
+  Tab: IS_MAC ? '\u21E5' : 'Tab',          // ⇥ or Tab
+  Enter: IS_MAC ? '\u21A9' : 'Enter',      // ↩ or Enter
+};
+
 /**
  * Helper to create a new project with mock sections/stations
  */
@@ -217,8 +230,8 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await waitForRecording(page, 'shortcut-secondary-select', false);
 
       // Verify the modifier combination is shown
-      await expect(recorder).toContainText('Ctrl');
-      await expect(recorder).toContainText('Shift');
+      await expect(recorder).toContainText(KEY.Ctrl);
+      await expect(recorder).toContainText(KEY.Shift);
       await expect(recorder).toContainText('W');
     });
   });
@@ -526,21 +539,21 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       const reserved = page.locator('[data-testid="reserved-shortcuts"]');
       await expect(reserved).toBeVisible();
 
-      // Verify reserved shortcuts are shown
-      await expect(reserved).toContainText('Escape');
-      await expect(reserved).toContainText('Delete');
-      await expect(reserved).toContainText('Backspace');
-      await expect(reserved).toContainText('Tab');
-      await expect(reserved).toContainText('Enter');
-      await expect(reserved).toContainText('Ctrl+A');
+      // Verify reserved shortcuts are shown (platform-aware display)
+      await expect(reserved).toContainText(KEY.Escape);
+      await expect(reserved).toContainText(KEY.Delete);
+      await expect(reserved).toContainText(KEY.Backspace);
+      await expect(reserved).toContainText(KEY.Tab);
+      await expect(reserved).toContainText(KEY.Enter);
+      await expect(reserved).toContainText(IS_MAC ? `${KEY.Ctrl}A` : 'Ctrl+A');
 
       // Verify grouped descriptions
       await expect(reserved).toContainText('Delete selection');
       await expect(reserved).toContainText('UI Navigation');
 
       // Ctrl+I and Ctrl+E should NOT be in reserved section (they are now configurable)
-      await expect(reserved).not.toContainText('Ctrl+I');
-      await expect(reserved).not.toContainText('Ctrl+E');
+      await expect(reserved).not.toContainText(IS_MAC ? `${KEY.Ctrl}I` : 'Ctrl+I');
+      await expect(reserved).not.toContainText(IS_MAC ? `${KEY.Ctrl}E` : 'Ctrl+E');
     });
 
     test('reserved shortcuts section is positioned above search bar', async ({ page }) => {
@@ -580,11 +593,11 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Verify default bindings
       const importRecorder = page.locator('[data-testid="shortcut-primary-import_dmp"]');
-      await expect(importRecorder).toContainText('Ctrl');
+      await expect(importRecorder).toContainText(KEY.Ctrl);
       await expect(importRecorder).toContainText('I');
 
       const exportRecorder = page.locator('[data-testid="shortcut-primary-export"]');
-      await expect(exportRecorder).toContainText('Ctrl');
+      await expect(exportRecorder).toContainText(KEY.Ctrl);
       await expect(exportRecorder).toContainText('E');
     });
 
@@ -600,8 +613,8 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await waitForRecording(page, 'shortcut-primary-import_dmp', false);
 
       // Verify new binding is shown
-      await expect(importRecorder).toContainText('Ctrl');
-      await expect(importRecorder).toContainText('Shift');
+      await expect(importRecorder).toContainText(KEY.Ctrl);
+      await expect(importRecorder).toContainText(KEY.Shift);
       await expect(importRecorder).toContainText('K');
 
       // No error should appear
@@ -615,7 +628,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await waitForRecording(page, 'shortcut-primary-select', false);
 
       // Should show Ctrl+I without error (it's no longer reserved or taken)
-      await expect(selectRecorder).toContainText('Ctrl');
+      await expect(selectRecorder).toContainText(KEY.Ctrl);
       await expect(selectRecorder).toContainText('I');
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
 
@@ -627,8 +640,8 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await waitForRecording(page, 'shortcut-primary-export', false);
 
       // Verify new binding is shown
-      await expect(exportRecorder).toContainText('Ctrl');
-      await expect(exportRecorder).toContainText('Alt');
+      await expect(exportRecorder).toContainText(KEY.Ctrl);
+      await expect(exportRecorder).toContainText(KEY.Alt);
       await expect(exportRecorder).toContainText('E');
 
       // No error should appear
@@ -642,7 +655,7 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await waitForRecording(page, 'shortcut-primary-pan', false);
 
       // Should show Ctrl+E without error
-      await expect(panRecorder).toContainText('Ctrl');
+      await expect(panRecorder).toContainText(KEY.Ctrl);
       await expect(panRecorder).toContainText('E');
       await expect(page.locator('[data-testid="shortcut-error"]')).not.toBeVisible();
     });

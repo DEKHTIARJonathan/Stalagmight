@@ -6,6 +6,9 @@ authors = ["Stalagmight Team"]
 edition = "2021"
 default-run = "stalagmight"
 
+[features]
+e2e = ["tauri-plugin-webdriver-automation"]
+
 [lib]
 name = "stalagmight_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -41,6 +44,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
+tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
 
 [profile.release]
 lto = true

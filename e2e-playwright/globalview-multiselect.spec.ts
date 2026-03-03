@@ -49,11 +49,11 @@ test.describe('GlobalView Multi-Select', () => {
     await expect(cardAlpha).toHaveClass(/ring-accent/);
 
     // Ctrl+click Beta to add it
-    await cardBeta.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
     await expect(cardBeta).toHaveClass(/ring-accent/);
 
     // Ctrl+click Beta again to deselect it
-    await cardBeta.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
     await expect(cardBeta).not.toHaveClass(/ring-accent/);
   });
 
@@ -66,8 +66,8 @@ test.describe('GlobalView Multi-Select', () => {
     await cardAlpha.click();
 
     // Ctrl+click Beta and Gamma
-    await cardBeta.click({ modifiers: ['Control'] });
-    await cardGamma.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
+    await cardGamma.click({ modifiers: ['ControlOrMeta'] });
 
     // All three should be selected
     await expect(cardAlpha).toHaveClass(/ring-accent/);
@@ -76,7 +76,7 @@ test.describe('GlobalView Multi-Select', () => {
   });
 
   test('Ctrl+A selects all projects in list view', async ({ page }) => {
-    await page.keyboard.press('Control+a');
+    await page.keyboard.press('ControlOrMeta+a');
 
     await expect(page.getByTestId(`system-card-${ALPHA}`)).toHaveClass(/ring-accent/);
     await expect(page.getByTestId(`system-card-${BETA}`)).toHaveClass(/ring-accent/);
@@ -105,7 +105,7 @@ test.describe('GlobalView Multi-Select', () => {
     await expect(page.getByTestId('merge-projects-button')).toBeHidden();
 
     // Multi-select - merge button visible
-    await cardBeta.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
     await expect(page.getByTestId('merge-projects-button')).toBeVisible();
   });
 
@@ -115,10 +115,10 @@ test.describe('GlobalView Multi-Select', () => {
 
     // Multi-select then deselect back to 1
     await cardAlpha.click();
-    await cardBeta.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
     await expect(page.getByTestId('merge-projects-button')).toBeVisible();
 
-    await cardBeta.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
     await expect(page.getByTestId('merge-projects-button')).toBeHidden();
   });
 
@@ -128,7 +128,7 @@ test.describe('GlobalView Multi-Select', () => {
 
     // Multi-select
     await cardAlpha.click();
-    await cardBeta.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
 
     // Right-click on a selected card
     await cardAlpha.click({ button: 'right' });
@@ -144,7 +144,7 @@ test.describe('GlobalView Multi-Select', () => {
 
     // Multi-select two cards
     await cardAlpha.click();
-    await cardBeta.click({ modifiers: ['Control'] });
+    await cardBeta.click({ modifiers: ['ControlOrMeta'] });
 
     // Right-click
     await cardAlpha.click({ button: 'right' });

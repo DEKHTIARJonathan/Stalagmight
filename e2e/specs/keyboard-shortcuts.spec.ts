@@ -8,6 +8,8 @@ import {
   waitForUiIdle,
 } from '../helpers/app';
 
+const CMD = 'Control';
+
 describe('Keyboard Shortcuts', () => {
   beforeEach(async () => {
     await waitForAppReady();
@@ -91,7 +93,7 @@ describe('Keyboard Shortcuts', () => {
     });
 
     it('should attempt save with Ctrl+S', async () => {
-      await browser.keys(['Control', 's']);
+      await browser.keys([CMD, 's']);
       await waitForUiIdle(500);
 
       // App should still be functional after save attempt
@@ -110,7 +112,7 @@ describe('Keyboard Shortcuts', () => {
     });
 
     it('should fit map to view with Ctrl+0', async () => {
-      await browser.keys(['Control', '0']);
+      await browser.keys([CMD, '0']);
       await waitForUiIdle(300);
 
       // Map should still be displayed
@@ -121,7 +123,7 @@ describe('Keyboard Shortcuts', () => {
 
   describe('Undo/Redo Shortcuts', () => {
     it('should handle Ctrl+Z for undo', async () => {
-      await browser.keys(['Control', 'z']);
+      await browser.keys([CMD, 'z']);
       await waitForUiIdle(200);
 
       const mainView = await $('[data-testid="map-canvas"]');
@@ -129,7 +131,7 @@ describe('Keyboard Shortcuts', () => {
     });
 
     it('should handle Ctrl+Y for redo', async () => {
-      await browser.keys(['Control', 'y']);
+      await browser.keys([CMD, 'y']);
       await waitForUiIdle(200);
 
       const mainView = await $('[data-testid="map-canvas"]');
@@ -137,7 +139,7 @@ describe('Keyboard Shortcuts', () => {
     });
 
     it('should handle Ctrl+Shift+Z for redo', async () => {
-      await browser.keys(['Control', 'Shift', 'z']);
+      await browser.keys([CMD, 'Shift', 'z']);
       await waitForUiIdle(200);
 
       const mainView = await $('[data-testid="map-canvas"]');

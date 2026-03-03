@@ -945,7 +945,12 @@ pub fn tile_fetch_impl(
 pub fn run() {
     let _guard = logging::init();
 
-    tauri::Builder::default()
+    #[cfg(not(feature = "e2e"))]
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "e2e")]
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_webdriver_automation::init());
+    builder
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
