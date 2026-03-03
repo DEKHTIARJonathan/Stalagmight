@@ -12,6 +12,9 @@ bash scripts/mac-setup.sh
 
 # Build + test
 bash scripts/mac-build.sh
+
+# Build + test with Playwright UI tests (headless)
+bash scripts/mac-build.sh --test-ui
 ```
 
 ### Remote Scaleway Build
@@ -19,6 +22,9 @@ bash scripts/mac-build.sh
 ```bash
 # Full lifecycle: create/reuse instance → transfer → build → retrieve artifacts → cleanup
 bash scripts/mac-remote-build.sh
+
+# Include Playwright UI tests
+bash scripts/mac-remote-build.sh --test-ui
 ```
 
 Artifacts are placed in `build/macos/`.
@@ -62,13 +68,17 @@ Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already be
 | Flag | Description |
 |------|-------------|
 | `--project-dir <path>` | Override project root (defaults to parent of `scripts/`) |
+| `--test-ui` | Install Playwright browsers + run headless UI tests |
+| `--test-ui-headed` | Install Playwright browsers + run headed UI tests (needs display) |
 
 ### Build steps
 
 1. `pnpm install` — install frontend dependencies
 2. `pnpm tsc --noEmit` — TypeScript type check
-3. `cargo test` — Rust test suite (with `ulimit -n 4096`)
-4. `CI=true pnpm tauri build` — production build (`.app` bundle + `.dmg`)
+3. `playwright install chromium` — install Playwright browsers *(only with `--test-ui*`)*
+4. `pnpm test:ui` / `pnpm test:ui:headed` — Playwright tests *(only with `--test-ui*`)*
+5. `cargo test` — Rust test suite (with `ulimit -n 4096`)
+6. `CI=true pnpm tauri build` — production build (`.app` bundle + `.dmg`)
 
 ### Build artifacts
 
@@ -76,6 +86,19 @@ Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already be
 |----------|----------|
 | `.app` bundle | `src-tauri/target/release/bundle/macos/` |
 | `.dmg` installer | `src-tauri/target/release/bundle/dmg/` |
+
+### Playwright Tests
+
+The `--test-ui` and `--test-ui-headed` flags add Playwright browser testing to the build pipeline. Only Chromium is installed (per `playwright.config.ts`).
+
+| Mode | Flag | Display needed? | Notes |
+|------|------|-----------------|-------|
+| Headless | `--test-ui` | No | Works over SSH with no display server |
+| Headed | `--test-ui-headed` | Yes | Requires a GUI session (e.g., VNC on Scaleway) |
+
+On Scaleway instances with a VNC session running, headed mode can use the existing display. For headless mode, no display configuration is needed.
+
+Test results (screenshots, traces on failure) are saved to `test-results/`. When using `mac-remote-build.sh`, this directory is automatically retrieved alongside build artifacts into `build/macos/test-results/`.
 
 ## `mac-remote-build.sh` — Scaleway Orchestrator
 
@@ -88,6 +111,13 @@ Manages the full lifecycle of a remote macOS build on Scaleway Apple Silicon inf
 | `~/.env` | Must contain `SCW_SECRET_KEY` and `SCW_DEFAULT_PROJECT_ID` |
 | SSH key | `~/.ssh/id_ed25519` (registered on Scaleway as "anzu") |
 | Local tools | `jq`, `curl`, `rsync`, `ssh` |
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--test-ui` | Pass through to `mac-build.sh` — run headless Playwright tests |
+| `--test-ui-headed` | Pass through to `mac-build.sh` — run headed Playwright tests |
 
 ### Instance lifecycle
 
