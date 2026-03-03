@@ -1740,6 +1740,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
               appearance: {
                 theme: 'dark',
+                day_color_theme: 'light',
+                night_color_theme: 'cave',
               },
             };
 
@@ -1918,6 +1920,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
               appearance: {
                 theme: 'dark',
+                day_color_theme: 'light',
+                night_color_theme: 'cave',
               },
             };
             return baseConfig;

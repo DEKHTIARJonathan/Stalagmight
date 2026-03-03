@@ -181,10 +181,11 @@ test.describe('Theme Switching - Default Dark Theme', () => {
 
   test('default theme is dark on app load', async ({ page }) => {
     // Verify data-theme attribute on document root immediately after load
+    // Config has theme:'dark' + night_color_theme:'cave', so data-theme resolves to 'cave'
     const dataTheme = await page.evaluate(
       () => document.documentElement.dataset.theme
     );
-    expect(dataTheme).toBe('dark');
+    expect(dataTheme).toBe('cave');
   });
 
   test('CSS variables resolve correctly in dark theme', async ({
@@ -198,7 +199,7 @@ test.describe('Theme Switching - Default Dark Theme', () => {
     });
 
     // Parse numerically for cross-engine stability
-    assertColorsApproximatelyEqual(bgColor, DARK_BG);
+    assertColorsApproximatelyEqual(bgColor, CAVE_BG);
   });
 });
 
@@ -276,11 +277,11 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await openSettingsDialog(page);
     await navigateToAppearance(page);
 
-    // Verify dark theme is active before change
+    // Verify night color theme is active before change (dark mode → night_color_theme 'cave')
     const dataThemeBefore = await page.evaluate(
       () => document.documentElement.dataset.theme
     );
-    expect(dataThemeBefore).toBe('dark');
+    expect(dataThemeBefore).toBe('cave');
 
     // Use the custom Select dropdown to switch to Light (but do NOT save)
     await selectThemeMode(page, 'Light');
@@ -333,11 +334,11 @@ test.describe('Theme Switching - Via Settings UI', () => {
       page.locator('[data-testid="settings-dialog"]')
     ).not.toBeVisible({ timeout: 5000 });
 
-    // Theme should revert to dark
+    // Theme should revert to night color theme ('cave')
     const dataThemeAfter = await page.evaluate(
       () => document.documentElement.dataset.theme
     );
-    expect(dataThemeAfter).toBe('dark');
+    expect(dataThemeAfter).toBe('cave');
   });
 
   test('theme persists across Settings dialog close and reopen', async ({

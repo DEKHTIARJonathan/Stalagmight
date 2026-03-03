@@ -153,14 +153,16 @@ test.describe('GlobalView Map', () => {
       const inner = marker.locator('.marker-inner');
 
       // Verify initial unselected state (semi-transparent border from --cc-stroke-light)
-      await expect(inner).toHaveCSS('border-color', 'rgba(255, 255, 255, 0.25)');
+      // Cave theme: --cc-stroke-light is rgba(213, 208, 202, 0.25)
+      await expect(inner).toHaveCSS('border-color', 'rgba(213, 208, 202, 0.25)');
 
       // Dispatch click event directly
       await marker.dispatchEvent('click');
 
       // Wait for React state update and marker style change
-      // Marker should change to selected style (solid white border)
-      await expect(inner).toHaveCSS('border-color', 'rgb(255, 255, 255)', { timeout: 2000 });
+      // Marker should change to selected style (solid border from --cc-stroke-color)
+      // Cave theme: --cc-stroke-color is rgb(213, 208, 202)
+      await expect(inner).toHaveCSS('border-color', 'rgb(213, 208, 202)', { timeout: 2000 });
     });
 
     test('should show tooltip on marker hover', async ({ page }) => {
@@ -330,7 +332,7 @@ test.describe('GlobalView Map', () => {
 
       // Error marker inner circle should be red
       const inner = marker.locator('.marker-inner');
-      await expect(inner).toHaveCSS('background-color', 'rgb(255, 107, 107)', { timeout: 10000 }); // --cc-error (#ff6b6b)
+      await expect(inner).toHaveCSS('background-color', 'rgb(184, 80, 72)', { timeout: 10000 }); // --cc-error (cave theme: #b85048)
     });
 
     test('should show all markers in markers mode', async ({ page }) => {
