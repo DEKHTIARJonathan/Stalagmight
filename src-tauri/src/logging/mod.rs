@@ -179,12 +179,19 @@ pub fn log_directory() -> Result<PathBuf> {
 /// Clean up old log files if directory size exceeds max
 pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
     let log_dir = log_directory()?;
+    let max_size_bytes = u64::from(max_size_mb) * 1024 * 1024;
+    cleanup_logs_in_dir(&log_dir, max_size_bytes)
+}
+
+/// Clean up old `.log` files in `log_dir` if their total size exceeds `max_size_bytes`.
+/// Deletes oldest files first. Extracted for cross-platform testability
+/// (`log_directory()` relies on platform-specific paths).
+fn cleanup_logs_in_dir(log_dir: &std::path::Path, max_size_bytes: u64) -> Result<()> {
     if !log_dir.exists() {
         return Ok(());
     }
 
-    let max_size_bytes = u64::from(max_size_mb) * 1024 * 1024;
-    let mut entries: Vec<_> = std::fs::read_dir(&log_dir)?
+    let mut entries: Vec<_> = std::fs::read_dir(log_dir)?
         .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "log"))
         .collect();
@@ -225,12 +232,12 @@ pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
 mod tests {
     use super::*;
 
+    use tempfile::TempDir;
+
     #[cfg(target_os = "linux")]
     use std::env;
     #[cfg(target_os = "linux")]
     use std::sync::Mutex;
-    #[cfg(target_os = "linux")]
-    use tempfile::TempDir;
 
     #[cfg(target_os = "linux")]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -277,5 +284,52 @@ mod tests {
             assert!(!first.exists());
             assert!(!second.exists());
         });
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn log_directory_uses_macos_library_path() {
+        let log_dir = log_directory().expect("log dir");
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let expected_prefix = format!("{home}/Library/Application Support");
+        assert!(
+            log_dir.starts_with(&expected_prefix),
+            "Expected log dir under {expected_prefix}, got {log_dir:?}"
+        );
+        assert_eq!(log_dir.file_name().and_then(|s| s.to_str()), Some("logs"));
+    }
+
+    #[test]
+    fn cleanup_logs_in_dir_removes_all_when_limit_zero() {
+        let dir = TempDir::new().expect("temp dir");
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create log dir");
+
+        let first = log_dir.join("first.log");
+        let second = log_dir.join("second.log");
+        std::fs::write(&first, b"abc").expect("write log");
+        std::fs::write(&second, b"defg").expect("write log");
+
+        cleanup_logs_in_dir(&log_dir, 0).expect("cleanup logs");
+
+        assert!(!first.exists());
+        assert!(!second.exists());
+    }
+
+    #[test]
+    fn cleanup_logs_in_dir_keeps_files_under_limit() {
+        let dir = TempDir::new().expect("temp dir");
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create log dir");
+
+        // 3 bytes + 4 bytes = 7 bytes total
+        std::fs::write(log_dir.join("first.log"), b"abc").expect("write log");
+        std::fs::write(log_dir.join("second.log"), b"defg").expect("write log");
+
+        // Limit of 10 bytes — both files fit
+        cleanup_logs_in_dir(&log_dir, 10).expect("cleanup logs");
+
+        assert!(log_dir.join("first.log").exists());
+        assert!(log_dir.join("second.log").exists());
     }
 }

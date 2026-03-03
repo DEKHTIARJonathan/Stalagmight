@@ -734,6 +734,65 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
     });
 }
 
+/// macOS sibling of the Linux test above. On macOS the `directories` crate ignores
+/// XDG_CONFIG_HOME, deriving paths from $HOME instead. We override HOME to a
+/// read-only temp dir so config.save() fails, then verify in-memory state is
+/// still updated.
+#[test]
+#[cfg(target_os = "macos")]
+fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+        return;
+    }
+
+    with_config_lock(|| {
+        let readonly_dir = TempDir::new().unwrap();
+        let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+        perms.set_mode(0o555);
+        fs::set_permissions(readonly_dir.path(), perms).unwrap();
+
+        // On macOS, directories crate uses ~/Library/Application Support/...
+        // Setting HOME to a read-only dir makes create_dir_all fail for config save.
+        let _env_guard = EnvVarGuard::set(
+            "HOME",
+            readonly_dir.path().to_str().unwrap(),
+        );
+
+        let app = app_with_state();
+        let project_dir = TempDir::new().unwrap();
+        let project_path = project_dir.path().join("config-fail.stalx");
+
+        let mut project = Project::new("Config Fail".to_string(), None);
+        project.add_section(SectionData {
+            shots: vec![shot_data(1.0)],
+            ..Default::default()
+        });
+        let mut db = Database::open(&project_path).unwrap();
+        db.save_project(&project).unwrap();
+        drop(db);
+
+        let result = project::open_project(state(&app), project_path.clone());
+        assert_success(&result);
+
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
+
+        let config_path = crate::config::Config::config_path().unwrap();
+        assert!(
+            !config_path.exists(),
+            "config file should not be written when HOME points to a read-only dir"
+        );
+
+        // Reset permissions so TempDir can clean up.
+        let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(readonly_dir.path(), perms).unwrap();
+    });
+}
+
 #[test]
 fn test_open_project_updates_recent_projects_order_and_truncates() {
     with_config_lock(|| {
