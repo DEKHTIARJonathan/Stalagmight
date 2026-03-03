@@ -73,3 +73,4 @@ Implementation plans are stored in `docs/plans/`.
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
 | [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
+| [macOS Build](docs/macos-build.md) | macOS build scripts, Scaleway remote builds, known issues |
