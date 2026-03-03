@@ -211,30 +211,36 @@ Tracks v1.0 spec completion and user testing feedback.
 
 Source: `docs/transcripts/1-summary.md` — usability session importing real Mnemo DMP data.
 
-### Bugs
+### Bugs (0/6 done)
 
-- [ ] **Fix segment merge orphaning section** — After merging sections, one section that was part of a segment didn't get placed with the rest. Reference shots were auto-deleted but the section was orphaned. *(transcript ~line 359)*
-- [ ] **Fix depth gradient colors overridden by theme** — App theming overrides the depth gradient, making it a useless subtle color change instead of a clear green→red gradient. *(~line 675)*
-- [ ] **Add per-shot depth gradient** — A shot going shallow→deep renders as a single flat color, not a gradient along its length. *(~line 677)*
-- [ ] **Fix Ariane export zero datum placement** — Exporting to Ariane placed the zero datum incorrectly and nothing else exported. Unconnected/floating shots are silently dropped. *(~line 827)*
-- [ ] **Fix double-click in data table** — Double-clicking a row should jump the map to that element, but it enters edit mode instead. Only works on non-editable cells. *(~line 1979)*
-- [ ] **Fix question mark tooltip** — `?` icon clicked but gave no useful explanation; seemed to do nothing. *(~line 77)*
+| Task | Status | Notes |
+|------|--------|-------|
+| Fix segment merge orphaning section | ❌ | After merging, one section not placed with the rest; reference shots auto-deleted but section orphaned *(~line 359)* |
+| Fix depth gradient colors overridden by theme | ❌ | Theming overrides depth gradient, making it a useless subtle color change instead of green→red *(~line 675)* |
+| Add per-shot depth gradient | ❌ | Shot going shallow→deep renders as single flat color, not a gradient along its length *(~line 677)* |
+| Fix Ariane export zero datum placement | ❌ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
+| Fix double-click in data table | ❌ | Should jump map to element, but enters edit mode instead; only works on non-editable cells *(~line 1979)* |
+| Fix question mark tooltip | ❌ | `?` icon clicked but gave no useful explanation *(~line 77)* |
 
-### UX Improvements
+### UX Improvements (0/5 done)
 
-- [ ] **Make "Place on map" button more visible** — Currently "really poorly visible" per developer's own admission. *(~line 147)*
-- [ ] **Add unmerge capability** — Once stations are merged, there's no way to undo the merge beyond the undo stack. Add right-click → Unmerge on merged stations. *(~line 569)*
-- [ ] **Make move tool larger and more discoverable** — User couldn't locate it even with verbal guidance. *(~line 413, 1707)*
-- [ ] **Add middle-click panning** — Control-drag for panning is not intuitive. Add middle-click drag as an alternative pan method. *(~line 1865)*
-- [ ] **Rename "reference shot" to "jump line"** — Users expect "virtual shot" (Ariane term) or "jump." User suggested "jump line" as the most natural label. Rename throughout UI, context menus, tooltips. *(~line 623)*
+| Task | Status | Notes |
+|------|--------|-------|
+| Make "Place on map" button more visible | ❌ | Currently "really poorly visible" *(~line 147)* |
+| Add unmerge capability | ❌ | No way to undo merge beyond undo stack; add right-click → Unmerge *(~line 569)* |
+| Make move tool larger and more discoverable | ❌ | User couldn't locate it even with verbal guidance *(~line 413, 1707)* |
+| Add middle-click panning | ❌ | Control-drag not intuitive; add middle-click drag as alternative *(~line 1865)* |
+| Rename "reference shot" to "jump line" | ❌ | Rename throughout UI, context menus, tooltips *(~line 623)* |
 
-### Feature Suggestions
+### Feature Suggestions (0/5 done)
 
-- [ ] **Prioritize map-first workflow** — "Surveying is a visual activity... a lot of people don't actually think in tables." Everything possible should be doable from the map view. *(~line 574)*
-- [ ] **Auto-merge everything on import** — Then leave unmerged sections floating with obvious tooltips on how to drag them into place. *(~line 1679)*
-- [ ] **Warn on export about floating/unconnected shots** — Ariane can't handle disconnected data; warn users before export instead of silently dropping shots. *(~line 1005)*
-- [ ] **Remove legacy import workflow** — Only kept as fallback; auto-merge is strictly better. User confirmed. *(~line 1748)*
-- [ ] **Consider optional telemetry** — To understand what features people actually use, especially for opinionated UX decisions. *(~line 739)*
+| Task | Status | Notes |
+|------|--------|-------|
+| Prioritize map-first workflow | ❌ | Everything possible should be doable from the map view *(~line 574)* |
+| Auto-merge everything on import | ❌ | Leave unmerged sections floating with tooltips to drag into place *(~line 1679)* |
+| Warn on export about floating/unconnected shots | ❌ | Ariane can't handle disconnected data; warn instead of silently dropping *(~line 1005)* |
+| Remove legacy import workflow | ❌ | Auto-merge is strictly better; user confirmed *(~line 1748)* |
+| Consider optional telemetry | ❌ | Understand what features people actually use *(~line 739)* |
 
 ---
 
