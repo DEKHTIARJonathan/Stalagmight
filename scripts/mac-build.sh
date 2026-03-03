@@ -68,7 +68,9 @@ info "Running TypeScript type check"
 ok "TypeScript check passed"
 
 # ── Step 3: Rust tests ──────────────────────────────────────────────────────
-info "Running Rust tests"
+# macOS defaults to 256 open files which is too low for the test suite
+ulimit -n 4096 2>/dev/null || ulimit -n 1024 2>/dev/null || true
+info "Running Rust tests (ulimit -n $(ulimit -n))"
 if cargo test --manifest-path "$PROJECT_DIR/src-tauri/Cargo.toml"; then
   ok "Rust tests passed"
 else

@@ -681,7 +681,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn test_open_project_updates_recent_projects_when_config_save_fails() {
     use std::os::unix::fs::PermissionsExt;
 

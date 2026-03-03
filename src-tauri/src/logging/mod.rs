@@ -224,12 +224,18 @@ pub fn cleanup_logs(max_size_mb: u32) -> Result<()> {
 #[expect(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
     use std::env;
+    #[cfg(target_os = "linux")]
     use std::sync::Mutex;
+    #[cfg(target_os = "linux")]
     use tempfile::TempDir;
 
+    #[cfg(target_os = "linux")]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    #[cfg(target_os = "linux")]
     fn with_temp_data_home<T>(f: impl FnOnce(&TempDir) -> T) -> T {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let dir = TempDir::new().expect("temp dir");
@@ -245,6 +251,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn log_directory_uses_xdg_data_home() {
         with_temp_data_home(|temp| {
             let log_dir = log_directory().expect("log dir");
@@ -254,6 +261,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn cleanup_logs_removes_all_when_limit_zero() {
         with_temp_data_home(|_temp| {
             let log_dir = log_directory().expect("log dir");
