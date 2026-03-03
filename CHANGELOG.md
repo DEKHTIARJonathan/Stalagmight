@@ -3,6 +3,7 @@
 All notable changes to Stalagmight are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
+Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
