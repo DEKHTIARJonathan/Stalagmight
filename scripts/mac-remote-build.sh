@@ -238,6 +238,7 @@ ok "SSH connected"
 # Transfer project
 info "Transferring project to remote…"
 rsync -az --progress \
+  --include='e2e/fixtures/*.stalx' \
   --filter=':- .gitignore' \
   --exclude='.git/' \
   -e "ssh ${SSH_OPTS[*]}" \
