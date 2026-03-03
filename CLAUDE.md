@@ -56,6 +56,10 @@ TypeScript IPC types are generated from Rust via `ts-rs`. Do **not** hand-edit o
 create files under `src/types/ipc/` or `src/types/ipc.generated.ts`; run
 `pnpm gen:ipc-types` and commit the regenerated output instead.
 
+### Commit Early, Commit Often
+
+Make small, frequent commits as you work. Don't accumulate large uncommitted changesets.
+
 ### Changelog
 
 Update `CHANGELOG.md` every time a new version is tagged.
