@@ -76,17 +76,11 @@ else
 fi
 
 # ── Step 4: Production build ────────────────────────────────────────────────
+# CI=true tells Tauri's DMG bundler to skip AppleScript (needs Finder GUI).
+# Without it, bundle_dmg.sh hangs on the AppleScript step in headless/SSH sessions.
 info "Building production macOS app"
-if (cd "$PROJECT_DIR" && pnpm tauri build); then
-  ok "Production build complete"
-else
-  # The .app may have been built even if DMG bundling failed
-  if [[ -d "$PROJECT_DIR/src-tauri/target/release/bundle/macos/Stalagmight.app" ]]; then
-    warn "DMG bundling failed, but Stalagmight.app was built successfully"
-  else
-    die "Production build failed"
-  fi
-fi
+(cd "$PROJECT_DIR" && CI=true pnpm tauri build)
+ok "Production build complete"
 
 # ── Step 5: Report artifacts ────────────────────────────────────────────────
 BUNDLE_DIR="$PROJECT_DIR/src-tauri/target/release/bundle/macos"
