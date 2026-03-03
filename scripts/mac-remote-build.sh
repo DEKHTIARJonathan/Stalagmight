@@ -17,6 +17,24 @@ die()   { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# ── Parse arguments ──────────────────────────────────────────────────────────
+BUILD_FLAGS=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --test-ui)
+      BUILD_FLAGS="$BUILD_FLAGS --test-ui"
+      shift
+      ;;
+    --test-ui-headed)
+      BUILD_FLAGS="$BUILD_FLAGS --test-ui-headed"
+      shift
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
 # ── Prerequisites ────────────────────────────────────────────────────────────
 info "Checking prerequisites"
 for cmd in jq curl rsync ssh; do
@@ -252,7 +270,7 @@ ok "Remote setup complete"
 
 # Run build
 info "Running mac-build.sh on remote…"
-remote_ssh "bash ~/stalagmight/scripts/mac-build.sh --project-dir ~/stalagmight"
+remote_ssh "bash ~/stalagmight/scripts/mac-build.sh --project-dir ~/stalagmight$BUILD_FLAGS"
 ok "Remote build complete"
 
 # ── Phase 3: Retrieve artifacts ─────────────────────────────────────────────
@@ -270,6 +288,14 @@ rsync -az --progress --include='*.dmg' --exclude='*' \
   -e "ssh ${SSH_OPTS[*]}" \
   "${SSH_USER}@${SERVER_IP}:~/stalagmight/src-tauri/target/release/bundle/dmg/" \
   "$PROJECT_DIR/build/macos/" 2>/dev/null || true
+
+# Retrieve Playwright test results if they exist
+if [[ -n "$BUILD_FLAGS" ]]; then
+  rsync -az --progress \
+    -e "ssh ${SSH_OPTS[*]}" \
+    "${SSH_USER}@${SERVER_IP}:~/stalagmight/test-results/" \
+    "$PROJECT_DIR/build/macos/test-results/" 2>/dev/null || true
+fi
 
 ok "Artifacts retrieved"
 

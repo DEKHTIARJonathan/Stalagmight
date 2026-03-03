@@ -10,11 +10,21 @@ die()   { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 PROJECT_DIR=""
+TEST_UI=false
+TEST_UI_HEADED=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-dir)
       PROJECT_DIR="$2"
       shift 2
+      ;;
+    --test-ui)
+      TEST_UI=true
+      shift
+      ;;
+    --test-ui-headed)
+      TEST_UI_HEADED=true
+      shift
       ;;
     *)
       die "Unknown argument: $1"
@@ -67,7 +77,25 @@ info "Running TypeScript type check"
 (cd "$PROJECT_DIR" && pnpm tsc --noEmit)
 ok "TypeScript check passed"
 
-# ── Step 3: Rust tests ──────────────────────────────────────────────────────
+# ── Step 3: Install Playwright browsers (optional) ────────────────────────
+if [[ "$TEST_UI" == true || "$TEST_UI_HEADED" == true ]]; then
+  info "Installing Playwright browsers (Chromium)"
+  (cd "$PROJECT_DIR" && pnpm exec playwright install chromium)
+  ok "Playwright browsers installed"
+fi
+
+# ── Step 4: Playwright UI tests (optional) ────────────────────────────────
+if [[ "$TEST_UI_HEADED" == true ]]; then
+  info "Running Playwright tests (headed)"
+  (cd "$PROJECT_DIR" && pnpm test:ui:headed)
+  ok "Playwright tests passed (headed)"
+elif [[ "$TEST_UI" == true ]]; then
+  info "Running Playwright tests (headless)"
+  (cd "$PROJECT_DIR" && pnpm test:ui)
+  ok "Playwright tests passed (headless)"
+fi
+
+# ── Step 5: Rust tests ──────────────────────────────────────────────────────
 # macOS defaults to 256 open files which is too low for the test suite
 ulimit -n 4096 2>/dev/null || ulimit -n 1024 2>/dev/null || true
 info "Running Rust tests (ulimit -n $(ulimit -n))"
@@ -77,14 +105,14 @@ else
   warn "Some Rust tests failed (continuing with build)"
 fi
 
-# ── Step 4: Production build ────────────────────────────────────────────────
+# ── Step 6: Production build ────────────────────────────────────────────────
 # CI=true tells Tauri's DMG bundler to skip AppleScript (needs Finder GUI).
 # Without it, bundle_dmg.sh hangs on the AppleScript step in headless/SSH sessions.
 info "Building production macOS app"
 (cd "$PROJECT_DIR" && CI=true pnpm tauri build)
 ok "Production build complete"
 
-# ── Step 5: Report artifacts ────────────────────────────────────────────────
+# ── Step 7: Report artifacts ────────────────────────────────────────────────
 BUNDLE_DIR="$PROJECT_DIR/src-tauri/target/release/bundle/macos"
 info "Build artifacts in $BUNDLE_DIR:"
 if [[ -d "$BUNDLE_DIR" ]]; then
