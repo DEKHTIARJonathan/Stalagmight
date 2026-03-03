@@ -35,8 +35,12 @@ success() { echo -e "${GREEN}[OK]${NC} $1"; }
 # ===== Configuration =====
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo_build}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cargo_build}"
 BINARY_PATH="$CARGO_TARGET_DIR/debug/stalagmight"
+IS_MACOS=false
+if [[ "$(uname -s)" == Darwin* ]]; then
+    IS_MACOS=true
+fi
 DIST_PATH="$PROJECT_ROOT/dist"
 DEFAULT_MAX_INSTANCES=1
 if command -v nproc &> /dev/null; then
@@ -144,17 +148,12 @@ check_platform() {
             success "Platform: Windows"
             ;;
         Darwin*)
-            error "macOS is not supported by tauri-driver."
-            error "WebdriverIO E2E tests can only run on Linux or Windows."
-            echo ""
-            echo "Alternative options:"
-            echo "  - Use Playwright tests: pnpm test:ui"
-            echo "  - Run tests in a Linux VM or container"
-            exit 1
+            IS_MACOS=true
+            success "Platform: macOS (using tauri-wd)"
             ;;
         *)
             error "Unknown platform: $(uname -s)"
-            error "WebdriverIO E2E tests require Linux or Windows."
+            error "WebdriverIO E2E tests require Linux, Windows, or macOS."
             exit 1
             ;;
     esac
@@ -162,19 +161,31 @@ check_platform() {
 
 # ===== tauri-driver check =====
 check_tauri_driver() {
-    info "Checking tauri-driver installation..."
-
-    if ! command -v tauri-driver &> /dev/null; then
-        error "tauri-driver is not installed."
-        echo ""
-        echo "Install it with:"
-        echo "  cargo install tauri-driver"
-        echo ""
-        echo "After installation, ensure it's in your PATH."
-        exit 1
+    if $IS_MACOS; then
+        info "Checking tauri-wd installation (macOS WebDriver)..."
+        if ! command -v tauri-wd &> /dev/null; then
+            error "tauri-wd is not installed."
+            echo ""
+            echo "Install it with:"
+            echo "  cargo install tauri-webdriver-automation"
+            echo ""
+            echo "After installation, ensure it's in your PATH."
+            exit 1
+        fi
+        success "tauri-wd found: $(which tauri-wd)"
+    else
+        info "Checking tauri-driver installation..."
+        if ! command -v tauri-driver &> /dev/null; then
+            error "tauri-driver is not installed."
+            echo ""
+            echo "Install it with:"
+            echo "  cargo install tauri-driver"
+            echo ""
+            echo "After installation, ensure it's in your PATH."
+            exit 1
+        fi
+        success "tauri-driver found: $(which tauri-driver)"
     fi
-
-    success "tauri-driver found: $(which tauri-driver)"
 }
 
 # ===== Display detection =====
@@ -183,6 +194,13 @@ USE_XVFB=false
 
 check_display() {
     info "Checking display availability..."
+
+    # macOS always has Quartz display available
+    if $IS_MACOS; then
+        HAS_DISPLAY=true
+        success "Display available (macOS Quartz)"
+        return
+    fi
 
     # Check for X11 or Wayland display
     if [[ -n "$DISPLAY" ]] || [[ -n "$WAYLAND_DISPLAY" ]]; then
@@ -240,10 +258,14 @@ check_display() {
 cleanup_ports() {
     info "Cleaning up stale processes..."
 
-    # Kill any existing tauri-driver processes
+    # Kill any existing tauri-driver / tauri-wd processes
     if pgrep -x tauri-driver > /dev/null 2>&1; then
         warn "Found running tauri-driver, killing..."
         pkill -9 tauri-driver 2>/dev/null || true
+    fi
+    if pgrep -x tauri-wd > /dev/null 2>&1; then
+        warn "Found running tauri-wd, killing..."
+        pkill -9 tauri-wd 2>/dev/null || true
     fi
 
     # Kill any existing WebKitWebDriver processes (used internally by tauri-driver)
@@ -277,7 +299,15 @@ cleanup_ports() {
 
     for ((i=0; i<port_range; i++)); do
         for port in "$((WDIO_BASE_PORT + i))" "$((WDIO_BASE_NATIVE_PORT + i))"; do
-            if command -v fuser &> /dev/null && fuser "$port/tcp" > /dev/null 2>&1; then
+            if $IS_MACOS; then
+                # macOS: use lsof instead of fuser
+                local pid
+                pid=$(lsof -ti :"$port" 2>/dev/null || true)
+                if [[ -n "$pid" ]]; then
+                    warn "Port $port in use (pid $pid), killing..."
+                    kill -9 $pid 2>/dev/null || true
+                fi
+            elif command -v fuser &> /dev/null && fuser "$port/tcp" > /dev/null 2>&1; then
                 warn "Port $port in use, killing process..."
                 fuser -k "$port/tcp" 2>/dev/null || true
             fi
@@ -390,8 +420,14 @@ do_build() {
     info "Building frontend..."
 
     # Build Tauri binary (debug mode, no bundle)
-    info "Building Tauri binary (debug mode)..."
-    env VITE_E2E=1 ${E2E_COVERAGE:+VITE_COVERAGE=1} pnpm tauri build --debug --no-bundle
+    # On macOS, include the e2e feature for tauri-plugin-webdriver-automation
+    if $IS_MACOS; then
+        info "Building Tauri binary (debug mode, with e2e feature)..."
+        env VITE_E2E=1 ${E2E_COVERAGE:+VITE_COVERAGE=1} pnpm tauri build --debug --no-bundle -- --features e2e
+    else
+        info "Building Tauri binary (debug mode)..."
+        env VITE_E2E=1 ${E2E_COVERAGE:+VITE_COVERAGE=1} pnpm tauri build --debug --no-bundle
+    fi
 
     # Create marker file with hash of dist/index.html to track what assets were built into binary
     md5sum "$DIST_PATH/index.html" 2>/dev/null | cut -d' ' -f1 > "$E2E_BUILD_MARKER"

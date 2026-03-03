@@ -19,6 +19,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 BUILD_FLAGS=""
+TEST_E2E=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --test-ui)
@@ -27,6 +28,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --test-ui-headed)
       BUILD_FLAGS="$BUILD_FLAGS --test-ui-headed"
+      shift
+      ;;
+    --test-e2e)
+      BUILD_FLAGS="$BUILD_FLAGS --test-e2e"
+      TEST_E2E=true
       shift
       ;;
     *)
@@ -295,6 +301,14 @@ if [[ -n "$BUILD_FLAGS" ]]; then
     -e "ssh ${SSH_OPTS[*]}" \
     "${SSH_USER}@${SERVER_IP}:~/stalagmight/test-results/" \
     "$PROJECT_DIR/build/macos/test-results/" 2>/dev/null || true
+fi
+
+# Retrieve WebDriverIO logs if E2E tests were run
+if [[ "$TEST_E2E" == true ]]; then
+  rsync -az --progress \
+    -e "ssh ${SSH_OPTS[*]}" \
+    "${SSH_USER}@${SERVER_IP}:~/stalagmight/wdio-logs/" \
+    "$PROJECT_DIR/build/macos/wdio-logs/" 2>/dev/null || true
 fi
 
 ok "Artifacts retrieved"

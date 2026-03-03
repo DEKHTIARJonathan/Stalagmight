@@ -3,6 +3,11 @@
  * These helpers interact with the real Tauri application through WebdriverIO.
  */
 
+// Keyboard modifier key: use 'Control' on all platforms.
+// The app checks both ctrlKey and metaKey, and tauri-wd may not properly
+// synthesize Meta key events on macOS, so 'Control' is more reliable.
+const CMD_KEY = 'Control';
+
 /**
  * Get the current map zoom level.
  * @returns The current zoom level, or 0 if map is not available.
@@ -810,7 +815,7 @@ export async function pressEscape(): Promise<void> {
  * Save the current project using keyboard shortcut.
  */
 export async function saveProject(): Promise<void> {
-  await browser.keys(['Control', 's']);
+  await browser.keys([CMD_KEY, 's']);
   // Wait a moment for save to complete
   await waitForUiIdle(500);
 }
@@ -819,7 +824,7 @@ export async function saveProject(): Promise<void> {
  * Trigger undo action.
  */
 export async function undo(): Promise<void> {
-  await browser.keys(['Control', 'z']);
+  await browser.keys([CMD_KEY, 'z']);
   await waitForUiIdle(200);
 }
 
@@ -827,7 +832,7 @@ export async function undo(): Promise<void> {
  * Trigger redo action.
  */
 export async function redo(): Promise<void> {
-  await browser.keys(['Control', 'y']);
+  await browser.keys([CMD_KEY, 'y']);
   await waitForUiIdle(200);
 }
 
@@ -882,7 +887,7 @@ function shortcutToKeys(shortcut: string): string[] {
         case 'cmd':
         case 'command':
         case 'meta':
-          return 'Control';
+          return CMD_KEY;
         case 'alt':
         case 'option':
           return 'Alt';

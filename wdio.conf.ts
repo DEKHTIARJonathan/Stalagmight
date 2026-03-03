@@ -9,6 +9,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let tauriDriver: ChildProcess | null = null;
+let tauriWdShared: ChildProcess | null = null; // macOS: single shared tauri-wd started in onPrepare
+let macTempRoot: string | null = null; // macOS: session-wide temp HOME (set in onPrepare, cleaned in onComplete)
 let tempRoot: string | null = null;
 let workerLogStream: fs.WriteStream | null = null;
 let xvfbProcess: ChildProcess | null = null;
@@ -21,10 +23,14 @@ const defaultCoverageDir = path.join(__dirname, 'docs', 'coverage', 'raw', 'wdio
 
 // Detect platform and set appropriate binary path
 const isWindows = process.platform === 'win32';
+const isMacOS = process.platform === 'darwin';
 const binaryName = isWindows ? 'stalagmight.exe' : 'stalagmight';
 // Use CARGO_TARGET_DIR from tauri config (~/.cargo_build)
 const cargoTargetDir = process.env.CARGO_TARGET_DIR || path.join(os.homedir(), '.cargo_build');
 const binaryPath = path.join(cargoTargetDir, 'debug', binaryName);
+// macOS: use a wrapper that delays the [webdriver] port announcement by 500ms,
+// giving the Tauri window time to be created before tauri-wd creates a session.
+const macWrapperPath = path.join(__dirname, 'e2e', 'mac-app-wrapper.mjs');
 const DEFAULT_MAX_INSTANCES = Math.max(1, Math.min(4, os.cpus().length));
 
 function readEnvInt(name: string, fallback: number): number {
@@ -34,7 +40,9 @@ function readEnvInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-const maxInstances = readEnvInt('WDIO_MAX_INSTANCES', DEFAULT_MAX_INSTANCES);
+// macOS: force sequential execution — shared tauri-wd means all apps inherit
+// the same environment, so parallel workers would contend on config/data files.
+const maxInstances = isMacOS ? 1 : readEnvInt('WDIO_MAX_INSTANCES', DEFAULT_MAX_INSTANCES);
 const basePort = readEnvInt('WDIO_BASE_PORT', 4444);
 const baseNativePort = readEnvInt('WDIO_BASE_NATIVE_PORT', basePort + 1000);
 const xvfbScreen = process.env.WDIO_XVFB_SCREEN || '1280x720x24';
@@ -46,9 +54,10 @@ const xvfbDisplays = [
   ':96',
 ].filter((value): value is string => Boolean(value));
 
-// Check if display is available (Linux only)
+// Check if display is available (Linux only — macOS always has Quartz)
 function checkDisplayAvailable(): boolean {
   if (isWindows) return true;
+  if (isMacOS) return true;
 
   // Check for DISPLAY environment variable
   if (process.env.DISPLAY) return true;
@@ -113,10 +122,18 @@ async function startXvfb(): Promise<boolean> {
 
 // Clear recent projects from config to ensure clean test state
 function clearRecentProjects(): void {
-  const configRoot = isWindows
-    ? process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
-    : process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  const configPath = path.join(configRoot, 'stalagmight', 'config.toml');
+  let configPath: string;
+  if (isWindows) {
+    const configRoot = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    configPath = path.join(configRoot, 'stalagmight', 'config.toml');
+  } else if (isMacOS) {
+    // macOS `directories` crate uses ~/Library/Application Support/ (ignores XDG)
+    const home = process.env.HOME || os.homedir();
+    configPath = path.join(home, 'Library', 'Application Support', 'stalagmight', 'config.toml');
+  } else {
+    const configRoot = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+    configPath = path.join(configRoot, 'stalagmight', 'config.toml');
+  }
 
   if (fs.existsSync(configPath)) {
     try {
@@ -169,6 +186,20 @@ function applyWorkerEnv(root: string): void {
     process.env.LOCALAPPDATA = localAppData;
     process.env.TEMP = tmp;
     process.env.TMP = tmp;
+  } else if (isMacOS) {
+    // macOS `directories` crate ignores XDG — it reads ~/Library/Application Support/
+    // Override HOME so each worker gets isolated config/data paths
+    const home = path.join(root, 'home');
+    const libAppSupport = path.join(home, 'Library', 'Application Support');
+    const libCaches = path.join(home, 'Library', 'Caches');
+    const tmp = path.join(root, 'tmp');
+    fs.mkdirSync(libAppSupport, { recursive: true });
+    fs.mkdirSync(libCaches, { recursive: true });
+    fs.mkdirSync(tmp, { recursive: true });
+    process.env.HOME = home;
+    process.env.TMPDIR = tmp;
+    process.env.TEMP = tmp;
+    process.env.TMP = tmp;
   } else {
     const config = path.join(root, 'config');
     const data = path.join(root, 'data');
@@ -204,16 +235,17 @@ export const config: Options.Testrunner = {
   // WebDriver capabilities for Tauri
   capabilities: [
     {
-      'platformName': process.platform === 'win32' ? 'windows' : 'linux',
+      'platformName': isWindows ? 'windows' : isMacOS ? 'mac' : 'linux',
       'tauri:options': {
-        application: binaryPath,
+        // macOS: use wrapper to delay port announcement (prevents "no window" race)
+        application: isMacOS ? macWrapperPath : binaryPath,
       },
     },
   ],
 
-  // Connect to tauri-driver WebDriver server
+  // Connect to tauri-driver / tauri-wd WebDriver server
   hostname: '127.0.0.1',
-  port: 4444,
+  port: basePort,
 
   // Test framework configuration
   framework: 'mocha',
@@ -265,9 +297,12 @@ export const config: Options.Testrunner = {
     if (process.env.SKIP_BUILD === '1') {
       console.log('Skipping build (SKIP_BUILD=1)');
     } else {
-      console.log('Building Tauri app in debug mode...');
+      const buildCmd = isMacOS
+        ? 'pnpm tauri build --debug --no-bundle -- --features e2e'
+        : 'pnpm tauri build --debug --no-bundle';
+      console.log(`Building Tauri app in debug mode${isMacOS ? ' (with e2e feature)' : ''}...`);
       try {
-        execSync('pnpm tauri build --debug --no-bundle', {
+        execSync(buildCmd, {
           stdio: 'inherit',
           cwd: process.cwd(),
           env: {
@@ -283,19 +318,64 @@ export const config: Options.Testrunner = {
         throw error;
       }
     }
+
+    // macOS: start a single shared tauri-wd instance in onPrepare.
+    // tauri-wd crashes with "Address already in use" when spawned from wdio
+    // worker processes (likely due to fd inheritance from the wdio runner).
+    // Starting it once here avoids the issue; tauri-wd handles multiple sessions.
+    //
+    // Environment isolation: tauri-wd inherits the main process env, and apps
+    // launched by tauri-wd inherit tauri-wd's env. So we set up an isolated
+    // HOME here BEFORE starting tauri-wd, ensuring all apps use a clean config.
+    if (isMacOS) {
+      // Create isolated HOME so the app doesn't read the user's real config
+      macTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-wdio-shared-'));
+      applyWorkerEnv(macTempRoot);
+      console.log(`macOS env isolation: HOME=${process.env.HOME}`);
+
+      // Set the real binary path for the wrapper script
+      process.env.STALAGMIGHT_BINARY = binaryPath;
+      console.log(`macOS wrapper: ${macWrapperPath} → ${binaryPath}`);
+
+      console.log(`Starting shared tauri-wd on port ${basePort}...`);
+      tauriWdShared = spawn('tauri-wd', ['--port', String(basePort)], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      tauriWdShared.stdout?.on('data', (data: Buffer) => {
+        const msg = data.toString().trim();
+        if (msg) console.log(`[tauri-wd] ${msg}`);
+      });
+      tauriWdShared.stderr?.on('data', (data: Buffer) => {
+        const msg = data.toString().trim();
+        if (msg) console.error(`[tauri-wd] ${msg}`);
+      });
+      tauriWdShared.on('exit', (code: number | null) => {
+        console.error(`[tauri-wd] exited with code ${code}`);
+        tauriWdShared = null;
+      });
+      // Wait for tauri-wd to be ready
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      if (tauriWdShared?.exitCode !== null) {
+        throw new Error('tauri-wd failed to start');
+      }
+      console.log('tauri-wd started successfully');
+    }
   },
 
   // Start tauri-driver before each test session
   beforeSession: function (wdioConfig, _capabilities, specs, cid) {
     const workerId = parseWorkerId(cid);
-    const driverPort = basePort + workerId;
+    const driverPort = isMacOS ? basePort : basePort + workerId;
     const nativePort = baseNativePort + workerId;
     currentWorkerId = workerId;
 
-    // Ensure each worker has isolated config/data/cache directories
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `stalagmight-wdio-${cid}-`));
-    applyWorkerEnv(tempRoot);
-    clearRecentProjects();
+    // macOS: env isolation was set up in onPrepare (before tauri-wd started),
+    // so skip per-worker isolation — all sessions share the same tauri-wd env.
+    if (!isMacOS) {
+      tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `stalagmight-wdio-${cid}-`));
+      applyWorkerEnv(tempRoot);
+      clearRecentProjects();
+    }
 
     wdioConfig.port = driverPort;
 
@@ -312,10 +392,20 @@ export const config: Options.Testrunner = {
       }
     };
 
+    // macOS: tauri-wd is already running (started in onPrepare), all workers share it
+    if (isMacOS) {
+      console.log(`[${cid}] Using shared tauri-wd on port ${driverPort}, logs: ${logPath}`);
+      workerLogStream.write(`=== Worker ${cid} started at ${new Date().toISOString()} ===\n`);
+      workerLogStream.write(`Spec: ${specs.join(', ')}\n`);
+      workerLogStream.write(`Driver: tauri-wd (shared), port: ${driverPort}\n\n`);
+      return;
+    }
+
+    // Linux/Windows: spawn a per-worker tauri-driver
     console.log(`[${cid}] Starting tauri-driver on port ${driverPort}, logs: ${logPath}`);
     workerLogStream.write(`=== Worker ${cid} started at ${new Date().toISOString()} ===\n`);
     workerLogStream.write(`Spec: ${specs.join(', ')}\n`);
-    workerLogStream.write(`Driver port: ${driverPort}, Native port: ${nativePort}\n\n`);
+    workerLogStream.write(`Driver: tauri-driver, port: ${driverPort}, native port: ${nativePort}\n\n`);
 
     tauriDriver = spawn('tauri-driver', ['--port', String(driverPort), '--native-port', String(nativePort)], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -339,6 +429,149 @@ export const config: Options.Testrunner = {
         resolve();
       }, 2000);
     });
+  },
+
+  // macOS workarounds: override commands that pass element references to execute/sync.
+  // tauri-plugin-webdriver-automation's __wdResolve re-queries DOM with
+  // querySelectorAll(selector)[index], which returns undefined when React re-renders
+  // shift element indices. These overrides pass CSS selectors as STRINGS instead.
+  before: async function () {
+    if (!isMacOS) return;
+
+    // Helper: check if selector is a valid CSS selector (not XPath or WebdriverIO-specific)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const isCssSelector = (el: any): boolean => {
+      const sel = el?.selector;
+      if (typeof sel !== 'string') return false;
+      // Exclude XPath selectors
+      if (sel.startsWith('//') || sel.startsWith('(')) return false;
+      // Exclude WebdriverIO-specific selectors: tag=text, tag*=text, *=text, =text, aria/role
+      if (/^[a-z]*\*?=/.test(sel) || sel.startsWith('aria/')) return false;
+      return true;
+    };
+
+    // Override isDisplayed() — most common source of execute/sync element ref failures
+    browser.overwriteCommand(
+      'isDisplayed',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async function (this: any, _originalFn: () => Promise<boolean>) {
+        try {
+          if (isCssSelector(this)) {
+            const result = await browser.execute(function (sel: string) {
+              const el = document.querySelector(sel);
+              if (!el) return false;
+              const style = window.getComputedStyle(el);
+              if (style.display === 'none' || style.visibility === 'hidden') return false;
+              const rect = el.getBoundingClientRect();
+              return rect.width > 0 || rect.height > 0;
+            }, this.selector);
+            return Boolean(result);
+          }
+          // For non-CSS selectors (button*=text, =text, etc.), use isExisting()
+          // as best-effort check — can't use document.querySelector for these
+          return await this.isExisting();
+        } catch {
+          return false;
+        }
+      },
+      true,
+    );
+
+    // Override isClickable() — internally uses execute/sync for viewport/visibility checks
+    browser.overwriteCommand(
+      'isClickable',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async function (this: any, _originalFn: () => Promise<boolean>) {
+        try {
+          if (isCssSelector(this)) {
+            const result = await browser.execute(function (sel: string) {
+              const el = document.querySelector(sel);
+              if (!el) return false;
+              if ((el as HTMLButtonElement).disabled) return false;
+              const style = window.getComputedStyle(el);
+              if (style.display === 'none' || style.visibility === 'hidden') return false;
+              if (style.pointerEvents === 'none') return false;
+              const rect = el.getBoundingClientRect();
+              if (rect.width === 0 && rect.height === 0) return false;
+              return rect.top < window.innerHeight && rect.bottom > 0
+                && rect.left < window.innerWidth && rect.right > 0;
+            }, this.selector);
+            return Boolean(result);
+          }
+          return await this.isExisting();
+        } catch {
+          return false;
+        }
+      },
+      true,
+    );
+
+    // Override isSelected() — internally uses execute/sync for .checked/.selected
+    browser.overwriteCommand(
+      'isSelected',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async function (this: any, _originalFn: () => Promise<boolean>) {
+        try {
+          if (isCssSelector(this)) {
+            const result = await browser.execute(function (sel: string) {
+              const el = document.querySelector(sel) as HTMLInputElement | null;
+              if (!el) return false;
+              return el.checked ?? el.selected ?? el.getAttribute('aria-selected') === 'true';
+            }, this.selector);
+            return Boolean(result);
+          }
+          // Non-CSS selectors: use getAttribute as fallback
+          const checked = await this.getAttribute('checked');
+          const ariaSelected = await this.getAttribute('aria-selected');
+          return checked !== null || ariaSelected === 'true';
+        } catch {
+          return false;
+        }
+      },
+      true,
+    );
+
+    // Override browser.execute() to intercept WebdriverIO Element args.
+    // When an Element object is passed, replace it with its CSS selector and
+    // inject a preamble that resolves selectors to DOM nodes before the script runs.
+    browser.overwriteCommand(
+      'execute',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async function (originalFn: (...a: any[]) => Promise<any>, script: any, ...args: any[]) {
+        // Only intercept if there are element reference args
+        const hasElementArgs = args.some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (a: any) => a && typeof a === 'object' && a.elementId && typeof a.selector === 'string',
+        );
+        if (!hasElementArgs) {
+          return originalFn(script, ...args);
+        }
+
+        // Replace Element objects with { __wdio_sel: cssSelector } markers
+        const patchedArgs = args.map(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (a: any) => {
+            if (a && typeof a === 'object' && a.elementId && typeof a.selector === 'string') {
+              return { __wdio_sel: a.selector };
+            }
+            return a;
+          },
+        );
+
+        // Wrap the script to resolve selector markers to DOM nodes
+        const scriptStr = typeof script === 'function' ? script.toString() : String(script);
+        const wrappedScript = `
+          var __args = Array.prototype.slice.call(arguments);
+          for (var i = 0; i < __args.length; i++) {
+            if (__args[i] && __args[i].__wdio_sel) {
+              __args[i] = document.querySelector(__args[i].__wdio_sel);
+            }
+          }
+          return (${scriptStr}).apply(null, __args);
+        `;
+        return originalFn(wrappedScript, ...patchedArgs);
+      },
+    );
   },
 
   // Log test results to per-spec log file
@@ -377,7 +610,7 @@ export const config: Options.Testrunner = {
     }
   },
 
-  // Kill tauri-driver after tests complete
+  // Kill tauri-driver after tests complete (Linux only; macOS uses shared instance)
   afterSession: function () {
     if (workerLogStream) {
       workerLogStream.write(`\n=== Session ended at ${new Date().toISOString()} ===\n`);
@@ -385,12 +618,14 @@ export const config: Options.Testrunner = {
       workerLogStream = null;
     }
 
-    if (tauriDriver) {
+    // On macOS, tauri-wd is shared and killed in onComplete
+    if (tauriDriver && !isMacOS) {
       tauriDriver.kill();
       tauriDriver = null;
     }
 
-    if (tempRoot) {
+    // On macOS, temp root is shared (macTempRoot) and cleaned in onComplete
+    if (tempRoot && !isMacOS) {
       try {
         fs.rmSync(tempRoot, { recursive: true, force: true });
       } catch (error) {
@@ -424,6 +659,20 @@ export const config: Options.Testrunner = {
       console.log(`\n⚠️  ${results.failed} spec(s) failed. Check the corresponding .log file for details.`);
     }
     console.log('='.repeat(70) + '\n');
+
+    if (tauriWdShared) {
+      tauriWdShared.kill();
+      tauriWdShared = null;
+    }
+
+    if (macTempRoot) {
+      try {
+        fs.rmSync(macTempRoot, { recursive: true, force: true });
+      } catch (error) {
+        console.warn('Failed to remove macOS temp directory:', error);
+      }
+      macTempRoot = null;
+    }
 
     if (xvfbProcess) {
       xvfbProcess.kill();

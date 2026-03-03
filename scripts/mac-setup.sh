@@ -120,6 +120,23 @@ fi
 # shellcheck disable=SC1091
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
+# ── tauri-wd (WebDriver for macOS E2E tests) ─────────────────────────────
+info "Checking tauri-wd (WebDriver for macOS)"
+# Use the fix branch that resolves W3C element references in execute/sync
+# (PR #3: https://github.com/danielraffel/tauri-webdriver/pull/3)
+# TODO: Switch back to `cargo install tauri-webdriver-automation` once fix is released
+TAURI_WD_GIT="https://github.com/FumblingBarbell/tauri-webdriver"
+TAURI_WD_BRANCH="fix/resolve-element-refs-in-execute-sync"
+TAURI_WD_MARKER="$HOME/.cargo/.tauri-wd-fix-branch"
+if command -v tauri-wd &>/dev/null && [[ -f "$TAURI_WD_MARKER" ]]; then
+  ok "Already installed from fix branch: $(tauri-wd --version 2>/dev/null || echo 'unknown version')"
+else
+  info "Installing tauri-webdriver-automation from fix branch…"
+  cargo install --git "$TAURI_WD_GIT" --branch "$TAURI_WD_BRANCH" tauri-webdriver-automation --force
+  touch "$TAURI_WD_MARKER"
+  ok "Installed"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 info "Tool versions:"
 echo "  Xcode CLI:  $(xcode-select -p)"
@@ -128,5 +145,6 @@ echo "  Node.js:    $(node --version)"
 echo "  pnpm:       $(pnpm --version)"
 echo "  Rust:       $(rustc --version)"
 echo "  Cargo:      $(cargo --version)"
+echo "  tauri-wd:   $(tauri-wd --version 2>/dev/null || echo 'installed')"
 
 ok "All development tools are ready"
