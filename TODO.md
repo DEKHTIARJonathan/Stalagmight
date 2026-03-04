@@ -232,7 +232,7 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Add middle-click panning | ✅ | Added middle-click drag pan everywhere Ctrl+drag pan is supported, preserving active tool after release *(~line 1865)* |
 | Rename "reference shot" to "jump line" | ✅ | Renamed key user-facing UI labels to "Jump/Reference" (Detail panel, Display menu, Data Table, Draw Shot, Context Menu); placement-setting and overlap labels kept unchanged by request *(~line 623)* |
 
-### Feature Suggestions (0/5 done)
+### Feature Suggestions (1/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
