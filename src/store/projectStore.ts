@@ -91,6 +91,7 @@ interface LoadError {
 interface CreateProjectOptions {
   savePath?: string;
   saveDirectory?: string;
+  deferInitialSave?: boolean;
 }
 
 function emptyCommandResult(
@@ -504,8 +505,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           projectLocation,
           saveDirectory: options?.saveDirectory,
           savePath: options?.savePath,
+          deferInitialSave: options?.deferInitialSave ?? !options?.savePath,
         },
-        { purpose: 'create new project on disk', fields: { name } }
+        { purpose: 'create new project workspace', fields: { name } }
       );
 
       // Check clientOpId hasn't changed

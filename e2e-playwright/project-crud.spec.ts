@@ -52,6 +52,27 @@ test.describe('Project CRUD Operations', () => {
       await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
     });
 
+    test('should not autosave untouched project when backing out', async ({ page }) => {
+      await page.evaluate(() => {
+        const overrides = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
+          | Record<string, unknown>
+          | undefined;
+        (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
+          ...(overrides ?? {}),
+          // Untouched new projects should close without any implicit save.
+          save_project: { __throw: 'save_project should not be called when backing out of untouched project' },
+        };
+      });
+
+      await createProject(page, 'Untouched Project');
+      await page.getByTestId('back-button').click();
+
+      await expect(page.getByTestId('single-system-view')).not.toBeVisible({ timeout: 10000 });
+      await expect(
+        page.locator('[data-testid="new-project-button"], [data-testid="empty-state-new-project"]').first()
+      ).toBeVisible({ timeout: 10000 });
+    });
+
     test('should create with "Save immediately" without calling save_project', async ({ page }) => {
       await page.evaluate(() => {
         const overrides = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
