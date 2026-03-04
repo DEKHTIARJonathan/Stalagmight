@@ -101,6 +101,8 @@ export default function DmpSelectionDialog({
   onCancel,
   onContinue,
 }: DmpSelectionDialogProps) {
+  const importSecondaryButtonClass = 'bg-background shadow-sm hover:bg-background-50';
+
   // Extract filename from path
   const fileName = useMemo(() => {
     return extractFilename(filePath);
@@ -402,6 +404,7 @@ export default function DmpSelectionDialog({
           <Button
             size="sm"
             onClick={handleSelectAll}
+            className={importSecondaryButtonClass}
             data-testid="select-all-button"
           >
             Select All
@@ -409,6 +412,7 @@ export default function DmpSelectionDialog({
           <Button
             size="sm"
             onClick={handleSelectNone}
+            className={importSecondaryButtonClass}
             data-testid="select-none-button"
           >
             Select None
@@ -416,6 +420,7 @@ export default function DmpSelectionDialog({
           <Button
             size="sm"
             onClick={handleInvertSelection}
+            className={importSecondaryButtonClass}
             data-testid="invert-selection-button"
           >
             Invert
@@ -494,7 +499,7 @@ export default function DmpSelectionDialog({
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={onCancel} data-testid="cancel-button">
+          <Button onClick={onCancel} className={importSecondaryButtonClass} data-testid="cancel-button">
             Cancel
           </Button>
           <Button

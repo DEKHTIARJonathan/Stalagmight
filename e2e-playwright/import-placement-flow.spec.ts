@@ -123,6 +123,21 @@ test.describe('Import Placement Flow', () => {
       const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
       await expect(placeAndFinishBtn).not.toBeVisible();
     });
+
+    test('should keep Place on Map as primary and keep secondary import buttons visibly button-like', async ({ page }) => {
+      await createProjectAndOpenImportDialog(page);
+      await selectSectionsAndProceed(page, [0, 1]);
+
+      await page.locator('[data-testid="placement-manual"]').check();
+
+      const placeOnMapButton = page.locator('[data-testid="start-placement-button"]');
+      await expect(placeOnMapButton).toBeVisible();
+      await expect(placeOnMapButton).toHaveAttribute('data-primary-action', '');
+
+      await expect(page.locator('[data-testid="cancel-button"]')).toHaveClass(/shadow-sm/);
+      await expect(page.locator('[data-testid="back-to-selection-button"]')).toHaveClass(/shadow-sm/);
+      await expect(page.locator('[data-testid="exclude-button"]')).toHaveClass(/shadow-sm/);
+    });
   });
 
   test.describe('Place Section Functionality', () => {
