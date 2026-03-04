@@ -14,7 +14,8 @@ impl AppState {
     ///
     /// # Arguments
     /// * `name` - Project name (will be sanitized for filesystem use)
-    /// * `directory` - Optional directory to save in. If None, uses user's documents directory.
+    /// * `directory` - Optional directory to save in. If None, uses user's
+    ///   documents `stalagmight` subdirectory.
     ///
     /// # Returns
     /// The full path to the project file (e.g., `/path/to/dir/ProjectName.stalx`)
@@ -44,8 +45,8 @@ impl AppState {
             }
             d.clone()
         } else {
-            // Default to user's documents directory, with fallbacks
-            let base_dir = directories::UserDirs::new()
+            // Default to user's documents/stalagmight directory, with fallbacks.
+            let documents_dir = directories::UserDirs::new()
                 .and_then(|ud| ud.document_dir().map(std::path::Path::to_path_buf))
                 .or_else(|| {
                     // Fallback to $HOME/Documents
@@ -55,14 +56,16 @@ impl AppState {
                 })
                 .ok_or_else(|| "Could not determine documents directory".to_string())?;
 
-            // Ensure the directory exists
-            if !base_dir.exists() {
-                std::fs::create_dir_all(&base_dir).map_err(|e| {
-                    format!("Failed to create documents directory: {e}")
+            let app_dir = documents_dir.join("stalagmight");
+
+            // Ensure the app default directory exists.
+            if !app_dir.exists() {
+                std::fs::create_dir_all(&app_dir).map_err(|e| {
+                    format!("Failed to create default project directory: {e}")
                 })?;
             }
 
-            base_dir
+            app_dir
         };
 
         // Build the full path with .stalx extension
@@ -1089,7 +1092,8 @@ impl AppState {
     /// * `name` - Project name (used for filename and project metadata)
     /// * `project_location` - Optional cave location metadata (free text)
     /// * `save_directory` - Optional directory to save the project in.
-    ///   If omitted (and `save_path` is omitted), uses user's documents directory.
+    ///   If omitted (and `save_path` is omitted), uses user's documents
+    ///   `stalagmight` subdirectory.
     /// * `save_path` - Optional full file path for the new project. If provided,
     ///   this takes precedence over `save_directory`.
     /// * `defer_initial_save` - When true, reserve `project.file_path` but do not
@@ -1366,6 +1370,8 @@ mod tests {
         assert!(result.is_ok(), "should resolve with default dir: {:?}", result.err());
         let path = result.unwrap();
         assert_eq!(path.file_name().unwrap().to_str().unwrap(), "TestProject.stalx");
+        let parent = path.parent().expect("default path should have parent");
+        assert_eq!(parent.file_name().unwrap().to_str().unwrap(), "stalagmight");
     }
 
     #[test]
@@ -1383,9 +1389,11 @@ mod tests {
     fn resolve_project_path_creates_nonexistent_default_dir() {
         let state = AppState::new().unwrap();
         // Use the default directory path (None) — should succeed even if
-        // the documents directory needs to be created
-        let result = state.resolve_project_path("CreateDirTest", None);
-        assert!(result.is_ok());
+        // the app documents subdirectory needs to be created.
+        let result = state.resolve_project_path("CreateDirTest", None).unwrap();
+        let parent = result.parent().expect("default path should have parent");
+        assert!(parent.exists(), "default app directory should exist");
+        assert_eq!(parent.file_name().unwrap().to_str().unwrap(), "stalagmight");
     }
 
     #[test]
