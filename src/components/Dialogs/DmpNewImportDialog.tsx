@@ -1037,6 +1037,7 @@ export default function DmpNewImportDialog({
   savedManualPlacingState,
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
+  const importSecondaryButtonClass = 'bg-background shadow-sm hover:bg-background-50';
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
@@ -3468,6 +3469,7 @@ export default function DmpNewImportDialog({
                           />
                         </div>
                         <Button
+                          variant="primary"
                           size="sm"
                           onClick={handleStartSegmentPlacement}
                           data-testid="segment-place-on-map-button"
@@ -3574,10 +3576,10 @@ export default function DmpNewImportDialog({
         {/* Footer */}
         <div className="px-4 py-3 border-t border-border flex justify-between items-center">
           <div className="flex gap-2">
-            <Button onClick={handleCancel} data-testid="cancel-button">
+            <Button onClick={handleCancel} className={importSecondaryButtonClass} data-testid="cancel-button">
               {t('common.actions.cancel')}
             </Button>
-            <Button onClick={handleBack} data-testid="back-button">
+            <Button onClick={handleBack} className={importSecondaryButtonClass} data-testid="back-button">
               {t('common.actions.back')}
             </Button>
           </div>
@@ -3587,6 +3589,7 @@ export default function DmpNewImportDialog({
                 <Button
                   onClick={handleSkip}
                   disabled={isImporting}
+                  className={importSecondaryButtonClass}
                   data-testid="skip-button"
                 >
                   {t('dialogs.dmpNewImport.skip')}
@@ -3606,6 +3609,7 @@ export default function DmpNewImportDialog({
                 {segmentQueue.length > 1 && (
                   <Button
                     onClick={handleSegmentSkip}
+                    className={importSecondaryButtonClass}
                     data-testid="segment-skip-button"
                   >
                     {t('dialogs.dmpNewImport.manualPlacing.skip')}
@@ -3644,7 +3648,7 @@ export default function DmpNewImportDialog({
         data-testid="cancel-confirm-dialog"
         actions={
           <>
-            <Button onClick={() => setShowCancelConfirm(false)}>
+            <Button onClick={() => setShowCancelConfirm(false)} className={importSecondaryButtonClass}>
               {t('common.actions.continue')}
             </Button>
             <Button variant="danger" onClick={onCancel} data-testid="confirm-cancel-button">
@@ -3668,7 +3672,7 @@ export default function DmpNewImportDialog({
         data-testid="back-confirm-dialog"
         actions={
           <>
-            <Button onClick={() => setShowBackConfirm(false)}>
+            <Button onClick={() => setShowBackConfirm(false)} className={importSecondaryButtonClass}>
               {t('common.actions.continue')}
             </Button>
             <Button variant="danger" onClick={onBack} data-testid="confirm-back-button">
