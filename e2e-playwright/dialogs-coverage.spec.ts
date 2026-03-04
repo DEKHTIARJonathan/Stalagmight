@@ -205,6 +205,26 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await expect(tooltip).toContainText('Higher values apply more closure adjustment');
   });
 
+  test('shows themed tooltip for shot discrepancy warnings', async ({ page }) => {
+    const { sectionId } = await setupProjectWithShots(page, 2);
+
+    await openDialog(page, 'edit-section', { sectionId });
+
+    const dialog = page.getByTestId('edit-section-dialog');
+    await expect(dialog).toBeVisible();
+
+    const warningIcon = dialog.getByTestId('shot-warning-0');
+    const tooltip = page.getByTestId('shot-warning-tooltip-0');
+
+    await expect(warningIcon).toBeVisible();
+    expect(await warningIcon.getAttribute('title')).toBeNull();
+    await expect(tooltip).not.toBeVisible();
+
+    await warningIcon.hover();
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText('Azimuth in/out differs by more than');
+  });
+
   test('updates metadata, edits shots, adds and deletes rows', async ({ page }) => {
     const { sectionId } = await setupProjectWithShots(page, 2);
 

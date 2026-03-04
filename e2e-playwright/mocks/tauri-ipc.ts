@@ -407,7 +407,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const resolvedPath = savePathArg
               ?? (saveDirectoryArg
                 ? `${saveDirectoryArg}/${sanitizedName}.stalx`
-                : `/mock/Documents/${sanitizedName}.stalx`);
+                : `/mock/Documents/stalagmight/${sanitizedName}.stalx`);
             projectPath = resolvedPath;
 
             currentProject = {

@@ -27,7 +27,7 @@ describe('projectStore.createProject', () => {
             station_merges: [],
             zero_datums: [],
             loop_closures: [],
-            file_path: args?.savePath ?? '/mock/Documents/Untitled_Project.stalx',
+            file_path: args?.savePath ?? '/mock/Documents/stalagmight/Untitled_Project.stalx',
             next_section_id: 1,
             section_offsets: {},
             imported_file_hashes: [],
