@@ -1037,7 +1037,7 @@ export default function DmpNewImportDialog({
   savedManualPlacingState,
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
-  const importSecondaryButtonClass = 'bg-background shadow-sm hover:bg-background-50';
+  const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
