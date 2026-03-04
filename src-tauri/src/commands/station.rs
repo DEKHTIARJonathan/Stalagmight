@@ -45,6 +45,22 @@ pub(crate) fn create_loop_closure_impl(
     })
 }
 
+/// Remove a loop closure by ID
+#[tauri::command]
+pub fn remove_loop_closure(
+    state: State<AppState>,
+    closure_id: u64,
+) -> CommandResult {
+    remove_loop_closure_impl(state.inner(), closure_id)
+}
+
+pub(crate) fn remove_loop_closure_impl(
+    state: &AppState,
+    closure_id: u64,
+) -> CommandResult {
+    state.execute(Command::RemoveLoopClosure { closure_id })
+}
+
 /// Adjust loop closures for a connected component (batch)
 #[tauri::command]
 pub fn adjust_loop_closures(

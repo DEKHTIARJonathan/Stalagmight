@@ -138,6 +138,100 @@ async function setupProjectWithMergedStation(
   return refs;
 }
 
+async function setupProjectWithStationClosures(
+  page: Page,
+  closureCount: 1 | 2
+): Promise<{
+  targetRef: StationRef;
+  closureRefA: StationRef;
+  closureRefB: StationRef | null;
+  closureAId: string;
+  closureBId: string | null;
+}> {
+  await setupMockedPage(page);
+  await createProject(page, 'Context Menu Closure Coverage');
+
+  await seedProjectWithSections(page, [
+    { name: 'Closure A', direction: 'in', shots: [buildShot(0)] },
+    { name: 'Closure B', direction: 'in', shots: [buildShot(1)] },
+    { name: 'Closure C', direction: 'in', shots: [buildShot(2)] },
+  ]);
+
+  await waitForMapReady(page);
+  await waitForNoDialogs(page);
+
+  const refs = await page.evaluate(async (count) => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => {
+            project: {
+              sections: Array<{ id: number }>;
+              loop_closures: Array<{
+                id: bigint;
+                station_a: StationRef;
+                station_b: StationRef;
+              }>;
+            } | null;
+            createLoopClosure: (a: StationRef, b: StationRef, strategy: string) => Promise<unknown>;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+
+    if (!e2e) return null;
+    const state = e2e.projectStore.getState();
+    const sectionIds = (state.project?.sections ?? []).map((section) => section.id);
+    if (sectionIds.length < 3) return null;
+
+    const targetRef = { section_id: sectionIds[0]!, station_index: 0 };
+    const closureRefA = { section_id: sectionIds[1]!, station_index: 0 };
+    const closureRefB = { section_id: sectionIds[2]!, station_index: 0 };
+
+    await state.createLoopClosure(targetRef, closureRefA, 'batch');
+    if (count > 1) {
+      await state.createLoopClosure(targetRef, closureRefB, 'batch');
+    }
+
+    const closures = e2e.projectStore.getState().project?.loop_closures ?? [];
+    const findByPair = (a: StationRef, b: StationRef) => {
+      return closures.find((closure: any) => {
+        const direct =
+          closure.station_a.section_id === a.section_id &&
+          closure.station_a.station_index === a.station_index &&
+          closure.station_b.section_id === b.section_id &&
+          closure.station_b.station_index === b.station_index;
+        const reverse =
+          closure.station_a.section_id === b.section_id &&
+          closure.station_a.station_index === b.station_index &&
+          closure.station_b.section_id === a.section_id &&
+          closure.station_b.station_index === a.station_index;
+        return direct || reverse;
+      });
+    };
+
+    const closureAResolved = findByPair(targetRef, closureRefA);
+    const closureBResolved = count > 1 ? findByPair(targetRef, closureRefB) : null;
+    if (!closureAResolved || (count > 1 && !closureBResolved)) {
+      return null;
+    }
+
+    return {
+      targetRef,
+      closureRefA,
+      closureRefB: count > 1 ? closureRefB : null,
+      closureAId: closureAResolved.id.toString(),
+      closureBId: closureBResolved ? closureBResolved.id.toString() : null,
+    };
+  }, closureCount);
+
+  if (!refs) {
+    throw new Error('Failed to prepare closure test data');
+  }
+
+  return refs;
+}
+
 async function openContextMenu(page: Page, target: Record<string, unknown>) {
   await page.evaluate(
     ({ target }) => {
@@ -316,5 +410,52 @@ test.describe('Context Menu Coverage', () => {
         };
       }, { target: targetRef, removed: mergeRefB });
     }).toEqual({ mergeCount: 1, hasRemovedPair: false });
+  });
+
+  test('station menu removes closure immediately when exactly one direct closure exists', async ({ page }) => {
+    const { targetRef } = await setupProjectWithStationClosures(page, 1);
+
+    await openContextMenu(page, { type: 'station', ref: targetRef });
+    await expect(page.getByRole('button', { name: 'Remove Closure' })).toBeVisible();
+    await page.getByRole('button', { name: 'Remove Closure' }).click();
+
+    await expect(page.getByTestId('remove-closure-dialog')).toBeHidden();
+
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project?.loop_closures?.length ?? 0;
+      });
+    }).toBe(0);
+  });
+
+  test('station menu opens closure picker when multiple direct closures exist', async ({ page }) => {
+    const { targetRef, closureBId } = await setupProjectWithStationClosures(page, 2);
+    if (!closureBId) {
+      throw new Error('Expected second closure id');
+    }
+
+    await openContextMenu(page, { type: 'station', ref: targetRef });
+    await expect(page.getByRole('button', { name: 'Remove Closure' })).toBeVisible();
+    await page.getByRole('button', { name: 'Remove Closure' }).click();
+
+    const removeDialog = page.getByTestId('remove-closure-dialog');
+    await expect(removeDialog).toBeVisible();
+
+    await page.getByTestId(`remove-closure-option-${closureBId}`).click();
+    await page.getByTestId('remove-closure-confirm').click();
+    await expect(removeDialog).not.toBeVisible({ timeout: 5000 });
+
+    await expect.poll(async () => {
+      return page.evaluate((removedClosureId) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        const closures = state.project?.loop_closures ?? [];
+        const hasRemovedClosure = closures.some((closure: any) => closure.id.toString() === removedClosureId);
+        return {
+          closureCount: closures.length,
+          hasRemovedClosure,
+        };
+      }, closureBId);
+    }).toEqual({ closureCount: 1, hasRemovedClosure: false });
   });
 });

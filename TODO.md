@@ -227,7 +227,7 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Task | Status | Notes |
 |------|--------|-------|
 | Make "Place on map" button more visible | ✅ | Promoted "Place on Map" to primary CTA in import placement and added clearer outlined secondary actions for import dialogs |
-| Add unmerge capability | ✅ | Added targeted unmerge flows: single merge unmerges immediately, multiple merges open chooser dialog, and detail panel merged links now include per-pair unmerge action *(~line 569)* |
+| Add unmerge capability | ✅ | Added targeted unmerge/remove flows: single merge/closure removes immediately, multiple items open chooser dialogs, and detail panel merged/closure links include per-item broken-chain actions *(~line 569)* |
 | Make move tool larger and more discoverable | ❌ | User couldn't locate it even with verbal guidance *(~line 413, 1707)* |
 | Add middle-click panning | ✅ | Added middle-click drag pan everywhere Ctrl+drag pan is supported, preserving active tool after release *(~line 1865)* |
 | Rename "reference shot" to "jump line" | ✅ | Renamed key user-facing UI labels to "Jump/Reference" (Detail panel, Display menu, Data Table, Draw Shot, Context Menu); placement-setting and overlap labels kept unchanged by request *(~line 623)* |
