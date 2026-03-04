@@ -101,6 +101,27 @@ pub(crate) fn unmerge_stations_impl(state: &AppState, station_ref: StationRef) -
     state.execute(Command::UnmergeStations { station_ref })
 }
 
+/// Unmerge a specific station pair
+#[tauri::command]
+pub fn unmerge_station_pair(
+    state: State<AppState>,
+    station_a: StationRef,
+    station_b: StationRef,
+) -> CommandResult {
+    unmerge_station_pair_impl(state.inner(), station_a, station_b)
+}
+
+pub(crate) fn unmerge_station_pair_impl(
+    state: &AppState,
+    station_a: StationRef,
+    station_b: StationRef,
+) -> CommandResult {
+    state.execute(Command::UnmergeStationPair {
+        station_a,
+        station_b,
+    })
+}
+
 /// Set zero datum for a station
 #[tauri::command]
 pub fn set_zero_datum(

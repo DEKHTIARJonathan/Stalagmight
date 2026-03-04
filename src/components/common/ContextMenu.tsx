@@ -22,7 +22,7 @@ export default function ContextMenu() {
     setMergeStationA: s.setMergeStationA,
     triggerZoomToSection: s.triggerZoomToSection,
   })));
-  const { project, setShotReference } = useProjectStore();
+  const { project, stations, setShotReference, unmergeStations, unmergeStationPair } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -64,6 +64,10 @@ export default function ContextMenu() {
         ?.shots.find((sh) => sh.id === target.shotId)
     : null;
 
+  const sameStationRef = (a: StationRef, b: StationRef): boolean => (
+    a.section_id === b.section_id && a.station_index === b.station_index
+  );
+
 
   const buildMenuItems = (): ContextMenuItem[] => {
     if (!target) return [];
@@ -71,6 +75,8 @@ export default function ContextMenu() {
     if (target.type === 'station') {
       const sectionId = target.ref.section_id;
       const stationSection = project?.sections.find((s) => s.id === sectionId);
+      const currentStation = stations.find((station) => sameStationRef(station.station_ref, target.ref));
+      const mergedStations = currentStation?.merged_with ?? [];
       const totalShots = stationSection?.shots.length ?? 0;
       const isFirstStation = target.ref.station_index === 0;
       const isLastStation = target.ref.station_index === totalShots;
@@ -106,6 +112,32 @@ export default function ContextMenu() {
           },
         },
       ];
+
+      if (mergedStations.length > 0) {
+        items.push({
+          label: 'Unmerge Stations',
+          action: () => {
+            if (mergedStations.length === 1) {
+              const mergeTarget = mergedStations[0]!;
+              const isDirectMerge = project?.station_merges.some((merge) => {
+                const direct = sameStationRef(merge.station_a, target.ref) && sameStationRef(merge.station_b, mergeTarget);
+                const reverse = sameStationRef(merge.station_a, mergeTarget) && sameStationRef(merge.station_b, target.ref);
+                return direct || reverse;
+              }) ?? false;
+              closeDialog();
+              void (isDirectMerge
+                ? unmergeStationPair(target.ref, mergeTarget)
+                : unmergeStations(target.ref));
+              return;
+            }
+
+            openDialog('unmerge-stations', {
+              stationRef: target.ref,
+              mergedStations,
+            });
+          },
+        });
+      }
 
       // "Add Shot Before" - only for station 0 (first station)
       // For empty sections, prependMode is set but azimuth reversal will be skipped

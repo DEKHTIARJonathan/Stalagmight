@@ -212,6 +212,27 @@ impl AppState {
                 }
             }
 
+            Command::UnmergeStationPair {
+                station_a,
+                station_b,
+            } => {
+                let closures_to_remove: Vec<LoopClosure> = project
+                    .loop_closures
+                    .iter()
+                    .filter(|lc| {
+                        (lc.station_a == *station_a && lc.station_b == *station_b)
+                            || (lc.station_a == *station_b && lc.station_b == *station_a)
+                    })
+                    .cloned()
+                    .collect();
+
+                UndoData::UnmergeInfo {
+                    station_a: *station_a,
+                    station_b: *station_b,
+                    removed_closures: closures_to_remove,
+                }
+            }
+
             // For create loop closure, capture snapshot when it mutates shot data
             Command::CreateLoopClosure { closure_strategy, .. } => {
                 if matches!(
@@ -1072,6 +1093,10 @@ impl AppState {
                 station_b,
             } => self.merge_stations(*station_a, *station_b),
             Command::UnmergeStations { station_ref } => self.unmerge_stations(*station_ref),
+            Command::UnmergeStationPair {
+                station_a,
+                station_b,
+            } => self.unmerge_station_pair(*station_a, *station_b),
             Command::CreateLoopClosure {
                 station_a,
                 station_b,

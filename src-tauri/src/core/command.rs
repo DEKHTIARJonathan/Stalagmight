@@ -95,6 +95,10 @@ pub enum Command {
     UnmergeStations {
         station_ref: StationRef,
     },
+    UnmergeStationPair {
+        station_a: StationRef,
+        station_b: StationRef,
+    },
     CreateLoopClosure {
         station_a: StationRef,
         station_b: StationRef,
@@ -312,6 +316,12 @@ impl Command {
             } => format!("Merge stations {station_a} and {station_b}"),
             Command::UnmergeStations { station_ref } => {
                 format!("Unmerge station {station_ref}")
+            }
+            Command::UnmergeStationPair {
+                station_a,
+                station_b,
+            } => {
+                format!("Unmerge station pair {station_a} and {station_b}")
             }
             Command::CreateLoopClosure {
                 station_a,
@@ -590,6 +600,13 @@ mod tests {
                     station_ref: station_a,
                 },
                 "Unmerge station 1:0",
+            ),
+            (
+                Command::UnmergeStationPair {
+                    station_a,
+                    station_b,
+                },
+                "Unmerge station pair 1:0 and 1:1",
             ),
             (
                 Command::SetZeroDatum {

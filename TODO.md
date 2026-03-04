@@ -19,9 +19,9 @@ Tracks v1.0 spec completion and user testing feedback.
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
 | User Testing: Bugs | 3 | 6 | 50% |
-| User Testing: UX | 3 | 5 | 60% |
-| User Testing: Features | 0 | 5 | 0% |
-| **Total** | **68** | **81** | **84%** |
+| User Testing: UX | 4 | 5 | 80% |
+| User Testing: Features | 1 | 5 | 20% |
+| **Total** | **70** | **81** | **86%** |
 
 ---
 
@@ -61,7 +61,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 ## 🚧 v1.0 Remaining Tasks
 
-### Import/Export (17/19 done)
+### Import/Export (19/19 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -87,7 +87,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 **Subtotals**: ✅ 19 done, ❌ 0 not started
 
-### UI & Polish (16/18 done)
+### UI & Polish (17/18 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -166,7 +166,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 **Subtotals**: ✅ 9 done
 
-### Integrations (0/1 done)
+### Integrations (0/3 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -199,11 +199,11 @@ Tracks v1.0 spec completion and user testing feedback.
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
 | User Testing: Bugs | 6 | 3 | 0 | 3 |
-| User Testing: UX | 5 | 3 | 0 | 2 |
+| User Testing: UX | 5 | 4 | 0 | 1 |
 | User Testing: Features | 5 | 1 | 0 | 4 |
-| **Total** | **81** | **69** | **0** | **12** |
+| **Total** | **81** | **70** | **0** | **11** |
 
-**Overall Progress**: 69/81 = ~85% complete
+**Overall Progress**: 70/81 = ~86% complete
 
 ---
 
@@ -222,12 +222,12 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Fix question mark tooltip | ✅ | Replaced with themed custom hover tooltip for closure-adjustment `?` help icon |
 | Fix duplicate save location on "Save now" | ✅ | Save-now now performs a single write to the selected path; default/autosave flow no longer duplicates files |
 
-### UX Improvements (3/5 done)
+### UX Improvements (4/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Make "Place on map" button more visible | ✅ | Promoted "Place on Map" to primary CTA in import placement and added clearer outlined secondary actions for import dialogs |
-| Add unmerge capability | ❌ | No way to undo merge beyond undo stack; add right-click → Unmerge *(~line 569)* |
+| Add unmerge capability | ✅ | Added targeted unmerge flows: single merge unmerges immediately, multiple merges open chooser dialog, and detail panel merged links now include per-pair unmerge action *(~line 569)* |
 | Make move tool larger and more discoverable | ❌ | User couldn't locate it even with verbal guidance *(~line 413, 1707)* |
 | Add middle-click panning | ✅ | Added middle-click drag pan everywhere Ctrl+drag pan is supported, preserving active tool after release *(~line 1865)* |
 | Rename "reference shot" to "jump line" | ✅ | Renamed key user-facing UI labels to "Jump/Reference" (Detail panel, Display menu, Data Table, Draw Shot, Context Menu); placement-setting and overlap labels kept unchanged by request *(~line 623)* |
