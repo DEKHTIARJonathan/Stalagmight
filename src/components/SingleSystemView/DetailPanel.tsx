@@ -5,7 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
-import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from '../common/icons';
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
@@ -307,11 +307,12 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 
 function StationDetail({ station }: { station: Station }) {
   const { t } = useTranslation();
-  const { project, stations } = useProjectStore();
+  const { project, stations, unmergeStations, unmergeStationPair } = useProjectStore();
   const { openDialog, setSelection, triggerCenterOnStation, announceSelection, setHoveredStation, setHoveredShot, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
   );
   const precision = useDecimalPrecision();
+  const [unmergeTargetKey, setUnmergeTargetKey] = useState<string | null>(null);
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
   );
@@ -373,6 +374,32 @@ function StationDetail({ station }: { station: Station }) {
 
   const handleCenterOnStation = () => {
     triggerCenterOnStation(station.station_ref);
+  };
+
+  const sameStationRef = (a: { section_id: number; station_index: number }, b: { section_id: number; station_index: number }): boolean => {
+    return a.section_id === b.section_id && a.station_index === b.station_index;
+  };
+
+  const isDirectMerge = (ref: { section_id: number; station_index: number }): boolean => {
+    return project?.station_merges.some((merge) => {
+      const direct = sameStationRef(merge.station_a, station.station_ref) && sameStationRef(merge.station_b, ref);
+      const reverse = sameStationRef(merge.station_a, ref) && sameStationRef(merge.station_b, station.station_ref);
+      return direct || reverse;
+    }) ?? false;
+  };
+
+  const handleUnmergeFromStation = async (ref: { section_id: number; station_index: number }) => {
+    const targetKey = `${ref.section_id}:${ref.station_index}`;
+    setUnmergeTargetKey(targetKey);
+    try {
+      if (isDirectMerge(ref)) {
+        await unmergeStationPair(station.station_ref, ref);
+      } else {
+        await unmergeStations(station.station_ref);
+      }
+    } finally {
+      setUnmergeTargetKey(null);
+    }
   };
 
   // Validate merged station targets exist
@@ -453,17 +480,32 @@ function StationDetail({ station }: { station: Station }) {
               <span className="text-sm text-text-secondary">{t('detailPanel.station.mergedWith')}:</span>
               <ul className="mt-1 space-y-1">
                 {station.merged_with.map((ref, i) => (
-                  <li key={i} className="text-sm">
-                    <DetailLink
-                      type="station"
-                      target={{ sectionId: ref.section_id, position: ref.station_index }}
-                      displayText={formatStationId(ref.section_id, ref.station_index)}
-                      onSelect={() => handleSelectMergedStation(ref)}
-                      isMissing={!mergedStationExists(ref)}
-                      onAnnounce={announceSelection}
-                      onHoverStart={() => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
-                      onHoverEnd={() => setHoveredStation(null)}
-                    />
+                  <li key={i} className="text-sm flex items-center justify-between gap-2">
+                    <div>
+                      <DetailLink
+                        type="station"
+                        target={{ sectionId: ref.section_id, position: ref.station_index }}
+                        displayText={formatStationId(ref.section_id, ref.station_index)}
+                        onSelect={() => handleSelectMergedStation(ref)}
+                        isMissing={!mergedStationExists(ref)}
+                        onAnnounce={announceSelection}
+                        onHoverStart={() => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
+                        onHoverEnd={() => setHoveredStation(null)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleUnmergeFromStation(ref);
+                      }}
+                      className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Unmerge Stations"
+                      aria-label={`Unmerge station ${formatStationId(ref.section_id, ref.station_index)}`}
+                      data-testid={`detail-unmerge-${ref.section_id}-${ref.station_index}`}
+                      disabled={unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
+                    >
+                      <LinkOffIcon size={14} />
+                    </button>
                   </li>
                 ))}
               </ul>

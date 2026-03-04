@@ -1089,6 +1089,7 @@ pub fn run() {
             // Station commands
             commands::station::merge_stations,
             commands::station::unmerge_stations,
+            commands::station::unmerge_station_pair,
             commands::station::set_zero_datum,
             commands::station::remove_zero_datum,
             commands::station::set_station_comment,

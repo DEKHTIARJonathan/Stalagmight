@@ -78,6 +78,66 @@ async function setupProjectWithShots(page: Page, shotCount: number): Promise<Men
   return ids as MenuTargets;
 }
 
+async function setupProjectWithMergedStation(
+  page: Page,
+  mergeCount: 1 | 2
+): Promise<{
+  targetRef: StationRef;
+  mergeRefA: StationRef;
+  mergeRefB: StationRef | null;
+}> {
+  await setupMockedPage(page);
+  await createProject(page, 'Context Menu Unmerge Coverage');
+
+  await seedProjectWithSections(page, [
+    { name: 'Merge A', direction: 'in', shots: [buildShot(0)] },
+    { name: 'Merge B', direction: 'in', shots: [buildShot(1)] },
+    { name: 'Merge C', direction: 'in', shots: [buildShot(2)] },
+  ]);
+
+  await waitForMapReady(page);
+  await waitForNoDialogs(page);
+
+  const refs = await page.evaluate(async (count) => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => {
+            project: { sections: Array<{ id: number }> } | null;
+            mergeStations: (a: StationRef, b: StationRef) => Promise<unknown>;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+
+    if (!e2e) return null;
+    const state = e2e.projectStore.getState();
+    const sectionIds = (state.project?.sections ?? []).map((section) => section.id);
+    if (sectionIds.length < 3) return null;
+
+    const targetRef = { section_id: sectionIds[0]!, station_index: 0 };
+    const mergeRefA = { section_id: sectionIds[1]!, station_index: 0 };
+    const mergeRefB = { section_id: sectionIds[2]!, station_index: 0 };
+
+    await state.mergeStations(targetRef, mergeRefA);
+    if (count > 1) {
+      await state.mergeStations(targetRef, mergeRefB);
+    }
+
+    return {
+      targetRef,
+      mergeRefA,
+      mergeRefB: count > 1 ? mergeRefB : null,
+    };
+  }, mergeCount);
+
+  if (!refs) {
+    throw new Error('Failed to prepare merged station test data');
+  }
+
+  return refs;
+}
+
 async function openContextMenu(page: Page, target: Record<string, unknown>) {
   await page.evaluate(
     ({ target }) => {
@@ -99,7 +159,7 @@ test.describe('Context Menu Coverage', () => {
     await openContextMenu(page, { type: 'shot', sectionId, shotId: firstShotId });
     await expect(page.getByRole('button', { name: 'Edit Shot' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Mark as Reference' }).click();
+    await page.getByRole('button', { name: 'Mark as Jump/Reference' }).click();
 
     await expect.poll(async () => {
       return page.evaluate(({ sectionId, shotId }) => {
@@ -197,5 +257,64 @@ test.describe('Context Menu Coverage', () => {
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test('station menu unmerges immediately when exactly one merge exists', async ({ page }) => {
+    const { targetRef } = await setupProjectWithMergedStation(page, 1);
+
+    await openContextMenu(page, { type: 'station', ref: targetRef });
+    await expect(page.getByRole('button', { name: 'Unmerge Stations' })).toBeVisible();
+    await page.getByRole('button', { name: 'Unmerge Stations' }).click();
+
+    await expect(page.getByTestId('unmerge-stations-dialog')).toBeHidden();
+
+    await expect.poll(async () => {
+      return page.evaluate(() => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        return state.project?.station_merges?.length ?? 0;
+      });
+    }).toBe(0);
+  });
+
+  test('station menu opens picker dialog when multiple merges exist', async ({ page }) => {
+    const { targetRef, mergeRefB } = await setupProjectWithMergedStation(page, 2);
+    if (!mergeRefB) {
+      throw new Error('Expected second merge target');
+    }
+
+    await openContextMenu(page, { type: 'station', ref: targetRef });
+    await expect(page.getByRole('button', { name: 'Unmerge Stations' })).toBeVisible();
+    await page.getByRole('button', { name: 'Unmerge Stations' }).click();
+
+    const unmergeDialog = page.getByTestId('unmerge-stations-dialog');
+    await expect(unmergeDialog).toBeVisible();
+
+    await page.getByTestId(`unmerge-station-option-${mergeRefB.section_id}-${mergeRefB.station_index}`).click();
+    await page.getByTestId('unmerge-stations-confirm').click();
+    await expect(unmergeDialog).not.toBeVisible({ timeout: 5000 });
+
+    await expect.poll(async () => {
+      return page.evaluate(({ target, removed }) => {
+        const state = (window as any).__E2E_TEST__.projectStore.getState();
+        const merges = state.project?.station_merges ?? [];
+        const hasRemovedPair = merges.some((merge: any) => {
+          const direct =
+            merge.station_a.section_id === target.section_id &&
+            merge.station_a.station_index === target.station_index &&
+            merge.station_b.section_id === removed.section_id &&
+            merge.station_b.station_index === removed.station_index;
+          const reverse =
+            merge.station_b.section_id === target.section_id &&
+            merge.station_b.station_index === target.station_index &&
+            merge.station_a.section_id === removed.section_id &&
+            merge.station_a.station_index === removed.station_index;
+          return direct || reverse;
+        });
+        return {
+          mergeCount: merges.length,
+          hasRemovedPair,
+        };
+      }, { target: targetRef, removed: mergeRefB });
+    }).toEqual({ mergeCount: 1, hasRemovedPair: false });
   });
 });
