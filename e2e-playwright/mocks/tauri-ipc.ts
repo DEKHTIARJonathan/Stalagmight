@@ -522,11 +522,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
+              closures_with: Array<{
+                closure_id: bigint;
+                station_ref: { section_id: number; station_index: number };
+                via_station: { section_id: number; station_index: number } | null;
+                is_transitive: boolean;
+              }>;
             }> = [];
 
             // Collect all section IDs for merged station setup
             const sectionIds = (currentProject.sections as Array<{ id: number }>).map(s => s.id);
             const currentMerges = (currentProject.station_merges ?? []) as Array<{
+              station_a: { section_id: number; station_index: number };
+              station_b: { section_id: number; station_index: number };
+            }>;
+            const currentClosures = (currentProject.loop_closures ?? []) as Array<{
+              id: bigint;
               station_a: { section_id: number; station_index: number };
               station_b: { section_id: number; station_index: number };
             }>;
@@ -585,6 +596,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 const loadDatum = loadDatums.find(
                   (d) => d.station_ref.section_id === section.id && d.station_ref.station_index === i
                 );
+                const closuresWith = currentClosures.flatMap((closure) => {
+                  const isA =
+                    closure.station_a.section_id === stationRef.section_id &&
+                    closure.station_a.station_index === stationRef.station_index;
+                  const isB =
+                    closure.station_b.section_id === stationRef.section_id &&
+                    closure.station_b.station_index === stationRef.station_index;
+                  if (isA) {
+                    return [{
+                      closure_id: closure.id,
+                      station_ref: closure.station_b,
+                      via_station: null,
+                      is_transitive: false,
+                    }];
+                  }
+                  if (isB) {
+                    return [{
+                      closure_id: closure.id,
+                      station_ref: closure.station_a,
+                      via_station: null,
+                      is_transitive: false,
+                    }];
+                  }
+                  return [];
+                });
 
                 mockStations.push({
                   station_ref: stationRef,
@@ -592,6 +628,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   is_zero_datum: !!loadDatum,
                   gps_coordinates: loadDatum ? loadDatum.gps : null,
                   merged_with: mergedWith,
+                  closures_with: closuresWith,
                 });
               }
             }
@@ -716,11 +753,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               is_zero_datum: boolean;
               gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
               merged_with: Array<{ section_id: number; station_index: number }>;
+              closures_with: Array<{
+                closure_id: bigint;
+                station_ref: { section_id: number; station_index: number };
+                via_station: { section_id: number; station_index: number } | null;
+                is_transitive: boolean;
+              }>;
             }> = [];
 
             // Collect all section IDs for merged station setup
             const sectionIdList = (currentProject?.sections as Array<{ id: number }> ?? []).map(s => s.id);
             const stateMerges = (currentProject?.station_merges ?? []) as Array<{
+              station_a: { section_id: number; station_index: number };
+              station_b: { section_id: number; station_index: number };
+            }>;
+            const stateClosures = (currentProject?.loop_closures ?? []) as Array<{
+              id: bigint;
               station_a: { section_id: number; station_index: number };
               station_b: { section_id: number; station_index: number };
             }>;
@@ -770,6 +818,31 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   const matchingDatum = zeroDatums.find(
                     (d) => d.station_ref.section_id === section.id && d.station_ref.station_index === i
                   );
+                  const closuresWith = stateClosures.flatMap((closure) => {
+                    const isA =
+                      closure.station_a.section_id === stationRef.section_id &&
+                      closure.station_a.station_index === stationRef.station_index;
+                    const isB =
+                      closure.station_b.section_id === stationRef.section_id &&
+                      closure.station_b.station_index === stationRef.station_index;
+                    if (isA) {
+                      return [{
+                        closure_id: closure.id,
+                        station_ref: closure.station_b,
+                        via_station: null,
+                        is_transitive: false,
+                      }];
+                    }
+                    if (isB) {
+                      return [{
+                        closure_id: closure.id,
+                        station_ref: closure.station_a,
+                        via_station: null,
+                        is_transitive: false,
+                      }];
+                    }
+                    return [];
+                  });
 
                   mockStations.push({
                     station_ref: stationRef,
@@ -777,6 +850,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     is_zero_datum: !!matchingDatum,
                     gps_coordinates: matchingDatum ? matchingDatum.gps : null,
                     merged_with: mergedWith,
+                    closures_with: closuresWith,
                   });
                 }
               }
@@ -1487,10 +1561,104 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { connected: false, preview: null, can_merge: true, reason: null };
           }
 
-          case 'create_loop_closure':
-            // Mock create loop closure - return success
+          case 'create_loop_closure': {
             console.log('[Mock IPC] create_loop_closure called with:', args);
+            const stationA = (args?.stationA ?? args?.station_a) as
+              | { section_id: number; station_index: number }
+              | undefined;
+            const stationB = (args?.stationB ?? args?.station_b) as
+              | { section_id: number; station_index: number }
+              | undefined;
+            const closureStrategy = (args?.closureStrategy ?? args?.closure_strategy) as string | undefined;
+            if (!stationA || !stationB) {
+              return { success: false, error: 'Missing closure stations' };
+            }
+
+            if (currentProject) {
+              const loopClosures = currentProject.loop_closures as Array<{
+                id: bigint;
+                station_a: { section_id: number; station_index: number };
+                station_b: { section_id: number; station_index: number };
+                path_length: number;
+                misclosure_distance: number;
+                error_percentage: number;
+                horizontal_misclosure: number;
+                vertical_misclosure: number;
+                strategy: string;
+                is_aligned: boolean;
+              }>;
+
+              const alreadyExists = loopClosures.some((closure) => {
+                const direct =
+                  closure.station_a.section_id === stationA.section_id &&
+                  closure.station_a.station_index === stationA.station_index &&
+                  closure.station_b.section_id === stationB.section_id &&
+                  closure.station_b.station_index === stationB.station_index;
+                const reverse =
+                  closure.station_a.section_id === stationB.section_id &&
+                  closure.station_a.station_index === stationB.station_index &&
+                  closure.station_b.section_id === stationA.section_id &&
+                  closure.station_b.station_index === stationA.station_index;
+                return direct || reverse;
+              });
+              if (alreadyExists) {
+                return { success: false, error: 'A loop closure already exists between these stations.' };
+              }
+
+              const maxExistingId = loopClosures.reduce(
+                (maxId, closure) => (closure.id > maxId ? closure.id : maxId),
+                0n
+              );
+              const nextId = maxExistingId + 1n;
+
+              loopClosures.push({
+                id: nextId,
+                station_a: stationA,
+                station_b: stationB,
+                path_length: 0,
+                misclosure_distance: 0,
+                error_percentage: 0,
+                horizontal_misclosure: 0,
+                vertical_misclosure: 0,
+                strategy: closureStrategy ?? 'batch',
+                is_aligned: false,
+              });
+            }
+
             return { success: true };
+          }
+
+          case 'remove_loop_closure': {
+            console.log('[Mock IPC] remove_loop_closure called with:', args);
+            const closureIdRaw = args?.closureId ?? args?.closure_id;
+            if (closureIdRaw === undefined || closureIdRaw === null) {
+              return { success: false, error: 'Missing closure ID' };
+            }
+            const closureId =
+              typeof closureIdRaw === 'bigint'
+                ? closureIdRaw
+                : typeof closureIdRaw === 'number'
+                  ? BigInt(closureIdRaw)
+                  : typeof closureIdRaw === 'string'
+                    ? BigInt(closureIdRaw)
+                    : null;
+            if (closureId === null) {
+              return { success: false, error: 'Invalid closure ID' };
+            }
+
+            if (!currentProject) {
+              return { success: false, error: 'No project open' };
+            }
+
+            const loopClosures = currentProject.loop_closures as Array<{ id: bigint }>;
+            const closureIndex = loopClosures.findIndex((closure) => closure.id === closureId);
+            if (closureIndex < 0) {
+              return { success: false, error: 'Loop closure not found' };
+            }
+
+            loopClosures.splice(closureIndex, 1);
+            return { success: true };
+          }
 
           case 'adjust_loop_closures':
             // Mock adjust loop closures - return success

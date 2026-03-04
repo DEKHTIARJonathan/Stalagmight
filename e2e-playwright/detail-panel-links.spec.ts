@@ -285,6 +285,57 @@ async function createDirectMerge(
   }, { a: stationA, b: stationB });
 }
 
+async function createDirectClosure(
+  page: Page,
+  stationA: { section_id: number; station_index: number },
+  stationB: { section_id: number; station_index: number }
+): Promise<string> {
+  const closureId = await page.evaluate(async ({ a, b }) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => {
+            createLoopClosure: (left: typeof a, right: typeof b, strategy: string) => Promise<unknown>;
+            project: {
+              loop_closures: Array<{
+                id: bigint;
+                station_a: { section_id: number; station_index: number };
+                station_b: { section_id: number; station_index: number };
+              }>;
+            } | null;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+    if (!stores) return null;
+
+    const state = stores.projectStore.getState();
+    await state.createLoopClosure(a, b, 'batch');
+
+    const closures = stores.projectStore.getState().project?.loop_closures ?? [];
+    const closure = closures.find((entry) => {
+      const direct =
+        entry.station_a.section_id === a.section_id &&
+        entry.station_a.station_index === a.station_index &&
+        entry.station_b.section_id === b.section_id &&
+        entry.station_b.station_index === b.station_index;
+      const reverse =
+        entry.station_a.section_id === b.section_id &&
+        entry.station_a.station_index === b.station_index &&
+        entry.station_b.section_id === a.section_id &&
+        entry.station_b.station_index === a.station_index;
+      return direct || reverse;
+    });
+
+    return closure ? closure.id.toString() : null;
+  }, { a: stationA, b: stationB });
+
+  if (!closureId) {
+    throw new Error('Failed to create closure');
+  }
+  return closureId;
+}
+
 test.describe('Detail Panel Links', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -621,6 +672,36 @@ test.describe('Detail Panel Links', () => {
             return direct || reverse;
           });
         }, { a: { section_id: mainSectionId, station_index: 3 }, b: { section_id: sideSectionId, station_index: 0 } });
+      }).toBe(false);
+    });
+
+    test('clicking broken-chain icon removes the listed closure', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const sectionIds = await getSectionIds(page);
+      const mainSectionId = sectionIds[0]!;
+      const sideSectionId = sectionIds[1]!;
+
+      const closureId = await createDirectClosure(
+        page,
+        { section_id: mainSectionId, station_index: 3 },
+        { section_id: sideSectionId, station_index: 0 }
+      );
+
+      await selectStation(page, mainSectionId, 3);
+      const stationDetail = page.getByTestId('station-detail');
+      await expect(stationDetail).toBeVisible();
+
+      const removeClosureButton = page.getByTestId(`detail-remove-closure-${closureId}`);
+      await expect(removeClosureButton).toBeVisible();
+      await removeClosureButton.click();
+
+      await expect.poll(async () => {
+        return page.evaluate((removedClosureId) => {
+          const state = (window as any).__E2E_TEST__.projectStore.getState();
+          const closures = state.project?.loop_closures ?? [];
+          return closures.some((closure: any) => closure.id.toString() === removedClosureId);
+        }, closureId);
       }).toBe(false);
     });
   });

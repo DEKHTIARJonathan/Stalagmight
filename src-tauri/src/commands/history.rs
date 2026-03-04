@@ -150,6 +150,7 @@ fn get_command_type(command: &Command) -> String {
         Command::UnmergeStations { .. } => "unmerge_stations".to_string(),
         Command::UnmergeStationPair { .. } => "unmerge_station_pair".to_string(),
         Command::CreateLoopClosure { .. } => "create_loop_closure".to_string(),
+        Command::RemoveLoopClosure { .. } => "remove_loop_closure".to_string(),
         Command::AdjustLoopClosures { .. } => "adjust_loop_closures".to_string(),
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
@@ -202,6 +203,9 @@ fn derive_command_details(
         }
         Command::CreateLoopClosure { station_a, station_b, closure_strategy } => {
             Some(format!("{} \u{2194} {}, {}", station_a, station_b, closure_strategy.as_str()))
+        }
+        Command::RemoveLoopClosure { closure_id } => {
+            Some(format!("Closure #{closure_id}"))
         }
         Command::AdjustLoopClosures { method, .. } => {
             Some(format!("Method: {}", method.as_str()))
@@ -671,6 +675,29 @@ fn derive_preview_data(
                         field: "Strategy".to_string(),
                         old_value: String::new(),
                         new_value: closure_strategy.as_str().to_string(),
+                    },
+                ],
+                additional_changes: 0,
+            })
+        }
+
+        // RemoveLoopClosure - show closure id and station pair when available
+        (Command::RemoveLoopClosure { closure_id }, UndoData::ClosureInfo { closure }) => {
+            Some(PreviewData {
+                changes: vec![
+                    FieldChange {
+                        field: "Closure ID".to_string(),
+                        old_value: String::new(),
+                        new_value: closure_id.to_string(),
+                    },
+                    FieldChange {
+                        field: "Stations".to_string(),
+                        old_value: String::new(),
+                        new_value: format!(
+                            "{} \u{2194} {}",
+                            format_station_with_name(&closure.station_a, section_names),
+                            format_station_with_name(&closure.station_b, section_names),
+                        ),
                     },
                 ],
                 additional_changes: 0,
