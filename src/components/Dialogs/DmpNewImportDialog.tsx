@@ -3005,18 +3005,6 @@ export default function DmpNewImportDialog({
     if (!currentSegment || !segmentAnchor) return;
     setAutoStartManualPlacementPending(false);
 
-    // Serialize current state for restore after placement
-    const baseSavedState: Omit<SavedManualPlacingState, 'segmentQueue' | 'segmentAnchor' | 'directPlacements'> = {
-      connections: connectionsRef.current,
-      skippedIndices: Array.from(skippedIndicesRef.current),
-      skippedSuggestions: Array.from(skippedSuggestionsRef.current.entries()),
-      segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
-      sectionEdits: Array.from(sectionEditsRef.current.entries()),
-      confirmedOverlaps: Array.from(confirmedOverlapsRef.current.entries()),
-      earlyImported: Array.from(earlyImportedRef.current.entries()),
-      discardedIndices: Array.from(discardedIndicesRef.current),
-    };
-
     // Reopen data (same as what App.tsx passes)
     const reopenData = {
       dmpFile,
@@ -3024,6 +3012,24 @@ export default function DmpNewImportDialog({
       selectionConfig,
       zeroDatumConfig,
     };
+
+    const buildSavedState = (
+      queue: number[][],
+      anchor: { sectionIndex: number; stationIndex: number },
+      directPlacements: DirectPlacement[],
+    ): SavedManualPlacingState => ({
+      connections: [...connectionsRef.current],
+      skippedIndices: Array.from(skippedIndicesRef.current),
+      segmentQueue: queue,
+      segmentAnchor: anchor,
+      directPlacements,
+      skippedSuggestions: Array.from(skippedSuggestionsRef.current.entries()),
+      segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
+      sectionEdits: Array.from(sectionEditsRef.current.entries()),
+      confirmedOverlaps: Array.from(confirmedOverlapsRef.current.entries()),
+      earlyImported: Array.from(earlyImportedRef.current.entries()),
+      discardedIndices: Array.from(discardedIndicesRef.current),
+    });
 
     const openPlacementDialog = (
       queue: number[][],
@@ -3033,12 +3039,7 @@ export default function DmpNewImportDialog({
       openDialog('dmp-import-new', {
         ...reopenData,
         autoStartManualPlacement: false,
-        savedManualPlacingState: {
-          ...baseSavedState,
-          segmentQueue: queue,
-          segmentAnchor: anchor,
-          directPlacements,
-        },
+        savedManualPlacingState: buildSavedState(queue, anchor, directPlacements),
       });
     };
 
