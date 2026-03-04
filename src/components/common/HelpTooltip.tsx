@@ -1,8 +1,10 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 interface HelpTooltipProps {
   text: string;
+  icon?: ReactNode;
+  ariaLabel?: string;
   className?: string;
   iconClassName?: string;
   tooltipClassName?: string;
@@ -16,6 +18,8 @@ interface HelpTooltipProps {
  */
 export function HelpTooltip({
   text,
+  icon = '?',
+  ariaLabel,
   className = '',
   iconClassName = '',
   tooltipClassName = '',
@@ -84,7 +88,7 @@ export function HelpTooltip({
       ? createPortal(
           <span
             ref={tooltipRef}
-            className={`pointer-events-none fixed z-[10000] max-w-72 rounded border border-border bg-panel-90 px-3 py-2 text-sm leading-snug text-text-primary shadow-lg ${tooltipClassName}`}
+            className={`pointer-events-none fixed z-[10000] max-w-72 rounded border border-border bg-panel-90 px-3 py-2 text-sm leading-snug text-text-primary shadow-lg whitespace-pre-line ${tooltipClassName}`}
             style={{
               left: `${position.left}px`,
               top: `${position.top}px`,
@@ -104,13 +108,13 @@ export function HelpTooltip({
       <span
         ref={triggerRef}
         className={`inline-flex items-center justify-center w-4 h-4 rounded-full border border-border text-[10px] font-bold text-text-secondary cursor-help ${iconClassName}`}
-        aria-label={text}
+        aria-label={ariaLabel ?? text}
         role="img"
         data-testid={iconTestId}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        ?
+        {icon}
       </span>
       {tooltip}
     </span>
