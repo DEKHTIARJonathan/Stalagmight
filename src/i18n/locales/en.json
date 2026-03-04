@@ -1658,6 +1658,64 @@
       "zoom": "Zoom"
     }
   },
+  "onboarding": {
+    "progress": "Step {{current}} of {{total}}",
+    "actions": {
+      "skip": "Skip tour"
+    },
+    "flows": {
+      "globalEmpty": {
+        "title": "Getting Started",
+        "steps": {
+          "welcome": {
+            "title": "Welcome to Stalagmight",
+            "description": "This quick tour highlights the core actions. The app is temporarily paused while this guide is active."
+          },
+          "import": {
+            "title": "Import Existing Survey Data",
+            "description": "Use Import DMP to bring in data from an existing survey export and continue working in Stalagmight."
+          },
+          "newProject": {
+            "title": "Create a New Project",
+            "description": "Use New Project to start from scratch. You can add sections, stations, and shots as you map the cave."
+          },
+          "openProject": {
+            "title": "Open an Existing Project",
+            "description": "Use Open Project to continue where you left off in any .stalx file on disk."
+          },
+          "settings": {
+            "title": "Tune Your Workspace",
+            "description": "Open Settings to configure units, shortcuts, display defaults, and performance options."
+          },
+          "debugLogs": {
+            "title": "Debug Logs",
+            "description": "Use the bug icon to open Debug Logs. Include relevant logs when reporting issues or bugs."
+          }
+        }
+      },
+      "singleView": {
+        "title": "Survey Workspace",
+        "steps": {
+          "toolbar": {
+            "title": "Top Toolbar",
+            "description": "The toolbar gives quick access to save/import/export plus undo and redo actions."
+          },
+          "drawTool": {
+            "title": "Draw Tool",
+            "description": "Use Draw to create new shots between stations directly on the map."
+          },
+          "map": {
+            "title": "Main Map",
+            "description": "This is your primary editing area for selecting, inspecting, and adjusting cave geometry."
+          },
+          "detailPanel": {
+            "title": "Detail Panel",
+            "description": "The detail panel shows editable metadata for the selected section, shot, or station."
+          }
+        }
+      }
+    }
+  },
   "commentOverlay": {
     "placeholder": "Add a comment...",
     "commit": "Save comment",
