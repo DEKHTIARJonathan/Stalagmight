@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage, createProject } from './helpers/app';
+import { setupMockedPage, createProject, createSectionViaStore } from './helpers/app';
 
 test.describe('Export Dialog', () => {
   test.beforeEach(async ({ page }) => {
@@ -158,6 +158,148 @@ test.describe('Export Dialog', () => {
     await exportButton.click();
 
     // After successful export, dialog should close
+    await expect(exportDialog).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test('should warn for TML export when sections are not anchored and allow cancel', async ({ page }) => {
+    await createProject(page, 'TML Warning Cancel Project');
+
+    await createSectionViaStore(page, {
+      name: 'Anchored Section',
+      shots: [{
+        azimuth_in: 45,
+        azimuth_out: 45,
+        length: 10,
+        depth_in: 0,
+        depth_out: 0,
+      }],
+    });
+    await createSectionViaStore(page, {
+      name: 'Floating Section',
+      shots: [{
+        azimuth_in: 120,
+        azimuth_out: 120,
+        length: 8,
+        depth_in: 1,
+        depth_out: 1,
+      }],
+    });
+
+    await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              setZeroDatum: (
+                stationRef: { section_id: number; station_index: number },
+                coordinates: { latitude: number; longitude: number; depth_reference: number }
+              ) => Promise<unknown>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      if (!e2e) throw new Error('E2E stores not available on window');
+      await e2e.projectStore.getState().setZeroDatum(
+        { section_id: 1, station_index: 0 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
+      );
+    });
+
+    await page.evaluate(() => {
+      const win = window as unknown as Record<string, unknown>;
+      win.__E2E_SAVE_CALLS__ = 0;
+      const dialogMock = win.__TAURI_DIALOG_MOCK__ as { save?: () => Promise<string | null> } | undefined;
+      if (dialogMock) {
+        dialogMock.save = async () => {
+          const previous = (win.__E2E_SAVE_CALLS__ as number) ?? 0;
+          win.__E2E_SAVE_CALLS__ = previous + 1;
+          return '/mock/export-warning.tml';
+        };
+      }
+    });
+
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    const formatSelect = page.locator('[data-testid="data-format-select"]');
+    await formatSelect.locator('button').first().click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("TML (Ariane)")').click();
+    await expect(formatSelect.locator('button').first()).toHaveText('TML (Ariane)');
+
+    await page.getByTestId('export-button').click();
+
+    const warningDialog = page.getByTestId('tml-unanchored-warning-dialog');
+    await expect(warningDialog).toBeVisible();
+    await expect(warningDialog).toContainText('Ariane TML/TMLU exports only include sections connected to a zero datum.');
+    await expect(warningDialog).toContainText('Floating Section (#2)');
+    await expect(warningDialog).not.toContainText('Anchored Section');
+    await expect(page.getByTestId('tml-unanchored-warning-continue')).toHaveAttribute('data-primary-action', '');
+
+    await page.getByTestId('tml-unanchored-warning-cancel').click();
+    await expect(warningDialog).not.toBeVisible({ timeout: 3000 });
+    await expect(exportDialog).toBeVisible();
+
+    const saveCalls = await page.evaluate(() => ((window as unknown as Record<string, unknown>).__E2E_SAVE_CALLS__ as number) ?? 0);
+    expect(saveCalls).toBe(0);
+  });
+
+  test('should continue TML export after unanchored warning confirmation', async ({ page }) => {
+    await createProject(page, 'TML Warning Continue Project');
+
+    await createSectionViaStore(page, {
+      name: 'Anchored Section',
+      shots: [{
+        azimuth_in: 30,
+        azimuth_out: 30,
+        length: 12,
+        depth_in: 0,
+        depth_out: 0,
+      }],
+    });
+    await createSectionViaStore(page, {
+      name: 'Unanchored Section',
+      shots: [{
+        azimuth_in: 210,
+        azimuth_out: 210,
+        length: 5,
+        depth_in: 2,
+        depth_out: 2,
+      }],
+    });
+
+    await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              setZeroDatum: (
+                stationRef: { section_id: number; station_index: number },
+                coordinates: { latitude: number; longitude: number; depth_reference: number }
+              ) => Promise<unknown>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      if (!e2e) throw new Error('E2E stores not available on window');
+      await e2e.projectStore.getState().setZeroDatum(
+        { section_id: 1, station_index: 0 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
+      );
+    });
+
+    await page.keyboard.press('Control+e');
+    const exportDialog = page.locator('[data-testid="export-dialog"]');
+    await expect(exportDialog).toBeVisible({ timeout: 5000 });
+
+    const formatSelect = page.locator('[data-testid="data-format-select"]');
+    await formatSelect.locator('button').first().click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("TML (Ariane)")').click();
+
+    await page.getByTestId('export-button').click();
+    await expect(page.getByTestId('tml-unanchored-warning-dialog')).toBeVisible();
+
+    await page.getByTestId('tml-unanchored-warning-continue').click();
     await expect(exportDialog).not.toBeVisible({ timeout: 5000 });
   });
 
