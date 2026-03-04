@@ -7,11 +7,13 @@ import { useUIStore } from './store/uiStore';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { useBeforeUnload, useLoadingProgress, useTheme } from './hooks';
+import { useOnboarding } from './hooks/useOnboarding';
 import i18n from './i18n';
 import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
+import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
 import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
 import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
@@ -22,7 +24,7 @@ import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement
 import { editableShotToShotData, calculateStationPositions } from './utils/shotConversion';
 
 function App() {
-  const { project, stations, loadConfig, config, isDirty, importDmp, parseTml, parseGpx, importSections } = useProjectStore();
+  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseGpx, importSections } = useProjectStore();
   const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
@@ -387,6 +389,17 @@ function App() {
     };
   }, [handleImportFileDrop]);
 
+  const onboarding = useOnboarding({
+    view,
+    hasProject: project !== null,
+    hasRecentProjects: recentProjects.length > 0,
+    configRecentProjectsCount: config?.general?.recent_projects.length ?? null,
+    activeDialog,
+    loadingProject: loading.isLoading,
+    splashVisible: splashMounted,
+    configLoaded: config !== null,
+  });
+
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative">
       {/* Splash screen overlay */}
@@ -617,6 +630,18 @@ function App() {
         />
       )}
       {activeDialog === 'keyboard-shortcuts' && <KeyboardShortcutsDialog />}
+
+      {onboarding.activeStep && (
+        <OnboardingOverlay
+          step={onboarding.activeStep}
+          stepIndex={onboarding.stepIndex}
+          stepCount={onboarding.stepCount}
+          canGoBack={onboarding.canGoBack}
+          onBack={onboarding.back}
+          onNext={onboarding.next}
+          onSkip={onboarding.skip}
+        />
+      )}
 
       {/* Toast notification (via Portal for z-index reliability) */}
       {toast && createPortal(
