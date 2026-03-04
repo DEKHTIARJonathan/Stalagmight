@@ -62,6 +62,8 @@ interface DmpNewImportDialogProps {
   onComplete: (newSectionIds?: number[]) => void;
   /** Saved state to restore after returning from manual map placement. */
   savedManualPlacingState?: SavedManualPlacingState | undefined;
+  /** If true, immediately start map placement when the dialog opens in manual placing phase. */
+  autoStartManualPlacement?: boolean;
 }
 
 // SectionEditState and ConfirmedOverlapInfo imported from batchImportHelpers
@@ -1035,6 +1037,7 @@ export default function DmpNewImportDialog({
   onHandoffToLegacy,
   onComplete,
   savedManualPlacingState,
+  autoStartManualPlacement = false,
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
   const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
@@ -1060,6 +1063,9 @@ export default function DmpNewImportDialog({
   const [isImporting, setIsImporting] = useState(false);
   const [phase, setPhase] = useState<'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done'>(
     saved ? 'manual_placing' : 'init'
+  );
+  const [autoStartManualPlacementPending, setAutoStartManualPlacementPending] = useState(
+    autoStartManualPlacement
   );
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showBackConfirm, setShowBackConfirm] = useState(false);
@@ -1911,8 +1917,6 @@ export default function DmpNewImportDialog({
 
       // 4. Import reachable sections immediately
       if (configs.length > 0) {
-        const oldSectionCount = useProjectStore.getState().project?.sections.length ?? 0;
-
         const result = await invokeIpc<CommandResult>('import_sections', {
           sections: configs,
           fileHash: selectionConfig.fileHash ?? null,
@@ -1931,10 +1935,10 @@ export default function DmpNewImportDialog({
 
         await refreshProjectState();
 
-        // Build DMP index → section_id mapping for late import
-        const projectSections = useProjectStore.getState().project?.sections ?? [];
+        // Build DMP index -> section_id mapping for late import.
+        // Use backend response ordering directly; it matches submitted configs.
         for (let i = 0; i < emittedDmpIndices.length; i++) {
-          const sectionId = projectSections[oldSectionCount + i]?.id;
+          const sectionId = result.section_ids[i];
           if (sectionId != null) {
             earlyImportedRef.current.set(emittedDmpIndices[i]!, sectionId);
           }
@@ -1958,10 +1962,8 @@ export default function DmpNewImportDialog({
         // Initialize anchor to first section's station 0
         const firstSegment = segments[0]!;
         commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
-
-        // Check if the first section has a skipped suggestion
-        const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
-        setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
+        setSegmentPlacementMode('manual');
+        setAutoStartManualPlacementPending(true);
 
         setPhase('manual_placing');
         return;
@@ -2141,8 +2143,6 @@ export default function DmpNewImportDialog({
         }
 
         if (segmentConfigs.length > 0) {
-          const oldSectionCount = useProjectStore.getState().project?.sections.length ?? 0;
-
           const result = await invokeIpc<CommandResult>('import_sections', {
             sections: segmentConfigs,
             fileHash: selectionConfig.fileHash ?? null,
@@ -2157,9 +2157,8 @@ export default function DmpNewImportDialog({
 
             await refreshProjectState();
 
-            const projectSections = useProjectStore.getState().project?.sections ?? [];
             for (let i = 0; i < segmentDmpIndices.length; i++) {
-              const sectionId = projectSections[oldSectionCount + i]?.id;
+              const sectionId = result.section_ids[i];
               if (sectionId != null) {
                 earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
               }
@@ -2538,16 +2537,17 @@ export default function DmpNewImportDialog({
   const startPlacementMode = useUIStore((s) => s.startPlacementMode);
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
+  const showToast = useUIStore((s) => s.showToast);
   const setDmpImportWizardPhase = useUIStore((s) => s.setDmpImportWizardPhase);
   const onboardingWizardPhase = useMemo(() => {
     if (phase === 'suggesting' && !isCalculating && currentSuggestion) {
       return 'suggesting' as const;
     }
-    if (phase === 'manual_placing' && currentSegment) {
+    if (phase === 'manual_placing' && currentSegment && !autoStartManualPlacementPending) {
       return 'manual_placing' as const;
     }
     return null;
-  }, [phase, isCalculating, currentSuggestion, currentSegment]);
+  }, [phase, isCalculating, currentSuggestion, currentSegment, autoStartManualPlacementPending]);
 
   useEffect(() => {
     setDmpImportWizardPhase(onboardingWizardPhase);
@@ -2830,77 +2830,185 @@ export default function DmpNewImportDialog({
     }
   }, [currentSegment, commitSegmentAnchor]);
 
+  const buildSegmentPlacementPayload = useCallback(
+    (segment: number[], anchor: { sectionIndex: number; stationIndex: number }) => {
+      const anchorDmpSection = dmpFile.sections[anchor.sectionIndex];
+      if (!anchorDmpSection) {
+        return null;
+      }
+
+      const edits = sectionEditsRef.current.get(anchor.sectionIndex);
+      const shots: ShotData[] = edits
+        ? edits.shots.filter((s) => !s.isDeleted).map(editableShotToShotData)
+        : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
+
+      const sectionData = {
+        name: edits?.name ?? anchorDmpSection.name,
+        surveyor: edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null,
+        date: edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null,
+        color:
+          (edits?.color || null) ??
+          SECTION_COLORS[selectedIndices.indexOf(anchor.sectionIndex) % SECTION_COLORS.length] ??
+          '#4ecdc4',
+        direction: edits?.direction ?? anchorDmpSection.direction,
+        quality: edits?.quality ?? 1.0,
+        shots,
+      };
+
+      // Build additional sections for segment shadow using effective (post-treatment)
+      // sections so the overlay reflects deleted shots and interpolated values.
+      const effectiveSections = dmpFile.sections.map((sec, idx) =>
+        buildEffectiveDmpSection(sec, sectionEditsRef.current.get(idx)),
+      );
+      const effectiveConns = adjustConnectionsForEdits(connectionsRef.current, sectionEditsRef.current);
+      const layout = computeSegmentLayout(segment, effectiveConns, effectiveSections);
+      // Offsets from computeSegmentLayout are relative to station 0 of the root
+      // section (segmentIndices[0]). Re-base them relative to the anchor section's
+      // station 0 so PlacementOverlay positions them correctly.
+      const anchorLayoutEntry = layout.find((entry) => entry.sectionIndex === anchor.sectionIndex);
+      const anchorLayoutOffsetX = anchorLayoutEntry?.offsetX ?? 0;
+      const anchorLayoutOffsetY = anchorLayoutEntry?.offsetY ?? 0;
+      const additionalSections = layout
+        .filter((entry) => entry.sectionIndex !== anchor.sectionIndex)
+        .map((entry) => {
+          const sec = effectiveSections[entry.sectionIndex];
+          if (!sec) return null;
+          const secEdits = sectionEditsRef.current.get(entry.sectionIndex);
+          const secSelectedPos = selectedIndices.indexOf(entry.sectionIndex);
+          const secColor =
+            (secEdits?.color || null) ??
+            SECTION_COLORS[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % SECTION_COLORS.length] ??
+            '#95a5a6';
+          const secShots = secEdits
+            ? secEdits.shots.filter((s) => !s.isDeleted).map(editableShotToShotData)
+            : convertToEditableShots(sec.shots).map(editableShotToShotData);
+          return {
+            sectionData: {
+              name: secEdits?.name ?? sec.name,
+              surveyor: null,
+              date: null,
+              color: secColor,
+              direction: secEdits?.direction ?? sec.direction,
+              quality: secEdits?.quality ?? 1.0,
+              shots: secShots,
+            },
+            color: secColor,
+            offsetX: entry.offsetX - anchorLayoutOffsetX,
+            offsetY: entry.offsetY - anchorLayoutOffsetY,
+          };
+        })
+        .filter((value): value is NonNullable<typeof value> => value !== null);
+
+      return { sectionData, additionalSections };
+    },
+    [dmpFile.sections, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices],
+  );
+
+  const importPlacedSegmentNow = useCallback(
+    async (segmentIndices: number[], directPlacements: DirectPlacement[]) => {
+      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+      const { configs, emittedDmpIndices } = buildBatchImport(
+        connectionsRef.current,
+        zeroDatumIdx,
+        dmpFile,
+        selectionConfig,
+        sectionEditsRef.current,
+        fullPoolRef.current,
+        directPlacements,
+        earlyImportedRef.current,
+      );
+
+      const pendingSet = new Set(segmentIndices);
+      const segmentConfigs: BackendImportSectionConfig[] = [];
+      const segmentDmpIndices: number[] = [];
+      // Map original config position -> new position in segmentConfigs
+      const posRemap = new Map<number, number>();
+      for (let i = 0; i < configs.length; i++) {
+        const dmpIdx = emittedDmpIndices[i];
+        if (dmpIdx != null && pendingSet.has(dmpIdx)) {
+          posRemap.set(i, segmentConfigs.length);
+          segmentConfigs.push({ ...configs[i]!, section_index: segmentConfigs.length });
+          segmentDmpIndices.push(dmpIdx);
+        }
+      }
+
+      for (const cfg of segmentConfigs) {
+        if (cfg.placement.type === 'from_importing') {
+          const placement = cfg.placement as {
+            type: 'from_importing';
+            import_station: number;
+            target_section_index: number;
+            target_station_index: number;
+          };
+          const oldTarget = placement.target_section_index;
+          const newTarget = posRemap.get(oldTarget);
+          if (newTarget != null) {
+            placement.target_section_index = newTarget;
+            continue;
+          }
+          const targetDmpIdx = emittedDmpIndices[oldTarget];
+          const existingTargetId = targetDmpIdx != null
+            ? earlyImportedRef.current.get(targetDmpIdx)
+            : undefined;
+          if (existingTargetId != null) {
+            cfg.placement = {
+              type: 'from_existing',
+              import_station: placement.import_station,
+              existing_station: {
+                section_id: existingTargetId,
+                station_index: placement.target_station_index,
+              },
+            };
+            continue;
+          }
+          setError('Segment import failed: unresolved relative placement target');
+          return false;
+        }
+      }
+
+      if (segmentConfigs.length === 0) {
+        return true;
+      }
+
+      const result = await invokeIpc<CommandResult>('import_sections', {
+        sections: segmentConfigs,
+        fileHash: selectionConfig.fileHash ?? null,
+        sectionHashes: selectionConfig.sectionHashes ?? null,
+        existingShotUpdates: null,
+      }, { purpose: 'import placed segment sections' });
+
+      if (!result.success) {
+        setError(result.error ?? 'Segment import failed');
+        return false;
+      }
+
+      if (result.section_ids.length > 0) {
+        importedSectionIdsRef.current.push(...result.section_ids);
+      }
+
+      await refreshProjectState();
+
+      for (let i = 0; i < segmentDmpIndices.length; i++) {
+        const sectionId = result.section_ids[i];
+        if (sectionId != null) {
+          earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
+        }
+      }
+
+      return true;
+    },
+    [buildBatchImport, dmpFile, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex],
+  );
+
   // Manual map placement for a segment
   const handleStartSegmentPlacement = useCallback(() => {
     if (!currentSegment || !segmentAnchor) return;
-
-    // Build SectionData for anchor section
-    const anchorDmpSection = dmpFile.sections[segmentAnchor.sectionIndex];
-    if (!anchorDmpSection) return;
-
-    const edits = sectionEditsRef.current.get(segmentAnchor.sectionIndex);
-    const shots: ShotData[] = edits
-      ? edits.shots.filter(s => !s.isDeleted).map(editableShotToShotData)
-      : convertToEditableShots(anchorDmpSection.shots).map(editableShotToShotData);
-
-    const sectionData = {
-      name: edits?.name ?? anchorDmpSection.name,
-      surveyor: edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null,
-      date: edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null,
-      color: (edits?.color || null) ?? SECTION_COLORS[(selectedIndices.indexOf(segmentAnchor.sectionIndex)) % SECTION_COLORS.length] ?? '#4ecdc4',
-      direction: edits?.direction ?? anchorDmpSection.direction,
-      quality: edits?.quality ?? 1.0,
-      shots,
-    };
-
-    // Build additional sections for segment shadow using effective (post-treatment)
-    // sections so the overlay reflects deleted shots and interpolated values.
-    const effectiveSections = dmpFile.sections.map((sec, idx) =>
-      buildEffectiveDmpSection(sec, sectionEditsRef.current.get(idx)),
-    );
-    const effectiveConns = adjustConnectionsForEdits(connections, sectionEditsRef.current);
-    const layout = computeSegmentLayout(currentSegment, effectiveConns, effectiveSections);
-    // Offsets from computeSegmentLayout are relative to station 0 of the root
-    // section (segmentIndices[0]). Re-base them relative to the anchor section's
-    // station 0 so PlacementOverlay positions them correctly.
-    const anchorLayoutEntry = layout.find(e => e.sectionIndex === segmentAnchor.sectionIndex);
-    const anchorLayoutOffsetX = anchorLayoutEntry?.offsetX ?? 0;
-    const anchorLayoutOffsetY = anchorLayoutEntry?.offsetY ?? 0;
-    const additionalSections = layout
-      .filter(entry => entry.sectionIndex !== segmentAnchor.sectionIndex)
-      .map(entry => {
-        const sec = effectiveSections[entry.sectionIndex];
-        if (!sec) return null;
-        const secEdits = sectionEditsRef.current.get(entry.sectionIndex);
-        const secSelectedPos = selectedIndices.indexOf(entry.sectionIndex);
-        const secColor = (secEdits?.color || null) ?? SECTION_COLORS[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % SECTION_COLORS.length] ?? '#95a5a6';
-        const secShots = secEdits
-          ? secEdits.shots.filter(s => !s.isDeleted).map(editableShotToShotData)
-          : convertToEditableShots(sec.shots).map(editableShotToShotData);
-        return {
-          sectionData: {
-            name: secEdits?.name ?? sec.name,
-            surveyor: null,
-            date: null,
-            color: secColor,
-            direction: secEdits?.direction ?? sec.direction,
-            quality: secEdits?.quality ?? 1.0,
-            shots: secShots,
-          },
-          color: secColor,
-          offsetX: entry.offsetX - anchorLayoutOffsetX,
-          offsetY: entry.offsetY - anchorLayoutOffsetY,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null);
+    setAutoStartManualPlacementPending(false);
 
     // Serialize current state for restore after placement
-    const savedState: SavedManualPlacingState = {
+    const baseSavedState: Omit<SavedManualPlacingState, 'segmentQueue' | 'segmentAnchor' | 'directPlacements'> = {
       connections: connectionsRef.current,
       skippedIndices: Array.from(skippedIndicesRef.current),
-      segmentQueue: segmentQueue,
-      segmentAnchor: segmentAnchor,
-      directPlacements: [...directPlacementsRef.current],
       skippedSuggestions: Array.from(skippedSuggestionsRef.current.entries()),
       segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
       sectionEdits: Array.from(sectionEditsRef.current.entries()),
@@ -2917,62 +3025,150 @@ export default function DmpNewImportDialog({
       zeroDatumConfig,
     };
 
-    startPlacementMode(
-      sectionData,
-      segmentAnchor.stationIndex,
-      // onComplete — advance queue and reopen dialog
-      (result: PlacementResult) => {
-        let placement: ImportPlacement;
-        if (result.snappedToStation) {
-          placement = {
-            type: 'manual_snap',
-            align_station_index: segmentAnchor.stationIndex,
-            snapped_to_station: result.snappedToStation,
+    const openPlacementDialog = (
+      queue: number[][],
+      anchor: { sectionIndex: number; stationIndex: number },
+      directPlacements: DirectPlacement[],
+    ) => {
+      openDialog('dmp-import-new', {
+        ...reopenData,
+        autoStartManualPlacement: false,
+        savedManualPlacingState: {
+          ...baseSavedState,
+          segmentQueue: queue,
+          segmentAnchor: anchor,
+          directPlacements,
+        },
+      });
+    };
+
+    const startSegmentPlacement = (
+      queue: number[][],
+      anchor: { sectionIndex: number; stationIndex: number },
+      directPlacements: DirectPlacement[],
+    ) => {
+      const segment = queue[0];
+      if (!segment) {
+        openPlacementDialog([], anchor, directPlacements);
+        return;
+      }
+
+      const payload = buildSegmentPlacementPayload(segment, anchor);
+      if (!payload) {
+        openPlacementDialog(queue, anchor, directPlacements);
+        return;
+      }
+
+      startPlacementMode(
+        payload.sectionData,
+        anchor.stationIndex,
+        (result: PlacementResult) => {
+          const handlePlacementComplete = async () => {
+            const placement: ImportPlacement = result.snappedToStation
+              ? {
+                  type: 'manual_snap',
+                  align_station_index: anchor.stationIndex,
+                  snapped_to_station: result.snappedToStation,
+                }
+              : {
+                  type: 'manual',
+                  align_station_index: anchor.stationIndex,
+                  offset: result.position,
+                };
+
+            const dp: DirectPlacement = {
+              anchorSectionIndex: anchor.sectionIndex,
+              anchorStationIndex: anchor.stationIndex,
+              placement,
+            };
+
+            const nextQueue = queue.slice(1);
+            const nextDirectPlacements = [...directPlacements, dp];
+            directPlacementsRef.current = nextDirectPlacements;
+
+            let segmentImported = false;
+            setIsImporting(true);
+            try {
+              segmentImported = await importPlacedSegmentNow(segment, nextDirectPlacements);
+            } catch (e) {
+              console.error('[manualPlacement] Immediate segment import failed:', e);
+              setError(String(e));
+            } finally {
+              setIsImporting(false);
+            }
+            if (!segmentImported) {
+              openPlacementDialog(queue, anchor, directPlacements);
+              return;
+            }
+
+            if (nextQueue.length > 0) {
+              const nextAnchor = {
+                sectionIndex: nextQueue[0]![0]!,
+                stationIndex: 0,
+              };
+              startSegmentPlacement(nextQueue, nextAnchor, nextDirectPlacements);
+              return;
+            }
+
+            openPlacementDialog([], anchor, nextDirectPlacements);
           };
-        } else {
-          placement = {
-            type: 'manual',
-            align_station_index: segmentAnchor.stationIndex,
-            offset: result.position,
-          };
-        }
 
-        const dp: DirectPlacement = {
-          anchorSectionIndex: segmentAnchor.sectionIndex,
-          anchorStationIndex: segmentAnchor.stationIndex,
-          placement,
-        };
+          void handlePlacementComplete();
+        },
+        () => {
+          openPlacementDialog(queue, anchor, directPlacements);
+        },
+        payload.additionalSections.length > 0 ? payload.additionalSections : undefined,
+      );
 
-        // Advance queue for restored state
-        const nextQueue = savedState.segmentQueue.slice(1);
-        const nextAnchor = nextQueue[0]
-          ? { sectionIndex: nextQueue[0][0]!, stationIndex: 0 }
-          : savedState.segmentAnchor;
+      showToast(
+        'Placement: Click to place section. Esc for more placement options.',
+        'dmp-manual-placement-hint'
+      );
+    };
 
-        openDialog('dmp-import-new', {
-          ...reopenData,
-          savedManualPlacingState: {
-            ...savedState,
-            segmentQueue: nextQueue,
-            segmentAnchor: nextAnchor,
-            directPlacements: [...savedState.directPlacements, dp],
-            pendingSegmentImport: savedState.segmentQueue[0],
-          },
-        });
-      },
-      // onCancel — reopen dialog with original state
-      () => {
-        openDialog('dmp-import-new', {
-          ...reopenData,
-          savedManualPlacingState: savedState,
-        });
-      },
-      additionalSections.length > 0 ? additionalSections : undefined,
-    );
+    startSegmentPlacement(segmentQueue, segmentAnchor, [...directPlacementsRef.current]);
 
     // Close dialog so user can interact with the map
     closeDialog();
-  }, [currentSegment, segmentAnchor, dmpFile, selectionConfig, connections, segmentQueue, zeroDatumConfig, startPlacementMode, closeDialog, openDialog]);
+  }, [
+    currentSegment,
+    segmentAnchor,
+    segmentQueue,
+    buildSegmentPlacementPayload,
+    dmpFile,
+    selectionConfig,
+    zeroDatumConfig,
+    importPlacedSegmentNow,
+    startPlacementMode,
+    closeDialog,
+    openDialog,
+    showToast,
+  ]);
+
+  useEffect(() => {
+    if (!autoStartManualPlacementPending) {
+      return;
+    }
+    if (phase !== 'manual_placing' || !currentSegment || !segmentAnchor || isImporting) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      handleStartSegmentPlacement();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    autoStartManualPlacementPending,
+    phase,
+    currentSegment,
+    segmentAnchor,
+    isImporting,
+    handleStartSegmentPlacement,
+  ]);
 
   // Cancel/Back
   const handleCancel = useCallback(() => {
@@ -3041,6 +3237,7 @@ export default function DmpNewImportDialog({
       fixedSize={{ width: 'min(1000px, 95vw)', height: 'min(700px, 90vh)' }}
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
+      hidden={autoStartManualPlacementPending}
       data-testid="dmp-new-import-dialog"
     >
       <div className="flex-1 flex flex-col min-h-0">

@@ -31,6 +31,7 @@ function App() {
     activeDialog,
     dialogData,
     dmpImportWizardPhase,
+    placementMode,
     closeDialog,
     openDialog,
     initPanelSizes,
@@ -409,6 +410,7 @@ function App() {
     configRecentProjectsCount: config?.general?.recent_projects.length ?? null,
     activeDialog,
     dmpImportWizardPhase,
+    placementModeActive: placementMode !== null,
     isDmpImportContext: Boolean(dialogData.dmpFile),
     loadingProject: loading.isLoading,
     splashVisible: splashMounted,
@@ -507,6 +509,7 @@ function App() {
           stations={stations}
           zeroDatumConfig={dialogData.zeroDatumConfig as ZeroDatumConfigResult | undefined}
           savedManualPlacingState={dialogData.savedManualPlacingState as import('./components/Dialogs/DmpNewImportDialog').SavedManualPlacingState | undefined}
+          autoStartManualPlacement={Boolean(dialogData.autoStartManualPlacement)}
           onCancel={closeDialog}
           onBack={() => {
             if (dialogData.zeroDatumConfig) {
