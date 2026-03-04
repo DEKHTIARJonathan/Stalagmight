@@ -8000,6 +8000,43 @@ fn test_save_project_no_path_specified() {
 }
 
 #[test]
+fn test_save_project_implicit_first_save_autorename_when_target_exists() {
+    let temp_dir = TempDir::new().unwrap();
+    let existing_path = temp_dir.path().join("existing.stalx");
+    let expected_autorenamed_path = temp_dir.path().join("existing_1.stalx");
+    std::fs::write(&existing_path, b"ORIGINAL").unwrap();
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Simulate deferred-create behavior: reserved file_path but no open database yet.
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        project.file_path = Some(existing_path.clone());
+    }
+    {
+        let mut db_guard = state.database.lock().unwrap();
+        *db_guard = None;
+    }
+
+    let result = state.save_project(None);
+    assert!(result.success, "unexpected save failure: {:?}", result.error);
+
+    // Existing file must remain untouched.
+    let bytes = std::fs::read(&existing_path).unwrap();
+    assert_eq!(bytes, b"ORIGINAL");
+
+    // Autosave should pick an available suffixed filename.
+    assert!(expected_autorenamed_path.exists());
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.file_path.as_ref(), Some(&expected_autorenamed_path));
+}
+
+#[test]
 fn test_save_project_adds_stalx_extension() {
     let temp_dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
