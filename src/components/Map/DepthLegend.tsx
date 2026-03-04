@@ -5,6 +5,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { getDepthColor } from '../../utils/colors';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
+import { themeTokens } from '../../theme/tokens';
 
 interface DepthLegendProps {
   minDepth: number;
@@ -37,8 +38,8 @@ export function DepthLegend({
   const precision = useDecimalPrecision();
   // Subscribe to theme for reactive color updates (value triggers re-render)
   useUIStore((s) => s.resolvedTheme);
-  const effectiveShallow = shallowColor ?? getThemeColor('--cc-depth-shallow');
-  const effectiveDeep = deepColor ?? getThemeColor('--cc-depth-deep');
+  const effectiveShallow = shallowColor ?? themeTokens.dark['--cc-depth-shallow'];
+  const effectiveDeep = deepColor ?? themeTokens.dark['--cc-depth-deep'];
   const depthTextColor = getThemeColor('--cc-depth-text');
   const textHaloAlt = getThemeColor('--cc-text-halo-alt');
 
