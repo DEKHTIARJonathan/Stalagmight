@@ -395,6 +395,7 @@ function App() {
     hasRecentProjects: recentProjects.length > 0,
     configRecentProjectsCount: config?.general?.recent_projects.length ?? null,
     activeDialog,
+    isDmpImportContext: Boolean(dialogData.dmpFile),
     loadingProject: loading.isLoading,
     splashVisible: splashMounted,
     configLoaded: config !== null,

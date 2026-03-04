@@ -1713,6 +1713,128 @@
             "description": "The detail panel shows editable metadata for the selected section, shot, or station."
           }
         }
+      },
+      "dmpNewProject": {
+        "title": "DMP Import: New Project",
+        "steps": {
+          "dialog": {
+            "title": "Create a Project for This Import",
+            "description": "When importing a DMP without an open project, start by creating the destination project."
+          },
+          "projectName": {
+            "title": "Project Name and Location",
+            "description": "Set a clear project name and choose a file path (name + location). If left blank, the file saves to the default path shown in the dialog."
+          },
+          "createAndContinue": {
+            "title": "Create and Continue",
+            "description": "This creates the project file and moves you into the DMP section-selection workflow."
+          }
+        }
+      },
+      "dmpSelection": {
+        "title": "DMP Import: Section Selection",
+        "steps": {
+          "dialog": {
+            "title": "Select Sections to Import",
+            "description": "This screen decides which DMP sections move into Stalagmight."
+          },
+          "fileOverview": {
+            "title": "File Overview",
+            "description": "Review file metadata and aggregate stats before selecting sections."
+          },
+          "defaultValues": {
+            "title": "Default Values",
+            "description": "Set surveyor/date defaults once and apply them to all imported sections."
+          },
+          "bulkSelection": {
+            "title": "Bulk Selection Controls",
+            "description": "Use Select All, Select None, or Invert to quickly adjust your selection set."
+          },
+          "continue": {
+            "title": "Continue to Placement",
+            "description": "Proceed when your section selection is ready."
+          }
+        }
+      },
+      "zeroDatumSelection": {
+        "title": "DMP Import: Zero Datum Choice",
+        "steps": {
+          "dialog": {
+            "title": "Pick a Section for Zero Datum",
+            "description": "Choose which selected section should provide the GPS anchor for the import."
+          },
+          "chooseSection": {
+            "title": "Section Cards",
+            "description": "Click a section card to configure its station and GPS coordinates."
+          },
+          "navigation": {
+            "title": "Back / Cancel",
+            "description": "Use Back to return to section selection, or Cancel to exit the import workflow."
+          }
+        }
+      },
+      "zeroDatumConfig": {
+        "title": "DMP Import: Zero Datum Setup",
+        "steps": {
+          "dialog": {
+            "title": "Configure the GPS Anchor",
+            "description": "Set the station and coordinates used as the import's geospatial reference."
+          },
+          "station": {
+            "title": "Reference Station",
+            "description": "Choose the station inside this section that should map to the GPS coordinate."
+          },
+          "gps": {
+            "title": "GPS Input",
+            "description": "Paste or type coordinates; once valid, Stalagmight parses and confirms them below."
+          },
+          "confirm": {
+            "title": "Apply Zero Datum",
+            "description": "Confirm to continue into the placement wizard with this geospatial anchor."
+          }
+        }
+      },
+      "dmpNewImport": {
+        "title": "DMP Import: Placement Wizard",
+        "steps": {
+          "dialog": {
+            "title": "Connection and Placement Wizard",
+            "description": "This wizard walks each section through suggested connections or manual placement."
+          },
+          "progress": {
+            "title": "Progress Tracker",
+            "description": "Track placed/skipped sections so you always know import completion status."
+          },
+          "placementPanel": {
+            "title": "Placement Details",
+            "description": "Review suggested matches, adjust options, or choose manual placement modes."
+          },
+          "actions": {
+            "title": "Step Actions",
+            "description": "Use Confirm/Skip and placement actions to advance each segment through the workflow."
+          }
+        }
+      },
+      "dmpLegacyConfig": {
+        "title": "DMP Import: Legacy Section Config",
+        "steps": {
+          "dialog": {
+            "title": "Legacy Placement Screen",
+            "description": "This mode configures one section at a time with full placement and editing controls."
+          },
+          "sectionList": {
+            "title": "Section Navigation",
+            "description": "Switch between selected sections and monitor placed/error states at a glance."
+          },
+          "placement": {
+            "title": "Placement Options",
+            "description": "Choose origin, zero datum, from-existing, or manual placement for the active section."
+          },
+          "actions": {
+            "title": "Placement Actions",
+            "description": "Place, finish, move to next section, or include/exclude sections during import."
+          }
+        }
       }
     }
   },

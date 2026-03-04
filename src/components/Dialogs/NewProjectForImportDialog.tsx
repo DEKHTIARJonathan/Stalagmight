@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 import type { DmpFile, TmlFile, GpxFile } from '../../types/commands';
 
 /**
@@ -28,8 +29,88 @@ export default function NewProjectForImportDialog() {
 
   const [name, setName] = useState(defaultName);
   const [projectLocation, setProjectLocation] = useState('');
+  const [savePath, setSavePath] = useState('');
+  const [documentsDir, setDocumentsDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+
+  const normalizedBaseName = useMemo(
+    () => (name.trim() || defaultName || 'Project').replace(/[^a-zA-Z0-9]/g, '_'),
+    [defaultName, name]
+  );
+
+  const joinPath = (base: string, child: string): string => {
+    const separator = base.includes('\\') ? '\\' : '/';
+    const trimmedBase = base.replace(/[\\/]+$/, '');
+    return `${trimmedBase}${separator}${child}`;
+  };
+
+  const truncatePathFromLeft = (path: string, maxChars: number): string => {
+    if (path.length <= maxChars) {
+      return path;
+    }
+    return `...${path.slice(path.length - (maxChars - 3))}`;
+  };
+
+  const resolvedDefaultSavePath = useMemo(() => {
+    if (!documentsDir) {
+      return null;
+    }
+    return joinPath(joinPath(documentsDir, 'stalagmight'), `${normalizedBaseName}.stalx`);
+  }, [documentsDir, normalizedBaseName]);
+
+  const displayedDefaultSavePath = useMemo(() => {
+    if (!resolvedDefaultSavePath) {
+      return null;
+    }
+    return truncatePathFromLeft(resolvedDefaultSavePath, 40);
+  }, [resolvedDefaultSavePath]);
+
+  useEffect(() => {
+    let active = true;
+    const loadDocumentsDir = async () => {
+      try {
+        const { documentDir, homeDir } = await import('@tauri-apps/api/path');
+
+        try {
+          const dir = await documentDir();
+          if (active && typeof dir === 'string' && dir.trim()) {
+            setDocumentsDir(dir);
+            return;
+          }
+        } catch {
+          // Fall through to a best-effort home directory fallback.
+        }
+
+        const home = await homeDir();
+        if (active && typeof home === 'string' && home.trim()) {
+          setDocumentsDir(joinPath(home, 'Documents'));
+        }
+      } catch {
+        // Optional enhancement only; keep path unset if resolution fails.
+      }
+    };
+    void loadDocumentsDir();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleSelectSavePath = async () => {
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const selected = await save({
+        title: 'Save Project',
+        filters: projectSaveFilters(),
+        defaultPath: savePath.trim() || resolvedDefaultSavePath || `${normalizedBaseName}.stalx`,
+      });
+      if (typeof selected === 'string' && selected.trim()) {
+        setSavePath(ensureExtension(selected, PROJECT_EXTENSION));
+      }
+    } catch (e) {
+      setError(getErrorMessage(e, 'Failed to open save dialog'));
+    }
+  };
 
   const handleCreate = async () => {
     if (!name.trim()) {
@@ -46,7 +127,11 @@ export default function NewProjectForImportDialog() {
     setError(null);
 
     try {
-      const result = await createProject(name.trim(), projectLocation.trim() || undefined);
+      const result = await createProject(
+        name.trim(),
+        projectLocation.trim() || undefined,
+        savePath.trim() ? { savePath: ensureExtension(savePath.trim(), PROJECT_EXTENSION) } : undefined
+      );
 
       if (result.success) {
         closeDialog();
@@ -77,7 +162,10 @@ export default function NewProjectForImportDialog() {
   };
 
   // Track if form has been modified from defaults
-  const isDirty = name.trim() !== defaultName || projectLocation.trim() !== '';
+  const isDirty =
+    name.trim() !== defaultName ||
+    projectLocation.trim() !== '' ||
+    savePath.trim() !== '';
 
   return (
     <DialogWrapper
@@ -146,7 +234,48 @@ export default function NewProjectForImportDialog() {
 
         <div>
           <label className="block text-sm text-text-secondary mb-1">
-            Location (optional)
+            Project File Path (optional)
+          </label>
+          <div className="flex gap-2" data-testid="project-save-path-controls">
+            <input
+              type="text"
+              value={savePath}
+              onChange={(e) => setSavePath(e.target.value)}
+              className="w-full"
+              placeholder={displayedDefaultSavePath || `${normalizedBaseName}.stalx`}
+              data-testid="project-save-path-input"
+            />
+            <Button
+              onClick={handleSelectSavePath}
+              disabled={isCreating}
+              data-testid="project-save-path-browse-button"
+            >
+              Browse...
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-text-secondary">
+            {resolvedDefaultSavePath ? (
+              <>
+                Defaults to{' '}
+                <span
+                  className="font-mono break-all"
+                  title={resolvedDefaultSavePath}
+                >
+                  {displayedDefaultSavePath}
+                </span>{' '}
+                when left blank.
+              </>
+            ) : (
+              <>
+                Leave blank to use the app&apos;s default save location.
+              </>
+            )}
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm text-text-secondary mb-1">
+            Cave Location (optional)
           </label>
           <input
             type="text"
