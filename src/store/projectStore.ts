@@ -88,6 +88,11 @@ interface LoadError {
   details?: string | undefined;
 }
 
+interface CreateProjectOptions {
+  savePath?: string;
+  saveDirectory?: string;
+}
+
 function emptyCommandResult(
   success: boolean,
   error?: string | null,
@@ -165,7 +170,7 @@ interface ProjectStore {
   /** Load a project using the consolidated load_project_full command */
   loadProject: (path: string) => Promise<{ success: boolean }>;
   /** Create a new project (legacy, still supported) */
-  createProject: (name: string, location?: string) => Promise<CommandResult>;
+  createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
    * Open a project using the legacy open_project command (no progress events).
    * @deprecated Use loadProject() instead for progress UI support.
@@ -485,7 +490,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Project operations - uses consolidated create_project_full command
-  createProject: async (name: string, location?: string) => {
+  createProject: async (name: string, projectLocation?: string, options?: CreateProjectOptions) => {
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 
@@ -494,7 +499,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     try {
       const result = await invokeIpc<CreateProjectFullResult>(
         'create_project_full',
-        { name, location },
+        {
+          name,
+          projectLocation,
+          saveDirectory: options?.saveDirectory,
+          savePath: options?.savePath,
+        },
         { purpose: 'create new project on disk', fields: { name } }
       );
 
