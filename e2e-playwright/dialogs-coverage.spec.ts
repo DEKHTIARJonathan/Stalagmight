@@ -195,7 +195,7 @@ test.describe('Dialog Coverage - Edit Section', () => {
     await expect(dialog).toBeVisible();
 
     const helpIcon = dialog.getByTestId('section-quality-help-icon');
-    const tooltip = dialog.getByTestId('section-quality-help-tooltip');
+    const tooltip = page.getByTestId('section-quality-help-tooltip');
 
     await expect(helpIcon).toBeVisible();
     await expect(tooltip).not.toBeVisible();
