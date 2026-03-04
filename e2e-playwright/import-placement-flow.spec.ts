@@ -134,9 +134,9 @@ test.describe('Import Placement Flow', () => {
       await expect(placeOnMapButton).toBeVisible();
       await expect(placeOnMapButton).toHaveAttribute('data-primary-action', '');
 
-      await expect(page.locator('[data-testid="cancel-button"]')).toHaveClass(/border-border\/60/);
-      await expect(page.locator('[data-testid="back-to-selection-button"]')).toHaveClass(/border-border\/60/);
-      await expect(page.locator('[data-testid="exclude-button"]')).toHaveClass(/border-border\/60/);
+      await expect(page.locator('[data-testid="cancel-button"]')).toHaveClass(/ring-1/);
+      await expect(page.locator('[data-testid="back-to-selection-button"]')).toHaveClass(/ring-1/);
+      await expect(page.locator('[data-testid="exclude-button"]')).toHaveClass(/ring-1/);
     });
   });
 
