@@ -27,7 +27,7 @@ export default function NewProjectForImportDialog() {
   const isGpx = importType === 'gpx' || !!gpxFile;
 
   const [name, setName] = useState(defaultName);
-  const [location, setLocation] = useState('');
+  const [projectLocation, setProjectLocation] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
@@ -46,7 +46,7 @@ export default function NewProjectForImportDialog() {
     setError(null);
 
     try {
-      const result = await createProject(name.trim(), location.trim() || undefined);
+      const result = await createProject(name.trim(), projectLocation.trim() || undefined);
 
       if (result.success) {
         closeDialog();
@@ -77,7 +77,7 @@ export default function NewProjectForImportDialog() {
   };
 
   // Track if form has been modified from defaults
-  const isDirty = name.trim() !== defaultName || location.trim() !== '';
+  const isDirty = name.trim() !== defaultName || projectLocation.trim() !== '';
 
   return (
     <DialogWrapper
@@ -150,8 +150,8 @@ export default function NewProjectForImportDialog() {
           </label>
           <input
             type="text"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
+            value={projectLocation}
+            onChange={(e) => setProjectLocation(e.target.value)}
             className="w-full"
             placeholder="e.g., Carlsbad Caverns National Park, NM"
             data-testid="project-location-input"

@@ -2,7 +2,7 @@
 
 Tracks v1.0 spec completion and user testing feedback.
 
-**Last Updated**: 2026-03-03
+**Last Updated**: 2026-03-04
 
 ---
 
@@ -18,10 +18,10 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
-| User Testing: Bugs | 0 | 6 | 0% |
+| User Testing: Bugs | 0 | 7 | 0% |
 | User Testing: UX | 0 | 5 | 0% |
 | User Testing: Features | 0 | 5 | 0% |
-| **Total** | **62** | **81** | **77%** |
+| **Total** | **62** | **82** | **76%** |
 
 ---
 
@@ -198,12 +198,12 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
-| User Testing: Bugs | 6 | 0 | 0 | 6 |
+| User Testing: Bugs | 7 | 0 | 0 | 7 |
 | User Testing: UX | 5 | 0 | 0 | 5 |
 | User Testing: Features | 5 | 0 | 0 | 5 |
-| **Total** | **81** | **62** | **0** | **19** |
+| **Total** | **82** | **62** | **0** | **20** |
 
-**Overall Progress**: 62/81 = ~77% complete
+**Overall Progress**: 62/82 = ~76% complete
 
 ---
 
@@ -211,7 +211,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 Source: `docs/transcripts/1-summary.md` — usability session importing real Mnemo DMP data.
 
-### Bugs (0/6 done)
+### Bugs (0/7 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -221,6 +221,7 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Fix Ariane export zero datum placement | ❌ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
 | Fix double-click in data table | ❌ | Should jump map to element, but enters edit mode instead; only works on non-editable cells *(~line 1979)* |
 | Fix question mark tooltip | ❌ | `?` icon clicked but gave no useful explanation *(~line 77)* |
+| Fix duplicate save location on "Save now" | ❌ | File saves twice to two locations: default `Documents` path and user-selected location when "Save now" is selected |
 
 ### UX Improvements (0/5 done)
 

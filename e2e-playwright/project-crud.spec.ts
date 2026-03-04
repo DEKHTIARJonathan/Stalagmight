@@ -52,6 +52,28 @@ test.describe('Project CRUD Operations', () => {
       await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
     });
 
+    test('should create with "Save immediately" without calling save_project', async ({ page }) => {
+      await page.evaluate(() => {
+        const overrides = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
+          | Record<string, unknown>
+          | undefined;
+        (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
+          ...(overrides ?? {}),
+          // Save-now flow should create directly at the selected path.
+          // If save_project is still called, this test fails.
+          save_project: { __throw: 'save_project should not be called for Save immediately on create' },
+        };
+      });
+
+      await openNewProjectDialog(page);
+      await page.getByTestId('new-project-name-input').fill('Save Now Single Write');
+      await page.getByTestId('new-project-save-immediately').check();
+      await page.getByTestId('new-project-create-button').click();
+
+      await expect(page.getByTestId('single-system-view')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('new-project-dialog')).not.toBeVisible();
+    });
+
     test('should cancel project creation', async ({ page }) => {
       await openNewProjectDialog(page);
       await page.getByTestId('new-project-cancel-button').click();
