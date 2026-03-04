@@ -204,7 +204,8 @@ pub fn cancel_loading(state: State<AppState>) {
 /// * `name` - Project name (used for both filename and project metadata)
 /// * `project_location` - Optional cave location metadata (free text).
 /// * `save_directory` - Optional directory path to save the project in.
-///   If omitted (and `save_path` is also omitted), uses user's documents directory.
+///   If omitted (and `save_path` is also omitted), uses user's documents
+///   `stalagmight` subdirectory.
 /// * `save_path` - Optional full file path to save the project to.
 ///   If provided, this takes precedence over `save_directory`.
 /// * `defer_initial_save` - Optional flag to reserve `project.file_path` without
