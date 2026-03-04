@@ -101,7 +101,7 @@ export default function DmpSelectionDialog({
   onCancel,
   onContinue,
 }: DmpSelectionDialogProps) {
-  const importSecondaryButtonClass = 'bg-background shadow-sm hover:bg-background-50';
+  const importSecondaryButtonClass = 'bg-background border border-border/60 hover:bg-background-50';
 
   // Extract filename from path
   const fileName = useMemo(() => {
