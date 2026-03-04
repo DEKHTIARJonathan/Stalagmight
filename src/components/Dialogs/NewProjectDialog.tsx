@@ -9,10 +9,10 @@ import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../ut
 export default function NewProjectDialog() {
   const { closeDialog } = useUIStore();
   const { setView } = useUIStore();
-  const { createProject, saveProject } = useProjectStore();
+  const { createProject } = useProjectStore();
 
   const [name, setName] = useState('');
-  const [location, setLocation] = useState('');
+  const [projectLocation, setProjectLocation] = useState('');
   const [saveImmediately, setSaveImmediately] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -27,24 +27,27 @@ export default function NewProjectDialog() {
     setError(null);
 
     try {
-      const result = await createProject(name.trim(), location.trim() || undefined);
+      let explicitSavePath: string | undefined;
+      if (saveImmediately) {
+        // Open save dialog before creation so we can create directly at the chosen path.
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const path = await save({
+          title: 'Save Project',
+          filters: projectSaveFilters(),
+          defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.stalx`,
+        });
+        if (path) {
+          explicitSavePath = ensureExtension(path, PROJECT_EXTENSION);
+        }
+      }
+
+      const result = await createProject(
+        name.trim(),
+        projectLocation.trim() || undefined,
+        explicitSavePath ? { savePath: explicitSavePath } : undefined
+      );
 
       if (result.success) {
-        if (saveImmediately) {
-          // Open save dialog (use save, not open, to allow entering custom filename)
-          const { save } = await import('@tauri-apps/plugin-dialog');
-          const path = await save({
-            title: 'Save Project',
-            filters: projectSaveFilters(),
-            defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.stalx`,
-          });
-
-          if (path) {
-            const finalPath = ensureExtension(path, PROJECT_EXTENSION);
-            await saveProject(finalPath);
-          }
-        }
-
         // Switch to single system view
         setView('single');
         closeDialog();
@@ -59,7 +62,7 @@ export default function NewProjectDialog() {
   };
 
   // Track if form has been modified
-  const isDirty = name.trim() !== '' || location.trim() !== '' || saveImmediately;
+  const isDirty = name.trim() !== '' || projectLocation.trim() !== '' || saveImmediately;
 
   return (
     <DialogWrapper title="New Project" onClose={closeDialog} size="md" isDirty={isDirty} data-testid="new-project-dialog">
@@ -90,8 +93,8 @@ export default function NewProjectDialog() {
           </label>
           <input
             type="text"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
+            value={projectLocation}
+            onChange={(e) => setProjectLocation(e.target.value)}
             className="w-full"
             placeholder="e.g., Carlsbad Caverns National Park, NM"
             data-testid="new-project-location-input"
