@@ -72,6 +72,8 @@ export default function DmpSectionConfigDialog({
   project,
   stations: _stations,
 }: DmpSectionConfigDialogProps) {
+  const importSecondaryButtonClass = 'bg-background shadow-sm hover:bg-background-50';
+
   // Get placement mode controls from UI store
   const { startPlacementMode, closeDialog, openDialog, dialogData, getMapViewportCenter } = useUIStore();
 
@@ -1643,6 +1645,7 @@ export default function DmpSectionConfigDialog({
                             />
                             <span className="text-sm text-text-secondary">with cursor</span>
                             <Button
+                              variant="primary"
                               size="sm"
                               onClick={handleStartManualPlacement}
                               disabled={isCurrentPlaced || isCurrentExcluded}
@@ -1698,16 +1701,17 @@ export default function DmpSectionConfigDialog({
         {/* Footer */}
         <div className="px-4 py-3 border-t border-border flex justify-between items-center">
           <div className="flex gap-2">
-            <Button onClick={handleCancel} data-testid="cancel-button">
+            <Button onClick={handleCancel} className={importSecondaryButtonClass} data-testid="cancel-button">
               Cancel
             </Button>
-            <Button onClick={handleBack} data-testid="back-to-selection-button">
+            <Button onClick={handleBack} className={importSecondaryButtonClass} data-testid="back-to-selection-button">
               ← Back to Selection
             </Button>
             {/* Exclude/Include toggle - always show so user can include sections back */}
             <Button
               onClick={handleExcludeToggle}
               disabled={isCurrentPlaced}
+              className={importSecondaryButtonClass}
               data-testid={isCurrentExcluded ? 'include-button' : 'exclude-button'}
               title={isCurrentPlaced ? 'Cannot exclude a placed section' : undefined}
             >
@@ -1717,7 +1721,7 @@ export default function DmpSectionConfigDialog({
           <div className="flex gap-2">
             {/* Show Cancel when all sections are excluded */}
             {allSectionsExcluded ? (
-              <Button onClick={handleCancel} data-testid="cancel-all-excluded-button">
+              <Button onClick={handleCancel} className={importSecondaryButtonClass} data-testid="cancel-all-excluded-button">
                 Cancel (all sections excluded)
               </Button>
             ) : canFinishWithExclusion ? (
