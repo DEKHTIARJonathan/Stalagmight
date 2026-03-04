@@ -202,7 +202,7 @@ export default function ContextMenu() {
           },
         },
         {
-          label: shot?.is_reference ? 'Mark as Permanent' : 'Mark as Reference',
+          label: shot?.is_reference ? 'Mark as Permanent' : 'Mark as Jump/Reference',
           action: async () => {
             await setShotReference(target.sectionId, target.shotId, !shot?.is_reference);
             closeDialog();

@@ -348,7 +348,7 @@ export default function DrawShotDialog() {
         {/* Reference checkbox */}
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={isReference} onChange={(e) => setIsReference(e.target.checked)} />
-          <span>Mark as reference shot</span>
+          <span>Mark as Jump/Reference shot</span>
           <span className="text-text-secondary text-sm">(temporary connection)</span>
         </label>
 
