@@ -1,3 +1,6 @@
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+
 interface HelpTooltipProps {
   text: string;
   className?: string;
@@ -19,23 +22,97 @@ export function HelpTooltip({
   iconTestId,
   tooltipTestId,
 }: HelpTooltipProps) {
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const tooltipRef = useRef<HTMLSpanElement>(null);
+  const [isHovered, setIsHovered] = useState(false);
+  const [position, setPosition] = useState({
+    left: 0,
+    top: 0,
+    transform: 'translate(-50%, -100%)',
+  });
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipEl = tooltipRef.current;
+    const margin = 8;
+
+    let left = triggerRect.left + triggerRect.width / 2;
+    let top = triggerRect.top - 10;
+    let transform = 'translate(-50%, -100%)';
+
+    if (tooltipEl) {
+      const tooltipRect = tooltipEl.getBoundingClientRect();
+      const halfWidth = tooltipRect.width / 2;
+
+      if (left - halfWidth < margin) {
+        left = margin + halfWidth;
+      } else if (left + halfWidth > window.innerWidth - margin) {
+        left = window.innerWidth - margin - halfWidth;
+      }
+
+      // If there isn't enough room above, place below the icon.
+      if (top - tooltipRect.height < margin) {
+        top = triggerRect.bottom + 10;
+        transform = 'translate(-50%, 0)';
+      }
+    }
+
+    setPosition({ left, top, transform });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isHovered) return;
+
+    const rafId = requestAnimationFrame(updatePosition);
+    const reposition = () => updatePosition();
+
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [isHovered, updatePosition]);
+
+  const tooltip =
+    isHovered && typeof document !== 'undefined'
+      ? createPortal(
+          <span
+            ref={tooltipRef}
+            className={`pointer-events-none fixed z-[10000] max-w-72 rounded border border-border bg-panel-90 px-3 py-2 text-sm leading-snug text-text-primary shadow-lg ${tooltipClassName}`}
+            style={{
+              left: `${position.left}px`,
+              top: `${position.top}px`,
+              transform: position.transform,
+            }}
+            role="tooltip"
+            data-testid={tooltipTestId}
+          >
+            {text}
+          </span>,
+          document.body
+        )
+      : null;
+
   return (
-    <span className={`relative inline-flex items-center group ${className}`}>
+    <span className={`inline-flex items-center ${className}`}>
       <span
+        ref={triggerRef}
         className={`inline-flex items-center justify-center w-4 h-4 rounded-full border border-border text-[10px] font-bold text-text-secondary cursor-help ${iconClassName}`}
         aria-label={text}
         role="img"
         data-testid={iconTestId}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
       >
         ?
       </span>
-      <span
-        className={`pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1 z-20 whitespace-nowrap rounded border border-border bg-panel-90 text-text-primary text-xs px-2 py-1 opacity-0 invisible transition-opacity duration-100 group-hover:opacity-100 group-hover:visible ${tooltipClassName}`}
-        role="tooltip"
-        data-testid={tooltipTestId}
-      >
-        {text}
-      </span>
+      {tooltip}
     </span>
   );
 }
