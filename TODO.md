@@ -200,10 +200,10 @@ Tracks v1.0 spec completion and user testing feedback.
 | Testing | 1 | 0 | 0 | 1 |
 | User Testing: Bugs | 6 | 3 | 0 | 3 |
 | User Testing: UX | 5 | 3 | 0 | 2 |
-| User Testing: Features | 5 | 0 | 0 | 5 |
-| **Total** | **81** | **68** | **0** | **13** |
+| User Testing: Features | 5 | 1 | 0 | 4 |
+| **Total** | **81** | **69** | **0** | **12** |
 
-**Overall Progress**: 68/81 = ~84% complete
+**Overall Progress**: 69/81 = ~85% complete
 
 ---
 
@@ -238,7 +238,7 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 |------|--------|-------|
 | Prioritize map-first workflow | ❌ | Everything possible should be doable from the map view *(~line 574)* |
 | Auto-merge everything on import | ❌ | Leave unmerged sections floating with tooltips to drag into place *(~line 1679)* |
-| Warn on export about floating/unconnected shots | ❌ | Ariane can't handle disconnected data; warn instead of silently dropping *(~line 1005)* |
+| Warn on export about floating/unconnected shots | ✅ | TML/TMLU export now warns when sections are not connected to a zero datum, lists potentially discarded sections, and makes "Continue anyway" the primary action *(~line 1005)* |
 | Remove legacy import workflow | ❌ | Auto-merge is strictly better; user confirmed *(~line 1748)* |
 | Consider optional telemetry | ❌ | Understand what features people actually use *(~line 739)* |
 
