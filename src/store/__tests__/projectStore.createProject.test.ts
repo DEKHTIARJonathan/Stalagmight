@@ -81,12 +81,13 @@ describe('projectStore.createProject', () => {
         name: 'SaveNow Cave',
         projectLocation: 'Florida Keys',
         savePath: '/tmp/custom-save.stalx',
+        deferInitialSave: false,
       }),
       expect.any(Object)
     );
   });
 
-  it('omits savePath for default Documents creation', async () => {
+  it('defers initial disk write for default autosave path', async () => {
     await useProjectStore.getState().createProject('Default Docs Cave');
 
     expect(invokeIpcMock).toHaveBeenCalledWith(
@@ -95,6 +96,7 @@ describe('projectStore.createProject', () => {
         name: 'Default Docs Cave',
         projectLocation: undefined,
         savePath: undefined,
+        deferInitialSave: true,
       }),
       expect.any(Object)
     );
