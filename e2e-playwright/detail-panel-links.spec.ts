@@ -267,6 +267,24 @@ async function setupMergedStations(
   );
 }
 
+async function createDirectMerge(
+  page: Page,
+  stationA: { section_id: number; station_index: number },
+  stationB: { section_id: number; station_index: number }
+): Promise<void> {
+  await page.evaluate(async ({ a, b }) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => { mergeStations: (left: typeof a, right: typeof b) => Promise<unknown> };
+        };
+      };
+    }).__E2E_TEST__;
+    if (!stores) return;
+    await stores.projectStore.getState().mergeStations(a, b);
+  }, { a: stationA, b: stationB });
+}
+
 test.describe('Detail Panel Links', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -562,6 +580,48 @@ test.describe('Detail Panel Links', () => {
       expect(selection?.type).toBe('station');
       expect(selection?.stationRef?.section_id).toBe(mainSectionId);
       expect(selection?.stationRef?.station_index).toBe(3);
+    });
+
+    test('clicking broken-chain icon unmerges the listed station pair', async ({ page }) => {
+      await createProjectWithSections(page);
+
+      const sectionIds = await getSectionIds(page);
+      const mainSectionId = sectionIds[0]!;
+      const sideSectionId = sectionIds[1]!;
+
+      await createDirectMerge(
+        page,
+        { section_id: mainSectionId, station_index: 3 },
+        { section_id: sideSectionId, station_index: 0 }
+      );
+
+      await selectStation(page, mainSectionId, 3);
+      const stationDetail = page.getByTestId('station-detail');
+      await expect(stationDetail).toBeVisible();
+
+      const unmergeButton = page.getByTestId(`detail-unmerge-${sideSectionId}-0`);
+      await expect(unmergeButton).toBeVisible();
+      await unmergeButton.click();
+
+      await expect.poll(async () => {
+        return page.evaluate(({ a, b }) => {
+          const state = (window as any).__E2E_TEST__.projectStore.getState();
+          const merges = state.project?.station_merges ?? [];
+          return merges.some((merge: any) => {
+            const direct =
+              merge.station_a.section_id === a.section_id &&
+              merge.station_a.station_index === a.station_index &&
+              merge.station_b.section_id === b.section_id &&
+              merge.station_b.station_index === b.station_index;
+            const reverse =
+              merge.station_b.section_id === a.section_id &&
+              merge.station_b.station_index === a.station_index &&
+              merge.station_a.section_id === b.section_id &&
+              merge.station_a.station_index === b.station_index;
+            return direct || reverse;
+          });
+        }, { a: { section_id: mainSectionId, station_index: 3 }, b: { section_id: sideSectionId, station_index: 0 } });
+      }).toBe(false);
     });
   });
 
