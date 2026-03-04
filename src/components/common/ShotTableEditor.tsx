@@ -7,6 +7,7 @@ import { defaultConfig } from '../../types/config';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
 import { applyAzimuthEdit, getAzimuthAverage } from '../../utils/shotTable';
+import { HelpTooltip } from './HelpTooltip';
 
 /**
  * Editable shot type - extends Shot with editing state flags.
@@ -769,17 +770,17 @@ export function ShotTableEditor({
                   {/* Warnings */}
                   <td className="p-0 text-center">
                     {(hasErrors || warnings.length > 0) && (
-                      <span
-                        className={`inline-flex items-center justify-center w-5 h-5 text-xs font-bold rounded-full cursor-help ${
+                      <HelpTooltip
+                        text={tooltipText}
+                        icon="!"
+                        ariaLabel={hasErrors ? t('shotTable.warnings.error') : t('shotTable.warnings.warning')}
+                        className="justify-center"
+                        iconClassName={`w-5 h-5 text-xs border-transparent ${
                           hasErrors ? 'bg-error-20 text-error' : 'bg-warning-20 text-warning'
                         }`}
-                        title={tooltipText}
-                        data-testid={`shot-warning-${visibleIdx}`}
-                        role="img"
-                        aria-label={hasErrors ? t('shotTable.warnings.error') : t('shotTable.warnings.warning')}
-                      >
-                        !
-                      </span>
+                        iconTestId={`shot-warning-${visibleIdx}`}
+                        tooltipTestId={`shot-warning-tooltip-${visibleIdx}`}
+                      />
                     )}
                   </td>
 
