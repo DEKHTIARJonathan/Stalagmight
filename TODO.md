@@ -18,10 +18,10 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
-| User Testing: Bugs | 2 | 7 | 29% |
-| User Testing: UX | 0 | 5 | 0% |
-| User Testing: Features | 0 | 5 | 0% |
-| **Total** | **64** | **82** | **78%** |
+| User Testing: Bugs | 3 | 6 | 50% |
+| User Testing: UX | 4 | 5 | 80% |
+| User Testing: Features | 1 | 5 | 20% |
+| **Total** | **70** | **81** | **86%** |
 
 ---
 
@@ -61,7 +61,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 ## 🚧 v1.0 Remaining Tasks
 
-### Import/Export (17/19 done)
+### Import/Export (19/19 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -87,7 +87,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 **Subtotals**: ✅ 19 done, ❌ 0 not started
 
-### UI & Polish (16/18 done)
+### UI & Polish (17/18 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -166,7 +166,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 **Subtotals**: ✅ 9 done
 
-### Integrations (0/1 done)
+### Integrations (0/3 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
@@ -198,12 +198,12 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
-| User Testing: Bugs | 7 | 2 | 0 | 5 |
-| User Testing: UX | 5 | 0 | 0 | 5 |
-| User Testing: Features | 5 | 0 | 0 | 5 |
-| **Total** | **82** | **64** | **0** | **18** |
+| User Testing: Bugs | 6 | 3 | 0 | 3 |
+| User Testing: UX | 5 | 4 | 0 | 1 |
+| User Testing: Features | 5 | 1 | 0 | 4 |
+| **Total** | **81** | **70** | **0** | **11** |
 
-**Overall Progress**: 64/82 = ~78% complete
+**Overall Progress**: 70/81 = ~86% complete
 
 ---
 
@@ -211,35 +211,34 @@ Tracks v1.0 spec completion and user testing feedback.
 
 Source: `docs/transcripts/1-summary.md` — usability session importing real Mnemo DMP data.
 
-### Bugs (2/7 done)
+### Bugs (3/6 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Fix segment merge orphaning section | ❌ | After merging, one section not placed with the rest; reference shots auto-deleted but section orphaned *(~line 359)* |
-| Fix depth gradient colors overridden by theme | ❌ | Theming overrides depth gradient, making it a useless subtle color change instead of green→red *(~line 675)* |
+| Fix depth gradient colors overridden by theme | ✅ | Depth gradient now uses the same dark-theme shallow/deep endpoints across all themes, preventing theme-specific gradient drift *(~line 675)* |
 | Add per-shot depth gradient | ❌ | Shot going shallow→deep renders as single flat color, not a gradient along its length *(~line 677)* |
 | Fix Ariane export zero datum placement | ❌ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
-| Fix double-click in data table | ❌ | Should jump map to element, but enters edit mode instead; only works on non-editable cells *(~line 1979)* |
 | Fix question mark tooltip | ✅ | Replaced with themed custom hover tooltip for closure-adjustment `?` help icon |
 | Fix duplicate save location on "Save now" | ✅ | Save-now now performs a single write to the selected path; default/autosave flow no longer duplicates files |
 
-### UX Improvements (0/5 done)
+### UX Improvements (4/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Make "Place on map" button more visible | ❌ | Currently "really poorly visible" *(~line 147)* |
-| Add unmerge capability | ❌ | No way to undo merge beyond undo stack; add right-click → Unmerge *(~line 569)* |
+| Make "Place on map" button more visible | ✅ | Promoted "Place on Map" to primary CTA in import placement and added clearer outlined secondary actions for import dialogs |
+| Add unmerge capability | ✅ | Added targeted unmerge flows: single merge unmerges immediately, multiple merges open chooser dialog, and detail panel merged links now include per-pair unmerge action *(~line 569)* |
 | Make move tool larger and more discoverable | ❌ | User couldn't locate it even with verbal guidance *(~line 413, 1707)* |
-| Add middle-click panning | ❌ | Control-drag not intuitive; add middle-click drag as alternative *(~line 1865)* |
-| Rename "reference shot" to "jump line" | ❌ | Rename throughout UI, context menus, tooltips *(~line 623)* |
+| Add middle-click panning | ✅ | Added middle-click drag pan everywhere Ctrl+drag pan is supported, preserving active tool after release *(~line 1865)* |
+| Rename "reference shot" to "jump line" | ✅ | Renamed key user-facing UI labels to "Jump/Reference" (Detail panel, Display menu, Data Table, Draw Shot, Context Menu); placement-setting and overlap labels kept unchanged by request *(~line 623)* |
 
-### Feature Suggestions (0/5 done)
+### Feature Suggestions (1/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Prioritize map-first workflow | ❌ | Everything possible should be doable from the map view *(~line 574)* |
 | Auto-merge everything on import | ❌ | Leave unmerged sections floating with tooltips to drag into place *(~line 1679)* |
-| Warn on export about floating/unconnected shots | ❌ | Ariane can't handle disconnected data; warn instead of silently dropping *(~line 1005)* |
+| Warn on export about floating/unconnected shots | ✅ | TML/TMLU export now warns when sections are not connected to a zero datum, lists potentially discarded sections, and makes "Continue anyway" the primary action *(~line 1005)* |
 | Remove legacy import workflow | ❌ | Auto-merge is strictly better; user confirmed *(~line 1748)* |
 | Consider optional telemetry | ❌ | Understand what features people actually use *(~line 739)* |
 

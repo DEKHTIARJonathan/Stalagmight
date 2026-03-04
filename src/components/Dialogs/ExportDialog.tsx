@@ -7,6 +7,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
+import { AlertDialog } from './AlertDialog';
 import { LoadingProgress } from '../LoadingProgress/LoadingProgress';
 import ExportPreview, { type ExportTheme, type DepthPresetColors } from './ExportPreview';
 import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
@@ -23,7 +24,7 @@ const EXPORT_PHASE_LABELS: Record<string, string> = {
 
 export default function ExportDialog() {
   const { closeDialog } = useUIStore();
-  const { exportCsv, exportJson, exportTml, exportImage } = useProjectStore();
+  const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } = useProjectStore();
 
   const [exportType, setExportType] = useState<'data' | 'image'>('data');
   const [dataFormat, setDataFormat] = useState<'csv' | 'json' | 'tml'>('csv');
@@ -53,6 +54,8 @@ export default function ExportDialog() {
   // Export progress state - uses shared LoadingProgressPayload from loading infrastructure
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<LoadingProgressPayload | null>(null);
+  const [showTmlUnanchoredWarning, setShowTmlUnanchoredWarning] = useState(false);
+  const [tmlDiscardedSections, setTmlDiscardedSections] = useState<Array<{ id: number; name: string | null }>>([]);
   // Track the loadingId we're expecting (to filter out events from other operations)
   const exportLoadingIdRef = useRef<bigint | null>(null);
 
@@ -112,10 +115,35 @@ export default function ExportDialog() {
     };
   }, [imageOptions, config?.units?.depth, config?.units?.decimal_precision?.depth]);
 
-  const handleExport = async () => {
+  const formatSectionLabel = useCallback((section: { id: number; name: string | null }): string => {
+    const trimmedName = section.name?.trim();
+    return trimmedName && trimmedName.length > 0
+      ? `${trimmedName} (#${section.id})`
+      : `Section ${section.id}`;
+  }, []);
+
+  const handleExport = async (options?: { skipTmlAnchorCheck?: boolean }) => {
     try {
       if (exportType === 'data') {
         const isTml = dataFormat === 'tml';
+        if (isTml && !options?.skipTmlAnchorCheck) {
+          try {
+            if (project && project.sections.length > 0) {
+              const anchoredSectionIds = new Set(await getAnchoredSectionIds());
+              const unanchoredSections = project.sections
+                .filter((section) => !anchoredSectionIds.has(section.id))
+                .map((section) => ({ id: section.id, name: section.name }));
+              if (unanchoredSections.length > 0) {
+                setTmlDiscardedSections(unanchoredSections);
+                setShowTmlUnanchoredWarning(true);
+                return;
+              }
+            }
+          } catch (error) {
+            console.error('Failed to check zero-datum coverage before TML export:', error);
+          }
+        }
+
         const filters = isTml
           ? [
               { name: 'TML (ZIP)', extensions: ['tml'] },
@@ -494,13 +522,56 @@ export default function ExportDialog() {
         <Button onClick={handleClose} disabled={isExporting}>Cancel</Button>
         <Button
           variant="primary"
-          onClick={handleExport}
+          onClick={() => {
+            void handleExport();
+          }}
           disabled={isExporting}
           data-testid="export-button"
         >
           {isExporting ? 'Exporting...' : 'Export'}
         </Button>
       </div>
+
+      <AlertDialog
+        open={showTmlUnanchoredWarning}
+        title="Some sections will be discarded"
+        onClose={() => setShowTmlUnanchoredWarning(false)}
+        data-testid="tml-unanchored-warning-dialog"
+        actions={
+          <>
+            <Button onClick={() => setShowTmlUnanchoredWarning(false)} data-testid="tml-unanchored-warning-cancel">
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setShowTmlUnanchoredWarning(false);
+                void handleExport({ skipTmlAnchorCheck: true });
+              }}
+              data-testid="tml-unanchored-warning-continue"
+            >
+              Continue anyway
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p>
+            Ariane TML/TMLU exports only include sections connected to a zero datum.
+            The sections below are not connected and may be discarded.
+          </p>
+          <div className="rounded border border-border bg-panel p-3">
+            <p className="text-xs font-medium text-text-secondary mb-2">Potentially discarded sections</p>
+            <ul className="list-disc pl-5 space-y-1 text-sm max-h-40 overflow-y-auto">
+              {tmlDiscardedSections.map((section) => (
+                <li key={section.id} data-testid="tml-unanchored-section-item">
+                  {formatSectionLabel(section)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </AlertDialog>
     </DialogWrapper>
   );
 }

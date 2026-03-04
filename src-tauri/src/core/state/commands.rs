@@ -80,6 +80,10 @@ impl AppState {
                 station_b,
             } => self.merge_stations(*station_a, *station_b),
             Command::UnmergeStations { station_ref } => self.unmerge_stations(*station_ref),
+            Command::UnmergeStationPair {
+                station_a,
+                station_b,
+            } => self.unmerge_station_pair(*station_a, *station_b),
             Command::CreateLoopClosure {
                 station_a,
                 station_b,
@@ -1235,6 +1239,33 @@ impl AppState {
                 "Station unmerged"
             );
             CommandResult::success()
+        })
+    }
+
+    pub(super) fn unmerge_station_pair(
+        &self,
+        station_a: StationRef,
+        station_b: StationRef,
+    ) -> CommandResult {
+        self.with_project_mut(|project| {
+            let (success, _removed_closures) = project.unmerge_stations(station_a, station_b);
+            if success {
+                tracing::info!(
+                    ?station_a,
+                    ?station_b,
+                    purpose = "disconnect selected merged station pair",
+                    "Station pair unmerged"
+                );
+                CommandResult::success()
+            } else {
+                tracing::warn!(
+                    ?station_a,
+                    ?station_b,
+                    purpose = "disconnect selected merged station pair",
+                    "Failed to unmerge station pair"
+                );
+                CommandResult::failure("Stations are not directly merged".to_string())
+            }
         })
     }
 

@@ -199,6 +199,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         stationA: { section_id: number; station_index: number };
         stationB: { section_id: number; station_index: number };
       }> = [];
+      let unmergeStationPairCalls: Array<{
+        stationA: { section_id: number; station_index: number };
+        stationB: { section_id: number; station_index: number };
+      }> = [];
       let mockOrphanPlacementSuggestions: unknown[] = [];
       let mockImportPlacementSuggestions: unknown[] = [];
 
@@ -212,6 +216,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_GET_MERGE_STATION_CALLS__ = () => [...mergeStationCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_MERGE_STATION_CALLS__ = () => {
         mergeStationCalls = [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_UNMERGE_STATION_PAIR_CALLS__ = () => [...unmergeStationPairCalls];
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_UNMERGE_STATION_PAIR_CALLS__ = () => {
+        unmergeStationPairCalls = [];
       };
       (window as unknown as Record<string, unknown>).__MOCK_SET_ORPHAN_SUGGESTIONS__ = (suggestions: unknown[]) => {
         mockOrphanPlacementSuggestions = Array.isArray(suggestions) ? [...suggestions] : [];
@@ -518,6 +526,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             // Collect all section IDs for merged station setup
             const sectionIds = (currentProject.sections as Array<{ id: number }>).map(s => s.id);
+            const currentMerges = (currentProject.station_merges ?? []) as Array<{
+              station_a: { section_id: number; station_index: number };
+              station_b: { section_id: number; station_index: number };
+            }>;
 
             // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
             const loadDatums = (currentProject.zero_datums ?? []) as Array<{
@@ -539,23 +551,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
 
               for (let i = 0; i < depths.length; i++) {
-                // Set up merged_with for testing: last station of first section merges with first station of second section
-                // This enables E2E tests for merged station links without direct store manipulation
-                let mergedWith: Array<{ section_id: number; station_index: number }> = [];
+                const stationRef = { section_id: section.id, station_index: i };
+                let mergedWith: Array<{ section_id: number; station_index: number }> = currentMerges
+                  .flatMap((merge) => {
+                    const isA =
+                      merge.station_a.section_id === stationRef.section_id &&
+                      merge.station_a.station_index === stationRef.station_index;
+                    const isB =
+                      merge.station_b.section_id === stationRef.section_id &&
+                      merge.station_b.station_index === stationRef.station_index;
+                    if (isA) return [merge.station_b];
+                    if (isB) return [merge.station_a];
+                    return [];
+                  });
+
                 const sectionIndex = sectionIds.indexOf(section.id);
                 const isLastStation = i === depths.length - 1;
                 const isFirstStation = i === 0;
 
-                // Last station of first section -> merge with first station of second section (if exists)
-                if (sectionIndex === 0 && isLastStation && sectionIds.length > 1) {
-                  mergedWith = [{ section_id: sectionIds[1]!, station_index: 0 }];
-                }
-                // First station of second section -> merge with last station of first section
-                if (sectionIndex === 1 && isFirstStation && sectionIds.length > 1) {
-                  // Find last station index of first section
-                  const firstSection = currentProject.sections[0] as { shots: unknown[] } | undefined;
-                  const firstSectionLastStationIndex = firstSection ? (firstSection.shots?.length ?? 0) : 0;
-                  mergedWith = [{ section_id: sectionIds[0]!, station_index: firstSectionLastStationIndex }];
+                // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
+                if (mergedWith.length === 0 && currentMerges.length === 0) {
+                  if (sectionIndex === 0 && isLastStation && sectionIds.length > 1) {
+                    mergedWith = [{ section_id: sectionIds[1]!, station_index: 0 }];
+                  }
+                  if (sectionIndex === 1 && isFirstStation && sectionIds.length > 1) {
+                    const firstSection = currentProject.sections[0] as { shots: unknown[] } | undefined;
+                    const firstSectionLastStationIndex = firstSection ? (firstSection.shots?.length ?? 0) : 0;
+                    mergedWith = [{ section_id: sectionIds[0]!, station_index: firstSectionLastStationIndex }];
+                  }
                 }
 
                 // Derive is_zero_datum and gps_coordinates from project zero_datums
@@ -564,7 +587,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 );
 
                 mockStations.push({
-                  station_ref: { section_id: section.id, station_index: i },
+                  station_ref: stationRef,
                   coordinates: { x: i * 10, y: 0, z: depths[i] ?? 0 },
                   is_zero_datum: !!loadDatum,
                   gps_coordinates: loadDatum ? loadDatum.gps : null,
@@ -697,6 +720,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             // Collect all section IDs for merged station setup
             const sectionIdList = (currentProject?.sections as Array<{ id: number }> ?? []).map(s => s.id);
+            const stateMerges = (currentProject?.station_merges ?? []) as Array<{
+              station_a: { section_id: number; station_index: number };
+              station_b: { section_id: number; station_index: number };
+            }>;
 
             // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
             const zeroDatums = (currentProject?.zero_datums ?? []) as Array<{
@@ -711,20 +738,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 const sectionIndex = sectionIdList.indexOf(section.id);
 
                 for (let i = 0; i <= shotCount; i++) {
-                  // Set up merged_with: last station of first section merges with first station of second section
-                  let mergedWith: Array<{ section_id: number; station_index: number }> = [];
+                  const stationRef = { section_id: section.id, station_index: i };
+                  let mergedWith: Array<{ section_id: number; station_index: number }> = stateMerges
+                    .flatMap((merge) => {
+                      const isA =
+                        merge.station_a.section_id === stationRef.section_id &&
+                        merge.station_a.station_index === stationRef.station_index;
+                      const isB =
+                        merge.station_b.section_id === stationRef.section_id &&
+                        merge.station_b.station_index === stationRef.station_index;
+                      if (isA) return [merge.station_b];
+                      if (isB) return [merge.station_a];
+                      return [];
+                    });
                   const isLastStation = i === shotCount;
                   const isFirstStation = i === 0;
 
-                  // Last station of first section -> merge with first station of second section (if exists)
-                  if (sectionIndex === 0 && isLastStation && sectionIdList.length > 1) {
-                    mergedWith = [{ section_id: sectionIdList[1]!, station_index: 0 }];
-                  }
-                  // First station of second section -> merge with last station of first section
-                  if (sectionIndex === 1 && isFirstStation && sectionIdList.length > 1) {
-                    const firstSection = currentProject.sections[0] as { shots?: unknown[] } | undefined;
-                    const firstSectionLastStationIndex = firstSection?.shots?.length ?? 0;
-                    mergedWith = [{ section_id: sectionIdList[0]!, station_index: firstSectionLastStationIndex }];
+                  // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
+                  if (mergedWith.length === 0 && stateMerges.length === 0) {
+                    if (sectionIndex === 0 && isLastStation && sectionIdList.length > 1) {
+                      mergedWith = [{ section_id: sectionIdList[1]!, station_index: 0 }];
+                    }
+                    if (sectionIndex === 1 && isFirstStation && sectionIdList.length > 1) {
+                      const firstSection = currentProject.sections[0] as { shots?: unknown[] } | undefined;
+                      const firstSectionLastStationIndex = firstSection?.shots?.length ?? 0;
+                      mergedWith = [{ section_id: sectionIdList[0]!, station_index: firstSectionLastStationIndex }];
+                    }
                   }
 
                   // Derive is_zero_datum and gps_coordinates from project zero_datums
@@ -733,10 +772,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   );
 
                   mockStations.push({
-                    station_ref: {
-                      section_id: section.id,
-                      station_index: i,
-                    },
+                    station_ref: stationRef,
                     coordinates: { x: i * 10, y: 0, z: 0 },
                     is_zero_datum: !!matchingDatum,
                     gps_coordinates: matchingDatum ? matchingDatum.gps : null,
@@ -1464,7 +1500,120 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'unmerge_stations':
             // Mock unmerge stations - return success
             console.log('[Mock IPC] unmerge_stations called with:', args);
+            if (currentProject && args) {
+              const stationRef = (args.stationRef ?? args.station_ref) as { section_id: number; station_index: number } | undefined;
+              if (stationRef) {
+                const stationMerges = currentProject.station_merges as Array<{
+                  station_a: { section_id: number; station_index: number };
+                  station_b: { section_id: number; station_index: number };
+                }>;
+
+                const removedPairs: Array<{
+                  station_a: { section_id: number; station_index: number };
+                  station_b: { section_id: number; station_index: number };
+                }> = [];
+
+                for (let i = stationMerges.length - 1; i >= 0; i -= 1) {
+                  const merge = stationMerges[i]!;
+                  const touchesStation =
+                    (merge.station_a.section_id === stationRef.section_id && merge.station_a.station_index === stationRef.station_index) ||
+                    (merge.station_b.section_id === stationRef.section_id && merge.station_b.station_index === stationRef.station_index);
+                  if (touchesStation) {
+                    removedPairs.push(merge);
+                    stationMerges.splice(i, 1);
+                  }
+                }
+
+                if (removedPairs.length > 0 && Array.isArray(currentProject.loop_closures)) {
+                  const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
+                  currentProject.loop_closures = loopClosures.filter((closure) => {
+                    const stationA = closure.station_a as { section_id: number; station_index: number } | undefined;
+                    const stationB = closure.station_b as { section_id: number; station_index: number } | undefined;
+                    if (!stationA || !stationB) {
+                      return true;
+                    }
+
+                    const matchesRemovedPair = removedPairs.some((pair) => {
+                      const direct =
+                        pair.station_a.section_id === stationA.section_id &&
+                        pair.station_a.station_index === stationA.station_index &&
+                        pair.station_b.section_id === stationB.section_id &&
+                        pair.station_b.station_index === stationB.station_index;
+                      const reverse =
+                        pair.station_b.section_id === stationA.section_id &&
+                        pair.station_b.station_index === stationA.station_index &&
+                        pair.station_a.section_id === stationB.section_id &&
+                        pair.station_a.station_index === stationB.station_index;
+                      return direct || reverse;
+                    });
+
+                    return !matchesRemovedPair;
+                  });
+                }
+              }
+            }
             return { success: true };
+
+          case 'unmerge_station_pair': {
+            console.log('[Mock IPC] unmerge_station_pair called with:', args);
+            const stationA = (args?.stationA ?? args?.station_a) as { section_id: number; station_index: number } | undefined;
+            const stationB = (args?.stationB ?? args?.station_b) as { section_id: number; station_index: number } | undefined;
+            if (!stationA || !stationB) {
+              return { success: false, error: 'Missing station pair' };
+            }
+
+            unmergeStationPairCalls.push({ stationA, stationB });
+
+            if (currentProject) {
+              const stationMerges = currentProject.station_merges as Array<{
+                station_a: { section_id: number; station_index: number };
+                station_b: { section_id: number; station_index: number };
+              }>;
+
+              const matchIndex = stationMerges.findIndex((merge) => {
+                const direct =
+                  merge.station_a.section_id === stationA.section_id &&
+                  merge.station_a.station_index === stationA.station_index &&
+                  merge.station_b.section_id === stationB.section_id &&
+                  merge.station_b.station_index === stationB.station_index;
+                const reverse =
+                  merge.station_b.section_id === stationA.section_id &&
+                  merge.station_b.station_index === stationA.station_index &&
+                  merge.station_a.section_id === stationB.section_id &&
+                  merge.station_a.station_index === stationB.station_index;
+                return direct || reverse;
+              });
+
+              if (matchIndex >= 0) {
+                stationMerges.splice(matchIndex, 1);
+
+                if (Array.isArray(currentProject.loop_closures)) {
+                  const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
+                  currentProject.loop_closures = loopClosures.filter((closure) => {
+                    const closureA = closure.station_a as { section_id: number; station_index: number } | undefined;
+                    const closureB = closure.station_b as { section_id: number; station_index: number } | undefined;
+                    if (!closureA || !closureB) {
+                      return true;
+                    }
+                    const direct =
+                      closureA.section_id === stationA.section_id &&
+                      closureA.station_index === stationA.station_index &&
+                      closureB.section_id === stationB.section_id &&
+                      closureB.station_index === stationB.station_index;
+                    const reverse =
+                      closureA.section_id === stationB.section_id &&
+                      closureA.station_index === stationB.station_index &&
+                      closureB.section_id === stationA.section_id &&
+                      closureB.station_index === stationA.station_index;
+                    return !(direct || reverse);
+                  });
+                }
+                return { success: true };
+              }
+            }
+
+            return { success: false, error: 'Stations are not directly merged' };
+          }
 
           case 'move_segment':
             // Mock move segment - just return success

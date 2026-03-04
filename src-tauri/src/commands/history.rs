@@ -148,6 +148,7 @@ fn get_command_type(command: &Command) -> String {
         Command::SetShotReference { .. } => "set_shot_reference".to_string(),
         Command::MergeStations { .. } => "merge_stations".to_string(),
         Command::UnmergeStations { .. } => "unmerge_stations".to_string(),
+        Command::UnmergeStationPair { .. } => "unmerge_station_pair".to_string(),
         Command::CreateLoopClosure { .. } => "create_loop_closure".to_string(),
         Command::AdjustLoopClosures { .. } => "adjust_loop_closures".to_string(),
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
@@ -634,6 +635,25 @@ fn derive_preview_data(
                     old_value: String::new(),
                     new_value: format_station_with_name(station_ref, section_names),
                 }],
+                additional_changes: 0,
+            })
+        }
+
+        // UnmergeStationPair - show both station identifiers with section names
+        (Command::UnmergeStationPair { station_a, station_b }, _) => {
+            Some(PreviewData {
+                changes: vec![
+                    FieldChange {
+                        field: "Station A".to_string(),
+                        old_value: String::new(),
+                        new_value: format_station_with_name(station_a, section_names),
+                    },
+                    FieldChange {
+                        field: "Station B".to_string(),
+                        old_value: String::new(),
+                        new_value: format_station_with_name(station_b, section_names),
+                    },
+                ],
                 additional_changes: 0,
             })
         }

@@ -209,6 +209,7 @@ interface ProjectStore {
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
+  unmergeStationPair: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   adjustLoopClosures: (
@@ -878,6 +879,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'unmerge_stations',
       { stationRef },
       { purpose: 'disconnect merged stations', fields: { stationRef } }
+    );
+  },
+
+  unmergeStationPair: async (stationA: StationRef, stationB: StationRef) => {
+    return executeCommand(
+      'unmerge_station_pair',
+      { stationA, stationB },
+      { purpose: 'disconnect selected merged station pair', fields: { stationA, stationB } }
     );
   },
 

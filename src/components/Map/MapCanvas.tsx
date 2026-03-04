@@ -30,7 +30,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { FitToViewIcon } from '../common/icons';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 
-// Tools that support Ctrl+drag for panning
+// Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
 
 interface BoxSelectState {
@@ -178,10 +178,12 @@ export default function MapCanvas() {
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
-  // Ref to track if we're in a Ctrl+drag operation (to filter spurious keyup events from Tauri/WebKit)
-  const ctrlDragActiveRef = useRef(false);
-  // Timestamp of the last mouse event during a Ctrl+drag (for filtering spurious keyup events)
-  const ctrlDragMouseEventTimeRef = useRef(0);
+  // True while custom panning gesture is active (Ctrl+left-drag or middle-drag)
+  const customPanActiveRef = useRef(false);
+  // True while custom panning was initiated with Ctrl+left-drag (for keyup filtering)
+  const ctrlPanActiveRef = useRef(false);
+  // Timestamp of the last mouse event during a Ctrl+left-drag (for spurious keyup filtering)
+  const ctrlPanMouseEventTimeRef = useRef(0);
   const [isHoveringFeature, setIsHoveringFeature] = useState(false);
   // Placement mode cursor position (screen pixels)
   const [placementCursor, setPlacementCursor] = useState<{ x: number; y: number } | null>(null);
@@ -1773,7 +1775,7 @@ export default function MapCanvas() {
         // mousedown/mouseup while holding Ctrl. Only suppress keyups that occur within
         // 50ms of a mouse event during a Ctrl+drag — genuine Ctrl releases go through
         // immediately so the cursor resets without delay.
-        if (ctrlDragActiveRef.current && Date.now() - ctrlDragMouseEventTimeRef.current < 50) {
+        if (ctrlPanActiveRef.current && Date.now() - ctrlPanMouseEventTimeRef.current < 50) {
           return;
         }
         setCtrlHeld(false);
@@ -1781,7 +1783,8 @@ export default function MapCanvas() {
     };
     // Also handle window blur (Ctrl held, switch windows, release outside)
     const handleBlur = () => {
-      ctrlDragActiveRef.current = false;
+      customPanActiveRef.current = false;
+      ctrlPanActiveRef.current = false;
       setCtrlHeld(false);
       // Cancel any active box select or zoom box
       setBoxSelect({ start: null, end: null });
@@ -1841,22 +1844,28 @@ export default function MapCanvas() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [moveDrag, setSnappedStation]);
 
-  // Custom Ctrl+drag panning implementation
-  // MapLibre's dragPan doesn't work reliably with Ctrl modifier in Tauri/WebKit,
-  // so we implement our own panning by tracking mouse movement and calling panBy() directly
+  // Custom temporary panning implementation for Ctrl+left-drag and middle-drag.
+  // MapLibre's dragPan with modifiers is unreliable in Tauri/WebKit, so we track
+  // mouse movement directly and call panBy() ourselves.
   useEffect(() => {
     const mapElement = mapContainer.current;
     if (!mapElement) return;
 
-    // Track drag start position for custom panning
-    let ctrlPanStart: { x: number; y: number } | null = null;
+    // Track drag start state for custom panning.
+    let customPanStart: { x: number; y: number } | null = null;
+    let customPanButtonMask: number | null = null;
 
     const handleMouseDownCapture = (e: MouseEvent) => {
-      if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool) && map.current) {
-        // Mark that we're starting a Ctrl+drag (to filter spurious keyup events from Tauri/WebKit)
-        ctrlDragActiveRef.current = true;
-        ctrlDragMouseEventTimeRef.current = Date.now();
-        ctrlPanStart = { x: e.clientX, y: e.clientY };
+      const isCtrlLeftPan = e.ctrlKey && e.button === 0;
+      const isMiddlePan = e.button === 1;
+      if ((isCtrlLeftPan || isMiddlePan) && CTRL_PAN_TOOLS.includes(activeTool) && map.current) {
+        customPanActiveRef.current = true;
+        ctrlPanActiveRef.current = isCtrlLeftPan;
+        if (isCtrlLeftPan) {
+          ctrlPanMouseEventTimeRef.current = Date.now();
+        }
+        customPanStart = { x: e.clientX, y: e.clientY };
+        customPanButtonMask = isMiddlePan ? 4 : 1;
 
         // Suppress default browser behavior during custom pan
         e.stopPropagation();
@@ -1867,35 +1876,43 @@ export default function MapCanvas() {
       }
     };
 
-    // Implement custom panning since MapLibre's dragPan doesn't work reliably with Ctrl modifier in Tauri/WebKit
+    // Implement custom panning since modified/middle drag interactions are handled manually.
     const handleMouseMoveCapture = (e: MouseEvent) => {
-      if (ctrlPanStart && e.buttons === 1 && map.current) {
-        const dx = e.clientX - ctrlPanStart.x;
-        const dy = e.clientY - ctrlPanStart.y;
+      if (customPanStart && customPanButtonMask !== null && (e.buttons & customPanButtonMask) !== 0 && map.current) {
+        const dx = e.clientX - customPanStart.x;
+        const dy = e.clientY - customPanStart.y;
 
         // Pan the map by the delta (negative because we're dragging the "ground")
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
           map.current.panBy([-dx, -dy], { animate: false });
-          ctrlPanStart = { x: e.clientX, y: e.clientY };
+          customPanStart = { x: e.clientX, y: e.clientY };
+        }
+        if (ctrlPanActiveRef.current) {
+          ctrlPanMouseEventTimeRef.current = Date.now();
         }
         // Stop propagation to prevent MapLibre from updating hover state during pan
         e.stopPropagation();
+        e.preventDefault();
       }
     };
 
     const handleMouseUpCapture = (e: MouseEvent) => {
-      if (ctrlPanStart && map.current) {
-        ctrlPanStart = null;
+      if (customPanStart && map.current) {
+        customPanStart = null;
+        customPanButtonMask = null;
         // Record timestamp for spurious keyup filter (Tauri/WebKit can fire one near mouseup too)
-        ctrlDragMouseEventTimeRef.current = Date.now();
+        if (ctrlPanActiveRef.current) {
+          ctrlPanMouseEventTimeRef.current = Date.now();
+        }
         // Suppress default browser behavior; the Ctrl+click guard in
         // SurveyLayer.handleMapClick prevents move/select actions
         e.stopPropagation();
         e.preventDefault();
-        // Clear ctrlDragActive after a small delay (can't rely on handleMouseUpGlobal
+        // Clear custom pan flags after a small delay (can't rely on handleMouseUpGlobal
         // because stopPropagation prevents it from firing on window bubble)
         setTimeout(() => {
-          ctrlDragActiveRef.current = false;
+          customPanActiveRef.current = false;
+          ctrlPanActiveRef.current = false;
         }, 50);
         // Restore cursor: if Ctrl still held, show grab cursor for next potential pan
         // Otherwise restore the tool cursor
@@ -1922,29 +1939,31 @@ export default function MapCanvas() {
       }
     };
 
-    // Capture the DOM click event during/after a Ctrl+drag pan.
+    // Capture the DOM click event during/after a custom pan gesture.
     // The browser fires 'click' as a separate event after mouseup — stopping propagation
     // on mousedown/mouseup does NOT prevent click from being dispatched. MapLibre listens
     // for 'click' on the canvas, so we must capture it to prevent spurious map clicks.
     const handleClickCapture = (e: MouseEvent) => {
-      if (ctrlDragActiveRef.current) {
+      if (customPanActiveRef.current) {
         e.stopPropagation();
         e.preventDefault();
       }
     };
 
-    // Capture pointer events during Ctrl+drag pan — MapLibre may use pointer events
+    // Capture pointer events during custom pan — MapLibre may use pointer events
     // internally, so capturing only mouse events is insufficient to prevent click leakage
     const handlePointerDownCapture = (e: PointerEvent) => {
-      if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool) && map.current && e.pointerType === 'mouse') {
+      const isCtrlLeftPan = e.ctrlKey && e.button === 0;
+      const isMiddlePan = e.button === 1;
+      if ((isCtrlLeftPan || isMiddlePan) && CTRL_PAN_TOOLS.includes(activeTool) && map.current && e.pointerType === 'mouse') {
         e.stopPropagation();
       }
     };
 
     const handlePointerUpCapture = (e: PointerEvent) => {
-      // If we're in a Ctrl+drag pan, stop pointer events from reaching MapLibre
-      // (ctrlPanStart is still set at this point — cleared by handleMouseUpCapture which fires after)
-      if (ctrlPanStart && e.pointerType === 'mouse') {
+      // If we're in custom pan, stop pointer events from reaching MapLibre.
+      // (customPanStart is still set here — cleared by handleMouseUpCapture which fires after)
+      if (customPanStart && e.pointerType === 'mouse') {
         e.stopPropagation();
       }
     };
@@ -1960,13 +1979,18 @@ export default function MapCanvas() {
       mouseIsDown = false;
       // Clear pan state in case mouse was released outside the map container
       // (handleMouseUpCapture only fires for events on the container element)
-      ctrlPanStart = null;
-      // Fallback: clear ctrlDragActive for mouseups outside the map container
+      customPanStart = null;
+      customPanButtonMask = null;
+      if (ctrlPanActiveRef.current) {
+        ctrlPanMouseEventTimeRef.current = Date.now();
+      }
+      // Fallback: clear custom pan flags for mouseups outside the map container
       // (handleMouseUpCapture handles the in-container case)
-      if (ctrlDragActiveRef.current) {
+      if (customPanActiveRef.current) {
         setTimeout(() => {
           if (!mouseIsDown) {
-            ctrlDragActiveRef.current = false;
+            customPanActiveRef.current = false;
+            ctrlPanActiveRef.current = false;
           }
         }, 50);
       }

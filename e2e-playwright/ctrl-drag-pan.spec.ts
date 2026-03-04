@@ -15,6 +15,22 @@ async function createProjectWithMap(page: Page): Promise<void> {
   await waitForMapReady(page);
 }
 
+async function getMapCenter(page: Page): Promise<{ lng: number; lat: number } | null> {
+  return page.evaluate(() => {
+    const map = (window as unknown as { __stalagmight_map__?: { getCenter: () => { lng: number; lat: number } } }).__stalagmight_map__;
+    if (!map) return null;
+    const center = map.getCenter();
+    return { lng: center.lng, lat: center.lat };
+  });
+}
+
+async function middleDrag(page: Page, startX: number, startY: number, endX: number, endY: number): Promise<void> {
+  await page.mouse.move(startX, startY);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.move(endX, endY, { steps: 8 });
+  await page.mouse.up({ button: 'middle' });
+}
+
 test.describe('Ctrl+Drag Panning', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -85,6 +101,41 @@ test.describe('Ctrl+Drag Panning', () => {
 
         // Map should remain functional after pan
         await expect(canvas).toBeVisible();
+      });
+    }
+  });
+
+  test.describe('Middle-Click Panning Behavior', () => {
+    for (const tool of supportedTools) {
+      test(`should allow middle-drag to pan in ${tool.name} mode and keep active tool`, async ({ page }) => {
+        // Switch to the tool
+        await page.keyboard.press(tool.key);
+        await waitForActiveTool(page, tool.name);
+
+        const canvas = page.getByTestId('map-canvas');
+        const box = await canvas.boundingBox();
+        expect(box).not.toBeNull();
+
+        const centerBefore = await getMapCenter(page);
+        expect(centerBefore).not.toBeNull();
+
+        await middleDrag(
+          page,
+          box!.x + box!.width / 2,
+          box!.y + box!.height / 2,
+          box!.x + box!.width / 2 + 120,
+          box!.y + box!.height / 2 + 80
+        );
+        await waitForMapIdle(page);
+
+        // Pan override must not change the active tool.
+        await waitForActiveTool(page, tool.name);
+
+        const centerAfter = await getMapCenter(page);
+        expect(centerAfter).not.toBeNull();
+
+        const centerDelta = Math.abs(centerAfter!.lng - centerBefore!.lng) + Math.abs(centerAfter!.lat - centerBefore!.lat);
+        expect(centerDelta).toBeGreaterThan(0.00001);
       });
     }
   });
