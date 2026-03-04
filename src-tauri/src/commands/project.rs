@@ -193,10 +193,12 @@ pub fn cancel_loading(state: State<AppState>) {
 /// This creates a new project database file immediately, emitting progress events
 /// during creation phases (CreatingDatabase, InitializingProject, SavingSettings).
 ///
-/// Unlike `create_project` which creates an in-memory project, this command:
-/// - Creates and persists the database file immediately
+/// Unlike `create_project`, this command supports assigning a canonical save path
+/// during project creation and can optionally defer the initial disk write.
+/// It:
 /// - Emits "loading-progress" events for UI feedback
 /// - Returns the project with display settings
+/// - Persists immediately unless `defer_initial_save` is true
 ///
 /// # Arguments
 /// * `name` - Project name (used for both filename and project metadata)
@@ -205,6 +207,8 @@ pub fn cancel_loading(state: State<AppState>) {
 ///   If omitted (and `save_path` is also omitted), uses user's documents directory.
 /// * `save_path` - Optional full file path to save the project to.
 ///   If provided, this takes precedence over `save_directory`.
+/// * `defer_initial_save` - Optional flag to reserve `project.file_path` without
+///   writing the file yet. First save/autosave creates the file.
 ///
 /// # Technical Note
 /// Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
@@ -217,13 +221,20 @@ pub async fn create_project_full(
     project_location: Option<String>,
     save_directory: Option<PathBuf>,
     save_path: Option<PathBuf>,
+    defer_initial_save: Option<bool>,
 ) -> Result<CreateProjectFullResult, LoadError> {
     // Use AppHandle to access state inside spawn_blocking
     // (State<'_, T> cannot be moved due to lifetime constraints)
     let result: Result<Result<CreateProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_create_project_full(name, project_location, save_directory, save_path)
+            state.do_create_project_full(
+                name,
+                project_location,
+                save_directory,
+                save_path,
+                defer_initial_save.unwrap_or(false),
+            )
         })
         .await;
 

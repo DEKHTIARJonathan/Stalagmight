@@ -27,13 +27,7 @@ impl AppState {
         // Sanitize the project name for filesystem use
         let sanitized_name: String = name
             .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect();
 
         // Remove leading/trailing whitespace and ensure not empty after sanitization
@@ -76,6 +70,48 @@ impl AppState {
         let full_path = dir.join(filename);
 
         Ok(full_path)
+    }
+
+    /// Return an available project path by appending `_N` before the extension when needed.
+    ///
+    /// Examples:
+    /// - `Cave.stalx` -> `Cave_1.stalx` (if `Cave.stalx` exists)
+    /// - `Cave_1.stalx` -> `Cave_2.stalx` (if both previous files exist)
+    fn next_available_project_path(path: &PathBuf) -> PathBuf {
+        if !path.exists() {
+            return path.clone();
+        }
+
+        let parent = path.parent().map(std::path::Path::to_path_buf);
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "project".to_string());
+        let extension = path
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_string())
+            .filter(|ext| !ext.is_empty());
+
+        let mut index: usize = 1;
+        loop {
+            let candidate_name = if let Some(ext) = &extension {
+                format!("{stem}_{index}.{ext}")
+            } else {
+                format!("{stem}_{index}")
+            };
+            let candidate_path = if let Some(parent_dir) = &parent {
+                parent_dir.join(&candidate_name)
+            } else {
+                PathBuf::from(&candidate_name)
+            };
+
+            if !candidate_path.exists() {
+                return candidate_path;
+            }
+
+            index += 1;
+        }
     }
 
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
@@ -242,8 +278,9 @@ impl AppState {
         };
 
         // Determine save path and ensure .stalx extension
+        let is_implicit_save = path.is_none();
         let save_path = path.or_else(|| project.file_path.clone());
-        let save_path = match save_path {
+        let mut save_path = match save_path {
             Some(p) => {
                 // Ensure .stalx extension
                 if p.extension().is_none_or(|ext| ext != "stalx") {
@@ -254,6 +291,26 @@ impl AppState {
             }
             None => return CommandResult::failure("No save path specified".to_string()),
         };
+
+        // On the first implicit save (path omitted), avoid overwriting an existing file.
+        // Deferred new projects can reserve a canonical path; if it now exists, auto-rename.
+        let has_open_database = self
+            .database
+            .lock()
+            .map(|db| db.is_some())
+            .unwrap_or(false);
+        if is_implicit_save && !has_open_database {
+            let candidate_path = Self::next_available_project_path(&save_path);
+            if candidate_path != save_path {
+                tracing::warn!(
+                    requested_path = ?save_path,
+                    selected_path = ?candidate_path,
+                    purpose = "avoid overwriting existing project on first implicit save",
+                    "Implicit first save path already exists; using auto-renamed path"
+                );
+                save_path = candidate_path;
+            }
+        }
 
         // Create a temporary file path in the same directory (for atomic rename)
         let temp_path = save_path.with_extension("stalx.tmp");
@@ -1022,7 +1079,7 @@ impl AppState {
     /// This is the main implementation used by create_project_full command.
     ///
     /// Phases:
-    /// 1. CreatingDatabase (40%) - Create SQLite file
+    /// 1. CreatingDatabase (40%) - Resolve/create SQLite file path
     /// 2. InitializingProject (40%) - Create project record
     /// 3. SavingSettings (20%) - Save default display settings
     ///
@@ -1035,12 +1092,15 @@ impl AppState {
     ///   If omitted (and `save_path` is omitted), uses user's documents directory.
     /// * `save_path` - Optional full file path for the new project. If provided,
     ///   this takes precedence over `save_directory`.
+    /// * `defer_initial_save` - When true, reserve `project.file_path` but do not
+    ///   create/write the project file yet. First save/autosave will create it.
     pub fn do_create_project_full(
         &self,
         name: String,
         project_location: Option<String>,
         save_directory: Option<PathBuf>,
         save_path: Option<PathBuf>,
+        defer_initial_save: bool,
     ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError> {
         use crate::core::loading::{
             CreateProjectFullResult, DisplaySettings, LoadError, LoadingPhase, ProgressEmitter,
@@ -1074,7 +1134,7 @@ impl AppState {
         progress.start_phase(LoadingPhase::CreatingDatabase);
 
         // Resolve database path from explicit save path or from project name + optional save directory.
-        let db_path = if let Some(path) = save_path {
+        let mut db_path = if let Some(path) = save_path {
             if path.extension().is_none_or(|ext| ext != "stalx") {
                 path.with_extension("stalx")
             } else {
@@ -1089,12 +1149,16 @@ impl AppState {
             }
         };
 
-        // CRITICAL: Fail if file already exists to prevent data corruption
-        if db_path.exists() {
-            early_return_err!(LoadError::new(
-                "ALREADY_EXISTS",
-                format!("Project file already exists: {}", db_path.display())
-            ));
+        // Avoid collisions by selecting the next available path instead of overwriting.
+        let available_db_path = Self::next_available_project_path(&db_path);
+        if available_db_path != db_path {
+            tracing::warn!(
+                requested_path = ?db_path,
+                selected_path = ?available_db_path,
+                purpose = "avoid overwriting existing project on create",
+                "Project path already exists; using auto-renamed path"
+            );
+            db_path = available_db_path;
         }
 
         // Create parent directories if they don't exist
@@ -1109,11 +1173,15 @@ impl AppState {
             }
         }
 
-        // Create the database - local variable only until Finalizing
-        let mut db = match Database::open(&db_path) {
-            Ok(db) => db,
-            Err(e) => {
-                early_return_err!(LoadError::new("DATABASE", format!("Failed to create database: {e}")));
+        // Create the database only when immediate persistence is requested.
+        let mut db = if defer_initial_save {
+            None
+        } else {
+            match Database::open(&db_path) {
+                Ok(db) => Some(db),
+                Err(e) => {
+                    early_return_err!(LoadError::new("DATABASE", format!("Failed to create database: {e}")));
+                }
             }
         };
         check_cancelled!();
@@ -1124,8 +1192,10 @@ impl AppState {
         let mut project = Project::new(name.clone(), project_location);
         project.file_path = Some(db_path.clone());
 
-        if let Err(e) = db.save_project(&project) {
-            early_return_err!(LoadError::new("DATABASE", format!("Failed to save project: {e}")));
+        if let Some(ref mut database) = db {
+            if let Err(e) = database.save_project(&project) {
+                early_return_err!(LoadError::new("DATABASE", format!("Failed to save project: {e}")));
+            }
         }
         check_cancelled!();
         progress.complete_phase(LoadingPhase::InitializingProject);
@@ -1150,13 +1220,15 @@ impl AppState {
             ("gridSpacing", display_settings.grid_spacing.to_string()),
         ];
 
-        for (key, value) in &settings_map {
-            if let Err(e) = db.save_display_setting(key, value) {
-                // Fail the command if display settings can't be saved - this indicates a real DB error
-                early_return_err!(LoadError::new(
-                    "DATABASE",
-                    format!("Failed to save display setting {key}: {e}")
-                ));
+        if let Some(ref mut database) = db {
+            for (key, value) in &settings_map {
+                if let Err(e) = database.save_display_setting(key, value) {
+                    // Fail the command if display settings can't be saved - this indicates a real DB error
+                    early_return_err!(LoadError::new(
+                        "DATABASE",
+                        format!("Failed to save display setting {key}: {e}")
+                    ));
+                }
             }
         }
         check_cancelled!();
@@ -1172,16 +1244,24 @@ impl AppState {
         *self.project.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
 
         // Commit 2: Database handle mutation
-        *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
+        *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = db;
 
         // Commit 3: Clear undo stack (new project)
         self.undo_stack.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
 
-        // Commit 4: Display settings cache clear
-        self.clear_display_settings_cache();
+        // Commit 4: Display settings cache
+        if defer_initial_save {
+            let mut cache = self.display_settings_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache.clear();
+            for (key, value) in &settings_map {
+                cache.insert((*key).to_string(), value.clone());
+            }
+        } else {
+            self.clear_display_settings_cache();
+        }
 
-        // Commit 5: Add to recent projects
-        {
+        // Commit 5: Add to recent projects only after a real file exists.
+        if !defer_initial_save {
             let mut recent = self.recent_projects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             recent.retain(|p| p != &db_path);
             recent.insert(0, db_path.clone());
@@ -1207,7 +1287,7 @@ impl AppState {
         tracing::info!(
             path = ?db_path,
             name = %name,
-            purpose = "create new project on disk",
+            purpose = if defer_initial_save { "create new project in memory with reserved save path" } else { "create new project on disk" },
             "Project created via create_project_full"
         );
 
@@ -1289,14 +1369,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_project_path_preserves_spaces_and_hyphens() {
+    fn resolve_project_path_replaces_spaces_and_symbols_with_underscores() {
         let state = AppState::new().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let resolved = state
             .resolve_project_path("My Cave-2024", Some(&temp_dir.path().to_path_buf()))
             .unwrap();
         let filename = resolved.file_name().unwrap().to_str().unwrap();
-        assert_eq!(filename, "My Cave-2024.stalx");
+        assert_eq!(filename, "My_Cave_2024.stalx");
     }
 
     #[test]
@@ -1306,5 +1386,18 @@ mod tests {
         // the documents directory needs to be created
         let result = state.resolve_project_path("CreateDirTest", None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn next_available_project_path_adds_incrementing_suffix() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_path = temp_dir.path().join("Collision.stalx");
+        let first_suffix = temp_dir.path().join("Collision_1.stalx");
+
+        std::fs::write(&base_path, b"base").unwrap();
+        std::fs::write(&first_suffix, b"first").unwrap();
+
+        let available = AppState::next_available_project_path(&base_path);
+        assert_eq!(available, temp_dir.path().join("Collision_2.stalx"));
     }
 }
