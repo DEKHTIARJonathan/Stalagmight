@@ -22,6 +22,7 @@ export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 export type ResolvedTheme = 'dark' | 'light' | 'cave' | 'dracula' | 'one_dark' | 'solarized_light' | 'catppuccin_latte' | 'nord' | 'catppuccin_mocha';
 
 export type ViewType = 'global' | 'single';
+export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done';
 
 export type DetailPanelTab = 'details' | 'warnings';
 
@@ -236,8 +237,10 @@ interface UIStore {
   // Dialog state
   activeDialog: string | null;
   dialogData: Record<string, unknown>;
+  dmpImportWizardPhase: DmpImportWizardPhase | null;
   openDialog: (dialog: string, data?: Record<string, unknown>) => void;
   closeDialog: () => void;
+  setDmpImportWizardPhase: (phase: DmpImportWizardPhase | null) => void;
 
   // Import flow context
   importContext: 'new-project' | 'existing-project' | null;
@@ -671,8 +674,11 @@ export const useUIStore = create<UIStore>((set) => ({
   // Dialog state
   activeDialog: null,
   dialogData: {},
-  openDialog: (activeDialog, dialogData = {}) => set({ activeDialog, dialogData }),
-  closeDialog: () => set({ activeDialog: null, dialogData: {} }),
+  dmpImportWizardPhase: null,
+  openDialog: (activeDialog, dialogData = {}) =>
+    set({ activeDialog, dialogData, dmpImportWizardPhase: null }),
+  closeDialog: () => set({ activeDialog: null, dialogData: {}, dmpImportWizardPhase: null }),
+  setDmpImportWizardPhase: (dmpImportWizardPhase) => set({ dmpImportWizardPhase }),
 
   // Import flow context
   importContext: null,

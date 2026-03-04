@@ -20,6 +20,7 @@ export interface SectionMetadataFormProps {
   onColorChange: (value: string) => void;
   onQualityChange?: (value: number) => void;
   onDirectionChange?: (value: 'in' | 'out') => void;
+  showName?: boolean;
   showDirection?: boolean;
   showQuality?: boolean;
   disabled?: boolean;
@@ -38,6 +39,7 @@ export function SectionMetadataForm({
   onColorChange,
   onQualityChange,
   onDirectionChange,
+  showName = true,
   showDirection = false,
   showQuality = false,
   disabled = false,
@@ -45,19 +47,20 @@ export function SectionMetadataForm({
   const { t } = useTranslation();
   return (
     <div className="space-y-3" data-testid="section-metadata-form">
-      {/* Name field - full width */}
-      <div>
-        <label className="block text-sm text-text-secondary mb-1">{t('common.labels.name')}</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => onNameChange(e.target.value)}
-          className="w-full px-3 py-2 bg-background border border-border rounded"
-          placeholder={t('sectionMetadata.placeholders.name')}
-          disabled={disabled}
-          data-testid="section-name-input"
-        />
-      </div>
+      {showName && (
+        <div>
+          <label className="block text-sm text-text-secondary mb-1">{t('common.labels.name')}</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            className="w-full px-3 py-2 bg-background border border-border rounded"
+            placeholder={t('sectionMetadata.placeholders.name')}
+            disabled={disabled}
+            data-testid="section-name-input"
+          />
+        </div>
+      )}
 
       {/* Surveyor field - full width */}
       <div>

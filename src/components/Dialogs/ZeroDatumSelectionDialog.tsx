@@ -85,6 +85,7 @@ interface ZeroDatumSelectionDialogProps {
   filePath: string;
   onCancel: () => void;
   onBack: () => void;
+  onSkip: () => void;
   onSelectSection: (sectionIndex: number) => void;
 }
 
@@ -94,6 +95,7 @@ export default function ZeroDatumSelectionDialog({
   filePath: _filePath,
   onCancel,
   onBack,
+  onSkip,
   onSelectSection,
 }: ZeroDatumSelectionDialogProps) {
   const { t } = useTranslation();
@@ -181,12 +183,17 @@ export default function ZeroDatumSelectionDialog({
         </div>
       </div>
 
-      <div className="flex justify-start gap-2 pt-3 border-t border-border mt-1 shrink-0">
-        <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-selection-cancel">
-          {t('common.actions.cancel')}
-        </Button>
-        <Button variant="secondary" onClick={onBack} data-testid="zero-datum-selection-back">
-          {t('common.actions.back')}
+      <div className="flex justify-between pt-3 border-t border-border mt-1 shrink-0">
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCancel} data-testid="zero-datum-selection-cancel">
+            {t('common.actions.cancel')}
+          </Button>
+          <Button variant="secondary" onClick={onBack} data-testid="zero-datum-selection-back">
+            {t('common.actions.back')}
+          </Button>
+        </div>
+        <Button variant="primary" onClick={onSkip} data-testid="zero-datum-selection-skip">
+          {t('dialogs.zeroDatumSelection.skip')}
         </Button>
       </div>
     </DialogWrapper>

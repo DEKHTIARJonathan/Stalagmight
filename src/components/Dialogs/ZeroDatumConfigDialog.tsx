@@ -80,7 +80,6 @@ export default function ZeroDatumConfigDialog({
   );
   const [color, setColor] = useState(SECTION_COLORS[colorIndex % SECTION_COLORS.length] ?? '#4ecdc4');
   const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
-  const [quality, setQuality] = useState(1.0);
 
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>(() =>
@@ -260,11 +259,11 @@ export default function ZeroDatumConfigDialog({
         date: date || null,
         color,
         direction,
-        quality,
+        quality: 1.0,
       },
       shots,
     });
-  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, quality, shots]);
+  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, shots]);
 
   if (!section) return null;
 
@@ -282,7 +281,11 @@ export default function ZeroDatumConfigDialog({
       {/* Scrollable content area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left column: Preview (fixed) */}
-        <div className="shrink-0 flex flex-col items-center p-4 border-r border-border" style={{ width: 380 }}>
+        <div
+          className="shrink-0 flex flex-col items-center p-4 border-r border-border"
+          style={{ width: 380 }}
+          data-testid="zero-datum-preview-map"
+        >
           <SectionPreview
             section={section}
             color={color}
@@ -299,7 +302,10 @@ export default function ZeroDatumConfigDialog({
         </div>
 
         {/* Right column: Configuration (scrollable) */}
-        <div className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5">
+        <div
+          className="flex-1 min-w-0 overflow-y-auto p-4 space-y-5"
+          data-testid="zero-datum-config-right-pane"
+        >
           {/* Zero Datum Location — prominent card */}
           <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 space-y-3">
             <div>
@@ -368,42 +374,52 @@ export default function ZeroDatumConfigDialog({
             </div>
           </div>
 
-          {/* Metadata form */}
+          {/* Section name */}
           <div>
             <h3 className="text-sm font-medium text-text-primary mb-2">
               {t('dialogs.zeroDatumConfig.metadataHeading')}
             </h3>
+            <label className="block text-sm text-text-secondary mb-1">{t('common.labels.name')}</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-3 py-2 bg-background border border-border rounded"
+              placeholder={t('sectionMetadata.placeholders.name')}
+              data-testid="section-name-input"
+            />
+          </div>
+
+          <div className="space-y-5" data-testid="zero-datum-editable-rest">
             <SectionMetadataForm
               name={name}
               surveyor={surveyor}
               date={date}
               color={color}
               direction={direction}
-              quality={quality}
               onNameChange={setName}
               onSurveyorChange={setSurveyor}
               onDateChange={setDate}
               onColorChange={setColor}
               onDirectionChange={setDirection}
-              onQualityChange={setQuality}
+              showName={false}
               showDirection
-              showQuality
             />
-          </div>
 
-          {/* Shot table */}
-          <div>
-            <h3 className="text-sm font-medium text-text-primary mb-2">
-              {t('dialogs.zeroDatumConfig.shotsHeading')}
-            </h3>
-            <ShotTableEditor
-              shots={shots}
-              onShotChange={handleShotChange}
-              onAddShot={handleAddShot}
-              onDeleteShot={handleDeleteShot}
-              onInsertBefore={handleInsertBefore}
-              onInsertAfter={handleInsertAfter}
-            />
+            {/* Shot table */}
+            <div>
+              <h3 className="text-sm font-medium text-text-primary mb-2">
+                {t('dialogs.zeroDatumConfig.shotsHeading')}
+              </h3>
+              <ShotTableEditor
+                shots={shots}
+                onShotChange={handleShotChange}
+                onAddShot={handleAddShot}
+                onDeleteShot={handleDeleteShot}
+                onInsertBefore={handleInsertBefore}
+                onInsertAfter={handleInsertAfter}
+              />
+            </div>
           </div>
         </div>
       </div>

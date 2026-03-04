@@ -1,4 +1,4 @@
-import type { ViewType } from '../store/uiStore';
+import type { DmpImportWizardPhase, ViewType } from '../store/uiStore';
 
 export type OnboardingPlacement = 'top' | 'bottom' | 'left' | 'right' | 'center';
 export type OnboardingInteraction = 'locked' | 'target' | 'free';
@@ -11,6 +11,13 @@ export interface OnboardingStepDefinition {
   targetSelectors?: string[];
   placement?: OnboardingPlacement;
   interaction?: OnboardingInteraction;
+  tooltipOffsetX?: number;
+  tooltipOffsetY?: number;
+  tooltipAnchorY?: 'auto' | 'top' | 'bottom';
+  tooltipTargetSelector?: string;
+  scrollContainerSelector?: string;
+  scrollTargetSelector?: string;
+  scrollAlignment?: 'top' | 'nearest';
 }
 
 export interface OnboardingContext {
@@ -19,6 +26,7 @@ export interface OnboardingContext {
   hasRecentProjects: boolean;
   configRecentProjectsCount: number | null;
   activeDialog: string | null;
+  dmpImportWizardPhase: DmpImportWizardPhase | null;
   isDmpImportContext: boolean;
   loadingProject: boolean;
   splashVisible: boolean;
@@ -212,10 +220,7 @@ const dmpSelectionFlow: OnboardingFlowDefinition = {
       id: 'file-overview',
       titleKey: 'onboarding.flows.dmpSelection.steps.fileOverview.title',
       descriptionKey: 'onboarding.flows.dmpSelection.steps.fileOverview.description',
-      targetSelectors: [
-        '[data-testid="dmp-filename"]',
-        '[data-testid="selection-stats"]',
-      ],
+      targetSelector: '[data-testid="dmp-file-overview"]',
       placement: 'bottom',
       interaction: 'locked',
     },
@@ -223,22 +228,23 @@ const dmpSelectionFlow: OnboardingFlowDefinition = {
       id: 'default-values',
       titleKey: 'onboarding.flows.dmpSelection.steps.defaultValues.title',
       descriptionKey: 'onboarding.flows.dmpSelection.steps.defaultValues.description',
-      targetSelectors: [
-        '[data-testid="default-surveyor-input"]',
-        '[data-testid="default-date-input"]',
-      ],
+      targetSelector: '[data-testid="dmp-default-values"]',
       placement: 'bottom',
+      interaction: 'locked',
+    },
+    {
+      id: 'section-table',
+      titleKey: 'onboarding.flows.dmpSelection.steps.sectionTable.title',
+      descriptionKey: 'onboarding.flows.dmpSelection.steps.sectionTable.description',
+      targetSelector: '[data-testid="dmp-section-table"]',
+      placement: 'top',
       interaction: 'locked',
     },
     {
       id: 'bulk-selection',
       titleKey: 'onboarding.flows.dmpSelection.steps.bulkSelection.title',
       descriptionKey: 'onboarding.flows.dmpSelection.steps.bulkSelection.description',
-      targetSelectors: [
-        '[data-testid="select-all-button"]',
-        '[data-testid="select-none-button"]',
-        '[data-testid="invert-selection-button"]',
-      ],
+      targetSelector: '[data-testid="dmp-bulk-selection-controls"]',
       placement: 'bottom',
       interaction: 'locked',
     },
@@ -249,6 +255,8 @@ const dmpSelectionFlow: OnboardingFlowDefinition = {
       targetSelector: '[data-testid="continue-button"]',
       placement: 'top',
       interaction: 'locked',
+      scrollContainerSelector: '[data-testid="dmp-selection-dialog"]',
+      scrollTargetSelector: '[data-testid="continue-button"]',
     },
   ],
 };
@@ -280,10 +288,7 @@ const zeroDatumSelectionFlow: OnboardingFlowDefinition = {
       id: 'navigation',
       titleKey: 'onboarding.flows.zeroDatumSelection.steps.navigation.title',
       descriptionKey: 'onboarding.flows.zeroDatumSelection.steps.navigation.description',
-      targetSelectors: [
-        '[data-testid="zero-datum-selection-cancel"]',
-        '[data-testid="zero-datum-selection-back"]',
-      ],
+      targetSelector: '[data-testid="zero-datum-selection-skip"]',
       placement: 'top',
       interaction: 'locked',
     },
@@ -309,9 +314,14 @@ const zeroDatumConfigFlow: OnboardingFlowDefinition = {
       id: 'station',
       titleKey: 'onboarding.flows.zeroDatumConfig.steps.station.title',
       descriptionKey: 'onboarding.flows.zeroDatumConfig.steps.station.description',
-      targetSelector: '[data-testid="zero-datum-station-select"]',
+      targetSelectors: [
+        '[data-testid="zero-datum-station-select"]',
+        '[data-testid="zero-datum-preview-map"]',
+      ],
       placement: 'bottom',
       interaction: 'locked',
+      tooltipAnchorY: 'bottom',
+      tooltipTargetSelector: '[data-testid="zero-datum-station-select"]',
     },
     {
       id: 'gps',
@@ -320,6 +330,24 @@ const zeroDatumConfigFlow: OnboardingFlowDefinition = {
       targetSelector: '[data-testid="zero-datum-gps-input"]',
       placement: 'bottom',
       interaction: 'locked',
+    },
+    {
+      id: 'section-name',
+      titleKey: 'onboarding.flows.zeroDatumConfig.steps.sectionName.title',
+      descriptionKey: 'onboarding.flows.zeroDatumConfig.steps.sectionName.description',
+      targetSelector: '[data-testid="section-name-input"]',
+      placement: 'bottom',
+      interaction: 'locked',
+    },
+    {
+      id: 'other-data',
+      titleKey: 'onboarding.flows.zeroDatumConfig.steps.otherData.title',
+      descriptionKey: 'onboarding.flows.zeroDatumConfig.steps.otherData.description',
+      targetSelector: '[data-testid="zero-datum-editable-rest"]',
+      placement: 'bottom',
+      interaction: 'locked',
+      scrollContainerSelector: '[data-testid="zero-datum-config-right-pane"]',
+      scrollTargetSelector: '[data-testid="zero-datum-editable-rest"]',
     },
     {
       id: 'confirm',
@@ -332,51 +360,121 @@ const zeroDatumConfigFlow: OnboardingFlowDefinition = {
   ],
 };
 
-const dmpWizardFlow: OnboardingFlowDefinition = {
-  id: 'dmp-new-import',
-  titleKey: 'onboarding.flows.dmpNewImport.title',
+const dmpSuggestedConnectionFlow: OnboardingFlowDefinition = {
+  id: 'dmp-suggested-connection',
+  titleKey: 'onboarding.flows.dmpSuggestedConnection.title',
   shouldStart: (context) =>
     canShowDialogOnboarding(context) &&
-    context.activeDialog === 'dmp-import-new',
+    context.activeDialog === 'dmp-import-new' &&
+    context.dmpImportWizardPhase === 'suggesting',
   steps: [
     {
       id: 'dialog',
-      titleKey: 'onboarding.flows.dmpNewImport.steps.dialog.title',
-      descriptionKey: 'onboarding.flows.dmpNewImport.steps.dialog.description',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.dialog.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.dialog.description',
       targetSelector: '[data-testid="dmp-new-import-dialog"]',
       placement: 'center',
       interaction: 'locked',
     },
     {
-      id: 'progress',
-      titleKey: 'onboarding.flows.dmpNewImport.steps.progress.title',
-      descriptionKey: 'onboarding.flows.dmpNewImport.steps.progress.description',
-      targetSelector: '[data-testid="wizard-progress"]',
+      id: 'connection',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.connection.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.connection.description',
+      targetSelector: '[data-testid="wizard-connection-description"]',
       placement: 'bottom',
       interaction: 'locked',
     },
     {
-      id: 'placement-panel',
-      titleKey: 'onboarding.flows.dmpNewImport.steps.placementPanel.title',
-      descriptionKey: 'onboarding.flows.dmpNewImport.steps.placementPanel.description',
+      id: 'confidence',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.confidence.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.confidence.description',
       targetSelectors: [
-        '[data-testid="wizard-suggestion"]',
-        '[data-testid="wizard-manual-placing"]',
+        '[data-testid="wizard-confidence"]',
+        '[data-testid="toggle-alternatives"]',
       ],
+      placement: 'bottom',
+      interaction: 'locked',
+    },
+    {
+      id: 'merge-station',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.mergeStation.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.mergeStation.description',
+      targetSelector: '[data-testid="wizard-merge-station-control"]',
+      placement: 'bottom',
+      interaction: 'locked',
+    },
+    {
+      id: 'overlap',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.overlap.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.overlap.description',
+      targetSelector: '[data-testid="wizard-overlap-control"]',
+      placement: 'bottom',
+      interaction: 'locked',
+    },
+    {
+      id: 'section-name',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.sectionName.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.sectionName.description',
+      targetSelector: '[data-testid="section-name-input"]',
+      placement: 'bottom',
+      interaction: 'locked',
+      scrollContainerSelector: '[data-testid="wizard-suggestion"]',
+      scrollTargetSelector: '[data-testid="section-name-input"]',
+      scrollAlignment: 'nearest',
+    },
+    {
+      id: 'other-data',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.otherData.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.otherData.description',
+      targetSelector: '[data-testid="wizard-editable-rest"]',
+      placement: 'bottom',
+      interaction: 'locked',
+      scrollContainerSelector: '[data-testid="wizard-suggestion"]',
+      scrollTargetSelector: '[data-testid="wizard-editable-rest"]',
+    },
+    {
+      id: 'actions',
+      titleKey: 'onboarding.flows.dmpSuggestedConnection.steps.actions.title',
+      descriptionKey: 'onboarding.flows.dmpSuggestedConnection.steps.actions.description',
+      targetSelector: '[data-testid="wizard-suggestion-actions"]',
+      placement: 'top',
+      interaction: 'locked',
+    },
+  ],
+};
+
+const dmpSegmentPlacementFlow: OnboardingFlowDefinition = {
+  id: 'dmp-segment-placement',
+  titleKey: 'onboarding.flows.dmpSegmentPlacement.title',
+  shouldStart: (context) =>
+    canShowDialogOnboarding(context) &&
+    context.activeDialog === 'dmp-import-new' &&
+    context.dmpImportWizardPhase === 'manual_placing',
+  steps: [
+    {
+      id: 'segment-panel',
+      titleKey: 'onboarding.flows.dmpSegmentPlacement.steps.segmentPanel.title',
+      descriptionKey: 'onboarding.flows.dmpSegmentPlacement.steps.segmentPanel.description',
+      targetSelector: '[data-testid="wizard-manual-placing"]',
+      placement: 'left',
+      interaction: 'locked',
+    },
+    {
+      id: 'placement-modes',
+      titleKey: 'onboarding.flows.dmpSegmentPlacement.steps.placementModes.title',
+      descriptionKey: 'onboarding.flows.dmpSegmentPlacement.steps.placementModes.description',
+      targetSelector: '[data-testid="segment-placement-modes"]',
       placement: 'left',
       interaction: 'locked',
     },
     {
       id: 'actions',
-      titleKey: 'onboarding.flows.dmpNewImport.steps.actions.title',
-      descriptionKey: 'onboarding.flows.dmpNewImport.steps.actions.description',
+      titleKey: 'onboarding.flows.dmpSegmentPlacement.steps.actions.title',
+      descriptionKey: 'onboarding.flows.dmpSegmentPlacement.steps.actions.description',
       targetSelectors: [
-        '[data-testid="confirm-button"]',
-        '[data-testid="skip-button"]',
         '[data-testid="segment-place-button"]',
         '[data-testid="segment-skip-button"]',
         '[data-testid="segment-place-on-map-button"]',
-        '[data-testid="retry-button"]',
       ],
       placement: 'top',
       interaction: 'locked',
@@ -440,6 +538,7 @@ export const ONBOARDING_FLOWS: readonly OnboardingFlowDefinition[] = [
   dmpSelectionFlow,
   zeroDatumSelectionFlow,
   zeroDatumConfigFlow,
-  dmpWizardFlow,
+  dmpSuggestedConnectionFlow,
+  dmpSegmentPlacementFlow,
   dmpLegacyConfigFlow,
 ];

@@ -25,7 +25,20 @@ import { editableShotToShotData, calculateStationPositions } from './utils/shotC
 
 function App() {
   const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseGpx, importSections } = useProjectStore();
-  const { view, setView, activeDialog, dialogData, closeDialog, openDialog, initPanelSizes, setImportContext, triggerFitToBounds, toast, selectionAnnouncement } = useUIStore();
+  const {
+    view,
+    setView,
+    activeDialog,
+    dialogData,
+    dmpImportWizardPhase,
+    closeDialog,
+    openDialog,
+    initPanelSizes,
+    setImportContext,
+    triggerFitToBounds,
+    toast,
+    selectionAnnouncement,
+  } = useUIStore();
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
@@ -395,6 +408,7 @@ function App() {
     hasRecentProjects: recentProjects.length > 0,
     configRecentProjectsCount: config?.general?.recent_projects.length ?? null,
     activeDialog,
+    dmpImportWizardPhase,
     isDmpImportContext: Boolean(dialogData.dmpFile),
     loadingProject: loading.isLoading,
     splashVisible: splashMounted,
@@ -552,6 +566,13 @@ function App() {
             openDialog('dmp-selection', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
+            });
+          }}
+          onSkip={() => {
+            openDialog('dmp-import-new', {
+              dmpFile: dialogData.dmpFile,
+              filePath: dialogData.filePath,
+              selectionConfig: dialogData.selectionConfig,
             });
           }}
           onSelectSection={(sectionIndex) => {
