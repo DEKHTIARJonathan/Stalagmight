@@ -27,6 +27,7 @@ export interface OnboardingContext {
   configRecentProjectsCount: number | null;
   activeDialog: string | null;
   dmpImportWizardPhase: DmpImportWizardPhase | null;
+  placementModeActive: boolean;
   isDmpImportContext: boolean;
   loadingProject: boolean;
   splashVisible: boolean;
@@ -44,6 +45,7 @@ const canShowOnboarding = (context: OnboardingContext): boolean =>
   context.configLoaded &&
   !context.splashVisible &&
   !context.loadingProject &&
+  !context.placementModeActive &&
   context.activeDialog === null;
 
 const canShowDialogOnboarding = (context: OnboardingContext): boolean =>
