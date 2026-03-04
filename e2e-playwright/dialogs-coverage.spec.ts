@@ -186,6 +186,25 @@ test.describe('Dialog Coverage - Draw Shot', () => {
 });
 
 test.describe('Dialog Coverage - Edit Section', () => {
+  test('shows themed help tooltip for closure adjustment quality', async ({ page }) => {
+    const { sectionId } = await setupProjectWithShots(page, 2);
+
+    await openDialog(page, 'edit-section', { sectionId });
+
+    const dialog = page.getByTestId('edit-section-dialog');
+    await expect(dialog).toBeVisible();
+
+    const helpIcon = dialog.getByTestId('section-quality-help-icon');
+    const tooltip = dialog.getByTestId('section-quality-help-tooltip');
+
+    await expect(helpIcon).toBeVisible();
+    await expect(tooltip).not.toBeVisible();
+
+    await helpIcon.hover();
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText('Higher values apply more closure adjustment');
+  });
+
   test('updates metadata, edits shots, adds and deletes rows', async ({ page }) => {
     const { sectionId } = await setupProjectWithShots(page, 2);
 
