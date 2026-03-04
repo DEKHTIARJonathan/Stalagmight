@@ -3,6 +3,7 @@
  * Used by EditSectionDialog and DmpSectionConfigDialog.
  */
 import { DatePicker } from './DatePicker';
+import { HelpTooltip } from './HelpTooltip';
 import { Select } from './Select';
 import { useTranslation } from 'react-i18next';
 
@@ -77,14 +78,11 @@ export function SectionMetadataForm({
           <label className="block text-sm text-text-secondary mb-1">
             <span className="inline-flex items-center gap-1">
               {t('sectionMetadata.labels.quality')}
-              <span
-                className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-border text-[10px] font-bold text-text-secondary cursor-help"
-                title={t('sectionMetadata.help.quality')}
-                aria-label={t('sectionMetadata.help.quality')}
-                role="img"
-              >
-                ?
-              </span>
+              <HelpTooltip
+                text={t('sectionMetadata.help.quality')}
+                iconTestId="section-quality-help-icon"
+                tooltipTestId="section-quality-help-tooltip"
+              />
             </span>
           </label>
           <input
