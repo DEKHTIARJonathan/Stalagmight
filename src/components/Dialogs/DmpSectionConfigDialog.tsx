@@ -72,7 +72,7 @@ export default function DmpSectionConfigDialog({
   project,
   stations: _stations,
 }: DmpSectionConfigDialogProps) {
-  const importSecondaryButtonClass = 'bg-background border border-border/60 hover:bg-background-50';
+  const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
   // Get placement mode controls from UI store
   const { startPlacementMode, closeDialog, openDialog, dialogData, getMapViewportCenter } = useUIStore();
