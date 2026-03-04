@@ -485,6 +485,19 @@ describe('parseGps', () => {
     const result = parseGps('completely invalid garbage');
     expect(isSuccess(result)).toBe(false);
   });
+
+  it('parses DD with extra internal whitespace and newlines', () => {
+    const result = parseGps('  48.8584  ,\n   2.2945  ');
+    expectCoordsClose(result, 48.8584, 2.2945);
+  });
+
+  it('parses Plus Codes with inserted whitespace', () => {
+    const result = parseGps(' 8FW4V75V + 8Q ');
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) {
+      expect(result.format).toBe('PlusCodes');
+    }
+  });
 });
 
 describe('formatGpsCoordinates', () => {

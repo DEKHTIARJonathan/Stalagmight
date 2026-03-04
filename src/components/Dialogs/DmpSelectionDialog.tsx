@@ -7,6 +7,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { extractFilename } from '../../utils/path';
 import { defaultConfig } from '../../types/config';
 import { formatLength, formatDepthRange } from '../../utils/formatStats';
+import { isImportableDmpShot } from '../../hooks/useImportState';
 import type { DmpFile } from '../../types/commands';
 
 /**
@@ -44,7 +45,7 @@ function calculateMetadata(dmpFile: DmpFile, selectedIndices: Set<number>) {
   const sections = dmpFile.sections;
   const sectionCount = sections.length;
 
-  // Count only standard shots from selected sections
+  // Count only importable shots from selected sections
   let totalShots = 0;
   let totalLength = 0;
   let minDepth: number | null = null;
@@ -56,7 +57,7 @@ function calculateMetadata(dmpFile: DmpFile, selectedIndices: Set<number>) {
     const section = sections[i];
     if (!section) continue;
 
-    const standardShots = section.shots.filter(s => s.shot_type === 'Standard');
+    const standardShots = section.shots.filter(isImportableDmpShot);
     totalShots += standardShots.length;
 
     for (const shot of standardShots) {
@@ -93,7 +94,7 @@ function calculateMetadata(dmpFile: DmpFile, selectedIndices: Set<number>) {
  * - Bulk selection controls (All, None, Invert)
  * - Section table with checkboxes
  *
- * Empty sections (0 standard shots) are displayed but grayed out and disabled.
+ * Empty sections (0 importable shots) are displayed but grayed out and disabled.
  */
 export default function DmpSelectionDialog({
   dmpFile,
@@ -204,12 +205,12 @@ export default function DmpSelectionDialog({
   const [initialSurveyor] = useState(lastUsedSurveyor);
   const [initialDate] = useState('');
 
-  // Section selection state - default to all non-empty sections
+  // Section selection state - default to sections with at least 2 importable shots
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(() => {
     const indices = new Set<number>();
     dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(s => s.shot_type === 'Standard');
-      if (standardShots.length > 0) {
+      const standardShots = section.shots.filter(isImportableDmpShot);
+      if (standardShots.length > 1) {
         indices.add(index);
       }
     });
@@ -220,8 +221,8 @@ export default function DmpSelectionDialog({
   const [initialSelection] = useState(() => {
     const indices = new Set<number>();
     dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(s => s.shot_type === 'Standard');
-      if (standardShots.length > 0) {
+      const standardShots = section.shots.filter(isImportableDmpShot);
+      if (standardShots.length > 1) {
         indices.add(index);
       }
     });
@@ -253,7 +254,7 @@ export default function DmpSelectionDialog({
   const handleSelectAll = useCallback(() => {
     const indices = new Set<number>();
     dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(s => s.shot_type === 'Standard');
+      const standardShots = section.shots.filter(isImportableDmpShot);
       if (standardShots.length > 0) {
         indices.add(index);
       }
@@ -268,7 +269,7 @@ export default function DmpSelectionDialog({
   const handleInvertSelection = useCallback(() => {
     const inverted = new Set<number>();
     dmpFile.sections.forEach((section, index) => {
-      const standardShots = section.shots.filter(s => s.shot_type === 'Standard');
+      const standardShots = section.shots.filter(isImportableDmpShot);
       if (standardShots.length > 0 && !selectedIndices.has(index)) {
         inverted.add(index);
       }
@@ -317,7 +318,7 @@ export default function DmpSelectionDialog({
   // Calculate section counts for display
   const nonEmptySectionCount = useMemo(() => {
     return dmpFile.sections.filter(
-      section => section.shots.filter(s => s.shot_type === 'Standard').length > 0
+      section => section.shots.filter(isImportableDmpShot).length > 0
     ).length;
   }, [dmpFile.sections]);
 
@@ -331,7 +332,7 @@ export default function DmpSelectionDialog({
     >
       <div className="space-y-4">
         {/* File metadata header */}
-        <div className="bg-background-50 rounded p-3 text-sm">
+        <div className="bg-background-50 rounded p-3 text-sm" data-testid="dmp-file-overview">
           <div className="font-medium text-text-primary mb-1" data-testid="dmp-filename">
             File: {fileName} (v{dmpFile.version})
           </div>
@@ -370,7 +371,7 @@ export default function DmpSelectionDialog({
 
         {/* Default values section */}
         <Panel title="Default Values (apply to all sections)">
-          <div className="flex gap-4">
+          <div className="flex gap-4" data-testid="dmp-default-values">
             <div className="flex-1">
               <label className="block text-sm text-text-secondary mb-1">
                 Surveyor
@@ -400,7 +401,7 @@ export default function DmpSelectionDialog({
         </Panel>
 
         {/* Bulk selection controls */}
-        <div className="flex gap-2">
+        <div className="flex gap-2" data-testid="dmp-bulk-selection-controls">
           <Button
             size="sm"
             onClick={handleSelectAll}
@@ -431,7 +432,7 @@ export default function DmpSelectionDialog({
         </div>
 
         {/* Section table */}
-        <div className="border border-border rounded overflow-hidden">
+        <div className="border border-border rounded overflow-hidden" data-testid="dmp-section-table">
           <div className="max-h-64 overflow-auto">
             <table className="w-full text-sm">
               <thead className="bg-background-50 sticky top-0">
@@ -445,7 +446,7 @@ export default function DmpSelectionDialog({
               </thead>
               <tbody>
                 {dmpFile.sections.map((section, index) => {
-                  const standardShots = section.shots.filter(s => s.shot_type === 'Standard');
+                  const standardShots = section.shots.filter(isImportableDmpShot);
                   const shotCount = standardShots.length;
                   const isEmpty = shotCount === 0;
                   const isSelected = selectedIndices.has(index);

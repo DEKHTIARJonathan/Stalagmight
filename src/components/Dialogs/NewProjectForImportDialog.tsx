@@ -253,24 +253,6 @@ export default function NewProjectForImportDialog() {
               Browse...
             </Button>
           </div>
-          <p className="mt-1 text-xs text-text-secondary">
-            {resolvedDefaultSavePath ? (
-              <>
-                Defaults to{' '}
-                <span
-                  className="font-mono break-all"
-                  title={resolvedDefaultSavePath}
-                >
-                  {displayedDefaultSavePath}
-                </span>{' '}
-                when left blank.
-              </>
-            ) : (
-              <>
-                Leave blank to use the app&apos;s default save location.
-              </>
-            )}
-          </p>
         </div>
 
         <div>

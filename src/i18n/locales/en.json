@@ -1024,6 +1024,7 @@
       "overlapMode_existingData": "Use existing data",
       "overlapMode_interpolate": "Interpolate",
       "overlapMode_keepBoth": "Keep both (reference)",
+      "noOverlapShots": "No overlapping shots detected for this suggestion.",
       "manualPlacing": {
         "segmentHeader": "Segment {{current}} of {{total}}",
         "sections": "Sections",
@@ -1051,6 +1052,7 @@
     "zeroDatumSelection": {
       "title": "Select Zero Datum Section",
       "subtitle": "Choose which section will establish the GPS reference point for this project. All other sections will be positioned relative to this one.",
+      "skip": "Skip Zero Datum",
       "shotCount": "{{count}} shots",
       "totalLength": "{{length}} total"
     },
@@ -1746,6 +1748,10 @@
             "title": "Default Values",
             "description": "Set surveyor/date defaults once and apply them to all imported sections."
           },
+          "sectionTable": {
+            "title": "Section Selection Table",
+            "description": "Select which sections to import from this table. Sections with only 1 shot are not selected by default."
+          },
           "bulkSelection": {
             "title": "Bulk Selection Controls",
             "description": "Use Select All, Select None, or Invert to quickly adjust your selection set."
@@ -1768,8 +1774,8 @@
             "description": "Click a section card to configure its station and GPS coordinates."
           },
           "navigation": {
-            "title": "Back / Cancel",
-            "description": "Use Back to return to section selection, or Cancel to exit the import workflow."
+            "title": "Skip Zero Datum (Optional)",
+            "description": "If you do not have a zero datum yet, skip this step for now and add it later."
           }
         }
       },
@@ -1782,11 +1788,28 @@
           },
           "station": {
             "title": "Reference Station",
-            "description": "Choose the station inside this section that should map to the GPS coordinate."
+            "description": "Choose the station to anchor as zero datum. The selected station is highlighted in the preview, or click a station directly in the preview map on the left."
           },
           "gps": {
             "title": "GPS Input",
-            "description": "Paste or type coordinates; once valid, Stalagmight parses and confirms them below."
+            "description": "Valid coordinate inputs:",
+            "descriptionItems": [
+              "DD: 48.8584, 2.2945",
+              "DMS: 48°51'30\"N 2°17'40\"E",
+              "DDM: 48°51.5'N 2°17.67'E",
+              "UTM: 31U 448251 5411932",
+              "MGRS: 31UDQ4825111932",
+              "Plus Codes: 8FW4V75V+8Q",
+              "Map links: Google Maps, OpenStreetMap, Bing Maps"
+            ]
+          },
+          "sectionName": {
+            "title": "Section Name",
+            "description": "Set an identifiable section name, such as \"Main Line\", so the anchor section is easy to recognize later."
+          },
+          "otherData": {
+            "title": "Other Editable Data",
+            "description": "You can adjust any remaining fields here, including surveyor/date, direction/color, and shot measurements. All of this data can also be changed later."
           },
           "confirm": {
             "title": "Apply Zero Datum",
@@ -1794,24 +1817,57 @@
           }
         }
       },
-      "dmpNewImport": {
-        "title": "DMP Import: Placement Wizard",
+      "dmpSuggestedConnection": {
+        "title": "DMP Import: Suggested Connection",
         "steps": {
           "dialog": {
-            "title": "Connection and Placement Wizard",
-            "description": "This wizard walks each section through suggested connections or manual placement."
+            "title": "Suggested Connections",
+            "description": "Stalagmight looks for likely section overlaps using reference shots and survey geometry to speed up placement. Review each suggestion, then confirm or override it as needed."
           },
-          "progress": {
-            "title": "Progress Tracker",
-            "description": "Track placed/skipped sections so you always know import completion status."
+          "connection": {
+            "title": "Connection Pair",
+            "description": "Review exactly what is connecting to what: import section/station on top and target section/station below."
           },
-          "placementPanel": {
-            "title": "Placement Details",
-            "description": "Review suggested matches, adjust options, or choose manual placement modes."
+          "confidence": {
+            "title": "Confidence and Alternatives",
+            "description": "Check the confidence level for this match. Alternative placements may appear for lower-confidence cases."
+          },
+          "mergeStation": {
+            "title": "Merge Station Control",
+            "description": "Choose exactly which import station merges to which target station."
+          },
+          "overlap": {
+            "title": "Overlap Shot Handling",
+            "description": "Choose how overlapping shots are treated: Interpolate, Keep Original (existing), Keep Connected (imported), or Keep Both."
+          },
+          "sectionName": {
+            "title": "Section Name",
+            "description": "Give this section a recognizable name before placement (for example, \"Main Line\")."
+          },
+          "otherData": {
+            "title": "Other Editable Data",
+            "description": "Adjust any remaining fields and shot data here. Everything can also be edited later after import."
           },
           "actions": {
-            "title": "Step Actions",
-            "description": "Use Confirm/Skip and placement actions to advance each segment through the workflow."
+            "title": "Confirm or Skip",
+            "description": "When you are happy with this connection, press Confirm. If placement looks wrong, press Skip and place it manually later."
+          }
+        }
+      },
+      "dmpSegmentPlacement": {
+        "title": "DMP Import: Segment Placement",
+        "steps": {
+          "segmentPanel": {
+            "title": "Segment Overview",
+            "description": "This step places sections that could not be auto-connected."
+          },
+          "placementModes": {
+            "title": "Placement Modes",
+            "description": "Choose a placement strategy: suggested, from existing, manual map placement, or do not place."
+          },
+          "actions": {
+            "title": "Placement Actions",
+            "description": "Use Place Segment (and Skip when available) to continue through remaining segments."
           }
         }
       },

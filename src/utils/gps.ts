@@ -75,6 +75,20 @@ const MGRS_BAND_LETTERS = UTM_ZONE_LETTERS;
 const OLC_ALPHABET = '23456789CFGHJMPQRVWX';
 
 /**
+ * Normalize user-entered GPS text:
+ * - collapse tabs/newlines/non-breaking spaces
+ * - collapse repeated whitespace
+ * - trim leading/trailing whitespace
+ */
+function normalizeGpsWhitespace(input: string): string {
+  return input
+    .replace(/\u00A0/g, ' ')
+    .replace(/[\t\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Validate latitude and longitude values.
  */
 export function validateCoordinates(lat: number, lon: number): GpsValidationResult {
@@ -103,7 +117,7 @@ export function validateCoordinates(lat: number, lon: number): GpsValidationResu
  * Examples: "48.8584, 2.2945", "48.8584 2.2945", "-33.8688, 151.2093"
  */
 export function parseDD(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim();
+  const trimmed = normalizeGpsWhitespace(input);
 
   // Match patterns like "lat, lon" or "lat lon" with optional signs
   const ddRegex = /^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/;
@@ -144,7 +158,7 @@ export function parseDD(input: string): GpsParseResult | GpsParseError {
  * Will not silently default to N/E for ambiguous inputs.
  */
 export function parseDMS(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim();
+  const trimmed = normalizeGpsWhitespace(input);
 
   // We'll extract these values from whichever pattern matches
   let latDegStr: string | undefined;
@@ -294,7 +308,7 @@ export function parseDMS(input: string): GpsParseResult | GpsParseError {
  * Requires degree symbol AND direction letters to disambiguate from DMS/DD.
  */
 export function parseDDM(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim();
+  const trimmed = normalizeGpsWhitespace(input);
 
   // Stricter DDM regex - requires degree symbol and direction letters
   // The minutes must contain a decimal point to distinguish from DMS
@@ -375,7 +389,7 @@ export function parseDDM(input: string): GpsParseResult | GpsParseError {
  * use a dedicated geodetic library.
  */
 export function parseUTM(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim();
+  const trimmed = normalizeGpsWhitespace(input);
 
   // More flexible UTM regex:
   // - Zone number (1-2 digits)
@@ -556,7 +570,7 @@ function utmToLatLon(
  * message for invalid formats.
  */
 export function parseMGRS(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim().replace(/\s+/g, '').toUpperCase();
+  const trimmed = normalizeGpsWhitespace(input).replace(/\s+/g, '').toUpperCase();
 
   // MGRS regex: zone, band, 100km square, easting, northing
   // Coordinates can be 2, 4, 6, 8, or 10 digits (1m to 10km precision)
@@ -628,7 +642,7 @@ export function parseMGRS(input: string): GpsParseResult | GpsParseError {
  * Additional digits after the first 10 use a 4x5 grid refinement.
  */
 export function parsePlusCodes(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim().toUpperCase();
+  const trimmed = normalizeGpsWhitespace(input).replace(/\s+/g, '').toUpperCase();
 
   // Plus codes: 8 characters + '+' + at least 2 more characters
   // Characters must be from OLC alphabet (note: '0' is padding, not valid for encoding)
@@ -782,7 +796,9 @@ function decodeOpenLocationCode(code: string): { lat: number; lon: number } | { 
  * with a different message for invalid formats.
  */
 export function parseWhat3words(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim().toLowerCase();
+  const trimmed = normalizeGpsWhitespace(input)
+    .replace(/\s*\.\s*/g, '.')
+    .toLowerCase();
 
   // Remove leading slashes if present
   const words = trimmed.replace(/^\/+/, '');
@@ -969,7 +985,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
  * Returns the most likely format or undefined if unknown.
  */
 export function detectFormat(input: string): GpsFormat | undefined {
-  const trimmed = input.trim();
+  const trimmed = normalizeGpsWhitespace(input);
 
   // URL detection (highest priority)
   if (trimmed.includes('http') || (trimmed.includes('maps') && trimmed.includes('/'))) {
@@ -1025,7 +1041,7 @@ export function detectFormat(input: string): GpsFormat | undefined {
  * Tries each parser in order of likelihood.
  */
 export function parseGps(input: string): GpsParseResult | GpsParseError {
-  const trimmed = input.trim();
+  const trimmed = normalizeGpsWhitespace(input);
 
   if (!trimmed) {
     return {

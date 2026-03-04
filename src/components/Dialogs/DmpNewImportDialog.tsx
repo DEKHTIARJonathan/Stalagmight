@@ -2538,6 +2538,27 @@ export default function DmpNewImportDialog({
   const startPlacementMode = useUIStore((s) => s.startPlacementMode);
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
+  const setDmpImportWizardPhase = useUIStore((s) => s.setDmpImportWizardPhase);
+  const onboardingWizardPhase = useMemo(() => {
+    if (phase === 'suggesting' && !isCalculating && currentSuggestion) {
+      return 'suggesting' as const;
+    }
+    if (phase === 'manual_placing' && currentSegment) {
+      return 'manual_placing' as const;
+    }
+    return null;
+  }, [phase, isCalculating, currentSuggestion, currentSegment]);
+
+  useEffect(() => {
+    setDmpImportWizardPhase(onboardingWizardPhase);
+  }, [onboardingWizardPhase, setDmpImportWizardPhase]);
+
+  useEffect(
+    () => () => {
+      setDmpImportWizardPhase(null);
+    },
+    [setDmpImportWizardPhase]
+  );
 
   // Project sections and merges for "From Existing" dropdown + preview
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
@@ -3093,12 +3114,12 @@ export default function DmpNewImportDialog({
                   </span>
                 </div>
 
-                {/* Merge station dropdown */}
-                {mergeOptions.length > 1 && (
-                  <div className="flex items-center gap-2" data-testid="merge-station-picker">
-                    <label className="text-xs text-text-secondary whitespace-nowrap">
-                      {t('dialogs.dmpNewImport.mergeStation')}
-                    </label>
+                {/* Merge station control */}
+                <div className="flex items-center gap-2" data-testid="wizard-merge-station-control">
+                  <label className="text-xs text-text-secondary whitespace-nowrap">
+                    {t('dialogs.dmpNewImport.mergeStation')}
+                  </label>
+                  {mergeOptions.length > 1 ? (
                     <select
                       value={selectedMergeOffset}
                       onChange={(e) => setSelectedMergeOffset(Number(e.target.value))}
@@ -3111,15 +3132,22 @@ export default function DmpNewImportDialog({
                         </option>
                       ))}
                     </select>
-                  </div>
-                )}
+                  ) : (
+                    <span className="text-xs text-text-secondary">
+                      stn {selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
+                      {' → '}
+                      {targetSectionName} stn{' '}
+                      {selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex}
+                    </span>
+                  )}
+                </div>
 
-                {/* Overlap mode picker */}
-                {currentSuggestion && currentSuggestion.matchedShots > 0 && (
-                  <div className="flex items-center gap-2" data-testid="overlap-mode-picker">
-                    <label className="text-xs text-text-secondary whitespace-nowrap">
-                      {t('dialogs.dmpNewImport.overlapMode')}
-                    </label>
+                {/* Overlap control */}
+                <div className="flex items-center gap-2" data-testid="wizard-overlap-control">
+                  <label className="text-xs text-text-secondary whitespace-nowrap">
+                    {t('dialogs.dmpNewImport.overlapMode')}
+                  </label>
+                  {currentSuggestion && currentSuggestion.matchedShots > 0 ? (
                     <select
                       value={overlapMode}
                       onChange={(e) => handleOverlapModeChange(e.target.value as OverlapMode)}
@@ -3131,8 +3159,12 @@ export default function DmpNewImportDialog({
                       <option value="existing_data">{t('dialogs.dmpNewImport.overlapMode_existingData')}</option>
                       <option value="keep_both">{t('dialogs.dmpNewImport.overlapMode_keepBoth')}</option>
                     </select>
-                  </div>
-                )}
+                  ) : (
+                    <span className="text-xs text-text-secondary">
+                      {t('dialogs.dmpNewImport.noOverlapShots')}
+                    </span>
+                  )}
+                </div>
 
                 {/* Prompt */}
                 <div className="text-sm font-medium">
@@ -3201,33 +3233,49 @@ export default function DmpNewImportDialog({
                   <div className="text-sm font-medium">
                     {t('dialogs.dmpNewImport.sectionSettings')}
                   </div>
-                  <SectionMetadataForm
-                    name={editState.name}
-                    surveyor={editState.surveyor}
-                    date={editState.date}
-                    color={editState.color}
-                    direction={editState.direction}
-                    quality={editState.quality}
-                    onNameChange={(v) => handleMetadataChange('name', v)}
-                    onSurveyorChange={(v) => handleMetadataChange('surveyor', v)}
-                    onDateChange={(v) => handleMetadataChange('date', v)}
-                    onColorChange={(v) => handleMetadataChange('color', v)}
-                    onDirectionChange={(v) => handleMetadataChange('direction', v)}
-                    onQualityChange={(v) => handleMetadataChange('quality', v)}
-                    showDirection
-                    showQuality
-                  />
-                  <div className="border-t border-border" />
-                  <ShotTableEditor
-                    shots={effectiveShots}
-                    onShotChange={handleShotChange}
-                    onAddShot={handleAddShot}
-                    onDeleteShot={handleDeleteShot}
-                    onInsertBefore={handleInsertBefore}
-                    onInsertAfter={handleInsertAfter}
-                    frozenShotIndices={frozenShotIndices}
-                    maxHeight="12rem"
-                  />
+                  <div>
+                    <label className="block text-sm text-text-secondary mb-1">
+                      {t('common.labels.name')}
+                    </label>
+                    <input
+                      type="text"
+                      value={editState.name}
+                      onChange={(e) => handleMetadataChange('name', e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-border rounded"
+                      placeholder={t('sectionMetadata.placeholders.name')}
+                      data-testid="section-name-input"
+                    />
+                  </div>
+                  <div className="space-y-4" data-testid="wizard-editable-rest">
+                    <SectionMetadataForm
+                      name={editState.name}
+                      surveyor={editState.surveyor}
+                      date={editState.date}
+                      color={editState.color}
+                      direction={editState.direction}
+                      quality={editState.quality}
+                      onNameChange={(v) => handleMetadataChange('name', v)}
+                      onSurveyorChange={(v) => handleMetadataChange('surveyor', v)}
+                      onDateChange={(v) => handleMetadataChange('date', v)}
+                      onColorChange={(v) => handleMetadataChange('color', v)}
+                      onDirectionChange={(v) => handleMetadataChange('direction', v)}
+                      onQualityChange={(v) => handleMetadataChange('quality', v)}
+                      showName={false}
+                      showDirection
+                      showQuality
+                    />
+                    <div className="border-t border-border" />
+                    <ShotTableEditor
+                      shots={effectiveShots}
+                      onShotChange={handleShotChange}
+                      onAddShot={handleAddShot}
+                      onDeleteShot={handleDeleteShot}
+                      onInsertBefore={handleInsertBefore}
+                      onInsertAfter={handleInsertAfter}
+                      frozenShotIndices={frozenShotIndices}
+                      maxHeight="12rem"
+                    />
+                  </div>
                 </>
               )}
             </div>
@@ -3274,7 +3322,7 @@ export default function DmpNewImportDialog({
               </div>
 
               {/* Placement mode radio group */}
-              <div className="space-y-2">
+              <div className="space-y-2" data-testid="segment-placement-modes">
                 <div className="text-xs font-medium text-text-secondary">
                   {t('dialogs.dmpNewImport.manualPlacing.placementMode')}
                 </div>
@@ -3583,7 +3631,7 @@ export default function DmpNewImportDialog({
               {t('common.actions.back')}
             </Button>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2" data-testid="wizard-suggestion-actions">
             {phase === 'suggesting' && !isCalculating && currentSuggestion && (
               <>
                 <Button

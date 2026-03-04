@@ -110,13 +110,24 @@ type ImportAction =
   | { type: 'RESTORE_STATE'; sectionConfigs: Map<number, SectionConfig>; placedSections: Set<number>; excludedSections: Set<number>; currentSectionIndex: number };
 
 const MAX_UNDO_HISTORY = 50;
+const DEFAULT_EXCLUDED_DMP_SHOT_LENGTH = 1;
+
+/**
+ * DMP imports skip length-1 standard shots by default.
+ */
+export function isImportableDmpShot(shot: DmpShot): boolean {
+  if (shot.shot_type !== 'Standard') {
+    return false;
+  }
+  return Math.abs(shot.length - DEFAULT_EXCLUDED_DMP_SHOT_LENGTH) > 1e-9;
+}
 
 /**
  * Convert DMP shots to EditableShots.
  */
 export function convertToEditableShots(shots: DmpShot[]): EditableShot[] {
   return shots
-    .filter((shot) => shot.shot_type === 'Standard')
+    .filter(isImportableDmpShot)
     .map((shot, index) => ({
       id: index,
       azimuth_in: shot.heading_in,

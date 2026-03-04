@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { ActiveOnboardingStep } from '../../hooks/useOnboarding';
@@ -21,23 +21,122 @@ interface SpotlightRect {
   height: number;
 }
 
+interface RectBounds {
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+}
+
 const SPOTLIGHT_PADDING = 10;
 const SPOTLIGHT_RADIUS = 14;
 const TOOLTIP_GAP = 18;
 const TOOLTIP_MAX_WIDTH = 360;
 const VIEWPORT_MARGIN = 16;
 const TOOLTIP_ESTIMATED_HEIGHT = 250;
+const STEP_SCROLL_TOP_PADDING = 10;
+const STEP_SCROLL_MAX_ATTEMPTS = 12;
+const STEP_SCROLL_RETRY_MS = 80;
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
-function toSpotlightRect(rect: DOMRect): SpotlightRect {
+function boundsFromDomRect(rect: DOMRect): RectBounds {
   return {
-    top: Math.max(0, rect.top - SPOTLIGHT_PADDING),
-    left: Math.max(0, rect.left - SPOTLIGHT_PADDING),
-    width: rect.width + SPOTLIGHT_PADDING * 2,
-    height: rect.height + SPOTLIGHT_PADDING * 2,
+    top: rect.top,
+    left: rect.left,
+    right: rect.right,
+    bottom: rect.bottom,
   };
+}
+
+function isNonEmptyBounds(bounds: RectBounds): boolean {
+  return bounds.right > bounds.left && bounds.bottom > bounds.top;
+}
+
+function intersectBounds(a: RectBounds, b: RectBounds): RectBounds | null {
+  const next: RectBounds = {
+    top: Math.max(a.top, b.top),
+    left: Math.max(a.left, b.left),
+    right: Math.min(a.right, b.right),
+    bottom: Math.min(a.bottom, b.bottom),
+  };
+  return isNonEmptyBounds(next) ? next : null;
+}
+
+function toSpotlightRect(bounds: RectBounds): SpotlightRect {
+  return {
+    top: bounds.top,
+    left: bounds.left,
+    width: bounds.right - bounds.left,
+    height: bounds.bottom - bounds.top,
+  };
+}
+
+function getElementClippingBounds(element: HTMLElement): RectBounds | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  let clippingBounds: RectBounds = {
+    top: 0,
+    left: 0,
+    right: window.innerWidth,
+    bottom: window.innerHeight,
+  };
+
+  let ancestor = element.parentElement;
+  while (ancestor) {
+    const style = window.getComputedStyle(ancestor);
+    const clipsX = style.overflowX !== 'visible';
+    const clipsY = style.overflowY !== 'visible';
+
+    if (clipsX || clipsY) {
+      const ancestorRect = ancestor.getBoundingClientRect();
+      const ancestorBounds: RectBounds = {
+        top: clipsY ? ancestorRect.top : Number.NEGATIVE_INFINITY,
+        left: clipsX ? ancestorRect.left : Number.NEGATIVE_INFINITY,
+        right: clipsX ? ancestorRect.right : Number.POSITIVE_INFINITY,
+        bottom: clipsY ? ancestorRect.bottom : Number.POSITIVE_INFINITY,
+      };
+      const nextBounds = intersectBounds(clippingBounds, ancestorBounds);
+      if (!nextBounds) {
+        return null;
+      }
+      clippingBounds = nextBounds;
+    }
+
+    ancestor = ancestor.parentElement;
+  }
+
+  return clippingBounds;
+}
+
+function getVisibleSpotlightRect(element: HTMLElement): SpotlightRect | null {
+  const elementBounds = boundsFromDomRect(element.getBoundingClientRect());
+  if (!isNonEmptyBounds(elementBounds)) {
+    return null;
+  }
+
+  const clippingBounds = getElementClippingBounds(element);
+  if (!clippingBounds) {
+    return null;
+  }
+
+  const visibleBounds = intersectBounds(elementBounds, clippingBounds);
+  if (!visibleBounds) {
+    return null;
+  }
+
+  const paddedBounds: RectBounds = {
+    top: visibleBounds.top - SPOTLIGHT_PADDING,
+    left: visibleBounds.left - SPOTLIGHT_PADDING,
+    right: visibleBounds.right + SPOTLIGHT_PADDING,
+    bottom: visibleBounds.bottom + SPOTLIGHT_PADDING,
+  };
+
+  const spotlightBounds = intersectBounds(paddedBounds, clippingBounds);
+  return spotlightBounds ? toSpotlightRect(spotlightBounds) : null;
 }
 
 function combineSpotlightRects(rects: SpotlightRect[]): SpotlightRect | null {
@@ -59,7 +158,10 @@ function combineSpotlightRects(rects: SpotlightRect[]): SpotlightRect | null {
 function calculateTooltipStyle(
   targetRect: SpotlightRect | null,
   placement: OnboardingPlacement,
-  viewportVersion: number
+  viewportVersion: number,
+  offsetX: number = 0,
+  offsetY: number = 0,
+  anchorY: 'auto' | 'top' | 'bottom' = 'auto'
 ): CSSProperties {
   void viewportVersion;
 
@@ -79,12 +181,14 @@ function calculateTooltipStyle(
 
   const centerX = targetRect.left + targetRect.width / 2;
   const centerY = targetRect.top + targetRect.height / 2;
+  const targetTop = targetRect.top;
+  const targetBottom = targetRect.top + targetRect.height;
 
   let left = centerX - TOOLTIP_MAX_WIDTH / 2;
-  let top = targetRect.top + targetRect.height + TOOLTIP_GAP;
+  let top = (anchorY === 'top' ? targetTop : targetBottom) + TOOLTIP_GAP;
 
   if (placement === 'top') {
-    top = targetRect.top - TOOLTIP_ESTIMATED_HEIGHT - TOOLTIP_GAP;
+    top = (anchorY === 'bottom' ? targetBottom : targetTop) - TOOLTIP_ESTIMATED_HEIGHT - TOOLTIP_GAP;
   } else if (placement === 'left') {
     left = targetRect.left - TOOLTIP_MAX_WIDTH - TOOLTIP_GAP;
     top = centerY - TOOLTIP_ESTIMATED_HEIGHT / 2;
@@ -93,10 +197,11 @@ function calculateTooltipStyle(
     top = centerY - TOOLTIP_ESTIMATED_HEIGHT / 2;
   }
 
-  if (placement === 'bottom' && top > maxTop) {
+  const allowAutoFlip = anchorY === 'auto';
+  if (allowAutoFlip && placement === 'bottom' && top > maxTop) {
     top = targetRect.top - TOOLTIP_ESTIMATED_HEIGHT - TOOLTIP_GAP;
   }
-  if (placement === 'top' && top < VIEWPORT_MARGIN) {
+  if (allowAutoFlip && placement === 'top' && top < VIEWPORT_MARGIN) {
     top = targetRect.top + targetRect.height + TOOLTIP_GAP;
   }
   if (placement === 'left' && left < VIEWPORT_MARGIN) {
@@ -105,6 +210,9 @@ function calculateTooltipStyle(
   if (placement === 'right' && left > maxLeft) {
     left = targetRect.left - TOOLTIP_MAX_WIDTH - TOOLTIP_GAP;
   }
+
+  left += offsetX;
+  top += offsetY;
 
   return {
     width: `min(${TOOLTIP_MAX_WIDTH}px, calc(100vw - ${VIEWPORT_MARGIN * 2}px))`,
@@ -125,12 +233,22 @@ export default function OnboardingOverlay({
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
   const maskIdRef = useRef(`onboarding-mask-${Math.random().toString(36).slice(2)}`);
+  const previousFlowIdRef = useRef(step.flowId);
+  const previousStepRef = useRef({ flowId: step.flowId, stepIndex });
+  const scrolledContainerSelectorsRef = useRef<Set<string>>(new Set());
   const [targetRects, setTargetRects] = useState<SpotlightRect[]>([]);
   const [viewportVersion, setViewportVersion] = useState(0);
 
   const isLastStep = stepIndex >= stepCount - 1;
   const interaction = step.interaction ?? 'locked';
   const placement = step.placement ?? 'bottom';
+  const description = t(step.descriptionKey);
+  const descriptionItemsRaw = t(`${step.descriptionKey}Items`, {
+    returnObjects: true,
+  }) as unknown;
+  const descriptionItems = Array.isArray(descriptionItemsRaw)
+    ? descriptionItemsRaw.filter((item): item is string => typeof item === 'string')
+    : [];
   const targetSelectorList = useMemo(() => {
     if (step.targetSelectors && step.targetSelectors.length > 0) {
       return step.targetSelectors;
@@ -141,6 +259,17 @@ export default function OnboardingOverlay({
     return [];
   }, [step.targetSelector, step.targetSelectors]);
   const selectorKey = targetSelectorList.join('|');
+
+  const resetScrolledContainers = useCallback(() => {
+    for (const selector of scrolledContainerSelectorsRef.current) {
+      const container = document.querySelector(selector) as HTMLElement | null;
+      if (!container) {
+        continue;
+      }
+      container.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    }
+    scrolledContainerSelectorsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -164,12 +293,12 @@ export default function OnboardingOverlay({
           continue;
         }
 
-        const rect = element.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) {
+        const spotlightRect = getVisibleSpotlightRect(element);
+        if (!spotlightRect) {
           continue;
         }
 
-        nextRects.push(toSpotlightRect(rect));
+        nextRects.push(spotlightRect);
       }
 
       setTargetRects(nextRects);
@@ -196,6 +325,103 @@ export default function OnboardingOverlay({
   useEffect(() => {
     cardRef.current?.focus();
   }, [step.id]);
+
+  useEffect(() => {
+    const previousFlowId = previousFlowIdRef.current;
+    if (previousFlowId !== step.flowId) {
+      resetScrolledContainers();
+    }
+    previousFlowIdRef.current = step.flowId;
+  }, [resetScrolledContainers, step.flowId]);
+
+  useEffect(() => {
+    const previousStep = previousStepRef.current;
+    const movedBackWithinFlow = previousStep.flowId === step.flowId && stepIndex < previousStep.stepIndex;
+    if (movedBackWithinFlow && (!step.scrollContainerSelector || !step.scrollTargetSelector)) {
+      resetScrolledContainers();
+    }
+    previousStepRef.current = { flowId: step.flowId, stepIndex };
+  }, [
+    resetScrolledContainers,
+    step.flowId,
+    step.scrollContainerSelector,
+    step.scrollTargetSelector,
+    stepIndex,
+  ]);
+
+  useEffect(() => () => {
+    resetScrolledContainers();
+  }, [resetScrolledContainers]);
+
+  useEffect(() => {
+    if (!step.scrollContainerSelector || !step.scrollTargetSelector) {
+      return;
+    }
+    const scrollContainerSelector = step.scrollContainerSelector;
+    const scrollTargetSelector = step.scrollTargetSelector;
+    const scrollAlignment = step.scrollAlignment ?? 'top';
+
+    let timeoutId: number | null = null;
+    let isCancelled = false;
+
+    const scrollStepTargetToTop = (attempt: number) => {
+      if (isCancelled) {
+        return;
+      }
+
+      const container = document.querySelector(scrollContainerSelector) as HTMLElement | null;
+      const target = document.querySelector(scrollTargetSelector) as HTMLElement | null;
+
+      if (!container || !target) {
+        if (attempt >= STEP_SCROLL_MAX_ATTEMPTS) {
+          return;
+        }
+        timeoutId = window.setTimeout(
+          () => scrollStepTargetToTop(attempt + 1),
+          STEP_SCROLL_RETRY_MS
+        );
+        return;
+      }
+
+      scrolledContainerSelectorsRef.current.add(scrollContainerSelector);
+
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTopInContainer = container.scrollTop + (targetRect.top - containerRect.top);
+      const targetBottomInContainer = targetTopInContainer + targetRect.height;
+      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      let nextScrollTop: number;
+
+      if (scrollAlignment === 'nearest') {
+        const visibleTop = container.scrollTop + STEP_SCROLL_TOP_PADDING;
+        const visibleBottom =
+          container.scrollTop + container.clientHeight - STEP_SCROLL_TOP_PADDING;
+
+        if (targetTopInContainer < visibleTop) {
+          nextScrollTop = targetTopInContainer - STEP_SCROLL_TOP_PADDING;
+        } else if (targetBottomInContainer > visibleBottom) {
+          nextScrollTop =
+            targetBottomInContainer - container.clientHeight + STEP_SCROLL_TOP_PADDING;
+        } else {
+          nextScrollTop = container.scrollTop;
+        }
+      } else {
+        nextScrollTop = targetTopInContainer - STEP_SCROLL_TOP_PADDING;
+      }
+
+      nextScrollTop = clamp(nextScrollTop, 0, maxScrollTop);
+      container.scrollTo({ top: nextScrollTop, left: 0, behavior: 'auto' });
+    };
+
+    scrollStepTargetToTop(0);
+
+    return () => {
+      isCancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [step.id, step.scrollAlignment, step.scrollContainerSelector, step.scrollTargetSelector]);
 
   useEffect(() => {
     const isAllowedTarget = (node: Node | null): boolean => {
@@ -265,10 +491,29 @@ export default function OnboardingOverlay({
   }, [canGoBack, interaction, onBack, onNext, onSkip, targetSelectorList]);
 
   const combinedTargetRect = useMemo(() => combineSpotlightRects(targetRects), [targetRects]);
+  const tooltipTargetRect = useMemo(() => {
+    if (!step.tooltipTargetSelector) {
+      return combinedTargetRect;
+    }
+    const tooltipTarget = document.querySelector(step.tooltipTargetSelector) as HTMLElement | null;
+    if (!tooltipTarget) {
+      return combinedTargetRect;
+    }
+    const rect = getVisibleSpotlightRect(tooltipTarget);
+    return rect ?? combinedTargetRect;
+  }, [combinedTargetRect, step.tooltipTargetSelector, viewportVersion]);
 
   const tooltipStyle = useMemo(
-    () => calculateTooltipStyle(combinedTargetRect, placement, viewportVersion),
-    [combinedTargetRect, placement, viewportVersion]
+    () =>
+      calculateTooltipStyle(
+        tooltipTargetRect,
+        placement,
+        viewportVersion,
+        step.tooltipOffsetX ?? 0,
+        step.tooltipOffsetY ?? 0,
+        step.tooltipAnchorY ?? 'auto'
+      ),
+    [placement, step.tooltipAnchorY, step.tooltipOffsetX, step.tooltipOffsetY, tooltipTargetRect, viewportVersion]
   );
 
   const overlay = (
@@ -330,7 +575,7 @@ export default function OnboardingOverlay({
         aria-modal="true"
         aria-label={t(step.titleKey)}
         tabIndex={-1}
-        className="fixed pointer-events-auto rounded-xl border border-border bg-panel px-4 py-4 shadow-2xl focus:outline-none"
+        className="fixed pointer-events-auto rounded-xl border border-border bg-panel px-4 py-4 shadow-[0_0_42px_14px_rgba(0,0,0,0.72)] focus:outline-none"
         style={tooltipStyle}
       >
         <div className="mb-1 text-xs uppercase tracking-wide text-text-secondary">
@@ -340,9 +585,16 @@ export default function OnboardingOverlay({
           {t('onboarding.progress', { current: stepIndex + 1, total: stepCount })}
         </div>
         <h2 className="mb-2 text-lg font-semibold text-text-primary">{t(step.titleKey)}</h2>
-        <p className="mb-4 text-sm leading-relaxed text-text-secondary">
-          {t(step.descriptionKey)}
-        </p>
+        <div className="mb-4">
+          <p className="text-sm leading-relaxed text-text-secondary">{description}</p>
+          {descriptionItems.length > 0 && (
+            <ul className="mt-2 list-disc pl-5 text-sm leading-relaxed text-text-secondary">
+              {descriptionItems.map((item, index) => (
+                <li key={`${step.id}-desc-item-${index}`}>{item}</li>
+              ))}
+            </ul>
+          )}
+        </div>
         <div className="flex items-center justify-between gap-2">
           <button
             className="rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-background-50 hover:text-text-primary"
