@@ -19,9 +19,9 @@ Tracks v1.0 spec completion and user testing feedback.
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
 | User Testing: Bugs | 2 | 7 | 29% |
-| User Testing: UX | 1 | 5 | 20% |
+| User Testing: UX | 2 | 5 | 40% |
 | User Testing: Features | 0 | 5 | 0% |
-| **Total** | **65** | **82** | **79%** |
+| **Total** | **66** | **82** | **80%** |
 
 ---
 
@@ -199,11 +199,11 @@ Tracks v1.0 spec completion and user testing feedback.
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
 | User Testing: Bugs | 7 | 2 | 0 | 5 |
-| User Testing: UX | 5 | 1 | 0 | 4 |
+| User Testing: UX | 5 | 2 | 0 | 3 |
 | User Testing: Features | 5 | 0 | 0 | 5 |
-| **Total** | **82** | **65** | **0** | **17** |
+| **Total** | **82** | **66** | **0** | **16** |
 
-**Overall Progress**: 65/82 = ~79% complete
+**Overall Progress**: 66/82 = ~80% complete
 
 ---
 
@@ -223,14 +223,14 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Fix question mark tooltip | ✅ | Replaced with themed custom hover tooltip for closure-adjustment `?` help icon |
 | Fix duplicate save location on "Save now" | ✅ | Save-now now performs a single write to the selected path; default/autosave flow no longer duplicates files |
 
-### UX Improvements (1/5 done)
+### UX Improvements (2/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Make "Place on map" button more visible | ✅ | Promoted "Place on Map" to primary CTA in import placement and added clearer outlined secondary actions for import dialogs |
 | Add unmerge capability | ❌ | No way to undo merge beyond undo stack; add right-click → Unmerge *(~line 569)* |
 | Make move tool larger and more discoverable | ❌ | User couldn't locate it even with verbal guidance *(~line 413, 1707)* |
-| Add middle-click panning | ❌ | Control-drag not intuitive; add middle-click drag as alternative *(~line 1865)* |
+| Add middle-click panning | ✅ | Added middle-click drag pan everywhere Ctrl+drag pan is supported, preserving active tool after release *(~line 1865)* |
 | Rename "reference shot" to "jump line" | ❌ | Rename throughout UI, context menus, tooltips *(~line 623)* |
 
 ### Feature Suggestions (0/5 done)
