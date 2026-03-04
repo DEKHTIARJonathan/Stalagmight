@@ -18,10 +18,10 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
-| User Testing: Bugs | 2 | 6 | 33% |
+| User Testing: Bugs | 3 | 6 | 50% |
 | User Testing: UX | 3 | 5 | 60% |
 | User Testing: Features | 0 | 5 | 0% |
-| **Total** | **67** | **81** | **83%** |
+| **Total** | **68** | **81** | **84%** |
 
 ---
 
@@ -198,12 +198,12 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
-| User Testing: Bugs | 6 | 2 | 0 | 4 |
+| User Testing: Bugs | 6 | 3 | 0 | 3 |
 | User Testing: UX | 5 | 3 | 0 | 2 |
 | User Testing: Features | 5 | 0 | 0 | 5 |
-| **Total** | **81** | **67** | **0** | **14** |
+| **Total** | **81** | **68** | **0** | **13** |
 
-**Overall Progress**: 67/81 = ~83% complete
+**Overall Progress**: 68/81 = ~84% complete
 
 ---
 
@@ -211,12 +211,12 @@ Tracks v1.0 spec completion and user testing feedback.
 
 Source: `docs/transcripts/1-summary.md` — usability session importing real Mnemo DMP data.
 
-### Bugs (2/6 done)
+### Bugs (3/6 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Fix segment merge orphaning section | ❌ | After merging, one section not placed with the rest; reference shots auto-deleted but section orphaned *(~line 359)* |
-| Fix depth gradient colors overridden by theme | ❌ | Theming overrides depth gradient, making it a useless subtle color change instead of green→red *(~line 675)* |
+| Fix depth gradient colors overridden by theme | ✅ | Depth gradient now uses the same dark-theme shallow/deep endpoints across all themes, preventing theme-specific gradient drift *(~line 675)* |
 | Add per-shot depth gradient | ❌ | Shot going shallow→deep renders as single flat color, not a gradient along its length *(~line 677)* |
 | Fix Ariane export zero datum placement | ❌ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
 | Fix question mark tooltip | ✅ | Replaced with themed custom hover tooltip for closure-adjustment `?` help icon |

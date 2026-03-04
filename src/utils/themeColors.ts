@@ -17,6 +17,8 @@ import { themeTokens } from '../theme/tokens';
  * Keep in sync with src/theme/tokens.ts (tests enforce parity with CSS).
  */
 const FALLBACK_MAP: Record<string, string> = { ...themeTokens.dark };
+const DARK_DEPTH_SHALLOW = themeTokens.dark['--cc-depth-shallow'];
+const DARK_DEPTH_DEEP = themeTokens.dark['--cc-depth-deep'];
 
 /**
  * Read a CSS custom property value from the document root.
@@ -66,8 +68,10 @@ export function getMapThemeColors(): MapThemeColors {
     textHaloAlt: getThemeColor('--cc-text-halo-alt'),
     stationDefault: getThemeColor('--cc-station-default'),
     zeroDatum: getThemeColor('--cc-zero-datum'),
-    depthShallow: getThemeColor('--cc-depth-shallow'),
-    depthDeep: getThemeColor('--cc-depth-deep'),
+    // Keep depth gradient endpoints consistent with the canonical dark theme
+    // across all UI themes so survey depth colors remain stable and comparable.
+    depthShallow: DARK_DEPTH_SHALLOW,
+    depthDeep: DARK_DEPTH_DEEP,
     labelColor: getThemeColor('--cc-depth-text'),
     grayLine: getThemeColor('--cc-gray-line'),
     grayText: getThemeColor('--cc-gray-text'),
