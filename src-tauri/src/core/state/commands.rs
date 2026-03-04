@@ -89,6 +89,9 @@ impl AppState {
                 station_b,
                 closure_strategy,
             } => self.create_loop_closure(*station_a, *station_b, *closure_strategy),
+            Command::RemoveLoopClosure { closure_id } => {
+                self.remove_loop_closure(*closure_id)
+            }
             Command::AdjustLoopClosures {
                 anchor_station,
                 method,
@@ -1178,6 +1181,30 @@ impl AppState {
                 CommandResult::failure(e)
             }
         }
+    }
+
+    pub(super) fn remove_loop_closure(&self, closure_id: u64) -> CommandResult {
+        self.with_project_mut(|project| match project.remove_loop_closure(closure_id) {
+            Ok(closure) => {
+                tracing::info!(
+                    closure_id,
+                    ?closure.station_a,
+                    ?closure.station_b,
+                    purpose = "remove loop closure from project",
+                    "Loop closure removed"
+                );
+                CommandResult::success()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    closure_id,
+                    error = %e,
+                    purpose = "remove loop closure from project",
+                    "Failed to remove loop closure"
+                );
+                CommandResult::failure(e)
+            }
+        })
     }
 
     pub(super) fn adjust_loop_closures(

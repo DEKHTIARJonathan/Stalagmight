@@ -251,6 +251,16 @@ impl AppState {
                 }
             }
 
+            Command::RemoveLoopClosure { closure_id } => {
+                if let Some(closure) = project.loop_closures.iter().find(|lc| lc.id == *closure_id) {
+                    UndoData::ClosureInfo {
+                        closure: closure.clone(),
+                    }
+                } else {
+                    UndoData::None
+                }
+            }
+
             // For zero datum operations - capture GPS and section offsets
             Command::SetZeroDatum { station_ref, .. } => {
                 // Find if there was a previous datum for this station
@@ -686,25 +696,46 @@ impl AppState {
             }
 
             UndoData::ClosureInfo { closure } => {
-                // Remove the specific closure instance (match by exact station pair, not all matching)
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
-                        Some(project) => {
-                            // Find and remove only the first matching closure for this exact pair
-                            if let Some(pos) = project.loop_closures.iter().position(|lc| {
-                                (lc.station_a == closure.station_a
-                                    && lc.station_b == closure.station_b)
-                                    || (lc.station_a == closure.station_b
-                                        && lc.station_b == closure.station_a)
-                            }) {
-                                project.loop_closures.remove(pos);
-                            }
-                            project.touch();
-                            CommandResult::success()
+                match &entry.command {
+                    Command::CreateLoopClosure { .. } => {
+                        // Undo create by removing the same closure ID.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    if let Some(pos) = project
+                                        .loop_closures
+                                        .iter()
+                                        .position(|lc| lc.id == closure.id)
+                                    {
+                                        project.loop_closures.remove(pos);
+                                    }
+                                    project.touch();
+                                    CommandResult::success()
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                         }
-                        None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
+                    Command::RemoveLoopClosure { .. } => {
+                        // Undo remove by restoring the captured closure.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    project.next_closure_id =
+                                        project.next_closure_id.max(closure.id + 1);
+                                    project.loop_closures.push(closure.clone());
+                                    project.touch();
+                                    CommandResult::success()
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        }
+                    }
+                    _ => CommandResult::failure(
+                        "Unsupported closure undo command".to_string(),
+                    ),
                 }
             }
 
@@ -996,19 +1027,46 @@ impl AppState {
                 }
             }
             UndoData::ClosureInfo { closure } => {
-                // Redo CreateLoopClosure by restoring the captured closure to preserve its ID
-                match self.project.lock() {
-                    Ok(mut proj_guard) => match proj_guard.as_mut() {
-                        Some(project) => {
-                            // Ensure next_closure_id stays ahead of restored closure's ID
-                            project.next_closure_id = project.next_closure_id.max(closure.id + 1);
-                            project.loop_closures.push(closure.clone());
-                            project.touch();
-                            CommandResult::success()
+                match &entry.command {
+                    Command::CreateLoopClosure { .. } => {
+                        // Redo create by restoring the captured closure to preserve its ID.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    project.next_closure_id =
+                                        project.next_closure_id.max(closure.id + 1);
+                                    project.loop_closures.push(closure.clone());
+                                    project.touch();
+                                    CommandResult::success()
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                         }
-                        None => CommandResult::failure("No project open".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                    }
+                    Command::RemoveLoopClosure { .. } => {
+                        // Redo remove by removing the same closure ID again.
+                        match self.project.lock() {
+                            Ok(mut proj_guard) => match proj_guard.as_mut() {
+                                Some(project) => {
+                                    if let Some(pos) = project
+                                        .loop_closures
+                                        .iter()
+                                        .position(|lc| lc.id == closure.id)
+                                    {
+                                        project.loop_closures.remove(pos);
+                                    }
+                                    project.touch();
+                                    CommandResult::success()
+                                }
+                                None => CommandResult::failure("No project open".to_string()),
+                            },
+                            Err(_) => CommandResult::failure("Failed to lock project".to_string()),
+                        }
+                    }
+                    _ => CommandResult::failure(
+                        "Unsupported closure redo command".to_string(),
+                    ),
                 }
             }
             _ => {
@@ -1102,6 +1160,7 @@ impl AppState {
                 station_b,
                 closure_strategy,
             } => self.create_loop_closure(*station_a, *station_b, *closure_strategy),
+            Command::RemoveLoopClosure { closure_id } => self.remove_loop_closure(*closure_id),
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,

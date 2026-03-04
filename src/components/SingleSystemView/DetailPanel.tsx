@@ -1167,8 +1167,10 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
+  const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
+  const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
   const contentId = 'closures-section-content';
 
   // Precompute station existence set for O(1) lookups
@@ -1217,6 +1219,15 @@ function ClosuresSection({
     });
   }, [closures]);
 
+  const handleRemoveClosure = async (closureId: bigint) => {
+    setRemovingClosureId(closureId);
+    try {
+      await removeLoopClosure(closureId);
+    } finally {
+      setRemovingClosureId(null);
+    }
+  };
+
   return (
     <div className="pt-2 border-t border-border" data-testid="closures-section">
       <button
@@ -1254,62 +1265,79 @@ function ClosuresSection({
 
             return (
               <div key={closureIdLabel} className={`space-y-1${isTransitiveOnly ? ' opacity-50' : ''}`}>
-                {directRefs.length > 0 && (
-                  <div className="text-sm" data-testid={`closure-direct-${closureIdLabel}`}>
-                    <span className="text-text-secondary">{t('detailPanel.closures.direct')} </span>
-                    {directRefs.map((ref, i) => (
-                      <span key={i}>
-                        {i > 0 && ', '}
-                        <DetailLink
-                          type="station"
-                          target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
-                          displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
-                          onSelect={() => onSelectStation(ref.station_ref)}
-                          isMissing={!stationExists(ref.station_ref)}
-                          onAnnounce={onAnnounce}
-                          onHoverStart={() => onHoverStart(ref.station_ref)}
-                          onHoverEnd={onHoverEnd}
-                        />
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {transitiveRefs.length > 0 && (
-                  <div className="text-sm" data-testid={`closure-transitive-${closureIdLabel}`}>
-                    <span className="text-text-secondary">{t('detailPanel.closures.transitive')} </span>
-                    {transitiveRefs.map((ref, i) => (
-                      <span key={i}>
-                        {i > 0 && ', '}
-                        <DetailLink
-                          type="station"
-                          target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
-                          displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
-                          onSelect={() => onSelectStation(ref.station_ref)}
-                          isMissing={!stationExists(ref.station_ref)}
-                          onAnnounce={onAnnounce}
-                          onHoverStart={() => onHoverStart(ref.station_ref)}
-                          onHoverEnd={onHoverEnd}
-                        />
-                        {ref.via_station && (
-                          <span>
-                            {t('detailPanel.closures.viaPrefix')}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="space-y-1 min-w-0">
+                    {directRefs.length > 0 && (
+                      <div className="text-sm" data-testid={`closure-direct-${closureIdLabel}`}>
+                        <span className="text-text-secondary">{t('detailPanel.closures.direct')} </span>
+                        {directRefs.map((ref, i) => (
+                          <span key={i}>
+                            {i > 0 && ', '}
                             <DetailLink
                               type="station"
-                              target={{ sectionId: ref.via_station.section_id, position: ref.via_station.station_index }}
-                              displayText={formatStationId(ref.via_station.section_id, ref.via_station.station_index)}
-                              onSelect={() => onSelectStation(ref.via_station!)}
-                              isMissing={!stationExists(ref.via_station)}
+                              target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
+                              displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
+                              onSelect={() => onSelectStation(ref.station_ref)}
+                              isMissing={!stationExists(ref.station_ref)}
                               onAnnounce={onAnnounce}
-                              onHoverStart={() => onHoverStart(ref.via_station!)}
+                              onHoverStart={() => onHoverStart(ref.station_ref)}
                               onHoverEnd={onHoverEnd}
                             />
-                            {t('detailPanel.closures.viaSuffix')}
                           </span>
-                        )}
-                      </span>
-                    ))}
+                        ))}
+                      </div>
+                    )}
+                    {transitiveRefs.length > 0 && (
+                      <div className="text-sm" data-testid={`closure-transitive-${closureIdLabel}`}>
+                        <span className="text-text-secondary">{t('detailPanel.closures.transitive')} </span>
+                        {transitiveRefs.map((ref, i) => (
+                          <span key={i}>
+                            {i > 0 && ', '}
+                            <DetailLink
+                              type="station"
+                              target={{ sectionId: ref.station_ref.section_id, position: ref.station_ref.station_index }}
+                              displayText={formatStationId(ref.station_ref.section_id, ref.station_ref.station_index)}
+                              onSelect={() => onSelectStation(ref.station_ref)}
+                              isMissing={!stationExists(ref.station_ref)}
+                              onAnnounce={onAnnounce}
+                              onHoverStart={() => onHoverStart(ref.station_ref)}
+                              onHoverEnd={onHoverEnd}
+                            />
+                            {ref.via_station && (
+                              <span>
+                                {t('detailPanel.closures.viaPrefix')}
+                                <DetailLink
+                                  type="station"
+                                  target={{ sectionId: ref.via_station.section_id, position: ref.via_station.station_index }}
+                                  displayText={formatStationId(ref.via_station.section_id, ref.via_station.station_index)}
+                                  onSelect={() => onSelectStation(ref.via_station!)}
+                                  isMissing={!stationExists(ref.via_station)}
+                                  onAnnounce={onAnnounce}
+                                  onHoverStart={() => onHoverStart(ref.via_station!)}
+                                  onHoverEnd={onHoverEnd}
+                                />
+                                {t('detailPanel.closures.viaSuffix')}
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void handleRemoveClosure(closureId);
+                    }}
+                    className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Remove Closure"
+                    aria-label={`Remove closure ${closureIdLabel}`}
+                    data-testid={`detail-remove-closure-${closureIdLabel}`}
+                    disabled={!closure || removingClosureId === closureId}
+                  >
+                    <LinkOffIcon size={14} />
+                  </button>
+                </div>
                 {closure ? (
                   <div className="text-xs text-text-secondary" data-testid={`closure-metrics-${closureIdLabel}`}>
                     {t('detailPanel.closures.metrics', {

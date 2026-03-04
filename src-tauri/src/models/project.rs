@@ -4198,6 +4198,24 @@ impl Project {
         Ok(closure)
     }
 
+    /// Remove a loop closure by ID
+    pub fn remove_loop_closure(&mut self, closure_id: u64) -> Result<LoopClosure, String> {
+        if let Some(pos) = self.loop_closures.iter().position(|lc| lc.id == closure_id) {
+            let closure = self.loop_closures.remove(pos);
+            self.touch();
+            info!(
+                closure_id,
+                station_a = ?closure.station_a,
+                station_b = ?closure.station_b,
+                purpose = "remove loop closure",
+                "Loop closure removed"
+            );
+            Ok(closure)
+        } else {
+            Err("Loop closure not found".to_string())
+        }
+    }
+
     /// Unmerge stations. Also removes closures for the specific unmerged pair only.
     /// Returns (success, removed_closures) where removed_closures contains any
     /// loop closures that matched this specific station pair.

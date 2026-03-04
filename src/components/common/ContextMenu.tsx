@@ -22,7 +22,7 @@ export default function ContextMenu() {
     setMergeStationA: s.setMergeStationA,
     triggerZoomToSection: s.triggerZoomToSection,
   })));
-  const { project, stations, setShotReference, unmergeStations, unmergeStationPair } = useProjectStore();
+  const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -77,6 +77,20 @@ export default function ContextMenu() {
       const stationSection = project?.sections.find((s) => s.id === sectionId);
       const currentStation = stations.find((station) => sameStationRef(station.station_ref, target.ref));
       const mergedStations = currentStation?.merged_with ?? [];
+      const directClosures = (() => {
+        const deduped = new Map<string, { closureId: bigint; stationRef: StationRef }>();
+        for (const closure of currentStation?.closures_with ?? []) {
+          if (closure.is_transitive) continue;
+          const key = closure.closure_id.toString();
+          if (!deduped.has(key)) {
+            deduped.set(key, {
+              closureId: closure.closure_id,
+              stationRef: closure.station_ref,
+            });
+          }
+        }
+        return Array.from(deduped.values());
+      })();
       const totalShots = stationSection?.shots.length ?? 0;
       const isFirstStation = target.ref.station_index === 0;
       const isLastStation = target.ref.station_index === totalShots;
@@ -134,6 +148,24 @@ export default function ContextMenu() {
             openDialog('unmerge-stations', {
               stationRef: target.ref,
               mergedStations,
+            });
+          },
+        });
+      }
+
+      if (directClosures.length > 0) {
+        items.push({
+          label: 'Remove Closure',
+          action: () => {
+            if (directClosures.length === 1) {
+              closeDialog();
+              void removeLoopClosure(directClosures[0]!.closureId);
+              return;
+            }
+
+            openDialog('remove-closure', {
+              anchorStation: target.ref,
+              closures: directClosures,
             });
           },
         });
