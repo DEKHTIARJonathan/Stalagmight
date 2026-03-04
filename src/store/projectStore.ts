@@ -212,6 +212,7 @@ interface ProjectStore {
   unmergeStationPair: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
+  removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
   adjustLoopClosures: (
     anchorStation: StationRef,
     method: ClosureStrategy
@@ -903,6 +904,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'create_loop_closure',
       { stationA, stationB, closureStrategy },
       { purpose: 'add loop closure for accuracy', fields: { stationA, stationB, closureStrategy } }
+    );
+  },
+
+  removeLoopClosure: async (closureId: bigint) => {
+    return executeCommand(
+      'remove_loop_closure',
+      { closureId: Number(closureId) },
+      { purpose: 'remove loop closure', fields: { closureId: closureId.toString() } }
     );
   },
 

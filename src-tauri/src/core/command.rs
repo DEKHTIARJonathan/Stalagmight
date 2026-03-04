@@ -104,6 +104,9 @@ pub enum Command {
         station_b: StationRef,
         closure_strategy: ClosureStrategy,
     },
+    RemoveLoopClosure {
+        closure_id: u64,
+    },
     AdjustLoopClosures {
         anchor_station: StationRef,
         method: ClosureStrategy,
@@ -328,6 +331,9 @@ impl Command {
                 station_b,
                 ..
             } => format!("Create loop closure between {station_a} and {station_b}"),
+            Command::RemoveLoopClosure { closure_id } => {
+                format!("Remove loop closure #{closure_id}")
+            }
             Command::AdjustLoopClosures { method, .. } => {
                 format!("Adjust loop closures ({})", method.as_str())
             }
@@ -607,6 +613,12 @@ mod tests {
                     station_b,
                 },
                 "Unmerge station pair 1:0 and 1:1",
+            ),
+            (
+                Command::RemoveLoopClosure {
+                    closure_id: 42,
+                },
+                "Remove loop closure #42",
             ),
             (
                 Command::SetZeroDatum {
