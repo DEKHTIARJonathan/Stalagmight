@@ -200,10 +200,11 @@ pub fn cancel_loading(state: State<AppState>) {
 ///
 /// # Arguments
 /// * `name` - Project name (used for both filename and project metadata)
-/// * `location` - Optional directory path to save the project in.
-///   If None, uses user's documents directory.
-///   NOTE: This is a FILE SYSTEM directory path, not cave location metadata.
-///   Cave location metadata can be set later via project settings.
+/// * `project_location` - Optional cave location metadata (free text).
+/// * `save_directory` - Optional directory path to save the project in.
+///   If omitted (and `save_path` is also omitted), uses user's documents directory.
+/// * `save_path` - Optional full file path to save the project to.
+///   If provided, this takes precedence over `save_directory`.
 ///
 /// # Technical Note
 /// Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
@@ -213,14 +214,16 @@ pub fn cancel_loading(state: State<AppState>) {
 pub async fn create_project_full(
     app_handle: tauri::AppHandle,
     name: String,
-    location: Option<PathBuf>,
+    project_location: Option<String>,
+    save_directory: Option<PathBuf>,
+    save_path: Option<PathBuf>,
 ) -> Result<CreateProjectFullResult, LoadError> {
     // Use AppHandle to access state inside spawn_blocking
     // (State<'_, T> cannot be moved due to lifetime constraints)
     let result: Result<Result<CreateProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_create_project_full(name, location)
+            state.do_create_project_full(name, project_location, save_directory, save_path)
         })
         .await;
 

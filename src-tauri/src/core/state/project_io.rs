@@ -1030,11 +1030,17 @@ impl AppState {
     ///
     /// # Arguments
     /// * `name` - Project name (used for filename and project metadata)
-    /// * `location` - Optional directory to save the project in. If None, uses user's documents directory.
+    /// * `project_location` - Optional cave location metadata (free text)
+    /// * `save_directory` - Optional directory to save the project in.
+    ///   If omitted (and `save_path` is omitted), uses user's documents directory.
+    /// * `save_path` - Optional full file path for the new project. If provided,
+    ///   this takes precedence over `save_directory`.
     pub fn do_create_project_full(
         &self,
         name: String,
-        location: Option<PathBuf>,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
     ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError> {
         use crate::core::loading::{
             CreateProjectFullResult, DisplaySettings, LoadError, LoadingPhase, ProgressEmitter,
@@ -1067,11 +1073,19 @@ impl AppState {
         // === PHASE 0: Creating database (40%) ===
         progress.start_phase(LoadingPhase::CreatingDatabase);
 
-        // Resolve the database path from name and optional location (directory)
-        let db_path = match self.resolve_project_path(&name, location.as_ref()) {
-            Ok(path) => path,
-            Err(e) => {
-                early_return_err!(LoadError::new("IO", e));
+        // Resolve database path from explicit save path or from project name + optional save directory.
+        let db_path = if let Some(path) = save_path {
+            if path.extension().is_none_or(|ext| ext != "stalx") {
+                path.with_extension("stalx")
+            } else {
+                path
+            }
+        } else {
+            match self.resolve_project_path(&name, save_directory.as_ref()) {
+                Ok(path) => path,
+                Err(e) => {
+                    early_return_err!(LoadError::new("IO", e));
+                }
             }
         };
 
@@ -1107,9 +1121,7 @@ impl AppState {
 
         // === PHASE 1: Initializing project (40%) ===
         progress.start_phase(LoadingPhase::InitializingProject);
-        // Note: location parameter is the save directory, not cave location metadata.
-        // Pass None for cave location - it can be set later via project settings.
-        let mut project = Project::new(name.clone(), None);
+        let mut project = Project::new(name.clone(), project_location);
         project.file_path = Some(db_path.clone());
 
         if let Err(e) = db.save_project(&project) {

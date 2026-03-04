@@ -398,16 +398,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'create_project_full': {
             // Consolidated create_project_full command for loading progress feature
             const name = (args?.name as string) ?? 'Untitled Project';
+            const projectLocation = (args?.projectLocation as string | null | undefined) ?? null;
+            const savePathArg = (args?.savePath as string | undefined) ?? undefined;
+            const saveDirectoryArg = (args?.saveDirectory as string | undefined) ?? undefined;
             const now = new Date().toISOString();
             sectionCounter = 0;
+            const sanitizedName = name.replace(/[^a-zA-Z0-9]/g, '_');
+            const resolvedPath = savePathArg
+              ?? (saveDirectoryArg
+                ? `${saveDirectoryArg}/${sanitizedName}.stalx`
+                : `/mock/Documents/${sanitizedName}.stalx`);
+            projectPath = resolvedPath;
 
             currentProject = {
               id: 1,
               name,
-              location: null,
+              location: projectLocation,
               created_at: now,
               modified_at: now,
-              file_path: null,
+              file_path: projectPath,
               sections: [],
               station_merges: [],
               zero_datums: [],
@@ -661,7 +670,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (currentProject && projectPath) {
               currentProject.file_path = projectPath;
             }
-            return { success: true, path: projectPath };
+            return { success: true, saved_path: projectPath, error: null, warnings: [], section_ids: [] };
           }
 
           case 'close_project': {
