@@ -13,6 +13,7 @@ import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -189,7 +190,7 @@ export default function SingleSystemView() {
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
         {/* Sections panel */}
-        {sectionsPanelOpen && (
+        {sectionsPanelOpen ? (
           <ResizablePanel
             direction="horizontal"
             defaultSize={sectionsPanelWidth}
@@ -199,10 +200,37 @@ export default function SingleSystemView() {
             onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
             className="border-r border-border"
           >
-            <ErrorBoundary panelName="Sections">
-              <SectionsPanel sections={project.sections} />
-            </ErrorBoundary>
+            <div className="relative h-full">
+              <button
+                type="button"
+                className="absolute right-0 top-1/2 z-10 -mr-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
+                onClick={toggleSectionsPanel}
+                title={t('dataTable.toggle.collapse')}
+                aria-label={t('dataTable.toggle.collapse')}
+                data-testid="sections-panel-collapse-toggle"
+              >
+                <span className="flex h-full items-center justify-center">
+                  <ChevronLeftIcon size={10} />
+                </span>
+              </button>
+              <ErrorBoundary panelName="Sections">
+                <SectionsPanel sections={project.sections} />
+              </ErrorBoundary>
+            </div>
           </ResizablePanel>
+        ) : (
+          <button
+            type="button"
+            className="w-3 flex-shrink-0 border-r border-border bg-panel transition-colors hover:bg-background-80"
+            onClick={toggleSectionsPanel}
+            title={t('sections.title')}
+            aria-label={t('sections.title')}
+            data-testid="sections-panel-collapsed-toggle"
+          >
+            <span className="flex h-full items-center justify-center text-text-secondary">
+              <ChevronRightIcon size={10} />
+            </span>
+          </button>
         )}
 
         {/* Map and data table */}
@@ -217,7 +245,7 @@ export default function SingleSystemView() {
           </div>
 
           {/* Data table */}
-          {dataTableOpen && (
+          {dataTableOpen ? (
             <ResizablePanel
               direction="vertical"
               defaultSize={dataTableHeight}
@@ -227,15 +255,42 @@ export default function SingleSystemView() {
               onResizeEnd={(size) => savePanelSizes(undefined, undefined, size)}
               className="border-t border-border"
             >
-              <ErrorBoundary panelName="Data Table">
-                <DataTable sections={project.sections} />
-              </ErrorBoundary>
+              <div className="relative h-full">
+                <button
+                  type="button"
+                  className="absolute left-1/2 top-0 z-10 h-3 w-12 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
+                  onClick={toggleDataTable}
+                  title={t('dataTable.toggle.collapse')}
+                  aria-label={t('dataTable.toggle.collapse')}
+                  data-testid="data-table-open-collapse-toggle"
+                >
+                  <span className="flex h-full items-center justify-center">
+                    <ChevronDownIcon size={10} />
+                  </span>
+                </button>
+                <ErrorBoundary panelName="Data Table">
+                  <DataTable sections={project.sections} />
+                </ErrorBoundary>
+              </div>
             </ResizablePanel>
+          ) : (
+            <button
+              type="button"
+              className="h-3 shrink-0 border-t border-border bg-panel transition-colors hover:bg-background-80"
+              onClick={toggleDataTable}
+              title={t('dataTable.toggle.expand')}
+              aria-label={t('dataTable.toggle.expand')}
+              data-testid="data-table-collapsed-toggle"
+            >
+              <span className="flex h-full items-center justify-center text-text-secondary">
+                <ChevronUpIcon size={12} />
+              </span>
+            </button>
           )}
         </div>
 
         {/* Detail panel */}
-        {detailPanelOpen && (
+        {detailPanelOpen ? (
           <ResizablePanel
             direction="horizontal"
             defaultSize={detailPanelWidth}
@@ -246,10 +301,37 @@ export default function SingleSystemView() {
             handlePosition="start"
             className="border-l border-border"
           >
-            <ErrorBoundary panelName="Details">
-              <DetailPanel />
-            </ErrorBoundary>
+            <div className="relative h-full">
+              <button
+                type="button"
+                className="absolute left-0 top-1/2 z-10 -ml-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
+                onClick={toggleDetailPanel}
+                title={t('dataTable.toggle.collapse')}
+                aria-label={t('dataTable.toggle.collapse')}
+                data-testid="detail-panel-collapse-toggle"
+              >
+                <span className="flex h-full items-center justify-center">
+                  <ChevronRightIcon size={10} />
+                </span>
+              </button>
+              <ErrorBoundary panelName="Details">
+                <DetailPanel />
+              </ErrorBoundary>
+            </div>
           </ResizablePanel>
+        ) : (
+          <button
+            type="button"
+            className="w-3 flex-shrink-0 border-l border-border bg-panel transition-colors hover:bg-background-80"
+            onClick={toggleDetailPanel}
+            title={t('onboarding.flows.singleView.steps.detailPanel.title')}
+            aria-label={t('onboarding.flows.singleView.steps.detailPanel.title')}
+            data-testid="detail-panel-collapsed-toggle"
+          >
+            <span className="flex h-full items-center justify-center text-text-secondary">
+              <ChevronLeftIcon size={10} />
+            </span>
+          </button>
         )}
       </div>
 
