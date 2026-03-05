@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
@@ -49,6 +49,9 @@ export default function SingleSystemView() {
     detailPanelWidth,
     dataTableOpen,
     dataTableHeight,
+    toggleSectionsPanel,
+    toggleDetailPanel,
+    toggleDataTable,
     setSectionsPanelWidth,
     setDetailPanelWidth,
     setDataTableHeight,
@@ -60,11 +63,106 @@ export default function SingleSystemView() {
     detailPanelWidth: s.detailPanelWidth,
     dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
+    toggleSectionsPanel: s.toggleSectionsPanel,
+    toggleDetailPanel: s.toggleDetailPanel,
+    toggleDataTable: s.toggleDataTable,
     setSectionsPanelWidth: s.setSectionsPanelWidth,
     setDetailPanelWidth: s.setDetailPanelWidth,
     setDataTableHeight: s.setDataTableHeight,
     savePanelSizes: s.savePanelSizes,
   })));
+
+  const sectionsPanelOpenedByOnboardingRef = useRef(false);
+  const detailPanelOpenedByOnboardingRef = useRef(false);
+  const dataTableOpenedByOnboardingRef = useRef(false);
+
+  // Auto-open Data Table during late SURVEY WORKSPACE steps to avoid
+  // a visible tooltip jump when entering the data-table step.
+  useEffect(() => {
+    const getSingleViewOnboardingStepId = (): string | null => {
+      const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
+      if (!overlay) {
+        return null;
+      }
+      const flowId = overlay.getAttribute('data-onboarding-flow-id');
+      const stepId = overlay.getAttribute('data-onboarding-step-id');
+      return flowId === 'single-view-basics' ? stepId : null;
+    };
+
+    const syncDataTableState = () => {
+      const stepId = getSingleViewOnboardingStepId();
+      const shouldShowSectionsPanel = stepId === 'sections';
+      const shouldShowDetailPanel = stepId === 'detail-panel';
+      const shouldShowDataTable = stepId === 'data-table';
+
+      if (shouldShowSectionsPanel) {
+        if (!sectionsPanelOpen) {
+          sectionsPanelOpenedByOnboardingRef.current = true;
+          toggleSectionsPanel();
+        }
+      } else if (sectionsPanelOpenedByOnboardingRef.current && sectionsPanelOpen) {
+        sectionsPanelOpenedByOnboardingRef.current = false;
+        toggleSectionsPanel();
+      } else if (!shouldShowSectionsPanel) {
+        sectionsPanelOpenedByOnboardingRef.current = false;
+      }
+
+      if (shouldShowDetailPanel) {
+        if (!detailPanelOpen) {
+          detailPanelOpenedByOnboardingRef.current = true;
+          toggleDetailPanel();
+        }
+      } else if (detailPanelOpenedByOnboardingRef.current && detailPanelOpen) {
+        detailPanelOpenedByOnboardingRef.current = false;
+        toggleDetailPanel();
+      } else if (!shouldShowDetailPanel) {
+        detailPanelOpenedByOnboardingRef.current = false;
+      }
+
+      if (shouldShowDataTable) {
+        if (!dataTableOpen) {
+          dataTableOpenedByOnboardingRef.current = true;
+          toggleDataTable();
+        }
+        return;
+      }
+
+      if (dataTableOpenedByOnboardingRef.current && dataTableOpen) {
+        dataTableOpenedByOnboardingRef.current = false;
+        toggleDataTable();
+        return;
+      }
+
+      if (!shouldShowDataTable) {
+        dataTableOpenedByOnboardingRef.current = false;
+      }
+    };
+
+    syncDataTableState();
+
+    if (typeof MutationObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new MutationObserver(syncDataTableState);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-onboarding-flow-id', 'data-onboarding-step-id'],
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [
+    dataTableOpen,
+    detailPanelOpen,
+    sectionsPanelOpen,
+    toggleDataTable,
+    toggleDetailPanel,
+    toggleSectionsPanel,
+  ]);
 
   if (!project) {
     return (
@@ -220,4 +318,3 @@ function formatLength(meters: number, lengthPrecision: number): string {
   }
   return `${formatFixed(meters, undefined, lengthPrecision)} m`;
 }
-
