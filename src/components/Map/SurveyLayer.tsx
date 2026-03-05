@@ -339,8 +339,6 @@ export default class SurveyLayer {
     this.map.addSource(this.sourceId + '-shots', {
       type: 'geojson',
       promoteId: 'featureId',
-      // Required for line-progress expressions used by per-shot depth gradients.
-      lineMetrics: true,
       buffer: dragBuffer,
       data: {
         type: 'FeatureCollection',
@@ -560,16 +558,7 @@ export default class SurveyLayer {
       type: 'line',
       source: this.sourceId + '-shots',
       paint: {
-        // Use endpoint colors so a single shot can transition shallow -> deep.
-        'line-gradient': [
-          'interpolate',
-          ['linear'],
-          ['line-progress'],
-          0,
-          ['coalesce', ['get', 'fromColor'], ['get', 'color']],
-          1,
-          ['coalesce', ['get', 'toColor'], ['get', 'color']],
-        ],
+        'line-color': ['get', 'color'],
         // Width: hover > selected > base (uses feature-state)
         'line-width': [
           'case',
