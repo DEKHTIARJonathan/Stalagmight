@@ -99,6 +99,35 @@ test.describe('DMP Interrupted Session', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Interrupted Session Project');
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore?: {
+            getState: () => {
+              config: {
+                general: {
+                  onboarding_enabled: boolean;
+                  onboarding_completed_flows: string[];
+                };
+              } | null;
+              setConfig: (config: unknown) => void;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      const store = e2e?.projectStore?.getState();
+      if (!store?.config) {
+        throw new Error('projectStore config is not available');
+      }
+      store.setConfig({
+        ...store.config,
+        general: {
+          ...store.config.general,
+          onboarding_enabled: false,
+          onboarding_completed_flows: [],
+        },
+      });
+    });
 
     await createSectionViaStore(page, {
       name: 'Anchor Section',
@@ -153,7 +182,14 @@ test.describe('DMP Interrupted Session', () => {
     await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
 
     await page.getByTestId('confirm-button').click();
-    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 15000 });
+    // Manual placing can auto-start map placement and close the dialog immediately.
+    // If that happens, Esc re-opens the wizard with cancel controls.
+    const manualPlacing = page.getByTestId('wizard-manual-placing');
+    await page.waitForTimeout(300);
+    if (!(await manualPlacing.isVisible())) {
+      await page.keyboard.press('Escape');
+    }
+    await expect(manualPlacing).toBeVisible({ timeout: 15000 });
 
     await page.getByTestId('cancel-button').click();
     await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible({ timeout: 5000 });
@@ -163,5 +199,69 @@ test.describe('DMP Interrupted Session', () => {
     await openDmpNewImportDialog(page);
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('ignores rapid double-skip so early import runs only once', async ({ page }) => {
+    await page.evaluate(() => {
+      const setSuggestions = (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof setSuggestions !== 'function') {
+        throw new Error('Mock suggestion setter not available');
+      }
+
+      (setSuggestions as (suggestions: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.96,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 1,
+          importSectionName: 'Anchor Candidate',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.91,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Unanchored Segment',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+    });
+
+    await openDmpNewImportDialog(page);
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+
+    await page.getByTestId('confirm-button').click();
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+
+    await page.getByTestId('skip-button').dblclick();
+
+    await expect.poll(async () =>
+      page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore?: {
+              getState: () => { project: { sections: unknown[] } | null };
+            };
+          };
+        }).__E2E_TEST__;
+        return stores?.projectStore?.getState().project?.sections.length ?? 0;
+      })
+    ).toBe(2);
   });
 });
