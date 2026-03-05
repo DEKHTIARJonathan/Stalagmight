@@ -84,6 +84,19 @@ export function findOverlapForStation(
   //    are deleted, so the boundary is at the edge of the overlap region.
   for (const s of fullPool) {
     if (s.importSectionIndex !== sectionIndex) continue;
+    // If the opposite direction is already confirmed (A→B confirmed, evaluating B→A),
+    // ignore this unconfirmed reverse candidate. Redirecting through it can detach a
+    // confirmed pair when overlap edits are processed in a different order.
+    if (s.targetType === 'importing' && s.targetImportIndex != null) {
+      const reverseConfirmed = confirmedOverlaps.get(s.targetImportIndex);
+      if (
+        reverseConfirmed &&
+        reverseConfirmed.targetType === 'importing' &&
+        reverseConfirmed.targetImportIndex === sectionIndex
+      ) {
+        continue;
+      }
+    }
 
     const isFront = s.importStationIndex === 0;
     const mergeStation = isFront

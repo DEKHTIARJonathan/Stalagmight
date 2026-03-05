@@ -1181,6 +1181,11 @@ export default function DmpNewImportDialog({
   // Guard against React StrictMode double-firing the mount effect
   // When restoring from saved state, skip the init effect entirely
   const importStartedRef = useRef(!!saved);
+  // Prevent duplicate "advance suggestion" actions (double-click skip/confirm)
+  // from racing the suggesting→placing transition.
+  const suggestionActionInFlightRef = useRef(false);
+  // Prevent re-entering early-import transition before state updates land.
+  const transitionToPlacingInFlightRef = useRef(false);
 
   // Accumulate all section IDs created during import for post-import orphan detection
   const importedSectionIdsRef = useRef<number[]>([]);
@@ -1881,102 +1886,109 @@ export default function DmpNewImportDialog({
   // Transition from suggesting phase: import reachable sections immediately (early import),
   // then enter manual_placing for unreachable segments, or complete if none.
   const transitionToPlacingOrManual = useCallback(async () => {
+    if (transitionToPlacingInFlightRef.current) return;
+    transitionToPlacingInFlightRef.current = true;
     setIsImporting(true);
     setError(null);
 
-    let unreachable: number[] = [];
     try {
-      // 1. Apply overlap treatments (single source of truth)
-      let existingShotUpdates: ExistingShotUpdateLocal[] = [];
-      if (fullPoolRef.current.length > 0) {
-        existingShotUpdates = applyAllOverlapTreatments(
-          fullPoolRef.current,
-          confirmedOverlapsRef.current,
+      let unreachable: number[] = [];
+      try {
+        // 1. Apply overlap treatments (single source of truth)
+        let existingShotUpdates: ExistingShotUpdateLocal[] = [];
+        if (fullPoolRef.current.length > 0) {
+          existingShotUpdates = applyAllOverlapTreatments(
+            fullPoolRef.current,
+            confirmedOverlapsRef.current,
+            sectionEditsRef.current,
+            dmpFile,
+            overlapMode,
+          );
+        }
+
+        // 2. Redirect connections targeting deleted overlap zones
+        redirectDeletedTargets(
+          connectionsRef.current,
           sectionEditsRef.current,
-          dmpFile,
-          overlapMode,
+          confirmedOverlapsRef.current,
+          fullPoolRef.current,
         );
-      }
 
-      // 2. Redirect connections targeting deleted overlap zones
-      redirectDeletedTargets(
-        connectionsRef.current,
-        sectionEditsRef.current,
-        confirmedOverlapsRef.current,
-        fullPoolRef.current,
-      );
+        // 3. Build batch import configs for reachable sections
+        const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+        let emittedDmpIndices: number[];
+        let configs: BackendImportSectionConfig[];
+        ({ configs, unreachable, emittedDmpIndices } = buildBatchImport(
+          connectionsRef.current,
+          zeroDatumIdx,
+          dmpFile,
+          selectionConfig,
+          sectionEditsRef.current,
+          fullPoolRef.current,
+          directPlacementsRef.current,
+        ));
 
-      // 3. Build batch import configs for reachable sections
-      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-      let emittedDmpIndices: number[];
-      let configs: BackendImportSectionConfig[];
-      ({ configs, unreachable, emittedDmpIndices } = buildBatchImport(
-        connectionsRef.current,
-        zeroDatumIdx,
-        dmpFile,
-        selectionConfig,
-        sectionEditsRef.current,
-        fullPoolRef.current,
-        directPlacementsRef.current,
-      ));
+        // 4. Import reachable sections immediately
+        if (configs.length > 0) {
+          const result = await invokeIpc<CommandResult>('import_sections', {
+            sections: configs,
+            fileHash: selectionConfig.fileHash ?? null,
+            sectionHashes: selectionConfig.sectionHashes ?? null,
+            existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
+          }, { purpose: 'import reachable sections (early import)' });
 
-      // 4. Import reachable sections immediately
-      if (configs.length > 0) {
-        const result = await invokeIpc<CommandResult>('import_sections', {
-          sections: configs,
-          fileHash: selectionConfig.fileHash ?? null,
-          sectionHashes: selectionConfig.sectionHashes ?? null,
-          existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
-        }, { purpose: 'import reachable sections (early import)' });
+          if (!result.success) {
+            setError(result.error ?? 'Import failed');
+            return;
+          }
 
-        if (!result.success) {
-          setError(result.error ?? 'Import failed');
-          return;
-        }
+          if (result.section_ids.length > 0) {
+            importedSectionIdsRef.current.push(...result.section_ids);
+          }
 
-        if (result.section_ids.length > 0) {
-          importedSectionIdsRef.current.push(...result.section_ids);
-        }
+          await refreshProjectState();
 
-        await refreshProjectState();
-
-        // Build DMP index -> section_id mapping for late import.
-        // Use backend response ordering directly; it matches submitted configs.
-        for (let i = 0; i < emittedDmpIndices.length; i++) {
-          const sectionId = result.section_ids[i];
-          if (sectionId != null) {
-            earlyImportedRef.current.set(emittedDmpIndices[i]!, sectionId);
+          // Build DMP index -> section_id mapping for late import.
+          // Use backend response ordering directly; it matches submitted configs.
+          for (let i = 0; i < emittedDmpIndices.length; i++) {
+            const sectionId = result.section_ids[i];
+            if (sectionId != null) {
+              earlyImportedRef.current.set(emittedDmpIndices[i]!, sectionId);
+            }
           }
         }
-      }
-    } catch (e) {
-      console.error('[earlyImport] Error during early import:', e);
-      setError(String(e));
-      return;
-    } finally {
-      setIsImporting(false);
-    }
-
-    // 5. Check for unreachable sections
-    if (unreachable.length > 0) {
-      const segments = computeUnreachableSegments(unreachable, connectionsRef.current);
-      if (segments.length > 0) {
-        setSegmentQueue(segments);
-        segmentSkipCountRef.current = new Map();
-
-        // Initialize anchor to first section's station 0
-        const firstSegment = segments[0]!;
-        commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
-        setSegmentPlacementMode('manual');
-        setAutoStartManualPlacementPending(true);
-
-        setPhase('manual_placing');
+      } catch (e) {
+        console.error('[earlyImport] Error during early import:', e);
+        setError(String(e));
         return;
+      } finally {
+        setIsImporting(false);
       }
-    }
 
-    // No unreachable — all done
-    onComplete(importedSectionIdsRef.current);
+      // 5. Check for unreachable sections
+      if (unreachable.length > 0) {
+        const segments = computeUnreachableSegments(unreachable, connectionsRef.current);
+        if (segments.length > 0) {
+          setSegmentQueue(segments);
+          segmentSkipCountRef.current = new Map();
+
+          // Initialize anchor to first section's station 0
+          const firstSegment = segments[0]!;
+          commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+          setSegmentPlacementMode('manual');
+          setAutoStartManualPlacementPending(true);
+
+          setPhase('manual_placing');
+          return;
+        }
+      }
+
+      // No unreachable — all done
+      onComplete(importedSectionIdsRef.current);
+    } finally {
+      transitionToPlacingInFlightRef.current = false;
+      suggestionActionInFlightRef.current = false;
+    }
   }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
@@ -2443,76 +2455,85 @@ export default function DmpNewImportDialog({
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
   const handleConfirm = useCallback(() => {
     if (!currentSuggestion) return;
-    if (import.meta.env.DEV) {
-      console.warn(
-        `[handleConfirm] import=${currentSuggestion.importSectionIndex} "${currentSuggestion.importSectionName}"`,
-        `→ target=${currentSuggestion.targetType === 'importing' ? currentSuggestion.targetImportIndex : currentSuggestion.existingSectionId}`,
-        `"${currentSuggestion.existingSectionName}"`,
-        `type=${currentSuggestion.targetType}`,
-        `impStn=${currentSuggestion.importStationIndex} exStn=${currentSuggestion.existingStationIndex}`,
-        `matched=${currentSuggestion.matchedShots} dir=${currentSuggestion.direction}`,
+    if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
+    suggestionActionInFlightRef.current = true;
+    try {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[handleConfirm] import=${currentSuggestion.importSectionIndex} "${currentSuggestion.importSectionName}"`,
+          `→ target=${currentSuggestion.targetType === 'importing' ? currentSuggestion.targetImportIndex : currentSuggestion.existingSectionId}`,
+          `"${currentSuggestion.existingSectionName}"`,
+          `type=${currentSuggestion.targetType}`,
+          `impStn=${currentSuggestion.importStationIndex} exStn=${currentSuggestion.existingStationIndex}`,
+          `matched=${currentSuggestion.matchedShots} dir=${currentSuggestion.direction}`,
+        );
+      }
+      setError(null);
+
+      // Read fresh edit state from the ref (synchronously up-to-date) instead of
+      // the editState React state which may be one render behind when the user
+      // confirms quickly after a suggestion change.
+      const importIdx = currentSuggestion.importSectionIndex;
+      const freshEditState = sectionEditsRef.current.get(importIdx);
+      if (!freshEditState) return; // shouldn't happen — init-effect always populates
+
+      // Save raw user edits unchanged — NO overlap treatment here.
+      // applyAllOverlapTreatments will handle all overlap mutation before batch import.
+      sectionEditsRef.current.set(importIdx, freshEditState);
+
+      // Record confirmed overlap info so applyAllOverlapTreatments knows the merge station
+      const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
+      confirmedOverlapsRef.current.set(importIdx, {
+        importStationIndex: currentSuggestion.importStationIndex,
+        matchedShots: currentSuggestion.matchedShots,
+        direction: currentSuggestion.direction,
+        existingStationIndex: currentSuggestion.existingStationIndex,
+        targetType: currentSuggestion.targetType,
+        existingSectionId: currentSuggestion.existingSectionId ?? null,
+        targetImportIndex: currentSuggestion.targetImportIndex ?? null,
+        mergeImportStation,
+      });
+
+      // Use selected merge pair for station indices (falls back to suggestion's original)
+      const mergeExistingStation = selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex;
+
+      const newConn: VirtualConnection = {
+        importSectionIndex: currentSuggestion.importSectionIndex,
+        importStationIndex: mergeImportStation,
+        targetType: currentSuggestion.targetType,
+        ...(currentSuggestion.existingSectionId != null && { existingSectionId: currentSuggestion.existingSectionId }),
+        ...(currentSuggestion.targetType === 'existing' && { existingStationIndex: mergeExistingStation }),
+        ...(currentSuggestion.targetImportIndex != null && { targetImportIndex: currentSuggestion.targetImportIndex }),
+        ...(currentSuggestion.targetType === 'importing' && { targetImportStationIndex: mergeExistingStation }),
+      };
+
+      setConnections((prev) => [...prev, newConn]);
+      // Update ref eagerly
+      connectionsRef.current = [...connectionsRef.current, newConn];
+
+      // Check if all sections are now connected or skipped
+      const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
+      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+      const remaining = selectedIndices.filter(
+        (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !skippedIndicesRef.current.has(idx)
       );
-    }
-    setError(null);
 
-    // Read fresh edit state from the ref (synchronously up-to-date) instead of
-    // the editState React state which may be one render behind when the user
-    // confirms quickly after a suggestion change.
-    const importIdx = currentSuggestion.importSectionIndex;
-    const freshEditState = sectionEditsRef.current.get(importIdx);
-    if (!freshEditState) return; // shouldn't happen — init-effect always populates
+      if (remaining.length === 0) {
+        // All handled — transition to placing (or manual_placing if unreachable)
+        transitionToPlacingOrManual();
+        return;
+      }
 
-    // Save raw user edits unchanged — NO overlap treatment here.
-    // applyAllOverlapTreatments will handle all overlap mutation before batch import.
-    sectionEditsRef.current.set(importIdx, freshEditState);
-
-    // Record confirmed overlap info so applyAllOverlapTreatments knows the merge station
-    const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
-    confirmedOverlapsRef.current.set(importIdx, {
-      importStationIndex: currentSuggestion.importStationIndex,
-      matchedShots: currentSuggestion.matchedShots,
-      direction: currentSuggestion.direction,
-      existingStationIndex: currentSuggestion.existingStationIndex,
-      targetType: currentSuggestion.targetType,
-      existingSectionId: currentSuggestion.existingSectionId ?? null,
-      targetImportIndex: currentSuggestion.targetImportIndex ?? null,
-      mergeImportStation,
-    });
-
-    // Use selected merge pair for station indices (falls back to suggestion's original)
-    const mergeExistingStation = selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex;
-
-    const newConn: VirtualConnection = {
-      importSectionIndex: currentSuggestion.importSectionIndex,
-      importStationIndex: mergeImportStation,
-      targetType: currentSuggestion.targetType,
-      ...(currentSuggestion.existingSectionId != null && { existingSectionId: currentSuggestion.existingSectionId }),
-      ...(currentSuggestion.targetType === 'existing' && { existingStationIndex: mergeExistingStation }),
-      ...(currentSuggestion.targetImportIndex != null && { targetImportIndex: currentSuggestion.targetImportIndex }),
-      ...(currentSuggestion.targetType === 'importing' && { targetImportStationIndex: mergeExistingStation }),
-    };
-
-    setConnections((prev) => [...prev, newConn]);
-    // Update ref eagerly
-    connectionsRef.current = [...connectionsRef.current, newConn];
-
-    // Check if all sections are now connected or skipped
-    const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
-    const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-    const remaining = selectedIndices.filter(
-      (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !skippedIndicesRef.current.has(idx)
-    );
-
-    if (remaining.length === 0) {
-      // All handled — transition to placing (or manual_placing if unreachable)
-      transitionToPlacingOrManual();
-      return;
-    }
-
-    // Pick next from pool
-    if (!pickFromPool()) {
-      // Pool exhausted — check for unreachable sections
-      transitionToPlacingOrManual();
+      // Pick next from pool
+      if (!pickFromPool()) {
+        // Pool exhausted — check for unreachable sections
+        transitionToPlacingOrManual();
+        return;
+      }
+    } finally {
+      if (!transitionToPlacingInFlightRef.current) {
+        suggestionActionInFlightRef.current = false;
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
@@ -2520,36 +2541,44 @@ export default function DmpNewImportDialog({
   // Skip handler (suggesting phase)
   const handleSkip = useCallback(() => {
     if (!currentSuggestion) return;
+    if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
+    suggestionActionInFlightRef.current = true;
+    try {
+      const skippedIdx = currentSuggestion.importSectionIndex;
 
-    const skippedIdx = currentSuggestion.importSectionIndex;
+      // Record the suggestion so it can be re-shown in manual_placing
+      skippedSuggestionsRef.current.set(skippedIdx, currentSuggestion);
 
-    // Record the suggestion so it can be re-shown in manual_placing
-    skippedSuggestionsRef.current.set(skippedIdx, currentSuggestion);
+      setSkippedIndices((prev) => {
+        const next = new Set(prev);
+        next.add(skippedIdx);
+        return next;
+      });
 
-    setSkippedIndices((prev) => {
-      const next = new Set(prev);
-      next.add(skippedIdx);
-      return next;
-    });
+      // Update ref eagerly
+      const newSkipped = new Set(skippedIndicesRef.current);
+      newSkipped.add(skippedIdx);
+      skippedIndicesRef.current = newSkipped;
 
-    // Update ref eagerly
-    const newSkipped = new Set(skippedIndicesRef.current);
-    newSkipped.add(skippedIdx);
-    skippedIndicesRef.current = newSkipped;
+      const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
+      const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
+      const remaining = selectedIndices.filter(
+        (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !newSkipped.has(idx)
+      );
 
-    const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
-    const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
-    const remaining = selectedIndices.filter(
-      (idx) => idx !== zeroDatumIdx && !newConnected.has(idx) && !newSkipped.has(idx)
-    );
+      if (remaining.length === 0) {
+        transitionToPlacingOrManual();
+        return;
+      }
 
-    if (remaining.length === 0) {
-      transitionToPlacingOrManual();
-      return;
-    }
-
-    if (!pickFromPool()) {
-      transitionToPlacingOrManual();
+      if (!pickFromPool()) {
+        transitionToPlacingOrManual();
+        return;
+      }
+    } finally {
+      if (!transitionToPlacingInFlightRef.current) {
+        suggestionActionInFlightRef.current = false;
+      }
     }
   }, [currentSuggestion, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
 

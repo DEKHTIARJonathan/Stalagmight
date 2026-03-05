@@ -335,4 +335,52 @@ describe('redirectDeletedTargets', () => {
     expect(conn.targetImportIndex).toBe(1);
     expect(conn.targetImportStationIndex).toBe(1);
   });
+
+  it('ignores reverse unconfirmed overlap when opposite direction is confirmed', () => {
+    // Confirmed A→B exists. While redirecting a connection targeting B, the pool
+    // may still contain reverse B→A suggestions. Those reverse candidates must
+    // not be used for redirect, otherwise confirmed pairs can get detached.
+    const conn = importingConn(2, 4, 1, 1); // C→B at B station 1
+    const conns = [conn];
+
+    const pool = [
+      makeSuggestion({
+        importSectionIndex: 1, // B→A (reverse of confirmed A→B)
+        importStationIndex: 0,
+        matchedShots: 3,
+        direction: 'forward',
+        targetType: 'importing',
+        targetImportIndex: 0,
+      }),
+    ];
+
+    // B looks like it has deleted overlap shots, which would normally trigger redirect.
+    const bEdits = makeEdits([
+      makeShot(0, { isDeleted: true }),
+      makeShot(1, { isDeleted: true }),
+      makeShot(2, { isDeleted: true }),
+      makeShot(3), makeShot(4),
+    ]);
+    const edits = new Map<number, SectionEditState>([[1, bEdits]]);
+
+    const confirmed = new Map<number, ConfirmedOverlapInfo>([
+      [0, {
+        importStationIndex: 0,
+        matchedShots: 3,
+        direction: 'forward',
+        existingStationIndex: 0,
+        targetType: 'importing',
+        existingSectionId: null,
+        targetImportIndex: 1,
+        mergeImportStation: 3,
+      }],
+    ]);
+
+    redirectDeletedTargets(conns, edits, confirmed, pool);
+
+    // Keep original target B — no redirect through reverse unconfirmed candidate.
+    expect(conn.targetType).toBe('importing');
+    expect(conn.targetImportIndex).toBe(1);
+    expect(conn.targetImportStationIndex).toBe(1);
+  });
 });
