@@ -213,7 +213,11 @@ export default function ContextMenu() {
       items.push({
         label: 'Set Zero Datum',
         action: () => {
-          openDialog('set-zero-datum', { stationRef: target.ref });
+          openDialog('edit-station', {
+            stationRef: target.ref,
+            forceEnableZeroDatum: true,
+            focusGpsInput: true,
+          });
         },
       });
       items.push({ label: '', action: () => {}, separator: true });
