@@ -49,6 +49,7 @@ export default function DisplayMenu() {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const openedByOnboardingRef = useRef(false);
   const { t } = useTranslation();
 
   const {
@@ -148,6 +149,56 @@ export default function DisplayMenu() {
     };
   }, [isOpen]);
 
+  // Auto-open display menu during PLACE ON MAP onboarding step 3.
+  useEffect(() => {
+    const isDisplayOptionsStepActive = (): boolean => {
+      const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
+      if (!overlay) {
+        return false;
+      }
+      return (
+        overlay.getAttribute('data-onboarding-flow-id') === 'placement-mode-map' &&
+        overlay.getAttribute('data-onboarding-step-id') === 'display-options'
+      );
+    };
+
+    const syncOpenState = () => {
+      if (isDisplayOptionsStepActive()) {
+        setIsOpen((current) => {
+          if (!current) {
+            openedByOnboardingRef.current = true;
+            return true;
+          }
+          return current;
+        });
+        return;
+      }
+
+      if (openedByOnboardingRef.current) {
+        openedByOnboardingRef.current = false;
+        setIsOpen(false);
+      }
+    };
+
+    syncOpenState();
+
+    if (typeof MutationObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new MutationObserver(syncOpenState);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-onboarding-flow-id', 'data-onboarding-step-id'],
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   return (
     <div className="relative">
       <button
@@ -176,7 +227,8 @@ export default function DisplayMenu() {
       {isOpen && (
         <div
           ref={menuRef}
-          className="absolute right-0 top-full mt-1 w-64 bg-panel border border-border rounded-lg shadow-lg z-50"
+          className="absolute right-0 top-full mt-1 w-64 overflow-y-auto overscroll-contain bg-panel border border-border rounded-lg shadow-lg z-50"
+          style={{ maxHeight: 'calc(100vh - 6rem)' }}
           data-testid="display-menu"
         >
           {displayOptions.map((group, groupIndex) => (
