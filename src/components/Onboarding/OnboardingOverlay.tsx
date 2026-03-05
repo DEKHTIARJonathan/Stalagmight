@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { ActiveOnboardingStep } from '../../hooks/useOnboarding';
-import type { OnboardingPlacement } from '../../onboarding/flows';
+import type { OnboardingIllustration, OnboardingPlacement } from '../../onboarding/flows';
 
 interface OnboardingOverlayProps {
   step: ActiveOnboardingStep;
@@ -161,14 +161,15 @@ function calculateTooltipStyle(
   viewportVersion: number,
   offsetX: number = 0,
   offsetY: number = 0,
-  anchorY: 'auto' | 'top' | 'bottom' = 'auto'
+  anchorY: 'auto' | 'top' | 'bottom' = 'auto',
+  tooltipHeight: number = TOOLTIP_ESTIMATED_HEIGHT
 ): CSSProperties {
   void viewportVersion;
 
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 720;
   const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - TOOLTIP_MAX_WIDTH - VIEWPORT_MARGIN);
-  const maxTop = Math.max(VIEWPORT_MARGIN, viewportHeight - TOOLTIP_ESTIMATED_HEIGHT - VIEWPORT_MARGIN);
+  const maxTop = Math.max(VIEWPORT_MARGIN, viewportHeight - tooltipHeight - VIEWPORT_MARGIN);
 
   if (!targetRect || placement === 'center') {
     return {
@@ -188,18 +189,18 @@ function calculateTooltipStyle(
   let top = (anchorY === 'top' ? targetTop : targetBottom) + TOOLTIP_GAP;
 
   if (placement === 'top') {
-    top = (anchorY === 'bottom' ? targetBottom : targetTop) - TOOLTIP_ESTIMATED_HEIGHT - TOOLTIP_GAP;
+    top = (anchorY === 'bottom' ? targetBottom : targetTop) - tooltipHeight - TOOLTIP_GAP;
   } else if (placement === 'left') {
     left = targetRect.left - TOOLTIP_MAX_WIDTH - TOOLTIP_GAP;
-    top = centerY - TOOLTIP_ESTIMATED_HEIGHT / 2;
+    top = centerY - tooltipHeight / 2;
   } else if (placement === 'right') {
     left = targetRect.left + targetRect.width + TOOLTIP_GAP;
-    top = centerY - TOOLTIP_ESTIMATED_HEIGHT / 2;
+    top = centerY - tooltipHeight / 2;
   }
 
   const allowAutoFlip = anchorY === 'auto';
   if (allowAutoFlip && placement === 'bottom' && top > maxTop) {
-    top = targetRect.top - TOOLTIP_ESTIMATED_HEIGHT - TOOLTIP_GAP;
+    top = targetRect.top - tooltipHeight - TOOLTIP_GAP;
   }
   if (allowAutoFlip && placement === 'top' && top < VIEWPORT_MARGIN) {
     top = targetRect.top + targetRect.height + TOOLTIP_GAP;
@@ -221,6 +222,149 @@ function calculateTooltipStyle(
   };
 }
 
+function renderMouseIcon(className: string, highlight: 'left' | 'wheel'): JSX.Element {
+  return (
+    <svg viewBox="0 0 44 54" className={className} aria-hidden="true">
+      <defs>
+        <clipPath id="mouse-body-clip">
+          <rect x="2.5" y="2.5" width="39" height="49" rx="18" />
+        </clipPath>
+      </defs>
+      <rect x="2.5" y="2.5" width="39" height="49" rx="18" fill="#f8fafc" stroke="#111827" strokeWidth="2" />
+      {highlight === 'left' ? (
+        <path
+          d="M21 21.5H3.5V3.5H21V21.5Z"
+          fill="#ef4444"
+          clipPath="url(#mouse-body-clip)"
+        />
+      ) : null}
+      <line x1="22" y1="5.5" x2="22" y2="20.5" stroke="#9ca3af" strokeWidth="1.6" />
+      <line x1="5.5" y1="22" x2="38.5" y2="22" stroke="#9ca3af" strokeWidth="1.4" />
+      <rect
+        x="19"
+        y="8"
+        width="6"
+        height="10.5"
+        rx="3"
+        fill={highlight === 'wheel' ? '#ef4444' : '#9ca3af'}
+        fillOpacity={highlight === 'wheel' ? 1 : 1}
+      />
+    </svg>
+  );
+}
+
+function renderStepIllustration(
+  illustration: OnboardingIllustration | undefined,
+  t: (key: string) => string
+): JSX.Element | null {
+  if (illustration !== 'mouse-pan-zoom') {
+    return null;
+  }
+
+  return (
+    <div className="mb-2 grid grid-cols-1 gap-1" data-testid="onboarding-illustration-mouse-pan-zoom">
+      <div className="rounded-md border border-border bg-background px-2 py-1.5">
+        <div className="mb-0 text-xs font-semibold text-text-primary">
+          {t('onboarding.illustrations.mouse.panTitle')}
+        </div>
+        <div className="-mt-0.5 grid grid-cols-[auto_auto_auto_auto_auto] items-center justify-center gap-x-2 gap-y-0 text-xs text-text-secondary">
+          <span className="col-start-3 row-start-1 justify-self-center text-center text-[11px] leading-none">Left click</span>
+          <span className="col-start-5 row-start-1 justify-self-center text-center text-[11px] leading-none">Middle click</span>
+          <span className="col-start-1 row-start-2 inline-flex h-7 min-w-[2.7rem] items-center justify-center rounded-md border border-border bg-background-50 px-2 font-semibold text-text-primary">
+            CTRL
+          </span>
+          <span className="col-start-2 row-start-2">+</span>
+          {renderMouseIcon('col-start-3 row-start-2 justify-self-center h-7 w-6', 'left')}
+          <span className="col-start-4 row-start-2 px-1 text-text-secondary">/</span>
+          {renderMouseIcon('col-start-5 row-start-2 justify-self-center h-7 w-6', 'wheel')}
+        </div>
+      </div>
+      <div className="rounded-md border border-border bg-background px-2 py-1.5">
+        <div className="mb-0 text-xs font-semibold text-text-primary">
+          {t('onboarding.illustrations.mouse.zoomTitle')}
+        </div>
+        <div className="-mt-0.5 grid grid-cols-[auto_auto_auto_auto_auto] items-end justify-center gap-x-2 gap-y-0 text-xs text-text-secondary">
+          <span className="col-start-1 row-start-1 justify-self-center text-center text-[11px] leading-none">Scroll</span>
+          {renderMouseIcon('col-start-1 row-start-2 justify-self-center h-7 w-6', 'wheel')}
+          <svg viewBox="0 0 14 40" className="col-start-2 row-start-2 h-7 w-3" aria-hidden="true">
+            <path d="M7 4v32" stroke="#d1d5db" strokeWidth="2" strokeLinecap="round" />
+            <path d="M7 3L3 9h8z" fill="#d1d5db" />
+            <path d="M7 37l-4-6h8z" fill="#d1d5db" />
+          </svg>
+          <span className="col-start-3 row-start-2 pb-2 px-1 text-text-secondary">/</span>
+          <svg viewBox="0 0 220 200" className="col-start-4 row-start-2 h-14 w-12" aria-hidden="true">
+            <defs>
+              <clipPath id="touch-gesture-left-cutout" clipPathUnits="userSpaceOnUse">
+                <path
+                  clipRule="evenodd"
+                  d="
+                    M 0 0 H 220 V 200 H 0 Z
+                    M 65 55
+                    A 15 15 0 0 1 80 40
+                    A 15 15 0 0 1 95 55
+                    L 95 200
+                    A 15 15 0 0 1 80 215
+                    A 15 15 0 0 1 65 200
+                    Z
+                  "
+                />
+              </clipPath>
+              <clipPath id="touch-gesture-right-cutout" clipPathUnits="userSpaceOnUse">
+                <path
+                  clipRule="evenodd"
+                  d="
+                    M 0 0 H 220 V 200 H 0 Z
+                    M 84 45
+                    A 15 15 0 0 1 99 30
+                    A 15 15 0 0 1 114 45
+                    L 114 200
+                    A 15 15 0 0 1 99 215
+                    A 15 15 0 0 1 84 200
+                    Z
+                  "
+                />
+              </clipPath>
+            </defs>
+            <g clipPath="url(#touch-gesture-left-cutout)">
+              <g clipPath="url(#touch-gesture-right-cutout)">
+                <circle cx="80" cy="55" r="24" fill="#f00" />
+                <circle cx="99" cy="45" r="24" fill="#f00" />
+              </g>
+            </g>
+            <path
+              d="
+                M 42 158
+                Q 47 132 42 105
+                Q 42 101 47 101
+                H 46
+                Q 62 101 62 124
+                Q 64 142 64 159
+                Z
+              "
+              fill="#fff"
+              transform="rotate(-40 52 129)"
+            />
+            <rect x="42" y="158" width="40" height="41" fill="#fff" transform="rotate(-40 52 129)" />
+            <rect x="52" y="138" width="20" height="20" fill="#fff" transform="rotate(-40 52 129)" />
+            <rect x="85" y="135" width="58" height="63" fill="#fff" />
+            <g fill="none" stroke="#fff" strokeWidth="20" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="80" y1="55" x2="80" y2="135" />
+              <line x1="99" y1="45" x2="99" y2="145" />
+              <line x1="117" y1="95" x2="117" y2="145" strokeWidth="20" />
+              <line x1="136.5" y1="102" x2="136.5" y2="157" strokeWidth="20" />
+            </g>
+          </svg>
+          <svg viewBox="0 0 14 40" className="col-start-5 row-start-2 h-7 w-3" aria-hidden="true">
+            <path d="M7 4v32" stroke="#d1d5db" strokeWidth="2" strokeLinecap="round" />
+            <path d="M7 3L3 9h8z" fill="#d1d5db" />
+            <path d="M7 37l-4-6h8z" fill="#d1d5db" />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OnboardingOverlay({
   step,
   stepIndex,
@@ -238,6 +382,7 @@ export default function OnboardingOverlay({
   const scrolledContainerSelectorsRef = useRef<Set<string>>(new Set());
   const [targetRects, setTargetRects] = useState<SpotlightRect[]>([]);
   const [viewportVersion, setViewportVersion] = useState(0);
+  const [tooltipHeight, setTooltipHeight] = useState(TOOLTIP_ESTIMATED_HEIGHT);
 
   const isLastStep = stepIndex >= stepCount - 1;
   const interaction = step.interaction ?? 'locked';
@@ -249,6 +394,7 @@ export default function OnboardingOverlay({
   const descriptionItems = Array.isArray(descriptionItemsRaw)
     ? descriptionItemsRaw.filter((item): item is string => typeof item === 'string')
     : [];
+  const illustration = renderStepIllustration(step.illustration, t);
   const targetSelectorList = useMemo(() => {
     if (step.targetSelectors && step.targetSelectors.length > 0) {
       return step.targetSelectors;
@@ -325,6 +471,31 @@ export default function OnboardingOverlay({
   useEffect(() => {
     cardRef.current?.focus();
   }, [step.id]);
+
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card) {
+      return;
+    }
+
+    const updateHeight = () => {
+      const nextHeight = Math.ceil(card.getBoundingClientRect().height);
+      setTooltipHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
+    };
+
+    updateHeight();
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(card);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [step.id, stepIndex]);
 
   useEffect(() => {
     const previousFlowId = previousFlowIdRef.current;
@@ -511,9 +682,18 @@ export default function OnboardingOverlay({
         viewportVersion,
         step.tooltipOffsetX ?? 0,
         step.tooltipOffsetY ?? 0,
-        step.tooltipAnchorY ?? 'auto'
+        step.tooltipAnchorY ?? 'auto',
+        tooltipHeight
       ),
-    [placement, step.tooltipAnchorY, step.tooltipOffsetX, step.tooltipOffsetY, tooltipTargetRect, viewportVersion]
+    [
+      placement,
+      step.tooltipAnchorY,
+      step.tooltipOffsetX,
+      step.tooltipOffsetY,
+      tooltipHeight,
+      tooltipTargetRect,
+      viewportVersion,
+    ]
   );
 
   const overlay = (
@@ -575,7 +755,7 @@ export default function OnboardingOverlay({
         aria-modal="true"
         aria-label={t(step.titleKey)}
         tabIndex={-1}
-        className="fixed pointer-events-auto rounded-xl border border-border bg-panel px-4 py-4 shadow-[0_0_42px_14px_rgba(0,0,0,0.72)] focus:outline-none"
+        className="fixed pointer-events-auto max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-border bg-panel px-4 py-4 shadow-[0_0_42px_14px_rgba(0,0,0,0.72)] focus:outline-none"
         style={tooltipStyle}
       >
         <div className="mb-1 text-xs uppercase tracking-wide text-text-secondary">
@@ -587,6 +767,7 @@ export default function OnboardingOverlay({
         <h2 className="mb-2 text-lg font-semibold text-text-primary">{t(step.titleKey)}</h2>
         <div className="mb-4">
           <p className="text-sm leading-relaxed text-text-secondary">{description}</p>
+          {illustration}
           {descriptionItems.length > 0 && (
             <ul className="mt-2 list-disc pl-5 text-sm leading-relaxed text-text-secondary">
               {descriptionItems.map((item, index) => (
