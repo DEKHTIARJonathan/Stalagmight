@@ -147,6 +147,21 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
 };
 
 /**
+ * During placement mode, only keep display toggles and map navigation shortcuts active.
+ */
+const PLACEMENT_MODE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
+  'toggle_depth_gradient',
+  'toggle_grid',
+  'toggle_satellite',
+  'toggle_station_labels',
+  'toggle_shot_labels',
+  'toggle_section_labels',
+  'fit_to_bounds',
+  'zoom_in',
+  'zoom_out',
+]);
+
+/**
  * Determine if a toast should be shown for an action based on feedback preference.
  */
 function shouldShowToast(action: ShortcutAction, feedback: ShortcutFeedback): boolean {
@@ -312,9 +327,15 @@ export function useKeyboardShortcuts() {
         }
       }
 
+      const placementModeActive = useUIStore.getState().placementMode !== null;
+
       // Handle Cmd/Ctrl+, to open Settings - works even when focus is in an input
       // Must be BEFORE the input guard check
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+        if (placementModeActive) {
+          event.preventDefault();
+          return;
+        }
         event.preventDefault();
         // Only open if Settings is not already open
         if (activeDialog !== 'settings') {
@@ -325,6 +346,11 @@ export function useKeyboardShortcuts() {
 
       // Handle Escape FIRST - works even when focus is in an input
       if (event.key === 'Escape') {
+        // Placement mode owns Escape behavior (handled in MapCanvas).
+        if (placementModeActive) {
+          return;
+        }
+
         // Skip if already handled (e.g., by a dropdown closing)
         if (event.defaultPrevented) {
           return;
@@ -372,6 +398,10 @@ export function useKeyboardShortcuts() {
 
       // Handle Delete/Backspace - delete selected items
       if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (placementModeActive) {
+          event.preventDefault();
+          return;
+        }
         // GUARD: No delete for pan/zoom tools
         const currentToolDel = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolDel)) return;
@@ -402,6 +432,9 @@ export function useKeyboardShortcuts() {
       if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
         // ALWAYS prevent browser select-all
         event.preventDefault();
+        if (placementModeActive) {
+          return;
+        }
         // GUARD: No select all for pan/zoom tools
         const currentToolA = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolA)) return;
@@ -423,6 +456,9 @@ export function useKeyboardShortcuts() {
       // Toggle keyboard shortcuts overlay
       if (event.key === '?') {
         event.preventDefault();
+        if (placementModeActive) {
+          return;
+        }
         const { activeDialog: currentDialog } = useUIStore.getState();
         if (currentDialog === 'keyboard-shortcuts') {
           useUIStore.getState().closeDialog();
@@ -445,6 +481,11 @@ export function useKeyboardShortcuts() {
 
       if (!action) {
         // No action mapped to this shortcut
+        return;
+      }
+
+      if (placementModeActive && !PLACEMENT_MODE_ALLOWED_SHORTCUTS.has(action)) {
+        event.preventDefault();
         return;
       }
 
