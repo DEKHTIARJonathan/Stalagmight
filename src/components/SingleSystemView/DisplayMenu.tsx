@@ -149,16 +149,18 @@ export default function DisplayMenu() {
     };
   }, [isOpen]);
 
-  // Auto-open display menu during PLACE ON MAP onboarding step 3.
+  // Auto-open display menu during onboarding "display options" steps.
   useEffect(() => {
     const isDisplayOptionsStepActive = (): boolean => {
       const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
       if (!overlay) {
         return false;
       }
+      const flowId = overlay.getAttribute('data-onboarding-flow-id');
+      const stepId = overlay.getAttribute('data-onboarding-step-id');
       return (
-        overlay.getAttribute('data-onboarding-flow-id') === 'placement-mode-map' &&
-        overlay.getAttribute('data-onboarding-step-id') === 'display-options'
+        stepId === 'display-options' &&
+        (flowId === 'placement-mode-map' || flowId === 'single-view-basics')
       );
     };
 

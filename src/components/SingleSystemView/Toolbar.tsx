@@ -142,7 +142,7 @@ export default function Toolbar({
   return (
     <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
       {/* Left section */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" data-testid="toolbar-file-controls">
         <Button
           onClick={onBack}
           size="sm"
@@ -198,7 +198,7 @@ export default function Toolbar({
 
       {/* Right section - tools and display menu */}
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1 bg-background rounded px-1 py-1">
+        <div className="flex items-center gap-1 bg-background rounded px-1 py-1" data-testid="toolbar-tools-group">
           {TOOLBAR_ITEMS.map((item, index) => {
             if (item.kind === 'separator') {
               return <div key={`sep-${index}`} className="w-px h-6 bg-border mx-1" />;

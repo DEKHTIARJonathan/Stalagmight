@@ -2,7 +2,14 @@ import type { DmpImportWizardPhase, ViewType } from '../store/uiStore';
 
 export type OnboardingPlacement = 'top' | 'bottom' | 'left' | 'right' | 'center';
 export type OnboardingInteraction = 'locked' | 'target' | 'free';
-export type OnboardingIllustration = 'mouse-pan-zoom';
+export type OnboardingIllustration =
+  | 'mouse-pan-zoom'
+  | 'tools-overview'
+  | 'map-controls'
+  | 'sections-controls'
+  | 'detail-controls'
+  | 'map-with-pan-zoom'
+  | 'data-table-controls';
 
 export interface OnboardingStepDefinition {
   id: string;
@@ -13,6 +20,7 @@ export interface OnboardingStepDefinition {
   mergeTargetSpotlights?: boolean;
   placement?: OnboardingPlacement;
   interaction?: OnboardingInteraction;
+  tooltipMaxWidth?: number;
   tooltipOffsetX?: number;
   tooltipOffsetY?: number;
   tooltipAnchorY?: 'auto' | 'top' | 'bottom';
@@ -143,28 +151,54 @@ const singleViewFlow: OnboardingFlowDefinition = {
     context.hasProject,
   steps: [
     {
-      id: 'toolbar',
-      titleKey: 'onboarding.flows.singleView.steps.toolbar.title',
-      descriptionKey: 'onboarding.flows.singleView.steps.toolbar.description',
-      targetSelector: '[data-testid="toolbar"]',
+      id: 'file-controls',
+      titleKey: 'onboarding.flows.singleView.steps.fileControls.title',
+      descriptionKey: 'onboarding.flows.singleView.steps.fileControls.description',
+      targetSelector: '[data-testid="toolbar-file-controls"]',
       placement: 'bottom',
       interaction: 'locked',
     },
     {
-      id: 'draw-tool',
-      titleKey: 'onboarding.flows.singleView.steps.drawTool.title',
-      descriptionKey: 'onboarding.flows.singleView.steps.drawTool.description',
-      targetSelector: '[data-testid="tool-draw"]',
+      id: 'tools',
+      titleKey: 'onboarding.flows.singleView.steps.tools.title',
+      descriptionKey: 'onboarding.flows.singleView.steps.tools.description',
+      targetSelector: '[data-testid="toolbar-tools-group"]',
       placement: 'bottom',
+      interaction: 'locked',
+      illustration: 'tools-overview',
+      tooltipMaxWidth: 980,
+    },
+    {
+      id: 'display-options',
+      titleKey: 'onboarding.flows.singleView.steps.displayOptions.title',
+      descriptionKey: 'onboarding.flows.singleView.steps.displayOptions.description',
+      targetSelectors: [
+        '[data-testid="display-menu-button"]',
+        '[data-testid="display-menu"]',
+      ],
+      mergeTargetSpotlights: true,
+      placement: 'left',
+      tooltipTargetSelector: '[data-testid="display-menu-button"]',
+      tooltipOffsetX: -150,
       interaction: 'locked',
     },
     {
-      id: 'map',
-      titleKey: 'onboarding.flows.singleView.steps.map.title',
-      descriptionKey: 'onboarding.flows.singleView.steps.map.description',
+      id: 'main-map',
+      titleKey: 'onboarding.flows.singleView.steps.mainMap.title',
+      descriptionKey: 'onboarding.flows.singleView.steps.mainMap.description',
       targetSelector: '[data-testid="map-canvas"]',
-      placement: 'top',
+      placement: 'bottom',
       interaction: 'locked',
+      illustration: 'map-with-pan-zoom',
+    },
+    {
+      id: 'sections',
+      titleKey: 'onboarding.flows.singleView.steps.sections.title',
+      descriptionKey: 'onboarding.flows.singleView.steps.sections.description',
+      targetSelector: '[data-testid="sections-panel"]',
+      placement: 'right',
+      interaction: 'locked',
+      illustration: 'sections-controls',
     },
     {
       id: 'detail-panel',
@@ -173,6 +207,16 @@ const singleViewFlow: OnboardingFlowDefinition = {
       targetSelector: '[data-testid="detail-panel"]',
       placement: 'left',
       interaction: 'locked',
+      illustration: 'detail-controls',
+    },
+    {
+      id: 'data-table',
+      titleKey: 'onboarding.flows.singleView.steps.dataTable.title',
+      descriptionKey: 'onboarding.flows.singleView.steps.dataTable.description',
+      targetSelector: '[data-testid="data-table"]',
+      placement: 'top',
+      interaction: 'locked',
+      illustration: 'data-table-controls',
     },
   ],
 };

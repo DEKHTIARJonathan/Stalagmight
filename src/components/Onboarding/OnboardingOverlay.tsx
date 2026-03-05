@@ -3,6 +3,24 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { ActiveOnboardingStep } from '../../hooks/useOnboarding';
 import type { OnboardingIllustration, OnboardingPlacement } from '../../onboarding/flows';
+import {
+  CenterMapIcon,
+  CommentToolIcon,
+  DeleteToolIcon,
+  DrawToolIcon,
+  FitToViewIcon,
+  MeasureToolIcon,
+  MergeToolIcon,
+  MinusIcon,
+  MoveCommentToolIcon,
+  MoveSegmentToolIcon,
+  MoveShotToolIcon,
+  MoveStationToolIcon,
+  PanToolIcon,
+  PlusIcon,
+  SelectToolIcon,
+  ZoomToolIcon,
+} from '../common/icons';
 
 interface OnboardingOverlayProps {
   step: ActiveOnboardingStep;
@@ -31,7 +49,7 @@ interface RectBounds {
 const SPOTLIGHT_PADDING = 10;
 const SPOTLIGHT_RADIUS = 14;
 const TOOLTIP_GAP = 18;
-const TOOLTIP_MAX_WIDTH = 360;
+const TOOLTIP_DEFAULT_MAX_WIDTH = 360;
 const VIEWPORT_MARGIN = 16;
 const TOOLTIP_ESTIMATED_HEIGHT = 250;
 const STEP_SCROLL_TOP_PADDING = 10;
@@ -159,6 +177,7 @@ function calculateTooltipStyle(
   targetRect: SpotlightRect | null,
   placement: OnboardingPlacement,
   viewportVersion: number,
+  maxWidth: number = TOOLTIP_DEFAULT_MAX_WIDTH,
   offsetX: number = 0,
   offsetY: number = 0,
   anchorY: 'auto' | 'top' | 'bottom' = 'auto',
@@ -168,12 +187,12 @@ function calculateTooltipStyle(
 
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 720;
-  const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - TOOLTIP_MAX_WIDTH - VIEWPORT_MARGIN);
+  const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - maxWidth - VIEWPORT_MARGIN);
   const maxTop = Math.max(VIEWPORT_MARGIN, viewportHeight - tooltipHeight - VIEWPORT_MARGIN);
 
   if (!targetRect || placement === 'center') {
     return {
-      width: `min(${TOOLTIP_MAX_WIDTH}px, calc(100vw - ${VIEWPORT_MARGIN * 2}px))`,
+      width: `min(${maxWidth}px, calc(100vw - ${VIEWPORT_MARGIN * 2}px))`,
       left: '50%',
       top: '50%',
       transform: 'translate(-50%, -50%)',
@@ -185,13 +204,13 @@ function calculateTooltipStyle(
   const targetTop = targetRect.top;
   const targetBottom = targetRect.top + targetRect.height;
 
-  let left = centerX - TOOLTIP_MAX_WIDTH / 2;
+  let left = centerX - maxWidth / 2;
   let top = (anchorY === 'top' ? targetTop : targetBottom) + TOOLTIP_GAP;
 
   if (placement === 'top') {
     top = (anchorY === 'bottom' ? targetBottom : targetTop) - tooltipHeight - TOOLTIP_GAP;
   } else if (placement === 'left') {
-    left = targetRect.left - TOOLTIP_MAX_WIDTH - TOOLTIP_GAP;
+    left = targetRect.left - maxWidth - TOOLTIP_GAP;
     top = centerY - tooltipHeight / 2;
   } else if (placement === 'right') {
     left = targetRect.left + targetRect.width + TOOLTIP_GAP;
@@ -209,20 +228,20 @@ function calculateTooltipStyle(
     left = targetRect.left + targetRect.width + TOOLTIP_GAP;
   }
   if (placement === 'right' && left > maxLeft) {
-    left = targetRect.left - TOOLTIP_MAX_WIDTH - TOOLTIP_GAP;
+    left = targetRect.left - maxWidth - TOOLTIP_GAP;
   }
 
   left += offsetX;
   top += offsetY;
 
   return {
-    width: `min(${TOOLTIP_MAX_WIDTH}px, calc(100vw - ${VIEWPORT_MARGIN * 2}px))`,
+    width: `min(${maxWidth}px, calc(100vw - ${VIEWPORT_MARGIN * 2}px))`,
     left: clamp(left, VIEWPORT_MARGIN, maxLeft),
     top: clamp(top, VIEWPORT_MARGIN, maxTop),
   };
 }
 
-function renderMouseIcon(className: string, highlight: 'left' | 'wheel'): JSX.Element {
+function renderMouseIcon(className: string, highlight: 'left' | 'wheel' | 'right'): JSX.Element {
   return (
     <svg viewBox="0 0 44 54" className={className} aria-hidden="true">
       <defs>
@@ -234,6 +253,13 @@ function renderMouseIcon(className: string, highlight: 'left' | 'wheel'): JSX.El
       {highlight === 'left' ? (
         <path
           d="M21 21.5H3.5V3.5H21V21.5Z"
+          fill="#ef4444"
+          clipPath="url(#mouse-body-clip)"
+        />
+      ) : null}
+      {highlight === 'right' ? (
+        <path
+          d="M40.5 21.5H22V3.5h18.5v18Z"
           fill="#ef4444"
           clipPath="url(#mouse-body-clip)"
         />
@@ -257,6 +283,315 @@ function renderStepIllustration(
   illustration: OnboardingIllustration | undefined,
   t: (key: string) => string
 ): JSX.Element | null {
+  if (illustration === 'map-with-pan-zoom') {
+    return (
+      <>
+        {renderStepIllustration('mouse-pan-zoom', t)}
+        {renderStepIllustration('map-controls', t)}
+      </>
+    );
+  }
+
+  if (illustration === 'tools-overview') {
+    const toolItems = {
+      select: {
+        label: t('toolbar.tools.select'),
+        description: t('onboarding.illustrations.tools.items.select'),
+        icon: <SelectToolIcon size={16} />,
+      },
+      pan: {
+        label: t('toolbar.tools.pan'),
+        description: t('onboarding.illustrations.tools.items.pan'),
+        icon: <PanToolIcon size={16} />,
+      },
+      zoom: {
+        label: t('toolbar.tools.zoom'),
+        description: t('onboarding.illustrations.tools.items.zoom'),
+        icon: <ZoomToolIcon size={16} />,
+      },
+      draw: {
+        label: t('toolbar.tools.draw'),
+        description: t('onboarding.illustrations.tools.items.draw'),
+        icon: <DrawToolIcon size={16} />,
+      },
+      delete: {
+        label: t('toolbar.tools.delete'),
+        description: t('onboarding.illustrations.tools.items.delete'),
+        icon: <DeleteToolIcon size={16} />,
+      },
+      merge: {
+        label: t('toolbar.tools.merge'),
+        description: t('onboarding.illustrations.tools.items.merge'),
+        icon: <MergeToolIcon size={16} />,
+      },
+      measure: {
+        label: t('toolbar.tools.measure'),
+        description: t('onboarding.illustrations.tools.items.measure'),
+        icon: <MeasureToolIcon size={16} />,
+      },
+      comment: {
+        label: t('toolbar.tools.comment'),
+        description: t('onboarding.illustrations.tools.items.comment'),
+        icon: <CommentToolIcon size={16} />,
+      },
+      moveComment: {
+        label: t('toolbar.tools.moveComment'),
+        description: t('onboarding.illustrations.tools.items.moveComment'),
+        icon: <MoveCommentToolIcon size={16} />,
+      },
+      moveStation: {
+        label: t('toolbar.tools.moveStation'),
+        description: t('onboarding.illustrations.tools.items.moveStation'),
+        icon: <MoveStationToolIcon size={16} />,
+      },
+      moveShot: {
+        label: t('toolbar.tools.moveShot'),
+        description: t('onboarding.illustrations.tools.items.moveShot'),
+        icon: <MoveShotToolIcon size={16} />,
+      },
+      moveSegment: {
+        label: t('toolbar.tools.moveSegment'),
+        description: t('onboarding.illustrations.tools.items.moveSegment'),
+        icon: <MoveSegmentToolIcon size={16} />,
+      },
+    };
+
+    const groups: { id: string; title: string; items: Array<keyof typeof toolItems> }[] = [
+      {
+        id: 'select',
+        title: t('onboarding.illustrations.tools.groups.select'),
+        items: ['select'],
+      },
+      {
+        id: 'navigate',
+        title: t('toolbar.groups.navigate'),
+        items: ['pan', 'zoom'],
+      },
+      {
+        id: 'edit',
+        title: t('onboarding.illustrations.tools.groups.edit'),
+        items: ['draw', 'delete', 'merge', 'measure'],
+      },
+      {
+        id: 'comment',
+        title: t('toolbar.groups.comment'),
+        items: ['comment', 'moveComment'],
+      },
+      {
+        id: 'move',
+        title: t('toolbar.groups.move'),
+        items: ['moveStation', 'moveShot', 'moveSegment'],
+      },
+    ];
+
+    const groupById = Object.fromEntries(groups.map((group) => [group.id, group]));
+    const groupIcons: Record<string, JSX.Element | null> = {
+      select: <SelectToolIcon size={14} />,
+      navigate: <PanToolIcon size={14} />,
+      comment: <CommentToolIcon size={14} />,
+      move: <MoveSegmentToolIcon size={14} />,
+      edit: null,
+    };
+    const groupColumns = [
+      ['select', 'navigate'],
+      ['edit'],
+      ['comment', 'move'],
+    ] as const;
+
+    return (
+      <div
+        className="mb-2 rounded-md border border-border bg-background p-2"
+        data-testid="onboarding-illustration-tools-overview"
+      >
+        <div className="mb-2 text-xs font-semibold text-text-primary">
+          {t('onboarding.illustrations.tools.title')}
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {groupColumns.map((column, columnIndex) => (
+            <div key={`group-column-${columnIndex}`} className="space-y-2">
+              {column.map((groupId) => {
+                const group = groupById[groupId];
+                if (!group) {
+                  return null;
+                }
+                return (
+                  <div key={group.id} className="rounded border border-border bg-background-30 px-2 py-1.5">
+                    <div className="mb-1.5 border-b border-border pb-1 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+                      <span className="inline-flex items-center gap-1">
+                        {groupIcons[group.id] ? (
+                          <span className="text-accent">{groupIcons[group.id]}</span>
+                        ) : null}
+                        <span>{group.title}</span>
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {group.items.map((itemKey) => {
+                        const item = toolItems[itemKey];
+                        const descriptionKey = `onboarding.illustrations.tools.items.${itemKey}`;
+                        const hasDescription =
+                          item.description.trim().length > 0 && item.description !== descriptionKey;
+                        return (
+                          <div key={`${group.id}-${itemKey}`}>
+                            <div className="flex items-center gap-1.5 text-sm font-semibold leading-none text-text-primary">
+                              <span className="text-accent">{item.icon}</span>
+                              <span>{item.label}</span>
+                            </div>
+                            {hasDescription ? (
+                              <p className="mt-0.5 pl-6 text-sm leading-tight text-text-secondary">{item.description}</p>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+              </div>
+      </div>
+    );
+  }
+
+  if (illustration === 'map-controls') {
+    return (
+      <div
+        className="mb-2 grid grid-cols-1 gap-2"
+        data-testid="onboarding-illustration-map-controls"
+      >
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+            <FitToViewIcon size={16} />
+            <span>{t('onboarding.illustrations.map.fitTitle')}</span>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+            {t('onboarding.illustrations.map.fitDescription')}
+          </p>
+        </div>
+        <div className="grid grid-cols-[1.25fr_1fr] gap-2">
+          <div className="rounded-md border border-border bg-background px-3 py-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+              <PlusIcon size={14} />
+              <MinusIcon size={14} />
+              <span className="whitespace-nowrap">{t('onboarding.illustrations.map.zoomTitle')}</span>
+            </div>
+          </div>
+          <div className="rounded-md border border-border bg-background px-3 py-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+              <svg viewBox="0 0 16 16" className="h-4 w-4" aria-hidden="true">
+                <path d="M2 8h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                <path d="M2 5v6M14 5v6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+              <span className="whitespace-nowrap">{t('onboarding.illustrations.map.scaleTitle')}</span>
+            </div>
+          </div>
+        </div>
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-text-primary">
+                <span className="whitespace-nowrap">{t('onboarding.illustrations.map.contextTitle')}</span>
+              </div>
+              <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+                {t('onboarding.illustrations.map.contextDescription')}
+              </p>
+            </div>
+            <div className="flex flex-shrink-0 flex-col items-center">
+              <span className="mb-1.5 text-xs font-medium leading-none text-text-secondary">{t('onboarding.illustrations.map.rightClick')}</span>
+              {renderMouseIcon('h-8 w-7', 'right')}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (illustration === 'sections-controls') {
+    return (
+      <div
+        className="mb-2 grid grid-cols-1 gap-2"
+        data-testid="onboarding-illustration-sections-controls"
+      >
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+            <PlusIcon size={14} />
+            <span className="whitespace-nowrap">{t('onboarding.illustrations.sections.addTitle')}</span>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+            {t('onboarding.illustrations.sections.addDescription')}
+          </p>
+        </div>
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-text-primary">
+                <span className="whitespace-nowrap">{t('onboarding.illustrations.sections.focusTitle')}</span>
+              </div>
+              <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+                {t('onboarding.illustrations.sections.focusDescription')}
+              </p>
+            </div>
+            <div className="flex flex-shrink-0 flex-col items-end">
+              <span className="mb-1.5 text-xs font-medium leading-none text-text-secondary">{t('onboarding.illustrations.sections.doubleClick')}</span>
+              <div className="flex items-end gap-2">
+                {renderMouseIcon('h-8 w-7', 'left')}
+                {renderMouseIcon('h-8 w-7', 'left')}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (illustration === 'detail-controls') {
+    return (
+      <div
+        className="mb-2 grid grid-cols-1 gap-2"
+        data-testid="onboarding-illustration-detail-controls"
+      >
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+            <CenterMapIcon size={14} />
+            <span className="whitespace-nowrap">{t('onboarding.illustrations.detail.centerTitle')}</span>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+            {t('onboarding.illustrations.detail.centerDescription')}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (illustration === 'data-table-controls') {
+    return (
+      <div
+        className="mb-2 grid grid-cols-1 gap-2"
+        data-testid="onboarding-illustration-data-table-controls"
+      >
+        <div className="rounded-md border border-border bg-background px-3 py-2">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-text-primary">
+                <span className="whitespace-nowrap">{t('onboarding.illustrations.dataTable.focusTitle')}</span>
+              </div>
+              <p className="mt-1 text-sm leading-relaxed text-text-secondary">
+                {t('onboarding.illustrations.dataTable.focusDescription')}
+              </p>
+            </div>
+            <div className="flex flex-shrink-0 flex-col items-end">
+              <span className="mb-1.5 text-xs font-medium leading-none text-text-secondary">{t('onboarding.illustrations.sections.doubleClick')}</span>
+              <div className="flex items-end gap-2">
+                {renderMouseIcon('h-8 w-7', 'left')}
+                {renderMouseIcon('h-8 w-7', 'left')}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (illustration !== 'mouse-pan-zoom') {
     return null;
   }
@@ -442,6 +777,7 @@ export default function OnboardingOverlay({
     return [];
   }, [step.targetSelector, step.targetSelectors]);
   const selectorKey = targetSelectorList.join('|');
+  const hasTargetSelectors = targetSelectorList.length > 0;
 
   const resetScrolledContainers = useCallback(() => {
     for (const selector of scrolledContainerSelectorsRef.current) {
@@ -723,6 +1059,7 @@ export default function OnboardingOverlay({
         tooltipTargetRect,
         placement,
         viewportVersion,
+        step.tooltipMaxWidth ?? TOOLTIP_DEFAULT_MAX_WIDTH,
         step.tooltipOffsetX ?? 0,
         step.tooltipOffsetY ?? 0,
         step.tooltipAnchorY ?? 'auto',
@@ -730,6 +1067,7 @@ export default function OnboardingOverlay({
       ),
     [
       placement,
+      step.tooltipMaxWidth,
       step.tooltipAnchorY,
       step.tooltipOffsetX,
       step.tooltipOffsetY,
@@ -738,6 +1076,7 @@ export default function OnboardingOverlay({
       viewportVersion,
     ]
   );
+  const isTooltipAnchorReady = !hasTargetSelectors || tooltipTargetRect !== null;
 
   const overlay = (
     <div
@@ -804,7 +1143,11 @@ export default function OnboardingOverlay({
         aria-label={t(step.titleKey)}
         tabIndex={-1}
         className="fixed pointer-events-auto max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-border bg-panel px-4 py-4 shadow-[0_0_42px_14px_rgba(0,0,0,0.72)] focus:outline-none"
-        style={tooltipStyle}
+        style={{
+          ...tooltipStyle,
+          visibility: isTooltipAnchorReady ? 'visible' : 'hidden',
+          pointerEvents: isTooltipAnchorReady ? 'auto' : 'none',
+        }}
       >
         <div className="mb-1 text-xs uppercase tracking-wide text-text-secondary">
           {t(step.flowTitleKey)}
@@ -814,7 +1157,7 @@ export default function OnboardingOverlay({
         </div>
         <h2 className="mb-2 text-lg font-semibold text-text-primary">{t(step.titleKey)}</h2>
         <div className="mb-4">
-          {hasDescription && <p className="text-sm leading-relaxed text-text-secondary">{description}</p>}
+          {hasDescription && <p className="mb-2 text-sm leading-relaxed text-text-secondary">{description}</p>}
           {illustration}
           {descriptionItems.length > 0 && (
             <ul className="mt-2 list-disc pl-5 text-sm leading-relaxed text-text-secondary">
