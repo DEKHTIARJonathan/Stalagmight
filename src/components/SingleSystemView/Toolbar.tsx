@@ -34,6 +34,7 @@ interface ToolbarProps {
   onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
+  placementModeActive: boolean;
 }
 
 /** Tool metadata for standalone tools */
@@ -133,6 +134,7 @@ export default function Toolbar({
   onRedo,
   canUndo,
   canRedo,
+  placementModeActive,
 }: ToolbarProps) {
   const { t } = useTranslation();
   const activeTool = useUIStore((s) => s.activeTool);
@@ -145,31 +147,32 @@ export default function Toolbar({
       <div className="flex items-center gap-2" data-testid="toolbar-file-controls">
         <Button
           onClick={onBack}
+          disabled={placementModeActive}
           size="sm"
           icon={<ArrowLeftIcon size={14} />}
           data-testid="back-button"
         >
           {t('common.actions.back')}
         </Button>
-        <Button onClick={onSave} size="sm" data-testid="toolbar-save-button">
+        <Button onClick={onSave} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
         </Button>
-        <Button onClick={() => onImport()} size="sm" data-testid="toolbar-import-button">
+        <Button onClick={() => onImport()} disabled={placementModeActive} size="sm" data-testid="toolbar-import-button">
           {t('common.actions.import')}
         </Button>
-        <Button onClick={() => openDialog('export')} size="sm" data-testid="toolbar-export-button">
+        <Button onClick={() => openDialog('export')} disabled={placementModeActive} size="sm" data-testid="toolbar-export-button">
           {t('common.actions.export')}
         </Button>
         <div className="w-px h-6 bg-border mx-2" />
         <UndoHistoryDropdown
           mode="undo"
-          disabled={!canUndo}
+          disabled={placementModeActive || !canUndo}
           onSingleAction={onUndo}
           testId="toolbar-undo-button"
         >
           <span className="inline-flex items-center gap-0.5">
             {t('common.actions.undo')}
-            {canUndo && (
+            {canUndo && !placementModeActive && (
               <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="undo-chevron">
                 <ChevronDownIcon size={10} />
               </span>
@@ -178,13 +181,13 @@ export default function Toolbar({
         </UndoHistoryDropdown>
         <UndoHistoryDropdown
           mode="redo"
-          disabled={!canRedo}
+          disabled={placementModeActive || !canRedo}
           onSingleAction={onRedo}
           testId="toolbar-redo-button"
         >
           <span className="inline-flex items-center gap-0.5">
             {t('common.actions.redo')}
-            {canRedo && (
+            {canRedo && !placementModeActive && (
               <span className="text-[10px] opacity-60" aria-hidden="true" data-testid="redo-chevron">
                 <ChevronDownIcon size={10} />
               </span>
@@ -210,6 +213,7 @@ export default function Toolbar({
                   tool={item.id}
                   active={activeTool === item.id}
                   onClick={() => setActiveTool(item.id)}
+                  disabled={placementModeActive}
                 />
               );
             }
@@ -222,6 +226,7 @@ export default function Toolbar({
                 group={group}
                 activeTool={activeTool}
                 onActivateTool={setActiveTool}
+                disabled={placementModeActive}
               />
             );
           })}
@@ -233,6 +238,7 @@ export default function Toolbar({
           tooltip="Debug Logs"
           aria-label="Debug Logs"
           size="sm"
+          disabled={placementModeActive}
           data-testid="toolbar-debug-button"
         />
       </div>
@@ -244,9 +250,10 @@ interface ToolButtonProps {
   tool: ToolType;
   active: boolean;
   onClick: () => void;
+  disabled?: boolean;
 }
 
-function ToolButton({ tool, active, onClick }: ToolButtonProps) {
+function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps) {
   const { t } = useTranslation();
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -257,6 +264,7 @@ function ToolButton({ tool, active, onClick }: ToolButtonProps) {
   const shortcut = getShortcutForTool(tool, shortcuts as unknown as Record<string, string[]>);
 
   const handleMouseEnter = useCallback(() => {
+    if (disabled) return;
     if (hoverCloseTimerRef.current) {
       clearTimeout(hoverCloseTimerRef.current);
       hoverCloseTimerRef.current = null;
@@ -266,9 +274,10 @@ function ToolButton({ tool, active, onClick }: ToolButtonProps) {
         setFlyoutOpen(true);
       }, 300);
     }
-  }, [flyoutOpen]);
+  }, [disabled, flyoutOpen]);
 
   const handleMouseLeave = useCallback(() => {
+    if (disabled) return;
     if (hoverOpenTimerRef.current) {
       clearTimeout(hoverOpenTimerRef.current);
       hoverOpenTimerRef.current = null;
@@ -286,9 +295,16 @@ function ToolButton({ tool, active, onClick }: ToolButtonProps) {
   }, []);
 
   const handleClick = useCallback(() => {
+    if (disabled) return;
     onClick();
     setFlyoutOpen(false);
-  }, [onClick]);
+  }, [disabled, onClick]);
+
+  useEffect(() => {
+    if (disabled && flyoutOpen) {
+      setFlyoutOpen(false);
+    }
+  }, [disabled, flyoutOpen]);
 
   return (
     <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
@@ -296,13 +312,14 @@ function ToolButton({ tool, active, onClick }: ToolButtonProps) {
         icon={<ToolIcon tool={tool} />}
         active={active}
         onClick={handleClick}
+        disabled={disabled}
         aria-label={t(TOOL_LABEL_KEYS[tool])}
         size="sm"
         aria-pressed={active}
         data-testid={`tool-${tool}`}
       />
 
-      {flyoutOpen && (
+      {flyoutOpen && !disabled && (
         <div
           className="absolute top-full right-0 mt-1 z-50 bg-panel border border-border rounded shadow-lg py-1 min-w-[10rem]"
           role="menu"
@@ -335,9 +352,10 @@ interface ToolGroupButtonProps {
   group: ToolGroupDef;
   activeTool: ToolType;
   onActivateTool: (tool: ToolType) => void;
+  disabled?: boolean;
 }
 
-function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonProps) {
+function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }: ToolGroupButtonProps) {
   const { t } = useTranslation();
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
@@ -366,6 +384,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
 
   // Left-click: If group inactive, activate last-used subtool. If active, cycle.
   const handleClick = useCallback(() => {
+    if (disabled) return;
     if (!isGroupActive) {
       onActivateTool(displayTool);
     } else {
@@ -378,16 +397,18 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
       }
     }
     setFlyoutOpen(false);
-  }, [isGroupActive, displayTool, activeTool, group.tools, onActivateTool]);
+  }, [disabled, isGroupActive, displayTool, activeTool, group.tools, onActivateTool]);
 
   // Right-click: Toggle flyout
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    if (disabled) return;
     setFlyoutOpen((prev) => !prev);
-  }, []);
+  }, [disabled]);
 
   // Hover: Open flyout after short delay, close after short delay (to survive gap)
   const handleMouseEnter = useCallback(() => {
+    if (disabled) return;
     if (hoverCloseTimerRef.current) {
       clearTimeout(hoverCloseTimerRef.current);
       hoverCloseTimerRef.current = null;
@@ -397,9 +418,10 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         setFlyoutOpen(true);
       }, 300);
     }
-  }, [flyoutOpen]);
+  }, [disabled, flyoutOpen]);
 
   const handleMouseLeave = useCallback(() => {
+    if (disabled) return;
     if (hoverOpenTimerRef.current) {
       clearTimeout(hoverOpenTimerRef.current);
       hoverOpenTimerRef.current = null;
@@ -407,7 +429,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
     hoverCloseTimerRef.current = setTimeout(() => {
       setFlyoutOpen(false);
     }, 150);
-  }, []);
+  }, [disabled]);
 
   // Close flyout when clicking outside
   useEffect(() => {
@@ -432,6 +454,12 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [flyoutOpen, closeFlyout]);
+
+  useEffect(() => {
+    if (disabled && flyoutOpen) {
+      setFlyoutOpen(false);
+    }
+  }, [disabled, flyoutOpen]);
 
   // Focus management: when flyout opens, focus the active subtool item
   useEffect(() => {
@@ -465,6 +493,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
 
   // Keyboard handler for the flyout
   const handleFlyoutKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (disabled) return;
     switch (e.key) {
       case 'ArrowDown': {
         e.preventDefault();
@@ -493,13 +522,14 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         break;
       }
     }
-  }, [focusedIndex, group.tools, onActivateTool, closeFlyout]);
+  }, [disabled, focusedIndex, group.tools, onActivateTool, closeFlyout]);
 
   // Handle clicking a subtool in the flyout (mouse path also restores focus)
   const handleSubtoolClick = useCallback((tool: ToolType) => {
+    if (disabled) return;
     onActivateTool(tool);
     closeFlyout();
-  }, [onActivateTool, closeFlyout]);
+  }, [disabled, onActivateTool, closeFlyout]);
 
   const groupLabel = t(TOOL_GROUP_LABEL_KEYS[group.id] ?? group.id);
 
@@ -522,6 +552,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         active={isGroupActive}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
+        disabled={disabled}
         aria-label={t(TOOL_LABEL_KEYS[displayTool])}
         aria-pressed={isGroupActive}
         aria-haspopup="true"
@@ -529,7 +560,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool }: ToolGroupButtonP
         data-testid={`tool-group-${group.id}`}
       />
 
-      {flyoutOpen && (
+      {flyoutOpen && !disabled && (
         <div
           ref={flyoutRef}
           className="absolute top-full right-0 mt-1 z-50 bg-panel border border-border rounded shadow-lg py-1 min-w-[10rem]"

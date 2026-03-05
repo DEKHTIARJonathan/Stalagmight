@@ -37,6 +37,7 @@ export default function SingleSystemView() {
 
   const isDirty = useProjectStore((s) => s.isDirty);
   const autoSave = useAutoSave();
+  const placementModeActive = useUIStore((s) => s.placementMode !== null);
 
   const handleSaveProject = useCallback(async () => {
     autoSave.cancelPending();
@@ -185,6 +186,7 @@ export default function SingleSystemView() {
         onRedo={redo}
         canUndo={canUndo}
         canRedo={canRedo}
+        placementModeActive={placementModeActive}
       />
 
       {/* Main content */}
@@ -198,13 +200,14 @@ export default function SingleSystemView() {
             maxSize={400}
             onResize={setSectionsPanelWidth}
             onResizeEnd={(size) => savePanelSizes(size, undefined, undefined)}
-            className="border-r border-border"
+            className={`border-r border-border${placementModeActive ? ' pointer-events-none select-none' : ''}`}
           >
             <div className="relative h-full">
               <button
                 type="button"
                 className="absolute right-0 top-1/2 z-10 -mr-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
                 onClick={toggleSectionsPanel}
+                disabled={placementModeActive}
                 title={t('dataTable.toggle.collapse')}
                 aria-label={t('dataTable.toggle.collapse')}
                 data-testid="sections-panel-collapse-toggle"
@@ -221,8 +224,9 @@ export default function SingleSystemView() {
         ) : (
           <button
             type="button"
-            className="w-3 flex-shrink-0 border-r border-border bg-panel transition-colors hover:bg-background-80"
+            className="w-3 flex-shrink-0 border-r border-border bg-panel transition-colors hover:bg-background-80 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={toggleSectionsPanel}
+            disabled={placementModeActive}
             title={t('sections.title')}
             aria-label={t('sections.title')}
             data-testid="sections-panel-collapsed-toggle"
@@ -253,13 +257,14 @@ export default function SingleSystemView() {
               maxSize={500}
               onResize={setDataTableHeight}
               onResizeEnd={(size) => savePanelSizes(undefined, undefined, size)}
-              className="border-t border-border"
+              className={`border-t border-border${placementModeActive ? ' pointer-events-none select-none' : ''}`}
             >
               <div className="relative h-full">
                 <button
                   type="button"
                   className="absolute left-1/2 top-0 z-10 h-3 w-12 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
                   onClick={toggleDataTable}
+                  disabled={placementModeActive}
                   title={t('dataTable.toggle.collapse')}
                   aria-label={t('dataTable.toggle.collapse')}
                   data-testid="data-table-open-collapse-toggle"
@@ -276,8 +281,9 @@ export default function SingleSystemView() {
           ) : (
             <button
               type="button"
-              className="h-3 shrink-0 border-t border-border bg-panel transition-colors hover:bg-background-80"
+              className="h-3 shrink-0 border-t border-border bg-panel transition-colors hover:bg-background-80 disabled:cursor-not-allowed disabled:opacity-50"
               onClick={toggleDataTable}
+              disabled={placementModeActive}
               title={t('dataTable.toggle.expand')}
               aria-label={t('dataTable.toggle.expand')}
               data-testid="data-table-collapsed-toggle"
@@ -299,13 +305,14 @@ export default function SingleSystemView() {
             onResize={setDetailPanelWidth}
             onResizeEnd={(size) => savePanelSizes(undefined, size, undefined)}
             handlePosition="start"
-            className="border-l border-border"
+            className={`border-l border-border${placementModeActive ? ' pointer-events-none select-none' : ''}`}
           >
             <div className="relative h-full">
               <button
                 type="button"
                 className="absolute left-0 top-1/2 z-10 -ml-1 h-10 w-3 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
                 onClick={toggleDetailPanel}
+                disabled={placementModeActive}
                 title={t('dataTable.toggle.collapse')}
                 aria-label={t('dataTable.toggle.collapse')}
                 data-testid="detail-panel-collapse-toggle"
@@ -322,8 +329,9 @@ export default function SingleSystemView() {
         ) : (
           <button
             type="button"
-            className="w-3 flex-shrink-0 border-l border-border bg-panel transition-colors hover:bg-background-80"
+            className="w-3 flex-shrink-0 border-l border-border bg-panel transition-colors hover:bg-background-80 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={toggleDetailPanel}
+            disabled={placementModeActive}
             title={t('onboarding.flows.singleView.steps.detailPanel.title')}
             aria-label={t('onboarding.flows.singleView.steps.detailPanel.title')}
             data-testid="detail-panel-collapsed-toggle"
