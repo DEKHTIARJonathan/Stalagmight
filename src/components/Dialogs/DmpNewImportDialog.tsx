@@ -1843,6 +1843,15 @@ export default function DmpNewImportDialog({
   }, [isTargetDoublyAnchored, overlapMode, handleOverlapModeChange]);
 
   // Pick the next suggestion from the cached pool, filtering out connected/skipped sections.
+  const computeDefaultMergeOffset = useCallback((suggestion: CrossSectionSuggestion): number => {
+    const section = dmpFile.sections[suggestion.importSectionIndex];
+    const importShotCount = section
+      ? section.shots.filter((s) => s.shot_type === 'Standard').length
+      : 0;
+    const options = computeMergeOptions(suggestion, importShotCount);
+    return options[options.length - 1]?.offset ?? 0;
+  }, [dmpFile.sections]);
+
   const pickFromPool = useCallback(() => {
     const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
     const skipped = skippedIndicesRef.current;
@@ -1874,6 +1883,9 @@ export default function DmpNewImportDialog({
     if (pool.length === 0) return false;
 
     const top = pool[0]!;
+    // Set default merge option immediately to avoid a one-render race where
+    // confirm can read the previous suggestion's offset.
+    setSelectedMergeOffset(computeDefaultMergeOffset(top));
     setCurrentSuggestion(top);
     setAlternatives(
       pool
@@ -1881,7 +1893,7 @@ export default function DmpNewImportDialog({
         .slice(0, 4)
     );
     return true;
-  }, []);
+  }, [computeDefaultMergeOffset]);
 
   // Transition from suggesting phase: import reachable sections immediately (early import),
   // then enter manual_placing for unreachable segments, or complete if none.
@@ -2584,6 +2596,7 @@ export default function DmpNewImportDialog({
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
+    setSelectedMergeOffset(computeDefaultMergeOffset(alt));
     setCurrentSuggestion(alt);
     setAlternatives((prev) => {
       const newAlts = prev.filter((a) => a !== alt);
@@ -2593,7 +2606,7 @@ export default function DmpNewImportDialog({
       }
       return newAlts.slice(0, 4);
     });
-  }, [currentSuggestion]);
+  }, [currentSuggestion, computeDefaultMergeOffset]);
 
   // ─── Manual placing phase handlers ────────────────────────────────────────
 
