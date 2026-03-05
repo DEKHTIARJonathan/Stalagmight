@@ -786,9 +786,9 @@ When an action is performed while the dropdown is open:
 
 After section selection, the primary import flow uses a connection wizard that auto-detects overlapping shots between sections and places them with a single batch import. The wizard handles overlap treatment (interpolation, import data, existing data, keep both), doubly-anchored guards to protect closure/datum constraints, and atomic updates to existing section shots. See [DMP Import Wizard](dmp-import.md) for full architecture documentation.
 
-#### DMP Import - Legacy Two-Step Flow
+#### DMP Import - Section Selection (DmpSelectionDialog)
 
-The legacy DMP import workflow uses a two-step process for improved UX:
+After selecting sections, the workflow continues into zero-datum setup (if needed) and the connection/placement wizard.
 
 ##### Step 1: Section Selection (DmpSelectionDialog)
 
@@ -834,7 +834,7 @@ The legacy DMP import workflow uses a two-step process for improved UX:
 - "Depth: --" shown when no depth data available
 - ARIA label provides screen reader description (e.g., "Selection statistics: 70 shots, 281.8m total length, depth range 2.1-15.4m")
 
-##### Step 2: Section Configuration (DmpSectionConfigDialog)
+##### Step 2: Connection + Placement Wizard (DmpNewImportDialog)
 
 ```
 ┌─ Configure Section: AAA - Main Line ─────────────────────────────┐
@@ -920,7 +920,7 @@ The legacy DMP import workflow uses a two-step process for improved UX:
 
 ##### Create Section Dialog (Manual Entry)
 
-For manual entry (no DMP file), goes directly to Step 2 (DmpSectionConfigDialog) with an empty shot table.
+For manual entry (no DMP file), use the generic Import dialog with an empty shot table.
 
 #### Merge Stations Dialog
 
@@ -1005,7 +1005,7 @@ Shown when creating a loop closure between two **connected** stations.
 5. If GPS provided: Single station with golden star visible
 6. User can now import sections or add manually
 
-### 7.3 Importing DMP File (Two-Step Flow)
+### 7.3 Importing DMP File (Wizard Flow)
 
 **Step 1: Section Selection (DmpSelectionDialog)**
 
@@ -1018,7 +1018,7 @@ Shown when creating a loop closure between two **connected** stations.
 5. If file hash matches previous import, warning shown
 6. User clicks [Continue] to proceed to Step 2
 
-**Step 2: Section Configuration (DmpSectionConfigDialog)**
+**Step 2: Connection + Placement Wizard (DmpNewImportDialog)**
 
 7. Step 2 dialog opens with first selected section
 8. User configures each section:

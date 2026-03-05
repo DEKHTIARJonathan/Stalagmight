@@ -200,7 +200,7 @@ When all suggestions are exhausted (or skipped), the placing phase proceeds:
    6. Adjust station indices for deleted overlap shots
 3. IPC call: `import_sections(sections, fileHash, existingShotUpdates)`
 
-Sections unreachable after all passes are handed off to the legacy import dialog.
+Sections unreachable after all passes remain in the wizard's manual segment-placement flow until the user places or discards them.
 
 ## Key Types
 

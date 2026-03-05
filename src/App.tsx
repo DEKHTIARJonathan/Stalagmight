@@ -14,17 +14,14 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpSectionConfigDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog } from './components/Dialogs';
 import { ContextMenu } from './components/common';
-import type { ImportedSectionConfig } from './components/Dialogs/DmpSectionConfigDialog';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
-import type { ShotData } from './types/project';
-import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement, OrphanPlacementSuggestion } from './types/commands';
-import { editableShotToShotData, calculateStationPositions } from './utils/shotConversion';
+import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
-  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseGpx, importSections } = useProjectStore();
+  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseGpx } = useProjectStore();
   const {
     view,
     setView,
@@ -57,18 +54,6 @@ function App() {
   // Determine if import dialog is open and has placed sections
   // This is used to show a confirmation when closing the app
   const isImportInProgress = useMemo(() => {
-    // Check if we're in the DMP section config dialog
-    if (activeDialog === 'dmp-section-config') {
-      // Check if there are placed sections in the saved state
-      const savedPlacedSections = dialogData.savedPlacedSections as number[] | undefined;
-      if (savedPlacedSections && savedPlacedSections.length > 0) {
-        return true;
-      }
-      // Also check the selectionConfig which indicates sections are being configured
-      if (dialogData.selectionConfig) {
-        return true;
-      }
-    }
     // Also block during DMP selection if we have a parsed file
     if (activeDialog === 'dmp-selection' && dialogData.dmpFile) {
       return true;
@@ -89,109 +74,6 @@ function App() {
     isImportInProgress,
     'Import is in progress. Discard all import data and close?'
   );
-
-  /**
-   * Convert frontend section configs to backend ImportSectionConfig format
-   * and import all sections as a single atomic operation.
-   */
-  const handleImportSections = useCallback(async (sections: ImportedSectionConfig[], fileHash?: string | null): Promise<boolean> => {
-    // Convert each section to the backend format
-    const backendSections: BackendImportSectionConfig[] = sections.map((sectionConfig) => {
-      const shots: ShotData[] = sectionConfig.shots.map(editableShotToShotData);
-      const placement = sectionConfig.placement;
-
-      let backendPlacement: ImportPlacement;
-
-      if (placement.type === 'origin') {
-        backendPlacement = { type: 'origin' };
-      } else if (placement.type === 'zeroDatum') {
-        backendPlacement = {
-          type: 'zero_datum',
-          coordinates: placement.coordinates,
-          station_index: placement.stationIndex,
-        };
-      } else if (placement.type === 'fromExisting') {
-        backendPlacement = {
-          type: 'from_existing',
-          import_station: placement.importStation,
-          existing_station: placement.existingStation,
-        };
-      } else if (placement.type === 'fromImporting') {
-        backendPlacement = {
-          type: 'from_importing',
-          import_station: placement.importStation,
-          target_section_index: placement.targetSectionIndex,
-          target_station_index: placement.targetStationIndex,
-        };
-      } else if (placement.type === 'manual' && placement.snappedToStation) {
-        // Manual with snap → manualSnap variant
-        const snapIndex = Math.max(0, Math.min(placement.alignStationIndex, sectionConfig.shots.length));
-        backendPlacement = {
-          type: 'manual_snap',
-          align_station_index: snapIndex,
-          snapped_to_station: placement.snappedToStation,
-        };
-      } else {
-        // Manual without snap → compute offset
-        const alignIdx = placement.type === 'manual' ? placement.alignStationIndex : 0;
-        // Clamp to valid station range to prevent out-of-bounds index reaching the backend
-        const stationCount = sectionConfig.shots.length + 1; // stations = shots + 1
-        const clampedIdx = Math.max(0, Math.min(alignIdx, stationCount - 1));
-        if (placement.type === 'manual' && placement.position) {
-          const stationPositions = calculateStationPositions(sectionConfig.shots);
-          const alignPos = stationPositions[clampedIdx];
-          if (alignPos) {
-            backendPlacement = {
-              type: 'manual',
-              align_station_index: clampedIdx,
-              offset: {
-                x: placement.position.x - alignPos.x,
-                y: placement.position.y - alignPos.y,
-                z: placement.position.z ?? 0,
-              },
-            };
-          } else {
-            backendPlacement = { type: 'manual', align_station_index: clampedIdx, offset: null };
-          }
-        } else {
-          backendPlacement = { type: 'manual', align_station_index: clampedIdx, offset: null };
-        }
-      }
-
-      return {
-        section_index: sectionConfig.sectionIndex,
-        name: sectionConfig.name,
-        surveyor: sectionConfig.surveyor,
-        date: sectionConfig.date,
-        color: sectionConfig.color,
-        direction: sectionConfig.direction,
-        quality: sectionConfig.quality ?? 1.0,
-        shots,
-        placement: backendPlacement,
-        station_comments: [],
-      };
-    });
-
-    // Single backend call — all sections + file hash in one atomic undo unit
-    const result = await importSections(backendSections, fileHash);
-
-    // Close the dialog and switch to single view
-    closeDialog();
-    setView('single');
-
-    // Fit map to show all stations including newly imported ones
-    triggerFitToBounds();
-
-    if (!result.success) {
-      openDialog('error', {
-        title: 'Import Errors',
-        message: result.error ?? 'Unknown error during import',
-      });
-      return false;
-    }
-
-    return true;
-  }, [importSections, closeDialog, openDialog, setView, triggerFitToBounds]);
 
   useEffect(() => {
     // Load config on startup
@@ -460,44 +342,13 @@ function App() {
           filePath={dialogData.filePath as string}
           onCancel={closeDialog}
           onContinue={(selectionCfg) => {
-            // Proceed to Step 2: legacy or new workflow
-            const useLegacy = useProjectStore.getState().config?.general.legacy_dmp_import ?? false;
-            if (useLegacy) {
-              openDialog('dmp-section-config', {
-                dmpFile: dialogData.dmpFile,
-                filePath: dialogData.filePath,
-                selectionConfig: selectionCfg,
-              });
-            } else {
-              // New workflow: check if project has zero datums
-              const hasZeroDatums = (project?.zero_datums?.length ?? 0) > 0;
-              openDialog(hasZeroDatums ? 'dmp-import-new' : 'zero-datum-selection', {
-                dmpFile: dialogData.dmpFile,
-                filePath: dialogData.filePath,
-                selectionConfig: selectionCfg,
-              });
-            }
-          }}
-        />
-      ) : null}
-      {activeDialog === 'dmp-section-config' && dialogData.dmpFile && dialogData.selectionConfig ? (
-        <DmpSectionConfigDialog
-          dmpFile={dialogData.dmpFile as import('./types/commands').DmpFile}
-          selectionConfig={dialogData.selectionConfig as DmpSelectionConfig}
-          project={project}
-          stations={stations}
-          onCancel={closeDialog}
-          onBack={() => {
-            // Go back to Step 1
-            openDialog('dmp-selection', {
+            // Continue to the new workflow
+            const hasZeroDatums = (project?.zero_datums?.length ?? 0) > 0;
+            openDialog(hasZeroDatums ? 'dmp-import-new' : 'zero-datum-selection', {
               dmpFile: dialogData.dmpFile,
               filePath: dialogData.filePath,
+              selectionConfig: selectionCfg,
             });
-          }}
-          onImport={async (sections) => {
-            // Capture hash before handleImportSections closes dialog (clears dialogData)
-            const hash = (dialogData.selectionConfig as DmpSelectionConfig)?.fileHash;
-            await handleImportSections(sections, hash);
           }}
         />
       ) : null}
@@ -526,16 +377,6 @@ function App() {
                 filePath: dialogData.filePath,
               });
             }
-          }}
-          onHandoffToLegacy={(remainingIndices) => {
-            openDialog('dmp-section-config', {
-              dmpFile: dialogData.dmpFile,
-              filePath: dialogData.filePath,
-              selectionConfig: {
-                ...(dialogData.selectionConfig as DmpSelectionConfig),
-                selectedIndices: remainingIndices,
-              },
-            });
           }}
           onComplete={async (newSectionIds?: number[]) => {
             if (newSectionIds?.length) {

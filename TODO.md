@@ -2,7 +2,7 @@
 
 Tracks v1.0 spec completion and user testing feedback.
 
-**Last Updated**: 2026-03-04
+**Last Updated**: 2026-03-05
 
 ---
 
@@ -19,9 +19,9 @@ Tracks v1.0 spec completion and user testing feedback.
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
 | User Testing: Bugs | 3 | 6 | 50% |
-| User Testing: UX | 4 | 5 | 80% |
+| User Testing: UX | 5 | 5 | 100% |
 | User Testing: Features | 1 | 5 | 20% |
-| **Total** | **70** | **81** | **86%** |
+| **Total** | **71** | **81** | **88%** |
 
 ---
 
@@ -65,7 +65,7 @@ Tracks v1.0 spec completion and user testing feedback.
 
 | Task | Status | Notes |
 |------|--------|-------|
-| DMP Import (two-step workflow) | ✅ | DmpSelectionDialog + DmpSectionConfigDialog |
+| DMP Import (wizard workflow) | ✅ | DmpSelectionDialog + zero datum setup + DmpNewImportDialog |
 | Shared ShotTableEditor | ✅ | |
 | Shared SectionMetadataForm | ✅ | |
 | Enhanced SectionPreview | ✅ | |
@@ -199,11 +199,11 @@ Tracks v1.0 spec completion and user testing feedback.
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
 | User Testing: Bugs | 6 | 3 | 0 | 3 |
-| User Testing: UX | 5 | 4 | 0 | 1 |
+| User Testing: UX | 5 | 5 | 0 | 0 |
 | User Testing: Features | 5 | 1 | 0 | 4 |
-| **Total** | **81** | **70** | **0** | **11** |
+| **Total** | **81** | **71** | **0** | **10** |
 
-**Overall Progress**: 70/81 = ~86% complete
+**Overall Progress**: 71/81 = ~88% complete
 
 ---
 
@@ -222,13 +222,13 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Fix question mark tooltip | ✅ | Replaced with themed custom hover tooltip for closure-adjustment `?` help icon |
 | Fix duplicate save location on "Save now" | ✅ | Save-now now performs a single write to the selected path; default/autosave flow no longer duplicates files |
 
-### UX Improvements (4/5 done)
+### UX Improvements (5/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Make "Place on map" button more visible | ✅ | Promoted "Place on Map" to primary CTA in import placement and added clearer outlined secondary actions for import dialogs |
 | Add unmerge capability | ✅ | Added targeted unmerge/remove flows: single merge/closure removes immediately, multiple items open chooser dialogs, and detail panel merged/closure links include per-item broken-chain actions *(~line 569)* |
-| Make move tool larger and more discoverable | ❌ | User couldn't locate it even with verbal guidance *(~line 413, 1707)* |
+| Make move tool larger and more discoverable | ✅ | Improved discoverability via toolbar grouping refinements and expanded onboarding tool guidance with larger visual references *(~line 413, 1707)* |
 | Add middle-click panning | ✅ | Added middle-click drag pan everywhere Ctrl+drag pan is supported, preserving active tool after release *(~line 1865)* |
 | Rename "reference shot" to "jump line" | ✅ | Renamed key user-facing UI labels to "Jump/Reference" (Detail panel, Display menu, Data Table, Draw Shot, Context Menu); placement-setting and overlap labels kept unchanged by request *(~line 623)* |
 
@@ -239,7 +239,7 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Prioritize map-first workflow | ❌ | Everything possible should be doable from the map view *(~line 574)* |
 | Auto-merge everything on import | ❌ | Leave unmerged sections floating with tooltips to drag into place *(~line 1679)* |
 | Warn on export about floating/unconnected shots | ✅ | TML/TMLU export now warns when sections are not connected to a zero datum, lists potentially discarded sections, and makes "Continue anyway" the primary action *(~line 1005)* |
-| Remove legacy import workflow | ❌ | Auto-merge is strictly better; user confirmed *(~line 1748)* |
+| Remove legacy import workflow | ✅ | Removed `dmp-section-config` dialog path and legacy toggle; DMP import now stays in selection/zero-datum/wizard/manual-placement flow only *(~line 1748)* |
 | Consider optional telemetry | ❌ | Understand what features people actually use *(~line 739)* |
 
 ---

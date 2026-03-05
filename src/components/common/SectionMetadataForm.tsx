@@ -1,6 +1,6 @@
 /**
  * Shared form component for editing section metadata (name, surveyor, date, color, direction).
- * Used by EditSectionDialog and DmpSectionConfigDialog.
+ * Used by EditSectionDialog and DMP import flows.
  */
 import { DatePicker } from './DatePicker';
 import { HelpTooltip } from './HelpTooltip';

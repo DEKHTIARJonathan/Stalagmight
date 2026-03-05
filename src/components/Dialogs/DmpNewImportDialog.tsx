@@ -58,7 +58,6 @@ interface DmpNewImportDialogProps {
   zeroDatumConfig?: ZeroDatumConfigResult | undefined;
   onCancel: () => void;
   onBack: () => void;
-  onHandoffToLegacy: (remainingIndices: Set<number>, connections: VirtualConnection[]) => void;
   onComplete: (newSectionIds?: number[]) => void;
   /** Saved state to restore after returning from manual map placement. */
   savedManualPlacingState?: SavedManualPlacingState | undefined;
@@ -1034,7 +1033,6 @@ export default function DmpNewImportDialog({
   zeroDatumConfig,
   onCancel,
   onBack,
-  onHandoffToLegacy,
   onComplete,
   savedManualPlacingState,
   autoStartManualPlacement = false,
@@ -2250,13 +2248,28 @@ export default function DmpNewImportDialog({
         setIsImporting(false);
       }
 
-      // Filter out discarded segments — they should not be handed to legacy
+      // Filter out discarded segments — they should not be placed later.
       const remaining = unreachable.filter(idx => !discardedIndicesRef.current.has(idx));
       if (remaining.length > 0) {
-        onHandoffToLegacy(new Set(remaining), connectionsRef.current);
-      } else {
-        onComplete(importedSectionIdsRef.current);
+        const segments = computeUnreachableSegments(remaining, connectionsRef.current);
+        if (segments.length > 0) {
+          setSegmentQueue(segments);
+          segmentSkipCountRef.current = new Map();
+
+          const firstSegment = segments[0]!;
+          commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+          const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
+          setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
+          setFromExistingSectionId(null);
+          setFromExistingStationIdx(0);
+          setAutoStartManualPlacementPending(true);
+          setError(null);
+          setPhase('manual_placing');
+          return;
+        }
       }
+
+      onComplete(importedSectionIdsRef.current);
     };
 
     doLateImport();
@@ -2268,15 +2281,30 @@ export default function DmpNewImportDialog({
     if (phase !== 'done') return;
     if (isImporting || isCalculating) return;
 
-    const remaining = new Set(
-      selectedIndices.filter((idx) => !connectedIndices.has(idx) && idx !== zeroDatumConfig?.sectionIndex)
+    const remaining = selectedIndices.filter(
+      (idx) => !connectedIndices.has(idx) && idx !== zeroDatumConfig?.sectionIndex
     );
 
-    if (remaining.size > 0) {
-      onHandoffToLegacy(remaining, connectionsRef.current);
-    } else {
-      onComplete(importedSectionIdsRef.current);
+    if (remaining.length > 0) {
+      const segments = computeUnreachableSegments(remaining, connectionsRef.current);
+      if (segments.length > 0) {
+        setSegmentQueue(segments);
+        segmentSkipCountRef.current = new Map();
+
+        const firstSegment = segments[0]!;
+        commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+        const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
+        setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
+        setFromExistingSectionId(null);
+        setFromExistingStationIdx(0);
+        setAutoStartManualPlacementPending(true);
+        setError(null);
+        setPhase('manual_placing');
+        return;
+      }
     }
+
+    onComplete(importedSectionIdsRef.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);
 
@@ -3920,17 +3948,10 @@ export default function DmpNewImportDialog({
               </div>
             )}
 
-            {/* No suggestions — show done phase briefly before handoff */}
+            {/* No suggestions — show status while transitioning to manual placement */}
             {phase === 'suggesting' && !isCalculating && !currentSuggestion && !isImporting && (
               <div className="text-center" data-testid="wizard-no-suggestions">
                 <div className="text-lg mb-2">{t('dialogs.dmpNewImport.noSuggestions')}</div>
-                {selectedIndices.filter((idx) => !connectedIndices.has(idx)).length > 0 && (
-                  <div className="text-sm text-text-secondary">
-                    {t('dialogs.dmpNewImport.handoffMessage', {
-                      count: selectedIndices.filter((idx) => !connectedIndices.has(idx)).length,
-                    })}
-                  </div>
-                )}
               </div>
             )}
 
