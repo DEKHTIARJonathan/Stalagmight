@@ -187,7 +187,25 @@ test.describe('Depth Gradient', () => {
   });
 
   test('shots use endpoint depth colors for line gradients', async ({ page }) => {
-    // Wait for shot features to render before reading properties from map layers.
+    // Sanity check: shot lines are actually visible in default (non-depth) mode.
+    await expect.poll(async () => {
+      const count = await page.evaluate(() => {
+        const map = (window as unknown as {
+          __stalagmight_map__?: {
+            queryRenderedFeatures: (opts: { layers: string[] }) => Array<unknown>;
+          };
+        }).__stalagmight_map__;
+        if (!map) return 0;
+        try {
+          return map.queryRenderedFeatures({ layers: ['survey-shots'] }).length;
+        } catch {
+          return 0;
+        }
+      });
+      return count;
+    }, { timeout: 5000 }).toBeGreaterThan(0);
+
+    // Wait for shot source features before reading endpoint color metadata.
     await expect.poll(async () => {
       const count = await page.evaluate(() => {
         const map = (window as unknown as {
@@ -220,7 +238,6 @@ test.describe('Depth Gradient', () => {
       if (!map) return null;
 
       const style = map.getStyle();
-      const sources = (style.sources ?? {}) as Record<string, { lineMetrics?: boolean }>;
       const shots = map.querySourceFeatures('survey-data-shots');
       const flatShotFound = shots.some((feature) => {
         const fromColor = feature.properties?.fromColor;
@@ -229,13 +246,11 @@ test.describe('Depth Gradient', () => {
       });
 
       return {
-        lineMetricsEnabled: sources['survey-data-shots']?.lineMetrics === true,
         flatShotFound,
       };
     });
 
     expect(baseline).not.toBeNull();
-    expect(baseline?.lineMetricsEnabled).toBe(true);
     expect(baseline?.flatShotFound).toBe(true);
 
     const depthGradientBefore = await page.evaluate(() => {

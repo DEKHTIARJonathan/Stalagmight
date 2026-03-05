@@ -18,10 +18,10 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
-| User Testing: Bugs | 4 | 6 | 67% |
+| User Testing: Bugs | 3 | 6 | 50% |
 | User Testing: UX | 5 | 5 | 100% |
 | User Testing: Features | 3 | 5 | 60% |
-| **Total** | **74** | **81** | **91%** |
+| **Total** | **73** | **81** | **90%** |
 
 ---
 
@@ -198,12 +198,12 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
-| User Testing: Bugs | 6 | 4 | 0 | 2 |
+| User Testing: Bugs | 6 | 3 | 0 | 3 |
 | User Testing: UX | 5 | 5 | 0 | 0 |
 | User Testing: Features | 5 | 3 | 0 | 2 |
-| **Total** | **81** | **74** | **0** | **7** |
+| **Total** | **81** | **73** | **0** | **8** |
 
-**Overall Progress**: 74/81 = ~91% complete
+**Overall Progress**: 73/81 = ~90% complete
 
 ---
 
@@ -211,13 +211,13 @@ Tracks v1.0 spec completion and user testing feedback.
 
 Source: `docs/transcripts/1-summary.md` — usability session importing real Mnemo DMP data.
 
-### Bugs (4/6 done)
+### Bugs (3/6 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Fix segment merge orphaning section | ❌ | After merging, one section not placed with the rest; reference shots auto-deleted but section orphaned *(~line 359)* |
 | Fix depth gradient colors overridden by theme | ✅ | Depth gradient now uses the same dark-theme shallow/deep endpoints across all themes, preventing theme-specific gradient drift *(~line 675)* |
-| Add per-shot depth gradient | ✅ | Shot lines now interpolate `fromColor`→`toColor` by `line-progress`, using shot endpoint depths (`depth_in`/`depth_out`) for per-shot shallow→deep rendering *(~line 677)* |
+| Add per-shot depth gradient | ❌ | Shot endpoint depth colors are computed (`fromColor`/`toColor`) but map rendering still uses flat per-shot color until a robust per-shot visual gradient path is implemented *(~line 677)* |
 | Fix Ariane export zero datum placement | ❌ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
 | Fix question mark tooltip | ✅ | Replaced with themed custom hover tooltip for closure-adjustment `?` help icon |
 | Fix duplicate save location on "Save now" | ✅ | Save-now now performs a single write to the selected path; default/autosave flow no longer duplicates files |
