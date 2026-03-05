@@ -20,8 +20,8 @@ Tracks v1.0 spec completion and user testing feedback.
 | Testing | 0 | 1 | 0% |
 | User Testing: Bugs | 4 | 6 | 67% |
 | User Testing: UX | 5 | 5 | 100% |
-| User Testing: Features | 1 | 5 | 20% |
-| **Total** | **72** | **81** | **89%** |
+| User Testing: Features | 3 | 5 | 60% |
+| **Total** | **74** | **81** | **91%** |
 
 ---
 
@@ -200,10 +200,10 @@ Tracks v1.0 spec completion and user testing feedback.
 | Testing | 1 | 0 | 0 | 1 |
 | User Testing: Bugs | 6 | 4 | 0 | 2 |
 | User Testing: UX | 5 | 5 | 0 | 0 |
-| User Testing: Features | 5 | 1 | 0 | 4 |
-| **Total** | **81** | **72** | **0** | **9** |
+| User Testing: Features | 5 | 3 | 0 | 2 |
+| **Total** | **81** | **74** | **0** | **7** |
 
-**Overall Progress**: 72/81 = ~89% complete
+**Overall Progress**: 74/81 = ~91% complete
 
 ---
 
@@ -232,12 +232,12 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Add middle-click panning | ✅ | Added middle-click drag pan everywhere Ctrl+drag pan is supported, preserving active tool after release *(~line 1865)* |
 | Rename "reference shot" to "jump line" | ✅ | Renamed key user-facing UI labels to "Jump/Reference" (Detail panel, Display menu, Data Table, Draw Shot, Context Menu); placement-setting and overlap labels kept unchanged by request *(~line 623)* |
 
-### Feature Suggestions (1/5 done)
+### Feature Suggestions (3/5 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Prioritize map-first workflow | ❌ | Everything possible should be doable from the map view *(~line 574)* |
-| Auto-merge everything on import | ❌ | Leave unmerged sections floating with tooltips to drag into place *(~line 1679)* |
+| Prioritize map-first workflow | ✅ | Core editing/placement/navigation workflows are now map-driven (tools, context menu actions, placement overlays, detail linking), reducing table-first dependency *(~line 574)* |
+| Auto-merge everything on import | ✅ | Import flow now auto-aligns/auto-merges where possible and keeps unresolved sections in map placement flow with visual guidance *(~line 1679)* |
 | Warn on export about floating/unconnected shots | ✅ | TML/TMLU export now warns when sections are not connected to a zero datum, lists potentially discarded sections, and makes "Continue anyway" the primary action *(~line 1005)* |
 | Remove legacy import workflow | ✅ | Removed `dmp-section-config` dialog path and legacy toggle; DMP import now stays in selection/zero-datum/wizard/manual-placement flow only *(~line 1748)* |
 | Consider optional telemetry | ❌ | Understand what features people actually use *(~line 739)* |
