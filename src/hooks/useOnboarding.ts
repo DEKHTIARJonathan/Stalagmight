@@ -23,8 +23,38 @@ interface UseOnboardingResult {
   startFlow: (flowId: string) => void;
 }
 
-export function useOnboarding(context: OnboardingContext): UseOnboardingResult {
-  const [suppressedFlowIds, setSuppressedFlowIds] = useState<string[]>([]);
+interface UseOnboardingOptions {
+  enabled: boolean;
+  completedFlowIds: string[];
+  onCompletedFlowIdsChange?: (flowIds: string[]) => void;
+}
+
+function normalizeFlowIds(flowIds: string[]): string[] {
+  const normalized: string[] = [];
+  for (const flowId of flowIds) {
+    const trimmed = flowId.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!normalized.includes(trimmed)) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
+}
+
+function sameFlowIdList(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  return a.every((id, idx) => id === b[idx]);
+}
+
+export function useOnboarding(context: OnboardingContext, options: UseOnboardingOptions): UseOnboardingResult {
+  const { enabled, completedFlowIds: completedFlowIdsProp, onCompletedFlowIdsChange } = options;
+  const [completedFlowIds, setCompletedFlowIds] = useState<string[]>(
+    normalizeFlowIds(completedFlowIdsProp)
+  );
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
 
@@ -50,24 +80,34 @@ export function useOnboarding(context: OnboardingContext): UseOnboardingResult {
     };
   }, [activeFlow, stepIndex]);
 
-  const suppressFlow = useCallback((flowId: string) => {
-    setSuppressedFlowIds((current) => {
-      if (current.includes(flowId)) {
-        return current;
-      }
-      return [...current, flowId];
-    });
-  }, []);
+  useEffect(() => {
+    const normalized = normalizeFlowIds(completedFlowIdsProp);
+    setCompletedFlowIds((current) => (sameFlowIdList(current, normalized) ? current : normalized));
+  }, [completedFlowIdsProp]);
+
+  const markFlowCompleted = useCallback(
+    (flowId: string) => {
+      setCompletedFlowIds((current) => {
+        if (current.includes(flowId)) {
+          return current;
+        }
+        const next = [...current, flowId];
+        onCompletedFlowIdsChange?.(next);
+        return next;
+      });
+    },
+    [onCompletedFlowIdsChange]
+  );
 
   const closeActiveFlow = useCallback(
     (suppressActiveFlow: boolean) => {
       if (activeFlowId && suppressActiveFlow) {
-        suppressFlow(activeFlowId);
+        markFlowCompleted(activeFlowId);
       }
       setActiveFlowId(null);
       setStepIndex(0);
     },
-    [activeFlowId, suppressFlow]
+    [activeFlowId, markFlowCompleted]
   );
 
   const next = useCallback(() => {
@@ -91,8 +131,11 @@ export function useOnboarding(context: OnboardingContext): UseOnboardingResult {
   }, [closeActiveFlow]);
 
   const resetProgress = useCallback(() => {
-    setSuppressedFlowIds([]);
-  }, []);
+    setCompletedFlowIds([]);
+    onCompletedFlowIdsChange?.([]);
+    setActiveFlowId(null);
+    setStepIndex(0);
+  }, [onCompletedFlowIdsChange]);
 
   const startFlow = useCallback((flowId: string) => {
     const flow = ONBOARDING_FLOWS.find((candidate) => candidate.id === flowId);
@@ -120,24 +163,20 @@ export function useOnboarding(context: OnboardingContext): UseOnboardingResult {
   }, [activeFlow, closeActiveFlow, context]);
 
   useEffect(() => {
-    setSuppressedFlowIds((current) => {
-      const filtered = current.filter((flowId) => {
-        const flow = ONBOARDING_FLOWS.find((candidate) => candidate.id === flowId);
-        return flow ? flow.shouldStart(context) : false;
-      });
-      const unchanged =
-        filtered.length === current.length &&
-        filtered.every((flowId, idx) => flowId === current[idx]);
-      return unchanged ? current : filtered;
-    });
-  }, [context]);
+    if (enabled) {
+      return;
+    }
+    if (activeFlowId) {
+      closeActiveFlow(false);
+    }
+  }, [enabled, activeFlowId, closeActiveFlow]);
 
   useEffect(() => {
-    if (activeFlowId !== null) {
+    if (!enabled || activeFlowId !== null) {
       return;
     }
     const nextFlow = ONBOARDING_FLOWS.find((flow) => {
-      if (suppressedFlowIds.includes(flow.id)) {
+      if (completedFlowIds.includes(flow.id)) {
         return false;
       }
       return flow.shouldStart(context);
@@ -148,9 +187,10 @@ export function useOnboarding(context: OnboardingContext): UseOnboardingResult {
     setActiveFlowId(nextFlow.id);
     setStepIndex(0);
   }, [
+    enabled,
     activeFlowId,
     context,
-    suppressedFlowIds,
+    completedFlowIds,
   ]);
 
   return {

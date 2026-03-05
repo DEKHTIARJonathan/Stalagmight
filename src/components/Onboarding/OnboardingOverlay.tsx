@@ -29,7 +29,8 @@ interface OnboardingOverlayProps {
   canGoBack: boolean;
   onBack: () => void;
   onNext: () => void;
-  onSkip: () => void;
+  onSkipCurrent: () => void;
+  onSkipAll: () => void;
 }
 
 interface SpotlightRect {
@@ -744,7 +745,8 @@ export default function OnboardingOverlay({
   canGoBack,
   onBack,
   onNext,
-  onSkip,
+  onSkipCurrent,
+  onSkipAll,
 }: OnboardingOverlayProps) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -756,6 +758,7 @@ export default function OnboardingOverlay({
   const [viewportVersion, setViewportVersion] = useState(0);
   const [tooltipHeight, setTooltipHeight] = useState(TOOLTIP_ESTIMATED_HEIGHT);
   const [isTooltipSettled, setIsTooltipSettled] = useState(true);
+  const [showSkipConfirm, setShowSkipConfirm] = useState(false);
 
   const isLastStep = stepIndex >= stepCount - 1;
   const interaction = step.interaction ?? 'locked';
@@ -780,6 +783,20 @@ export default function OnboardingOverlay({
   }, [step.targetSelector, step.targetSelectors]);
   const selectorKey = targetSelectorList.join('|');
   const hasTargetSelectors = targetSelectorList.length > 0;
+
+  const requestSkip = useCallback(() => {
+    setShowSkipConfirm(true);
+  }, []);
+
+  const handleSkipCurrent = useCallback(() => {
+    setShowSkipConfirm(false);
+    onSkipCurrent();
+  }, [onSkipCurrent]);
+
+  const handleSkipAll = useCallback(() => {
+    setShowSkipConfirm(false);
+    onSkipAll();
+  }, [onSkipAll]);
 
   const resetScrolledContainers = useCallback(() => {
     for (const selector of scrolledContainerSelectorsRef.current) {
@@ -846,6 +863,10 @@ export default function OnboardingOverlay({
   useEffect(() => {
     cardRef.current?.focus();
   }, [step.id]);
+
+  useEffect(() => {
+    setShowSkipConfirm(false);
+  }, [step.flowId, stepIndex]);
 
   useEffect(() => {
     const card = cardRef.current;
@@ -1005,7 +1026,15 @@ export default function OnboardingOverlay({
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
-        onSkip();
+        if (showSkipConfirm) {
+          setShowSkipConfirm(false);
+        } else {
+          requestSkip();
+        }
+        return;
+      }
+
+      if (showSkipConfirm) {
         return;
       }
 
@@ -1034,7 +1063,7 @@ export default function OnboardingOverlay({
       document.removeEventListener('wheel', handleWheel, true);
       document.removeEventListener('keydown', handleKeyboard, true);
     };
-  }, [canGoBack, interaction, onBack, onNext, onSkip, targetSelectorList]);
+  }, [canGoBack, interaction, onBack, onNext, requestSkip, showSkipConfirm, targetSelectorList]);
 
   const combinedTargetRect = useMemo(() => combineSpotlightRects(targetRects), [targetRects]);
   const spotlightRects = useMemo(() => {
@@ -1197,42 +1226,82 @@ export default function OnboardingOverlay({
         </div>
         <h2 className="mb-2 text-lg font-semibold text-text-primary">{t(step.titleKey)}</h2>
         <div className="mb-4">
-          {hasDescription && <p className="mb-2 text-sm leading-relaxed text-text-secondary">{description}</p>}
-          {illustration}
-          {descriptionItems.length > 0 && (
-            <ul className="mt-2 list-disc pl-5 text-sm leading-relaxed text-text-secondary">
-              {descriptionItems.map((item, index) => (
-                <li key={`${step.id}-desc-item-${index}`}>{item}</li>
-              ))}
-            </ul>
+          {showSkipConfirm ? (
+            <>
+              <p className="mb-2 text-sm leading-relaxed text-text-secondary">
+                {t('onboarding.skipConfirm.description')}
+              </p>
+            </>
+          ) : (
+            <>
+              {hasDescription && <p className="mb-2 text-sm leading-relaxed text-text-secondary">{description}</p>}
+              {illustration}
+              {descriptionItems.length > 0 && (
+                <ul className="mt-2 list-disc pl-5 text-sm leading-relaxed text-text-secondary">
+                  {descriptionItems.map((item, index) => (
+                    <li key={`${step.id}-desc-item-${index}`}>{item}</li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </div>
         <div className="flex items-center justify-between gap-2">
-          <button
-            className="rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-background-50 hover:text-text-primary"
-            onClick={onSkip}
-            type="button"
-          >
-            {t('onboarding.actions.skip')}
-          </button>
-          <div className="flex items-center gap-2">
-            {canGoBack && (
+          {showSkipConfirm ? (
+            <>
               <button
                 className="rounded-md border border-border px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-background-50"
-                onClick={onBack}
+                onClick={() => setShowSkipConfirm(false)}
                 type="button"
               >
-                {t('common.actions.back')}
+                {t('common.actions.cancel')}
               </button>
-            )}
-            <button
-              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
-              onClick={onNext}
-              type="button"
-            >
-              {isLastStep ? t('common.actions.done') : t('common.actions.next')}
-            </button>
-          </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-md border border-border px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-background-50"
+                  onClick={handleSkipCurrent}
+                  type="button"
+                >
+                  {t('onboarding.skipConfirm.skipCurrent')}
+                </button>
+                <button
+                  className="rounded-md bg-error px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                  onClick={handleSkipAll}
+                  type="button"
+                >
+                  {t('onboarding.skipConfirm.skipAll')}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <button
+                className="rounded-md px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-background-50 hover:text-text-primary"
+                onClick={requestSkip}
+                type="button"
+              >
+                {t('onboarding.actions.skip')}
+              </button>
+              <div className="flex items-center gap-2">
+                {canGoBack && (
+                  <button
+                    className="rounded-md border border-border px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-background-50"
+                    onClick={onBack}
+                    type="button"
+                  >
+                    {t('common.actions.back')}
+                  </button>
+                )}
+                <button
+                  className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                  onClick={onNext}
+                  type="button"
+                >
+                  {isLastStep ? t('common.actions.done') : t('common.actions.next')}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
+import { Button } from '../../common/Button';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
@@ -82,6 +83,17 @@ export function GeneralSettings({
   // --- Startup ---
   const handleSplashScreenToggle = createToggleHandler(onChange,
     (v) => ({ general: { ...config.general, splash_screen: v } }));
+  const handleOnboardingToggle = createToggleHandler(onChange,
+    (v) => ({ general: { ...config.general, onboarding_enabled: v } }));
+  const handleRestartOnboarding = useCallback(() => {
+    onChange({
+      general: {
+        ...config.general,
+        onboarding_enabled: true,
+        onboarding_completed_flows: [],
+      },
+    });
+  }, [config.general, onChange]);
 
   // --- Feedback ---
   const handleShortcutFeedbackChange = createSelectHandler(onChange,
@@ -94,6 +106,10 @@ export function GeneralSettings({
     (v) => ({ general: { ...config.general, number_format: v } }));
   const handleDateFormatChange = createSelectHandler(onChange,
     (v) => ({ general: { ...config.general, date_format: v } }));
+
+  const canRestartOnboarding =
+    (config.general.onboarding_completed_flows?.length ?? 0) > 0 ||
+    !config.general.onboarding_enabled;
 
   return (
     <div
@@ -314,6 +330,40 @@ export function GeneralSettings({
             aria-label={t('settings.general.splashScreen.aria')}
             data-testid="toggle-splash-screen"
           />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.general.onboarding.enabled.label')}
+          helpText={t('settings.general.onboarding.enabled.help')}
+          isChanged={isFieldChanged(changedFields, 'general.onboarding_enabled')}
+          onReset={() => onChange({ general: { ...config.general, onboarding_enabled: defaultConfig.general.onboarding_enabled } })}
+          isDefault={config.general.onboarding_enabled === defaultConfig.general.onboarding_enabled}
+          data-testid="setting-onboarding-enabled"
+        >
+          <Toggle
+            checked={config.general.onboarding_enabled}
+            onChange={handleOnboardingToggle}
+            aria-label={t('settings.general.onboarding.enabled.aria')}
+            data-testid="toggle-onboarding-enabled"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.general.onboarding.restart.label')}
+          helpText={t('settings.general.onboarding.restart.help')}
+          isChanged={isFieldChanged(changedFields, 'general.onboarding_completed_flows', 'general.onboarding_enabled')}
+          onReset={handleRestartOnboarding}
+          isDefault={!canRestartOnboarding}
+          data-testid="setting-onboarding-restart"
+        >
+          <Button
+            variant="secondary"
+            onClick={handleRestartOnboarding}
+            disabled={!canRestartOnboarding}
+            data-testid="restart-onboarding-button"
+          >
+            {t('settings.general.onboarding.restart.action')}
+          </Button>
         </SettingRow>
       </SettingsSection>
     </div>

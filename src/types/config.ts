@@ -50,6 +50,8 @@ export const defaultConfig: Config = {
     number_format: 'locale',
     date_format: 'locale',
     splash_screen: false,
+    onboarding_enabled: true,
+    onboarding_completed_flows: [],
     legacy_dmp_import: false,
   },
   units: {

@@ -130,6 +130,8 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.general.undo_history_limit).toBe(100);
       expect(defaultConfig.general.undo_persist_limit).toBe(20);
       expect(defaultConfig.general.locale).toBe('system');
+      expect(defaultConfig.general.onboarding_enabled).toBe(true);
+      expect(defaultConfig.general.onboarding_completed_flows).toEqual([]);
     });
   });
 
