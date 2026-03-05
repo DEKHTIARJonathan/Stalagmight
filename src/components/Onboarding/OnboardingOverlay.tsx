@@ -55,6 +55,7 @@ const TOOLTIP_ESTIMATED_HEIGHT = 250;
 const STEP_SCROLL_TOP_PADDING = 10;
 const STEP_SCROLL_MAX_ATTEMPTS = 12;
 const STEP_SCROLL_RETRY_MS = 80;
+const TOOLTIP_SETTLE_DELAY_MS = 220;
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
@@ -754,6 +755,7 @@ export default function OnboardingOverlay({
   const [targetRects, setTargetRects] = useState<SpotlightRect[]>([]);
   const [viewportVersion, setViewportVersion] = useState(0);
   const [tooltipHeight, setTooltipHeight] = useState(TOOLTIP_ESTIMATED_HEIGHT);
+  const [isTooltipSettled, setIsTooltipSettled] = useState(true);
 
   const isLastStep = stepIndex >= stepCount - 1;
   const interaction = step.interaction ?? 'locked';
@@ -1052,6 +1054,43 @@ export default function OnboardingOverlay({
     const rect = getVisibleSpotlightRect(tooltipTarget);
     return rect ?? combinedTargetRect;
   }, [combinedTargetRect, step.tooltipTargetSelector, viewportVersion]);
+  const tooltipTargetSignature = useMemo(() => {
+    if (!tooltipTargetRect) {
+      return 'none';
+    }
+    return [
+      Math.round(tooltipTargetRect.left),
+      Math.round(tooltipTargetRect.top),
+      Math.round(tooltipTargetRect.width),
+      Math.round(tooltipTargetRect.height),
+    ].join(':');
+  }, [
+    tooltipTargetRect?.height,
+    tooltipTargetRect?.left,
+    tooltipTargetRect?.top,
+    tooltipTargetRect?.width,
+  ]);
+
+  useEffect(() => {
+    if (!hasTargetSelectors) {
+      setIsTooltipSettled(true);
+      return;
+    }
+
+    if (tooltipTargetSignature === 'none') {
+      setIsTooltipSettled(false);
+      return;
+    }
+
+    setIsTooltipSettled(false);
+    const timeoutId = window.setTimeout(() => {
+      setIsTooltipSettled(true);
+    }, TOOLTIP_SETTLE_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [hasTargetSelectors, step.id, tooltipTargetSignature]);
 
   const tooltipStyle = useMemo(
     () =>
@@ -1076,7 +1115,8 @@ export default function OnboardingOverlay({
       viewportVersion,
     ]
   );
-  const isTooltipAnchorReady = !hasTargetSelectors || tooltipTargetRect !== null;
+  const isTooltipAnchorReady =
+    (!hasTargetSelectors || tooltipTargetRect !== null) && isTooltipSettled;
 
   const overlay = (
     <div

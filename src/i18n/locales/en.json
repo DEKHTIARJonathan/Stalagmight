@@ -1903,36 +1903,35 @@
         "steps": {
           "segmentPanel": {
             "title": "Segment Overview",
-            "description": "This step places sections that could not be auto-connected."
+            "description": "This dialog handles segments that could not be auto-connected. Review placement mode, adjust metadata, and place each segment before finishing import."
           },
-          "placementModes": {
-            "title": "Placement Modes",
-            "description": "Choose a placement strategy: suggested, from existing, manual map placement, or do not place."
-          },
-          "actions": {
-            "title": "Placement Actions",
-            "description": "Use Place Segment (and Skip when available) to continue through remaining segments."
-          }
-        }
-      },
-      "dmpLegacyConfig": {
-        "title": "DMP Import: Legacy Section Config",
-        "steps": {
-          "dialog": {
-            "title": "Legacy Placement Screen",
-            "description": "This mode configures one section at a time with full placement and editing controls."
-          },
-          "sectionList": {
-            "title": "Section Navigation",
-            "description": "Switch between selected sections and monitor placed/error states at a glance."
-          },
-          "placement": {
+          "placementOptions": {
             "title": "Placement Options",
-            "description": "Choose origin, zero datum, from-existing, or manual placement for the active section."
+            "description": "Choose how this segment should be placed: from an existing station, manual map placement, or do not place."
+          },
+          "fromExisting": {
+            "title": "From Existing Station",
+            "description": "Use this mode to anchor the segment to an existing project station. As you configure anchors, the left preview helps you verify how geometry aligns."
+          },
+          "manualPlacement": {
+            "title": "Manual Placement",
+            "description": "Manual placement lets you position this segment directly on the map. Station controls which station is anchored to your cursor, which is useful when visually merging with existing survey geometry."
+          },
+          "doNotPlace": {
+            "title": "Do Not Place",
+            "description": "Use Do Not Place when this section was imported by mistake and should be skipped."
+          },
+          "sectionName": {
+            "title": "Section Name",
+            "description": "Give this section a recognizable name before placement (for example, \"Main Line\")."
+          },
+          "otherData": {
+            "title": "Other Editable Data",
+            "description": "Adjust any remaining fields and shot data here. Everything can also be edited later after import."
           },
           "actions": {
-            "title": "Placement Actions",
-            "description": "Place, finish, move to next section, or include/exclude sections during import."
+            "title": "Skip or Place Segment",
+            "description": "Use Skip to review a different remaining segment first. Use Place Segment when this segment is configured the way you want."
           }
         }
       }

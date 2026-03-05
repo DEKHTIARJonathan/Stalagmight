@@ -3219,6 +3219,66 @@ export default function DmpNewImportDialog({
   // Whether we're in the manual_placing phase
   const showManualPlacing = phase === 'manual_placing' && currentSegment != null;
 
+  // Keep segment placement mode synced with onboarding steps so each step shows
+  // the intended controls and context while the user progresses.
+  useEffect(() => {
+    if (!showManualPlacing) {
+      return;
+    }
+
+    const getSegmentPlacementOnboardingStepId = (): string | null => {
+      const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
+      if (!overlay) {
+        return null;
+      }
+      const flowId = overlay.getAttribute('data-onboarding-flow-id');
+      const stepId = overlay.getAttribute('data-onboarding-step-id');
+      return flowId === 'dmp-segment-placement' ? stepId : null;
+    };
+
+    const syncPlacementModeForStep = () => {
+      const stepId = getSegmentPlacementOnboardingStepId();
+      let requiredMode: 'fromExisting' | 'manual' | 'discard' | null = null;
+
+      if (stepId === 'from-existing') {
+        requiredMode = 'fromExisting';
+      } else if (
+        stepId === 'manual-placement' ||
+        stepId === 'section-name' ||
+        stepId === 'other-data' ||
+        stepId === 'actions'
+      ) {
+        requiredMode = 'manual';
+      } else if (stepId === 'do-not-place') {
+        requiredMode = 'discard';
+      }
+
+      if (!requiredMode) {
+        return;
+      }
+
+      setSegmentPlacementMode((current) => (current === requiredMode ? current : requiredMode));
+    };
+
+    syncPlacementModeForStep();
+
+    if (typeof MutationObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new MutationObserver(syncPlacementModeForStep);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-onboarding-flow-id', 'data-onboarding-step-id'],
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [showManualPlacing]);
+
   // Target type label for import-to-import connections
   const isImportTarget = currentSuggestion?.targetType === 'importing';
 
@@ -3265,7 +3325,11 @@ export default function DmpNewImportDialog({
         {showSideBySide ? (
           <div className="flex-1 flex min-h-0 overflow-hidden relative">
             {/* Left column: SectionPreview */}
-            <div className="shrink-0 flex flex-col items-center p-4 border-r border-border" style={{ width: 380 }}>
+            <div
+              className="shrink-0 flex flex-col items-center p-4 border-r border-border"
+              style={{ width: 380 }}
+              data-testid="segment-preview-panel"
+            >
               <SectionPreview
                 section={importPreviewSection}
                 color={importColor}
@@ -3439,7 +3503,7 @@ export default function DmpNewImportDialog({
                     {t('dialogs.dmpNewImport.sectionSettings')}
                   </div>
                   <div>
-                    <label className="block text-sm text-text-secondary mb-1">
+                    <label className="block text-sm text-text-secondary mb-1" data-testid="section-name-label">
                       {t('common.labels.name')}
                     </label>
                     <input
@@ -3487,7 +3551,11 @@ export default function DmpNewImportDialog({
         ) : showManualPlacing ? (
           <div className="flex-1 flex min-h-0 overflow-hidden relative">
             {/* Left column: Segment Preview */}
-            <div className="shrink-0 flex flex-col items-center p-4 border-r border-border" style={{ width: 380 }}>
+            <div
+              className="shrink-0 flex flex-col items-center p-4 border-r border-border"
+              style={{ width: 380 }}
+              data-testid="segment-preview-panel"
+            >
               <SectionPreview
                 segmentSections={segmentPreviewSections}
                 contextSections={fromExistingContextSections}
@@ -3540,7 +3608,10 @@ export default function DmpNewImportDialog({
                 )}
 
                 {/* From existing station */}
-                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                <label
+                  className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer"
+                  data-testid="segment-mode-from-existing"
+                >
                   <input
                     type="radio"
                     name="segmentPlacementMode"
@@ -3651,7 +3722,10 @@ export default function DmpNewImportDialog({
                 </label>
 
                 {/* Manual placement */}
-                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                <label
+                  className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer"
+                  data-testid="segment-mode-manual"
+                >
                   <input
                     type="radio"
                     name="segmentPlacementMode"
@@ -3722,7 +3796,10 @@ export default function DmpNewImportDialog({
                 </label>
 
                 {/* Do not place (discard) */}
-                <label className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer">
+                <label
+                  className="flex items-start gap-2 p-2 rounded border border-border hover:bg-accent-5 cursor-pointer"
+                  data-testid="segment-mode-discard"
+                >
                   <input
                     type="radio"
                     name="segmentPlacementMode"
@@ -3742,22 +3819,24 @@ export default function DmpNewImportDialog({
               {/* Section settings (same editing surface as section connection / zero datum flows) */}
               {editState && (
                 <>
-                  <div className="border-t border-border" />
-                  <div className="text-sm font-medium">
-                    {t('dialogs.dmpNewImport.sectionSettings')}
-                  </div>
-                  <div>
-                    <label className="block text-sm text-text-secondary mb-1">
-                      {t('common.labels.name')}
-                    </label>
-                    <input
-                      type="text"
-                      value={editState.name}
-                      onChange={(e) => handleMetadataChange('name', e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded"
-                      placeholder={t('sectionMetadata.placeholders.name')}
-                      data-testid="section-name-input"
-                    />
+                  <div className="space-y-2" data-testid="wizard-manual-section-settings">
+                    <div className="border-t border-border" />
+                    <div className="text-sm font-medium">
+                      {t('dialogs.dmpNewImport.sectionSettings')}
+                    </div>
+                    <div>
+                      <label className="block text-sm text-text-secondary mb-1">
+                        {t('common.labels.name')}
+                      </label>
+                      <input
+                        type="text"
+                        value={editState.name}
+                        onChange={(e) => handleMetadataChange('name', e.target.value)}
+                        className="w-full px-3 py-2 bg-background border border-border rounded"
+                        placeholder={t('sectionMetadata.placeholders.name')}
+                        data-testid="section-name-input"
+                      />
+                    </div>
                   </div>
                   <div className="space-y-4" data-testid="wizard-manual-editable-rest">
                     <SectionMetadataForm
@@ -3776,24 +3855,18 @@ export default function DmpNewImportDialog({
                       showName={false}
                       showDirection
                     />
+                    <div className="border-t border-border" />
+                    <ShotTableEditor
+                      shots={effectiveShots}
+                      onShotChange={handleShotChange}
+                      onAddShot={handleAddShot}
+                      onDeleteShot={handleDeleteShot}
+                      onInsertBefore={handleInsertBefore}
+                      onInsertAfter={handleInsertAfter}
+                      frozenShotIndices={frozenShotIndices}
+                      maxHeight="12rem"
+                    />
                   </div>
-                </>
-              )}
-
-              {/* Shot table */}
-              {editState && (
-                <>
-                  <div className="border-t border-border" />
-                  <ShotTableEditor
-                    shots={effectiveShots}
-                    onShotChange={handleShotChange}
-                    onAddShot={handleAddShot}
-                    onDeleteShot={handleDeleteShot}
-                    onInsertBefore={handleInsertBefore}
-                    onInsertAfter={handleInsertAfter}
-                    frozenShotIndices={frozenShotIndices}
-                    maxHeight="12rem"
-                  />
                 </>
               )}
 
