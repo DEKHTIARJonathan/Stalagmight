@@ -76,6 +76,33 @@ export type DirectPlacement = {
   placement: ImportPlacement;   // origin, zero_datum, manual, manual_snap, or from_existing
 };
 
+type SkippedSuggestionPlacement = {
+  suggestion: CrossSectionSuggestion;
+  mergeImportStation: number;
+  mergeExistingStation: number;
+};
+
+type SavedSkippedSuggestionEntry = CrossSectionSuggestion | SkippedSuggestionPlacement;
+
+function normalizeSkippedSuggestionEntry(entry: SavedSkippedSuggestionEntry): SkippedSuggestionPlacement {
+  if (
+    typeof entry === 'object' &&
+    entry !== null &&
+    'suggestion' in entry &&
+    'mergeImportStation' in entry &&
+    'mergeExistingStation' in entry
+  ) {
+    return entry as SkippedSuggestionPlacement;
+  }
+
+  const suggestion = entry as CrossSectionSuggestion;
+  return {
+    suggestion,
+    mergeImportStation: suggestion.importStationIndex,
+    mergeExistingStation: suggestion.existingStationIndex,
+  };
+}
+
 /** Saved state for restoring the dialog after manual map placement. */
 export interface SavedManualPlacingState {
   connections: VirtualConnection[];
@@ -83,7 +110,7 @@ export interface SavedManualPlacingState {
   segmentQueue: number[][];
   segmentAnchor: { sectionIndex: number; stationIndex: number };
   directPlacements: DirectPlacement[];
-  skippedSuggestions: Array<[number, CrossSectionSuggestion]>;
+  skippedSuggestions: Array<[number, SavedSkippedSuggestionEntry]>;
   segmentSkipCounts: Array<[string, number]>;
   sectionEdits: Array<[number, SectionEditState]>;
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
@@ -1156,8 +1183,8 @@ export default function DmpNewImportDialog({
   const [fromExistingStationIdx, setFromExistingStationIdx] = useState<number>(0);
 
   // Track original suggestions for sections skipped during suggesting phase
-  const skippedSuggestionsRef = useRef<Map<number, CrossSectionSuggestion>>(
-    saved ? new Map(saved.skippedSuggestions) : new Map()
+  const skippedSuggestionsRef = useRef<Map<number, SkippedSuggestionPlacement>>(
+    new Map((saved?.skippedSuggestions ?? []).map(([idx, entry]) => [idx, normalizeSkippedSuggestionEntry(entry)]))
   );
 
   // Accumulated direct placements for manual_placing phase
@@ -2557,9 +2584,15 @@ export default function DmpNewImportDialog({
     suggestionActionInFlightRef.current = true;
     try {
       const skippedIdx = currentSuggestion.importSectionIndex;
+      const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
+      const mergeExistingStation = selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex;
 
       // Record the suggestion so it can be re-shown in manual_placing
-      skippedSuggestionsRef.current.set(skippedIdx, currentSuggestion);
+      skippedSuggestionsRef.current.set(skippedIdx, {
+        suggestion: currentSuggestion,
+        mergeImportStation,
+        mergeExistingStation,
+      });
 
       setSkippedIndices((prev) => {
         const next = new Set(prev);
@@ -2592,7 +2625,7 @@ export default function DmpNewImportDialog({
         suggestionActionInFlightRef.current = false;
       }
     }
-  }, [currentSuggestion, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
+  }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
@@ -2812,15 +2845,15 @@ export default function DmpNewImportDialog({
     let placement: ImportPlacement;
     if (segmentPlacementMode === 'suggestion' && segmentSkippedSuggestion) {
       // Use the skipped suggestion as a from_existing connection
-      const suggestion = segmentSkippedSuggestion;
+      const suggestion = segmentSkippedSuggestion.suggestion;
       if (suggestion.targetType === 'existing' && suggestion.existingSectionId != null) {
         // Add as a virtual connection instead
         const newConn: VirtualConnection = {
           importSectionIndex: suggestion.importSectionIndex,
-          importStationIndex: suggestion.importStationIndex,
+          importStationIndex: segmentSkippedSuggestion.mergeImportStation,
           targetType: 'existing',
           existingSectionId: suggestion.existingSectionId,
-          existingStationIndex: suggestion.existingStationIndex,
+          existingStationIndex: segmentSkippedSuggestion.mergeExistingStation,
         };
         setConnections((prev) => [...prev, newConn]);
         connectionsRef.current = [...connectionsRef.current, newConn];
@@ -2829,10 +2862,10 @@ export default function DmpNewImportDialog({
       } else if (suggestion.targetType === 'importing' && suggestion.targetImportIndex != null) {
         const newConn: VirtualConnection = {
           importSectionIndex: suggestion.importSectionIndex,
-          importStationIndex: suggestion.importStationIndex,
+          importStationIndex: segmentSkippedSuggestion.mergeImportStation,
           targetType: 'importing',
           targetImportIndex: suggestion.targetImportIndex,
-          targetImportStationIndex: suggestion.existingStationIndex,
+          targetImportStationIndex: segmentSkippedSuggestion.mergeExistingStation,
         };
         setConnections((prev) => [...prev, newConn]);
         connectionsRef.current = [...connectionsRef.current, newConn];
@@ -3670,8 +3703,8 @@ export default function DmpNewImportDialog({
                     <div className="text-sm">
                       <div className="font-medium">{t('dialogs.dmpNewImport.manualPlacing.suggestion')}</div>
                       <div className="text-xs text-text-secondary">
-                        → {segmentSkippedSuggestion.existingSectionName} stn {segmentSkippedSuggestion.existingStationIndex}
-                        {' · '}{segmentSkippedSuggestion.matchedShots} shots matched
+                        → {segmentSkippedSuggestion.suggestion.existingSectionName} stn {segmentSkippedSuggestion.mergeExistingStation}
+                        {' · '}{segmentSkippedSuggestion.suggestion.matchedShots} shots matched
                       </div>
                     </div>
                   </label>
