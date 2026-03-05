@@ -35,6 +35,7 @@ export interface GhostFeatureSets {
 
 export interface SurveyFeatureSets {
   shotFeatures: GeoJSON.Feature[];
+  shotGradientFeatures: GeoJSON.Feature[];
   shotLabelFeatures: GeoJSON.Feature[];
   stationFeatures: GeoJSON.Feature[];
   sectionLabelFeatures: GeoJSON.Feature[];
@@ -120,6 +121,7 @@ export function buildSurveyFeatures(
   const strokeColor = themeColors.strokeColor;
   const sectionDefault = themeColors.stationDefault;
   const shotFeatures: GeoJSON.Feature[] = [];
+  const shotGradientFeatures: GeoJSON.Feature[] = [];
   const shotLabelFeatures: GeoJSON.Feature[] = [];
   const stationFeatures: GeoJSON.Feature[] = [];
   const sectionLabelFeatures: GeoJSON.Feature[] = [];
@@ -205,6 +207,47 @@ export function buildSurveyFeatures(
             azimuth: shot.azimuth_in,
           },
         });
+
+        if (showDepthGradient) {
+          const segmentCount = Math.max(4, Math.min(12, Math.ceil(shot.length / 2)));
+          const fromX = fromStation.coordinates.x;
+          const fromY = fromStation.coordinates.y;
+          const toX = toStation.coordinates.x;
+          const toY = toStation.coordinates.y;
+          const dx = toX - fromX;
+          const dy = toY - fromY;
+          const depthDelta = shot.depth_out - shot.depth_in;
+
+          for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex++) {
+            const startT = segmentIndex / segmentCount;
+            const endT = (segmentIndex + 1) / segmentCount;
+            const midT = (startT + endT) / 2;
+
+            const segmentDepth = shot.depth_in + depthDelta * midT;
+            const segmentColor =
+              getDepthColor(segmentDepth, depthShallow, depthDeep, depthRange.min, depthRange.max) ??
+              shotColor;
+
+            shotGradientFeatures.push({
+              type: 'Feature',
+              geometry: {
+                type: 'LineString',
+                coordinates: [
+                  metersToMapCoords(fromX + dx * startT, fromY + dy * startT, gpsOrigin),
+                  metersToMapCoords(fromX + dx * endT, fromY + dy * endT, gpsOrigin),
+                ],
+              },
+              properties: {
+                featureId: shotFeatureId,
+                sectionId: section.id,
+                shotId: shot.id,
+                segmentIndex,
+                color: segmentColor,
+                isReference: shot.is_reference,
+              },
+            });
+          }
+        }
 
         const midX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
         const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
@@ -409,6 +452,7 @@ export function buildSurveyFeatures(
 
   return {
     shotFeatures,
+    shotGradientFeatures,
     shotLabelFeatures,
     stationFeatures,
     sectionLabelFeatures,

@@ -231,6 +231,9 @@ test.describe('Depth Gradient', () => {
             properties?: {
               fromColor?: string;
               toColor?: string;
+              sectionId?: number;
+              shotId?: number;
+              color?: string;
             };
           }>;
         };
@@ -239,6 +242,7 @@ test.describe('Depth Gradient', () => {
 
       const style = map.getStyle();
       const shots = map.querySourceFeatures('survey-data-shots');
+      const gradientSegments = map.querySourceFeatures('survey-data-shot-gradients');
       const flatShotFound = shots.some((feature) => {
         const fromColor = feature.properties?.fromColor;
         const toColor = feature.properties?.toColor;
@@ -247,11 +251,13 @@ test.describe('Depth Gradient', () => {
 
       return {
         flatShotFound,
+        gradientSegmentCount: gradientSegments.length,
       };
     });
 
     expect(baseline).not.toBeNull();
     expect(baseline?.flatShotFound).toBe(true);
+    expect(baseline?.gradientSegmentCount).toBe(0);
 
     const depthGradientBefore = await page.evaluate(() => {
       const stores = (window as unknown as {
@@ -286,36 +292,46 @@ test.describe('Depth Gradient', () => {
     }, { timeout: 2000 }).toBe(true);
 
     await expect.poll(async () => {
-      const hasGradientShot = await page.evaluate(() => {
+      const hasPerShotGradientSegments = await page.evaluate(() => {
         const map = (window as unknown as {
           __stalagmight_map__?: {
             querySourceFeatures: (sourceId: string) => Array<{
               properties?: {
-                fromColor?: string;
-                toColor?: string;
+                sectionId?: number;
+                shotId?: number;
+                color?: string;
               };
             }>;
           };
         }).__stalagmight_map__;
         if (!map) return false;
         try {
-          const shots = map.querySourceFeatures('survey-data-shots');
-          return shots.some((feature) => {
-            const fromColor = feature.properties?.fromColor;
-            const toColor = feature.properties?.toColor;
-            return (
-              typeof fromColor === 'string' &&
-              typeof toColor === 'string' &&
-              fromColor.length > 0 &&
-              toColor.length > 0 &&
-              fromColor !== toColor
-            );
-          });
+          const segments = map.querySourceFeatures('survey-data-shot-gradients');
+          if (segments.length === 0) return false;
+
+          const colorsByShot = new Map<string, Set<string>>();
+          for (const segment of segments) {
+            const sectionId = segment.properties?.sectionId;
+            const shotId = segment.properties?.shotId;
+            const color = segment.properties?.color;
+            if (typeof sectionId !== 'number' || typeof shotId !== 'number' || typeof color !== 'string') {
+              continue;
+            }
+            const key = `${sectionId}:${shotId}`;
+            const colors = colorsByShot.get(key) ?? new Set<string>();
+            colors.add(color);
+            colorsByShot.set(key, colors);
+          }
+
+          for (const colors of colorsByShot.values()) {
+            if (colors.size > 1) return true;
+          }
+          return false;
         } catch {
           return false;
         }
       });
-      return hasGradientShot;
+      return hasPerShotGradientSegments;
     }, { timeout: 3000 }).toBe(true);
   });
 
