@@ -139,7 +139,7 @@ await page.evaluate(() => {
 await page.waitForSelector('[data-testid="import-section-dialog"]');
 ```
 
-> **Note**: `Ctrl+I` opens `DmpSelectionDialog` (Step 1 of DMP import), NOT `ImportDialog` (manual section creation). Step 2 is `DmpSectionConfigDialog`. See [Dialog Reference](#dialog-reference) for details.
+> **Note**: `Ctrl+I` opens `DmpSelectionDialog` (Step 1 of DMP import), NOT `ImportDialog` (manual section creation). The flow then continues to zero-datum selection/config (when needed) and `DmpNewImportDialog`.
 
 **Closing dialogs:**
 ```typescript
@@ -256,7 +256,7 @@ Located in `e2e/`. These tests run against the full Tauri application.
 ```
 e2e/
 ├── specs/
-│   ├── import-dmp-dialog.spec.ts      # DMP import flow (Selection + Config)
+│   ├── import-dmp-dialog.spec.ts      # DMP import flow (Selection + Wizard)
 │   ├── import-section-dialog.spec.ts  # ImportDialog tests (section creation)
 │   ├── project-lifecycle.spec.ts
 │   ├── keyboard-shortcuts.spec.ts
@@ -276,14 +276,14 @@ Stalagmight has two different import flows that serve different purposes:
 | Dialog Component | `activeDialog` Value | Opened By | Test File | Stats Feature |
 |------------------|---------------------|-----------|-----------|---------------|
 | `DmpSelectionDialog` | `'dmp-selection'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` | Selection stats (shot count, total length, depth range) |
-| `DmpSectionConfigDialog` | `'dmp-section-config'` | Continue from selection | `import-dmp-dialog.spec.ts` | Section stats in Parameters panel |
+| `ZeroDatumSelectionDialog` / `ZeroDatumConfigDialog` | `'zero-datum-selection'` / `'zero-datum-config'` | Continue from selection when no project zero datum exists | `import-dmp-dialog.spec.ts` | Zero datum section selection and coordinates |
+| `DmpNewImportDialog` | `'dmp-import-new'` | Continue from selection (or zero datum config) | `import-dmp-dialog.spec.ts` | Suggested connections, segment placement, metadata editing |
 | `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` | N/A |
 
 **Important**: The `Ctrl+I` shortcut opens `DmpSelectionDialog` (Step 1), not `ImportDialog`. Tests that need to verify section name input should use `ImportDialog` via the store.
 
 **Stats Testing Notes:**
 - Step 1 stats update when sections are checked/unchecked - verify `[data-testid="selection-stats"]` content changes
-- Step 2 stats update when shots are edited/deleted - verify `[data-testid="section-stats"]` content changes
 - Use `aria-label` attribute for accessibility testing - contains full descriptive text
 
 ### Dialog Close Behaviors

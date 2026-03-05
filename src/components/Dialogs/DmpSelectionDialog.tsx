@@ -12,7 +12,7 @@ import type { DmpFile } from '../../types/commands';
 
 /**
  * Configuration produced by DmpSelectionDialog (Step 1)
- * and passed to DmpSectionConfigDialog (Step 2).
+ * and passed to the DMP import wizard.
  */
 export interface DmpSelectionConfig {
   /** Indices of selected sections from the DMP file */

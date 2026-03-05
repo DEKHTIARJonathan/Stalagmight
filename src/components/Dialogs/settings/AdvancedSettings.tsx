@@ -420,31 +420,6 @@ export function AdvancedSettings({
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.advanced.sections.import')} data-testid="section-import">
-        <SettingRow
-          label={t('settings.advanced.import.legacyDmpImport.label')}
-          helpText={t('settings.advanced.import.legacyDmpImport.help')}
-          isChanged={isFieldChanged(changedFields, 'general.legacy_dmp_import')}
-          onReset={() => onChange({ general: { ...config.general, legacy_dmp_import: defaultConfig.general.legacy_dmp_import } })}
-          isDefault={config.general.legacy_dmp_import === defaultConfig.general.legacy_dmp_import}
-          data-testid="setting-legacy-dmp-import"
-        >
-          <Toggle
-            checked={config.general.legacy_dmp_import}
-            onChange={(checked: boolean) => {
-              onChange({
-                general: {
-                  ...config.general,
-                  legacy_dmp_import: checked,
-                },
-              });
-            }}
-            aria-label={t('settings.advanced.import.legacyDmpImport.aria')}
-            data-testid="toggle-legacy-dmp-import"
-          />
-        </SettingRow>
-      </SettingsSection>
-
       <SettingsSection title={t('settings.advanced.sections.closureAdjustment')} data-testid="section-closure-adjustment">
         <SettingRow
           label={t('settings.advanced.closureAdjustment.sigmaLength.label')}
