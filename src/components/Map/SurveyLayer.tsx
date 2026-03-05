@@ -62,6 +62,7 @@ export default class SurveyLayer {
   private map: MaplibreMap;
   private sourceId = 'survey-data';
   private shotsLayerId = 'survey-shots';
+  private shotGradientsLayerId = 'survey-shot-gradients';
   private stationsLayerId = 'survey-stations';
   private labelsLayerId = 'survey-labels';
   private shotLabelsLayerId = 'survey-shot-labels';
@@ -144,6 +145,7 @@ export default class SurveyLayer {
     translateAnchorProp: string;
   }> = [
     { mainLayerId: 'survey-shots', tempLayerId: 'survey-drag-shots', sourceId: 'survey-data-shots', type: 'line', translateProp: 'line-translate', translateAnchorProp: 'line-translate-anchor' },
+    { mainLayerId: 'survey-shot-gradients', tempLayerId: 'survey-drag-shot-gradients', sourceId: 'survey-data-shot-gradients', type: 'line', translateProp: 'line-translate', translateAnchorProp: 'line-translate-anchor' },
     { mainLayerId: 'survey-stations', tempLayerId: 'survey-drag-stations', sourceId: 'survey-data-stations', type: 'circle', translateProp: 'circle-translate', translateAnchorProp: 'circle-translate-anchor' },
     { mainLayerId: 'survey-shot-labels', tempLayerId: 'survey-drag-shot-labels', sourceId: 'survey-data-shot-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
     { mainLayerId: 'survey-labels', tempLayerId: 'survey-drag-labels', sourceId: 'survey-data-section-labels', type: 'symbol', translateProp: 'text-translate', translateAnchorProp: 'text-translate-anchor' },
@@ -350,6 +352,16 @@ export default class SurveyLayer {
     this.map.addSource(this.sourceId + '-stations', {
       type: 'geojson',
       promoteId: 'featureId',
+      buffer: dragBuffer,
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    });
+
+    // Shot gradient segment source (visual-only overlay for per-shot depth transitions)
+    this.map.addSource(this.sourceId + '-shot-gradients', {
+      type: 'geojson',
       buffer: dragBuffer,
       data: {
         type: 'FeatureCollection',
@@ -569,6 +581,27 @@ export default class SurveyLayer {
         'line-opacity': [
           'case',
           ['boolean', ['feature-state', 'anchored'], false], 0.25,
+          ['get', 'isReference'], 0.5,
+          1,
+        ],
+      },
+    });
+
+    // Gradient overlay (composed of tiny line segments) for true in->out shot depth transitions.
+    // Uses a slightly smaller width so hover/selection states on the main shots layer remain visible.
+    this.map.addLayer({
+      id: this.shotGradientsLayerId,
+      type: 'line',
+      source: this.sourceId + '-shot-gradients',
+      layout: {
+        'line-cap': 'round',
+        'line-join': 'round',
+      },
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': Math.max(1, baseWidth - 0.35),
+        'line-opacity': [
+          'case',
           ['get', 'isReference'], 0.5,
           1,
         ],
@@ -1892,6 +1925,7 @@ export default class SurveyLayer {
       this.clearShotHover();
     }
     this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.shotGradientsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
   }
 
@@ -1906,6 +1940,7 @@ export default class SurveyLayer {
     if (visible) {
       // Restore original filters (label layers have zoom-based density filters)
       this.map.setFilter(this.shotsLayerId, null);
+      this.map.setFilter(this.shotGradientsLayerId, null);
       this.map.setFilter(this.stationsLayerId, null);
       this.map.setFilter(this.stationsHitboxLayerId, null);
       this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
@@ -1914,6 +1949,7 @@ export default class SurveyLayer {
     } else {
       // Hide reference shots and their labels
       this.map.setFilter(this.shotsLayerId, notReference);
+      this.map.setFilter(this.shotGradientsLayerId, notReference);
       this.map.setFilter(this.shotLabelsLayerId,
         this.shotLabelsBaseFilter
           ? ['all', this.shotLabelsBaseFilter, notReference] as maplibregl.FilterSpecification
@@ -2276,9 +2312,22 @@ export default class SurveyLayer {
           ['get', 'isReference'], 0.5,
           1,
         ] as maplibregl.ExpressionSpecification);
+        this.map.setPaintProperty(this.shotGradientsLayerId, 'line-opacity', [
+          'case',
+          immovableCheck, 0.25,
+          anchoredCheck, 0.25,
+          ['get', 'isReference'], 0.5,
+          1,
+        ] as maplibregl.ExpressionSpecification);
       } else {
         // Restore default (feature-state only)
         this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
+          'case',
+          anchoredCheck, 0.25,
+          ['get', 'isReference'], 0.5,
+          1,
+        ] as maplibregl.ExpressionSpecification);
+        this.map.setPaintProperty(this.shotGradientsLayerId, 'line-opacity', [
           'case',
           anchoredCheck, 0.25,
           ['get', 'isReference'], 0.5,
@@ -2298,6 +2347,12 @@ export default class SurveyLayer {
         1,
       ] as maplibregl.ExpressionSpecification);
       this.map.setPaintProperty(this.shotsLayerId, 'line-opacity', [
+        'case',
+        anchoredCheck, 0.25,
+        ['get', 'isReference'], 0.5,
+        1,
+      ] as maplibregl.ExpressionSpecification);
+      this.map.setPaintProperty(this.shotGradientsLayerId, 'line-opacity', [
         'case',
         anchoredCheck, 0.25,
         ['get', 'isReference'], 0.5,
@@ -2735,7 +2790,7 @@ export default class SurveyLayer {
       const shotExclusion: maplibregl.FilterSpecification =
         ['!', shotInclusion] as unknown as maplibregl.FilterSpecification;
 
-      for (const layerId of ['survey-shots', 'survey-shot-labels']) {
+      for (const layerId of ['survey-shots', 'survey-shot-gradients', 'survey-shot-labels']) {
         const existing = this.map.getFilter(layerId);
         this.dragSavedFilters.set(layerId, existing ?? undefined);
         const composed: maplibregl.FilterSpecification = (existing && typeof existing === 'object')
@@ -3157,6 +3212,7 @@ export default class SurveyLayer {
 
     const {
       shotFeatures,
+      shotGradientFeatures,
       shotLabelFeatures,
       stationFeatures,
       sectionLabelFeatures,
@@ -3210,6 +3266,14 @@ export default class SurveyLayer {
       (stationsSource as maplibregl.GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: stationFeatures,
+      });
+    }
+
+    const shotGradientsSource = this.map.getSource(this.sourceId + '-shot-gradients');
+    if (shotGradientsSource && 'setData' in shotGradientsSource) {
+      (shotGradientsSource as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: shotGradientFeatures,
       });
     }
 
@@ -3397,6 +3461,9 @@ export default class SurveyLayer {
       if (this.map.getLayer(this.shotsLayerId)) {
         this.map.removeLayer(this.shotsLayerId);
       }
+      if (this.map.getLayer(this.shotGradientsLayerId)) {
+        this.map.removeLayer(this.shotGradientsLayerId);
+      }
       if (this.map.getLayer(this.loopClosuresLayerId)) {
         this.map.removeLayer(this.loopClosuresLayerId);
       }
@@ -3427,6 +3494,9 @@ export default class SurveyLayer {
       // Remove all sources after layers are removed
       if (this.map.getSource(this.sourceId + '-shots')) {
         this.map.removeSource(this.sourceId + '-shots');
+      }
+      if (this.map.getSource(this.sourceId + '-shot-gradients')) {
+        this.map.removeSource(this.sourceId + '-shot-gradients');
       }
       if (this.map.getSource(this.sourceId + '-stations')) {
         this.map.removeSource(this.sourceId + '-stations');
