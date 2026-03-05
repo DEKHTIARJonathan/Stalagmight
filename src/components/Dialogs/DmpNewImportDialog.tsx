@@ -275,9 +275,41 @@ function applyAllOverlapTreatments(
     const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
     if (allOverlapIds.size === 0) continue;
 
-    // Determine actionable IDs: use merge station from confirmed info, or full overlap range
     const confirmed = confirmedOverlaps.get(importSectionIndex);
     const isConfirmed = !!(confirmed && matchesConfirmed(suggestion, confirmed));
+
+    // Once a section has a confirmed suggestion, ignore all alternatives for that
+    // same import section. This ensures overlap treatment follows exactly the path
+    // the user accepted in the wizard.
+    if (confirmed && !isConfirmed) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[applyAllOverlaps] skipping alternative for confirmed section ${importSectionIndex}`,
+        );
+      }
+      continue;
+    }
+
+    // If the opposite direction was confirmed (A->B), ignore unconfirmed reverse
+    // suggestions (B->A). Otherwise reverse candidates can pre-treat shots and
+    // prevent the confirmed direction from applying its intended deletion boundary.
+    if (!isConfirmed && targetType === 'importing' && targetImportIndex != null) {
+      const reverseConfirmed = confirmedOverlaps.get(targetImportIndex);
+      if (
+        reverseConfirmed &&
+        reverseConfirmed.targetType === 'importing' &&
+        reverseConfirmed.targetImportIndex === importSectionIndex
+      ) {
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[applyAllOverlaps] skipping reverse unconfirmed candidate ${importSectionIndex}->${targetImportIndex}`,
+          );
+        }
+        continue;
+      }
+    }
+
+    // Determine actionable IDs: use merge station from confirmed info, or full overlap range
     let actionableIds: Set<number>;
     if (isConfirmed) {
       actionableIds = computeActionableIds(importStationIndex, matchedShots, confirmed!.mergeImportStation);
