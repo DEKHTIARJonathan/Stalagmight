@@ -1198,6 +1198,15 @@ export default function DmpNewImportDialog({
     [selectionConfig.selectedIndices]
   );
 
+  // Section currently being edited in the right-side editor panel.
+  // In suggesting mode this follows the current suggestion section.
+  // In manual placing mode this follows the selected segment anchor section.
+  const activeEditableSectionIndex = useMemo(() => {
+    if (currentSuggestion) return currentSuggestion.importSectionIndex;
+    if (phase === 'manual_placing' && segmentAnchor) return segmentAnchor.sectionIndex;
+    return null;
+  }, [currentSuggestion, phase, segmentAnchor]);
+
   const totalSelected = selectedIndices.length;
 
   // Set of section indices that already have a connection
@@ -1506,15 +1515,15 @@ export default function DmpNewImportDialog({
     return () => { cancelled = true; };
   }, [currentSuggestion, connections, dmpFile.sections]);
 
-  // Initialize / restore section edit state when currentSuggestion changes
+  // Initialize / restore section edit state when active editable section changes.
   useEffect(() => {
-    if (!currentSuggestion) {
+    if (activeEditableSectionIndex == null) {
       setEditStateForSection(null);
       setEditState(null);
       return;
     }
 
-    const idx = currentSuggestion.importSectionIndex;
+    const idx = activeEditableSectionIndex;
 
     // Restore from ref if previously edited
     const existing = sectionEditsRef.current.get(idx);
@@ -1564,32 +1573,30 @@ export default function DmpNewImportDialog({
     setEditStateForSection(idx);
     setEditState(newState);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSuggestion]);
+  }, [activeEditableSectionIndex]);
 
   // Keep sectionEditsRef in sync with editState changes (user edits to shots/metadata).
-  // Guard: only write when editState actually belongs to the current suggestion's section.
-  // Without this guard, when currentSuggestion changes, this effect fires with stale
-  // editState from the previous suggestion before setEditState takes effect, temporarily
-  // clobbering the new section's sectionEditsRef entry (including any target-side
-  // overlap modifications written by handleConfirm).
+  // Guard: only write when editState actually belongs to the active edit section.
+  // Without this guard, when the active section changes, this effect can briefly fire
+  // with stale editState from the previous section before setEditState takes effect.
   useEffect(() => {
-    if (!editState || !currentSuggestion) return;
-    if (editStateForSection !== currentSuggestion.importSectionIndex) {
+    if (!editState || activeEditableSectionIndex == null) return;
+    if (editStateForSection !== activeEditableSectionIndex) {
       if (import.meta.env.DEV) {
         console.warn(
-          `[sync-effect] SKIPPED stale write: editStateFor=${editStateForSection} !== suggestion.import=${currentSuggestion.importSectionIndex}`,
+          `[sync-effect] SKIPPED stale write: editStateFor=${editStateForSection} !== active=${activeEditableSectionIndex}`,
         );
       }
       return;
     }
     if (import.meta.env.DEV) {
       console.warn(
-        `[sync-effect] WRITING sectionEditsRef[${currentSuggestion.importSectionIndex}]`,
+        `[sync-effect] WRITING sectionEditsRef[${activeEditableSectionIndex}]`,
         `editState.shots.length=${editState.shots.length}`,
       );
     }
-    sectionEditsRef.current.set(currentSuggestion.importSectionIndex, editState);
-  }, [editState, currentSuggestion, editStateForSection]);
+    sectionEditsRef.current.set(activeEditableSectionIndex, editState);
+  }, [editState, activeEditableSectionIndex, editStateForSection]);
 
   // Compute frozen shot indices — matched overlap shots that must not be deleted
   const frozenShotIndices = useMemo(() => {
@@ -3123,7 +3130,7 @@ export default function DmpNewImportDialog({
       );
 
       showToast(
-        'Placement: Click to place section. Esc for more placement options.',
+        'Placement: Click to place section. Esc for more placement options and metadata changes.',
         'dmp-manual-placement-hint'
       );
     };
@@ -3460,7 +3467,6 @@ export default function DmpNewImportDialog({
                       onQualityChange={(v) => handleMetadataChange('quality', v)}
                       showName={false}
                       showDirection
-                      showQuality
                     />
                     <div className="border-t border-border" />
                     <ShotTableEditor
@@ -3505,18 +3511,6 @@ export default function DmpNewImportDialog({
                 <div className="text-xs text-text-secondary mt-0.5">
                   {t('dialogs.dmpNewImport.manualPlacing.sections')}: {segmentSectionNames.join(', ')}
                 </div>
-              </div>
-
-              {/* Anchor station display */}
-              <div className="text-xs text-text-secondary">
-                {segmentAnchor ? (
-                  t('dialogs.dmpNewImport.manualPlacing.anchorStation', {
-                    section: sectionEditsRef.current.get(segmentAnchor.sectionIndex)?.name ?? dmpFile.sections[segmentAnchor.sectionIndex]?.name ?? `Section ${segmentAnchor.sectionIndex}`,
-                    station: segmentAnchor.stationIndex,
-                  })
-                ) : (
-                  t('dialogs.dmpNewImport.manualPlacing.selectAnchor')
-                )}
               </div>
 
               {/* Placement mode radio group */}
@@ -3744,6 +3738,64 @@ export default function DmpNewImportDialog({
                   </div>
                 </label>
               </div>
+
+              {/* Section settings (same editing surface as section connection / zero datum flows) */}
+              {editState && (
+                <>
+                  <div className="border-t border-border" />
+                  <div className="text-sm font-medium">
+                    {t('dialogs.dmpNewImport.sectionSettings')}
+                  </div>
+                  <div>
+                    <label className="block text-sm text-text-secondary mb-1">
+                      {t('common.labels.name')}
+                    </label>
+                    <input
+                      type="text"
+                      value={editState.name}
+                      onChange={(e) => handleMetadataChange('name', e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-border rounded"
+                      placeholder={t('sectionMetadata.placeholders.name')}
+                      data-testid="section-name-input"
+                    />
+                  </div>
+                  <div className="space-y-4" data-testid="wizard-manual-editable-rest">
+                    <SectionMetadataForm
+                      name={editState.name}
+                      surveyor={editState.surveyor}
+                      date={editState.date}
+                      color={editState.color}
+                      direction={editState.direction}
+                      quality={editState.quality}
+                      onNameChange={(v) => handleMetadataChange('name', v)}
+                      onSurveyorChange={(v) => handleMetadataChange('surveyor', v)}
+                      onDateChange={(v) => handleMetadataChange('date', v)}
+                      onColorChange={(v) => handleMetadataChange('color', v)}
+                      onDirectionChange={(v) => handleMetadataChange('direction', v)}
+                      onQualityChange={(v) => handleMetadataChange('quality', v)}
+                      showName={false}
+                      showDirection
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Shot table */}
+              {editState && (
+                <>
+                  <div className="border-t border-border" />
+                  <ShotTableEditor
+                    shots={effectiveShots}
+                    onShotChange={handleShotChange}
+                    onAddShot={handleAddShot}
+                    onDeleteShot={handleDeleteShot}
+                    onInsertBefore={handleInsertBefore}
+                    onInsertAfter={handleInsertAfter}
+                    frozenShotIndices={frozenShotIndices}
+                    maxHeight="12rem"
+                  />
+                </>
+              )}
 
               {/* Error */}
               {error && (
