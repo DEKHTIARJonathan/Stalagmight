@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -16,6 +16,8 @@ export default function EditStationDialog() {
   const { stations, project, setZeroDatum, removeZeroDatum, updateStationComment } = useProjectStore();
 
   const stationRef = dialogData.stationRef as StationRef | undefined;
+  const forceEnableZeroDatum = dialogData.forceEnableZeroDatum === true;
+  const focusGpsInput = dialogData.focusGpsInput === true;
 
   const station = stations.find(
     (s) =>
@@ -28,7 +30,9 @@ export default function EditStationDialog() {
   );
 
   // Form state
-  const [isZeroDatum, setIsZeroDatumState] = useState(false);
+  const [isZeroDatum, setIsZeroDatumState] = useState(
+    () => forceEnableZeroDatum || station?.is_zero_datum || false
+  );
   const [gpsInput, setGpsInput] = useState('');
   const [gpsCoords, setGpsCoords] = useState<GpsCoordinates | null>(null);
   const [gpsFormat, setGpsFormat] = useState<GpsFormat | null>(null);
@@ -36,11 +40,12 @@ export default function EditStationDialog() {
   const [comment, setComment] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const gpsInputRef = useRef<HTMLInputElement>(null);
 
   // Initialize form state from station data
   useEffect(() => {
     if (station) {
-      setIsZeroDatumState(station.is_zero_datum);
+      setIsZeroDatumState(forceEnableZeroDatum ? true : station.is_zero_datum);
       setComment(station.comment ?? '');
       if (station.gps_coordinates) {
         const initialInput = `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`;
@@ -49,7 +54,19 @@ export default function EditStationDialog() {
         setGpsFormat('DD');
       }
     }
-  }, [station]);
+  }, [forceEnableZeroDatum, station]);
+
+  // Focus GPS input when dialog is opened from "Set Zero Datum" action.
+  useEffect(() => {
+    if (!focusGpsInput || !isZeroDatum) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      gpsInputRef.current?.focus();
+      gpsInputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [focusGpsInput, isZeroDatum]);
 
   // GPS input handler
   const handleGpsInputChange = useCallback((value: string) => {
@@ -247,6 +264,8 @@ export default function EditStationDialog() {
                   GPS:
                 </label>
                 <input
+                  ref={gpsInputRef}
+                  data-autofocus={focusGpsInput ? 'true' : undefined}
                   type="text"
                   value={gpsInput}
                   onChange={(e) => handleGpsInputChange(e.target.value)}
