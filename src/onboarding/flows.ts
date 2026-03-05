@@ -2,6 +2,7 @@ import type { DmpImportWizardPhase, ViewType } from '../store/uiStore';
 
 export type OnboardingPlacement = 'top' | 'bottom' | 'left' | 'right' | 'center';
 export type OnboardingInteraction = 'locked' | 'target' | 'free';
+export type OnboardingIllustration = 'mouse-pan-zoom';
 
 export interface OnboardingStepDefinition {
   id: string;
@@ -9,12 +10,14 @@ export interface OnboardingStepDefinition {
   descriptionKey: string;
   targetSelector?: string;
   targetSelectors?: string[];
+  mergeTargetSpotlights?: boolean;
   placement?: OnboardingPlacement;
   interaction?: OnboardingInteraction;
   tooltipOffsetX?: number;
   tooltipOffsetY?: number;
   tooltipAnchorY?: 'auto' | 'top' | 'bottom';
   tooltipTargetSelector?: string;
+  illustration?: OnboardingIllustration;
   scrollContainerSelector?: string;
   scrollTargetSelector?: string;
   scrollAlignment?: 'top' | 'nearest';
@@ -52,6 +55,15 @@ const canShowDialogOnboarding = (context: OnboardingContext): boolean =>
   context.configLoaded &&
   !context.splashVisible &&
   !context.loadingProject;
+
+const canShowPlacementOnboarding = (context: OnboardingContext): boolean =>
+  context.configLoaded &&
+  !context.splashVisible &&
+  !context.loadingProject &&
+  context.view === 'single' &&
+  context.hasProject &&
+  context.placementModeActive &&
+  context.activeDialog === null;
 
 const globalEmptyFlow: OnboardingFlowDefinition = {
   id: 'global-empty-basics',
@@ -160,6 +172,61 @@ const singleViewFlow: OnboardingFlowDefinition = {
       descriptionKey: 'onboarding.flows.singleView.steps.detailPanel.description',
       targetSelector: '[data-testid="detail-panel"]',
       placement: 'left',
+      interaction: 'locked',
+    },
+  ],
+};
+
+const placementModeFlow: OnboardingFlowDefinition = {
+  id: 'placement-mode-map',
+  titleKey: 'onboarding.flows.placementMode.title',
+  shouldStart: (context) => canShowPlacementOnboarding(context),
+  steps: [
+    {
+      id: 'place-freely',
+      titleKey: 'onboarding.flows.placementMode.steps.placeFreely.title',
+      descriptionKey: 'onboarding.flows.placementMode.steps.placeFreely.description',
+      targetSelector: '[data-testid="map-canvas"]',
+      placement: 'top',
+      interaction: 'locked',
+    },
+    {
+      id: 'pan-and-zoom',
+      titleKey: 'onboarding.flows.placementMode.steps.panAndZoom.title',
+      descriptionKey: 'onboarding.flows.placementMode.steps.panAndZoom.description',
+      targetSelector: '[data-testid="map-canvas"]',
+      placement: 'top',
+      interaction: 'locked',
+      illustration: 'mouse-pan-zoom',
+    },
+    {
+      id: 'display-options',
+      titleKey: 'onboarding.flows.placementMode.steps.displayOptions.title',
+      descriptionKey: 'onboarding.flows.placementMode.steps.displayOptions.description',
+      targetSelectors: [
+        '[data-testid="display-menu-button"]',
+        '[data-testid="display-menu"]',
+      ],
+      mergeTargetSpotlights: true,
+      placement: 'left',
+      tooltipTargetSelector: '[data-testid="display-menu-button"]',
+      tooltipOffsetX: -150,
+      interaction: 'locked',
+    },
+    {
+      id: 'click-and-merge',
+      titleKey: 'onboarding.flows.placementMode.steps.clickAndMerge.title',
+      descriptionKey: 'onboarding.flows.placementMode.steps.clickAndMerge.description',
+      targetSelector: '[data-testid="map-canvas"]',
+      placement: 'top',
+      interaction: 'locked',
+    },
+    {
+      id: 'escape-options',
+      titleKey: 'onboarding.flows.placementMode.steps.escapeOptions.title',
+      descriptionKey: 'onboarding.flows.placementMode.steps.escapeOptions.description',
+      targetSelector: '[data-testid="placement-mode-indicator"]',
+      placement: 'bottom',
       interaction: 'locked',
     },
   ],
@@ -534,6 +601,7 @@ const dmpLegacyConfigFlow: OnboardingFlowDefinition = {
 };
 
 export const ONBOARDING_FLOWS: readonly OnboardingFlowDefinition[] = [
+  placementModeFlow,
   globalEmptyFlow,
   singleViewFlow,
   dmpNewProjectFlow,

@@ -1477,7 +1477,7 @@
     },
     "placement": {
       "title": "Placement",
-      "instructions": "Click to place section. Esc to cancel.",
+      "instructions": "Click to place section. Esc for more placement options and metadata changes.",
       "snapped": "Snapped to station"
     },
     "merge": {
@@ -1716,6 +1716,38 @@
           }
         }
       },
+      "placementMode": {
+        "title": "Place on Map",
+        "steps": {
+          "placeFreely": {
+            "title": "Place Freely First",
+            "description": "Place the section where it makes sense right now. Position can be refined later."
+          },
+          "panAndZoom": {
+            "title": "Pan and Zoom Controls",
+            "description": ""
+          },
+          "displayOptions": {
+            "title": "Display Options",
+            "description": "Open Display options to toggle context layers like Satellite, Grid, labels, and other overlays while placing."
+          },
+          "clickAndMerge": {
+            "title": "Click to Place, Hover to Snap",
+            "description": "Click the map to place the section. Hover near an existing station to snap and merge both stations at placement time."
+          },
+          "escapeOptions": {
+            "title": "Esc for More Options",
+            "description": "Press Esc to return to placement options and metadata editing.",
+            "descriptionItems": [
+              "Suggested connection: retry overlap-based auto placement when available.",
+              "From existing section: align the segment to a selected existing station.",
+              "Place on map: continue manual click placement with station snap/merge.",
+              "Do not place: import now and position this section later.",
+              "Edit metadata and shots: name, surveyor, date, color, direction, and shot table."
+            ]
+          }
+        }
+      },
       "dmpNewProject": {
         "title": "DMP Import: New Project",
         "steps": {
@@ -1891,6 +1923,12 @@
             "description": "Place, finish, move to next section, or include/exclude sections during import."
           }
         }
+      }
+    },
+    "illustrations": {
+      "mouse": {
+        "panTitle": "Pan",
+        "zoomTitle": "Zoom"
       }
     }
   },
