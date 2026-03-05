@@ -1698,21 +1698,33 @@
       "singleView": {
         "title": "Survey Workspace",
         "steps": {
-          "toolbar": {
-            "title": "Top Toolbar",
-            "description": "The toolbar gives quick access to save/import/export plus undo and redo actions."
+          "fileControls": {
+            "title": "File Controls",
+            "description": "Use this group for project-level actions: back, save, import/export, undo, and redo."
           },
-          "drawTool": {
-            "title": "Draw Tool",
-            "description": "Use Draw to create new shots between stations directly on the map."
+          "tools": {
+            "title": "Tool Palette",
+            "description": "These are your editing tools. Switch mode based on what you need to do on the map."
           },
-          "map": {
+          "displayOptions": {
+            "title": "Display Options",
+            "description": "Open Display to toggle layers like satellite imagery, grid, labels, and overlays while you work."
+          },
+          "mainMap": {
             "title": "Main Map",
-            "description": "This is your primary editing area for selecting, inspecting, and adjusting cave geometry."
+            "description": "This is your primary workspace for reviewing and editing survey geometry."
+          },
+          "sections": {
+            "title": "Sections",
+            "description": "This panel is where project sections appear."
           },
           "detailPanel": {
             "title": "Detail Panel",
             "description": "The detail panel shows editable metadata for the selected section, shot, or station."
+          },
+          "dataTable": {
+            "title": "Data Table",
+            "description": "This panel shows survey data in table form for quick review and precise edits to shots and stations."
           }
         }
       },
@@ -1929,6 +1941,53 @@
       "mouse": {
         "panTitle": "Pan",
         "zoomTitle": "Zoom"
+      },
+      "tools": {
+        "title": "Expanded Tool Reference",
+        "groups": {
+          "select": "Select",
+          "edit": "Edit"
+        },
+        "items": {
+          "select": "Select stations, shots, or sections.",
+          "pan": "Move the map view without editing data.",
+          "zoom": "Box-zoom to focus on an area. Left/right click zooms in/out.",
+          "draw": "Extend existing sections with new shots.",
+          "delete": "Remove shots entered by mistake, or split sections.",
+          "merge": "Merge stations together.",
+          "measure": "Measure distance and depth difference.",
+          "comment": "Add comments to station/shot.",
+          "moveComment": "Reposition an existing comment.",
+          "moveStation": "",
+          "moveShot": "",
+          "moveSegment": "Move a group of connected sections."
+        }
+      },
+      "map": {
+        "fitTitle": "Fit to View",
+        "fitDescription": "Use Fit to View to frame the full survey quickly.",
+        "zoomTitle": "Zoom Controls",
+        "zoomDescription": "Use + and - controls to adjust zoom level.",
+        "scaleTitle": "Scale Bar",
+        "scaleDescription": "Use the scale bar to estimate map distances at current zoom.",
+        "contextTitle": "Context Menu",
+        "contextDescription": "Right-click to open a context menu with additional options.",
+        "rightClick": "Right click"
+      },
+      "sections": {
+        "addTitle": "Add Section",
+        "addDescription": "Add a new section from manually recorded data.",
+        "focusTitle": "Focus Section",
+        "doubleClick": "Double-click",
+        "focusDescription": "Double-click a section to bring it into view quickly."
+      },
+      "detail": {
+        "centerTitle": "Bring to View",
+        "centerDescription": "When a station, shot, or section is selected, use Bring to View to quickly center it on the map."
+      },
+      "dataTable": {
+        "focusTitle": "Focus Shot/Section",
+        "focusDescription": "Double-click a row to quickly bring section/station into view."
       }
     }
   },
