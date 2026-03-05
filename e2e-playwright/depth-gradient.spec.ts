@@ -186,6 +186,124 @@ test.describe('Depth Gradient', () => {
     }, { timeout: 3000 }).toBe('changed');
   });
 
+  test('shots use endpoint depth colors for line gradients', async ({ page }) => {
+    // Wait for shot features to render before reading properties from map layers.
+    await expect.poll(async () => {
+      const count = await page.evaluate(() => {
+        const map = (window as unknown as {
+          __stalagmight_map__?: {
+            querySourceFeatures: (sourceId: string) => Array<unknown>;
+          };
+        }).__stalagmight_map__;
+        if (!map) return 0;
+        try {
+          return map.querySourceFeatures('survey-data-shots').length;
+        } catch {
+          return 0;
+        }
+      });
+      return count;
+    }, { timeout: 5000 }).toBeGreaterThan(0);
+
+    const baseline = await page.evaluate(() => {
+      const map = (window as unknown as {
+        __stalagmight_map__?: {
+          getStyle: () => { sources?: Record<string, unknown> };
+          querySourceFeatures: (sourceId: string) => Array<{
+            properties?: {
+              fromColor?: string;
+              toColor?: string;
+            };
+          }>;
+        };
+      }).__stalagmight_map__;
+      if (!map) return null;
+
+      const style = map.getStyle();
+      const sources = (style.sources ?? {}) as Record<string, { lineMetrics?: boolean }>;
+      const shots = map.querySourceFeatures('survey-data-shots');
+      const flatShotFound = shots.some((feature) => {
+        const fromColor = feature.properties?.fromColor;
+        const toColor = feature.properties?.toColor;
+        return typeof fromColor === 'string' && fromColor.length > 0 && fromColor === toColor;
+      });
+
+      return {
+        lineMetricsEnabled: sources['survey-data-shots']?.lineMetrics === true,
+        flatShotFound,
+      };
+    });
+
+    expect(baseline).not.toBeNull();
+    expect(baseline?.lineMetricsEnabled).toBe(true);
+    expect(baseline?.flatShotFound).toBe(true);
+
+    const depthGradientBefore = await page.evaluate(() => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: { getState: () => { showDepthGradient: boolean } };
+        };
+      }).__E2E_TEST__;
+      return stores?.uiStore.getState().showDepthGradient ?? null;
+    });
+    expect(depthGradientBefore).toBe(false);
+
+    await page.evaluate(() => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: { getState: () => { toggleDisplay: (key: string) => void } };
+        };
+      }).__E2E_TEST__;
+      if (!stores) throw new Error('__E2E_TEST__ stores not found');
+      stores.uiStore.getState().toggleDisplay('showDepthGradient');
+    });
+
+    await expect.poll(async () => {
+      const enabled = await page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: { getState: () => { showDepthGradient: boolean } };
+          };
+        }).__E2E_TEST__;
+        return stores?.uiStore.getState().showDepthGradient ?? false;
+      });
+      return enabled;
+    }, { timeout: 2000 }).toBe(true);
+
+    await expect.poll(async () => {
+      const hasGradientShot = await page.evaluate(() => {
+        const map = (window as unknown as {
+          __stalagmight_map__?: {
+            querySourceFeatures: (sourceId: string) => Array<{
+              properties?: {
+                fromColor?: string;
+                toColor?: string;
+              };
+            }>;
+          };
+        }).__stalagmight_map__;
+        if (!map) return false;
+        try {
+          const shots = map.querySourceFeatures('survey-data-shots');
+          return shots.some((feature) => {
+            const fromColor = feature.properties?.fromColor;
+            const toColor = feature.properties?.toColor;
+            return (
+              typeof fromColor === 'string' &&
+              typeof toColor === 'string' &&
+              fromColor.length > 0 &&
+              toColor.length > 0 &&
+              fromColor !== toColor
+            );
+          });
+        } catch {
+          return false;
+        }
+      });
+      return hasGradientShot;
+    }, { timeout: 3000 }).toBe(true);
+  });
+
   test('toggle shows depth legend when enabled', async ({ page }) => {
     // Verify legend is hidden initially
     await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();

@@ -243,19 +243,30 @@ export default function MapCanvas() {
     return config?.map.satellite_gps_origin ?? null;
   }, [project?.zero_datums, config?.map.satellite_gps_origin]);
 
-  // Compute depth range from actual station coordinates (absolute, not section-relative)
+  // Compute depth range from both station coordinates and shot depth endpoints.
+  // Including shot depths avoids a flat scale when station Z isn't populated yet.
   const depthRange = useMemo(() => {
-    if (!stations || stations.length === 0) return { min: 0, max: 50 };
     let min = Infinity;
     let max = -Infinity;
-    for (const station of stations) {
-      const z = station.coordinates.z;
-      if (z < min) min = z;
-      if (z > max) max = z;
+    if (stations && stations.length > 0) {
+      for (const station of stations) {
+        const z = station.coordinates.z;
+        if (z < min) min = z;
+        if (z > max) max = z;
+      }
+    }
+    const sections = project?.sections ?? [];
+    for (const section of sections) {
+      for (const shot of section.shots) {
+        if (shot.depth_in < min) min = shot.depth_in;
+        if (shot.depth_in > max) max = shot.depth_in;
+        if (shot.depth_out < min) min = shot.depth_out;
+        if (shot.depth_out > max) max = shot.depth_out;
+      }
     }
     if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 50 };
     return { min, max };
-  }, [stations]);
+  }, [stations, project?.sections]);
 
   // Extract zoom config values for stable dependencies (used by zoom handlers and effects)
   const zoomStep = config?.map.zoom_step ?? 1.0;
