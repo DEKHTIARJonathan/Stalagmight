@@ -158,6 +158,18 @@
         "help": "Show branding splash screen during startup",
         "aria": "Splash screen on startup"
       },
+      "onboarding": {
+        "enabled": {
+          "label": "Guided onboarding",
+          "help": "Show guided overlays for core workflows. Each flow is shown once by default.",
+          "aria": "Enable guided onboarding"
+        },
+        "restart": {
+          "label": "Restart onboarding",
+          "help": "Clear completed onboarding progress and re-enable guided onboarding.",
+          "action": "Restart"
+        }
+      },
       "validation": {
         "autoSaveInterval": "Auto-save interval must be between 10 and 3600 seconds",
         "recentProjects": "Recent projects limit must be between 1 and 50",
@@ -1664,6 +1676,11 @@
     "progress": "Step {{current}} of {{total}}",
     "actions": {
       "skip": "Skip tour"
+    },
+    "skipConfirm": {
+      "description": "Do you want to skip only this guide, or stop showing all guides going forward?",
+      "skipCurrent": "Skip this guide",
+      "skipAll": "Disable all guides"
     },
     "flows": {
       "globalEmpty": {

@@ -285,6 +285,32 @@ function App() {
     };
   }, [handleImportFileDrop]);
 
+  const persistCompletedOnboardingFlows = useCallback((flowIds: string[]) => {
+    const normalized = Array.from(
+      new Set(flowIds.map((flowId) => flowId.trim()).filter((flowId) => flowId.length > 0))
+    );
+    const currentConfig = useProjectStore.getState().config;
+    if (!currentConfig) {
+      return;
+    }
+
+    const currentCompleted = currentConfig.general.onboarding_completed_flows ?? [];
+    const unchanged =
+      normalized.length === currentCompleted.length &&
+      normalized.every((flowId, idx) => flowId === currentCompleted[idx]);
+    if (unchanged) {
+      return;
+    }
+
+    void useProjectStore.getState().updateConfig({
+      ...currentConfig,
+      general: {
+        ...currentConfig.general,
+        onboarding_completed_flows: normalized,
+      },
+    });
+  }, []);
+
   const onboarding = useOnboarding({
     view,
     hasProject: project !== null,
@@ -297,7 +323,31 @@ function App() {
     loadingProject: loading.isLoading,
     splashVisible: splashMounted,
     configLoaded: config !== null,
+  }, {
+    enabled: config?.general?.onboarding_enabled ?? true,
+    completedFlowIds: config?.general?.onboarding_completed_flows ?? [],
+    onCompletedFlowIdsChange: persistCompletedOnboardingFlows,
   });
+
+  const disableOnboardingGuides = useCallback(() => {
+    const store = useProjectStore.getState();
+    const currentConfig = store.config;
+    if (!currentConfig) {
+      return;
+    }
+    if (!currentConfig.general.onboarding_enabled) {
+      return;
+    }
+    const nextConfig = {
+      ...currentConfig,
+      general: {
+        ...currentConfig.general,
+        onboarding_enabled: false,
+      },
+    };
+    store.setConfig(nextConfig);
+    void store.updateConfig(nextConfig);
+  }, []);
 
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative">
@@ -505,7 +555,8 @@ function App() {
           canGoBack={onboarding.canGoBack}
           onBack={onboarding.back}
           onNext={onboarding.next}
-          onSkip={onboarding.skip}
+          onSkipCurrent={onboarding.skip}
+          onSkipAll={disableOnboardingGuides}
         />
       )}
 

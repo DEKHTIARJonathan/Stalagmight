@@ -48,6 +48,8 @@ impl Default for GeneralConfig {
             number_format: "locale".to_string(),
             date_format: "locale".to_string(),
             splash_screen: false,
+            onboarding_enabled: true,
+            onboarding_completed_flows: Vec::new(),
             legacy_dmp_import: false,
         }
     }

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
@@ -508,6 +509,12 @@ pub struct GeneralConfig {
     /// Show splash screen with branding on startup
     #[serde(default)]
     pub splash_screen: bool,
+    /// Global onboarding master switch
+    #[serde(default = "default_onboarding_enabled")]
+    pub onboarding_enabled: bool,
+    /// Onboarding flow IDs already completed/skipped by the user
+    #[serde(default)]
+    pub onboarding_completed_flows: Vec<String>,
     /// Use legacy DMP import workflow (per-section config dialog)
     #[serde(default)]
     pub legacy_dmp_import: bool,
@@ -519,6 +526,10 @@ fn default_locale() -> String {
 
 fn default_format_locale() -> String {
     "locale".to_string()
+}
+
+fn default_onboarding_enabled() -> bool {
+    true
 }
 
 fn default_undo_history_limit() -> usize {
@@ -1427,6 +1438,11 @@ impl Config {
         if self.general.locale.trim().is_empty() {
             self.general.locale = default_locale();
         }
+        let mut seen = HashSet::new();
+        self.general.onboarding_completed_flows.retain(|flow_id| {
+            let trimmed = flow_id.trim();
+            !trimmed.is_empty() && seen.insert(trimmed.to_string())
+        });
     }
 
     /// Migrate legacy config fields to new structure
