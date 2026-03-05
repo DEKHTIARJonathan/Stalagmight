@@ -158,11 +158,29 @@ export function buildSurveyFeatures(
           stationsWithNonReferenceShot.add(`${section.id}:${fromStation.station_ref.station_index}`);
           stationsWithNonReferenceShot.add(`${section.id}:${toStation.station_ref.station_index}`);
         }
-        const avgDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
+        const avgDepth = (shot.depth_in + shot.depth_out) / 2;
         const depthColor = showDepthGradient
           ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
           : null;
         const shotColor = depthColor ?? section.color;
+        const fromDepthColor = showDepthGradient
+          ? getDepthColor(
+              shot.depth_in,
+              depthShallow,
+              depthDeep,
+              depthRange.min,
+              depthRange.max
+            )
+          : null;
+        const toDepthColor = showDepthGradient
+          ? getDepthColor(
+              shot.depth_out,
+              depthShallow,
+              depthDeep,
+              depthRange.min,
+              depthRange.max
+            )
+          : null;
 
         const shotFeatureId = section.id * FEATURE_ID_STRIDE + shot.id;
 
@@ -180,6 +198,8 @@ export function buildSurveyFeatures(
             sectionId: section.id,
             shotId: shot.id,
             color: shotColor,
+            fromColor: fromDepthColor ?? shotColor,
+            toColor: toDepthColor ?? shotColor,
             isReference: shot.is_reference,
             length: shot.length,
             azimuth: shot.azimuth_in,
