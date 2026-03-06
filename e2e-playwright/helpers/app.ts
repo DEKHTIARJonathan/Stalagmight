@@ -28,9 +28,6 @@ export async function setupMockedPage(page: Page): Promise<void> {
   await setupTauriMocks(page);
   await page.goto('/');
   await waitForAppReady(page);
-  // Most Playwright DMP specs assert legacy Step-2 behavior.
-  // Keep tests deterministic by defaulting the workflow to legacy.
-  await setDmpImportWorkflow(page, 'legacy');
 }
 
 export async function waitForAppReady(page: Page): Promise<void> {
@@ -41,47 +38,6 @@ export async function waitForAppReady(page: Page): Promise<void> {
         document.querySelector('[data-testid="map-canvas"]')
     );
   });
-}
-
-type DmpImportWorkflow = 'legacy' | 'new';
-
-export async function setDmpImportWorkflow(page: Page, workflow: DmpImportWorkflow): Promise<void> {
-  await page.waitForFunction(() => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore?: {
-          getState: () => { config: unknown | null; setConfig: (config: unknown) => void };
-        };
-      };
-    }).__E2E_TEST__;
-    return Boolean(e2e?.projectStore?.getState().config);
-  }, undefined, { timeout: 10000 });
-
-  await page.evaluate((useLegacy) => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore?: {
-          getState: () => {
-            config: {
-              general: { legacy_dmp_import: boolean };
-            } | null;
-            setConfig: (config: unknown) => void;
-          };
-        };
-      };
-    }).__E2E_TEST__;
-    const store = e2e?.projectStore?.getState();
-    if (!store?.config) {
-      throw new Error('projectStore config is not available');
-    }
-    store.setConfig({
-      ...store.config,
-      general: {
-        ...store.config.general,
-        legacy_dmp_import: useLegacy,
-      },
-    });
-  }, workflow === 'legacy');
 }
 
 export async function waitForMapReady(page: Page): Promise<void> {
@@ -179,13 +135,7 @@ export async function createProject(page: Page, name: string): Promise<void> {
   await waitForMapReady(page);
 }
 
-export async function openDmpSelectionDialog(
-  page: Page,
-  options?: { workflow?: DmpImportWorkflow },
-): Promise<void> {
-  if (options?.workflow) {
-    await setDmpImportWorkflow(page, options.workflow);
-  }
+export async function openDmpSelectionDialog(page: Page): Promise<void> {
   await page.keyboard.press('Control+i');
   await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 10000 });
 }
