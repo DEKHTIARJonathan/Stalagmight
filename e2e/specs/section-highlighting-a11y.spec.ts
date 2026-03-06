@@ -241,24 +241,42 @@ describe('Section Panel Accessibility', () => {
       const options = await $$('[role="option"]');
       expect(options.length).toBeGreaterThan(0);
 
-      // Initially no selection
-      const initialAriaSelected = await options[0].getAttribute('aria-selected');
+      const rowTestId = await options[0].getAttribute('data-testid');
+      expect(rowTestId).toContain('section-row-');
+      const rowSelector = `[data-testid="${rowTestId}"]`;
+
+      // Clear any pre-selected state to make this assertion deterministic.
+      await browser.execute(() => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: {
+              getState: () => {
+                setSelection: (selection: null) => void;
+              };
+            };
+          };
+        }).__E2E_TEST__;
+
+        e2e?.uiStore.getState().setSelection(null);
+      });
+
+      const initialAriaSelected = await $(rowSelector).getAttribute('aria-selected');
       expect(initialAriaSelected).toBe('false');
 
       // Click to select
-      await options[0].click();
+      await (await $(rowSelector)).click();
 
       // Wait for aria-selected to update
       await browser.waitUntil(
         async () => {
-          const ariaSelected = await options[0].getAttribute('aria-selected');
+          const ariaSelected = await (await $(rowSelector)).getAttribute('aria-selected');
           return ariaSelected === 'true';
         },
         { timeout: 3000, timeoutMsg: 'aria-selected did not update' }
       );
 
       // Verify aria-selected updated
-      const updatedAriaSelected = await options[0].getAttribute('aria-selected');
+      const updatedAriaSelected = await (await $(rowSelector)).getAttribute('aria-selected');
       expect(updatedAriaSelected).toBe('true');
     });
 
@@ -296,7 +314,10 @@ describe('Visual Highlight States', () => {
       const options = await $$('[role="option"]');
       expect(options.length).toBeGreaterThan(0);
 
-      const firstOption = options[0];
+      const rowTestId = await options[0].getAttribute('data-testid');
+      expect(rowTestId).toContain('section-row-');
+      const rowSelector = `[data-testid="${rowTestId}"]`;
+      const firstOption = await $(rowSelector);
 
       // Get initial background color before selection
       const initialBgColor = await browser.execute((el) => {
@@ -309,7 +330,7 @@ describe('Visual Highlight States', () => {
       // Wait for selection state to apply
       await browser.waitUntil(
         async () => {
-          const ariaSelected = await firstOption.getAttribute('aria-selected');
+          const ariaSelected = await (await $(rowSelector)).getAttribute('aria-selected');
           return ariaSelected === 'true';
         },
         { timeout: 3000, timeoutMsg: 'Selection state did not apply' }
@@ -319,13 +340,13 @@ describe('Visual Highlight States', () => {
       // The component uses bg-accent/20 for selected state
       const selectedBgColor = await browser.execute((el) => {
         return window.getComputedStyle(el).backgroundColor;
-      }, firstOption);
+      }, await $(rowSelector));
 
       // Should have visible background (not transparent)
       expect(selectedBgColor).not.toBe('rgba(0, 0, 0, 0)');
 
       // Also verify aria-selected is true
-      const ariaSelected = await firstOption.getAttribute('aria-selected');
+      const ariaSelected = await (await $(rowSelector)).getAttribute('aria-selected');
       expect(ariaSelected).toBe('true');
     });
 

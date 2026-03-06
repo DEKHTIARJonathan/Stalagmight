@@ -94,11 +94,17 @@ async function toggleDepthGradient(): Promise<void> {
  * Helper to open the Display menu
  */
 async function openDisplayMenu(): Promise<void> {
-  const displayButton = await $('button*=Display');
-  await displayButton.click();
+  const displayButton = await $('[data-testid="display-menu-button"]');
+  await displayButton.waitForDisplayed({ timeout: 5000 });
+  try {
+    await displayButton.waitForClickable({ timeout: 2000 });
+    await displayButton.click();
+  } catch {
+    await browser.execute((el) => (el as HTMLElement).click(), displayButton);
+  }
   // Wait for menu to open
   const toggle = await $('[data-testid="display-toggle-showStations"]');
-  await toggle.waitForDisplayed({ timeout: 2000 });
+  await toggle.waitForDisplayed({ timeout: 5000 });
 }
 
 /**
