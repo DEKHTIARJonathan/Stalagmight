@@ -515,9 +515,6 @@ pub struct GeneralConfig {
     /// Onboarding flow IDs already completed/skipped by the user
     #[serde(default)]
     pub onboarding_completed_flows: Vec<String>,
-    /// Use legacy DMP import workflow (per-section config dialog)
-    #[serde(default)]
-    pub legacy_dmp_import: bool,
 }
 
 fn default_locale() -> String {

@@ -1920,7 +1920,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Keep onboarding disabled in E2E to avoid overlay interception.
                 onboarding_enabled: false,
                 onboarding_completed_flows: [],
-                legacy_dmp_import: false,
               },
               units: {
                 length: 'meters',
@@ -2105,7 +2104,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Keep onboarding disabled in E2E to avoid overlay interception.
                 onboarding_enabled: false,
                 onboarding_completed_flows: [],
-                legacy_dmp_import: false,
               },
               units: {
                 length: 'meters',
