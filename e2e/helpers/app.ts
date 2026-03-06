@@ -273,6 +273,8 @@ export async function resetAppState(): Promise<void> {
   const globalView = await $('[data-testid="global-view"]');
   await globalView.waitForExist({ timeout: 10000 });
   await waitForUiIdle(200);
+  await disableOnboardingGuides();
+  await waitForUiIdle(100);
 }
 
 /**
@@ -483,6 +485,92 @@ export async function waitForAppReady(): Promise<void> {
 }
 
 /**
+ * Disable onboarding guides for E2E runs.
+ * The onboarding overlay can intercept clicks and alter menu/dialog behavior.
+ */
+export async function disableOnboardingGuides(): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(() => {
+        const e2e = (window as unknown as {
+          __E2E_TEST__?: {
+            projectStore?: {
+              getState: () => { config: unknown | null };
+            };
+          };
+        }).__E2E_TEST__;
+        return Boolean(e2e?.projectStore?.getState().config);
+      }),
+    {
+      timeout: 10000,
+      timeoutMsg: 'Project config not available for onboarding setup',
+    }
+  );
+
+  const result = await browser.executeAsync(
+    async (done: (result: { success: boolean; error?: string }) => void) => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore?: {
+            getState: () => {
+              config: {
+                general: {
+                  onboarding_enabled: boolean;
+                  onboarding_completed_flows?: string[];
+                };
+              } | null;
+              setConfig: (config: unknown) => void;
+              updateConfig: (config: unknown) => Promise<{ success: boolean; error?: string | null }>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+
+      const store = e2e?.projectStore?.getState();
+      if (!store?.config) {
+        done({ success: false, error: 'projectStore config is not available' });
+        return;
+      }
+
+      const nextConfig = {
+        ...store.config,
+        general: {
+          ...store.config.general,
+          onboarding_enabled: false,
+          onboarding_completed_flows: store.config.general.onboarding_completed_flows ?? [],
+        },
+      };
+
+      try {
+        store.setConfig(nextConfig);
+        const persistResult = await store.updateConfig(nextConfig);
+        done({
+          success: persistResult.success,
+          error: persistResult.error ?? undefined,
+        });
+      } catch (err) {
+        done({ success: false, error: String(err) });
+      }
+    }
+  );
+
+  if (!result.success) {
+    throw new Error(`Failed to disable onboarding: ${result.error}`);
+  }
+
+  await browser.waitUntil(
+    async () => {
+      const overlay = await $('[data-testid="onboarding-overlay"]');
+      return !(await overlay.isExisting());
+    },
+    {
+      timeout: 5000,
+      timeoutMsg: 'Onboarding overlay remained visible after disabling onboarding',
+    }
+  );
+}
+
+/**
  * Click an element using JavaScript (fallback for WebKit issues).
  * Uses a full synthetic MouseEvent to properly trigger React event handlers.
  */
@@ -622,75 +710,63 @@ export async function createNewProject(projectName: string): Promise<void> {
   const singleView = await $('[data-testid="single-system-view"]');
   await singleView.waitForExist({ timeout: 15000 });
   await waitForMapReady();
+  await disableOnboardingGuides();
+}
+
+/**
+ * Open the New Project dialog through the UI store.
+ * This avoids WebDriver click flakiness on heavily animated landing screens.
+ */
+export async function openNewProjectDialog(): Promise<void> {
+  await browser.waitUntil(
+    async () => await browser.execute(() => !!(window as { __E2E_TEST__?: unknown }).__E2E_TEST__),
+    { timeout: 10000, timeoutMsg: 'E2E helpers not available on window' }
+  );
+
+  const storeResult = await browser.execute(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: {
+          getState: () => {
+            openDialog: (name: string) => void;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+
+    if (!e2e) {
+      return { success: false, error: 'E2E helpers not available' };
+    }
+
+    try {
+      e2e.uiStore.getState().openDialog('new-project');
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  if (!storeResult.success) {
+    throw new Error(`Failed to open New Project dialog: ${storeResult.error}`);
+  }
+
+  const dialog = await $('[data-testid="new-project-dialog"]');
+  await dialog.waitForDisplayed({ timeout: 10000 });
 }
 
 /**
  * Open the DMP Import Dialog (Step 1: DmpSelectionDialog) with a parsed DMP file.
  *
- * With the new two-step import flow:
+ * With the current import flow:
  * - Step 1: DmpSelectionDialog - Select sections from DMP file
- * - Step 2: DmpSectionConfigDialog - Configure each section
+ * - Step 2: zero-datum-selection or dmp-new-import-dialog depending on project state
  *
  * This helper parses the DMP file via IPC and opens Step 1 directly.
  * Note: Ctrl+I triggers the native file picker which can't be automated in E2E tests.
  *
  * @param filePath - Path to the DMP file to parse (defaults to test_v5.dmp fixture)
  */
-type DmpImportWorkflow = 'legacy' | 'new';
-
-/**
- * Configure which DMP import workflow is active in UI tests.
- * Most WDIO specs currently assert the legacy Step-2 dialog flow.
- */
-export async function setDmpImportWorkflow(workflow: DmpImportWorkflow): Promise<void> {
-  await browser.waitUntil(
-    async () =>
-      browser.execute(() => {
-        const e2e = (window as unknown as {
-          __E2E_TEST__?: {
-            projectStore?: {
-              getState: () => { config: unknown | null };
-            };
-          };
-        }).__E2E_TEST__;
-        return Boolean(e2e?.projectStore?.getState().config);
-      }),
-    {
-      timeout: 10000,
-      timeoutMsg: 'Project config not available for DMP workflow setup',
-    }
-  );
-
-  await browser.execute((useLegacy: boolean) => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore?: {
-          getState: () => {
-            config: { general: { legacy_dmp_import: boolean } } | null;
-            setConfig: (config: unknown) => void;
-          };
-        };
-      };
-    }).__E2E_TEST__;
-
-    const store = e2e?.projectStore?.getState();
-    if (!store?.config) {
-      throw new Error('projectStore config is not available');
-    }
-
-    store.setConfig({
-      ...store.config,
-      general: {
-        ...store.config.general,
-        legacy_dmp_import: useLegacy,
-      },
-    });
-  }, workflow === 'legacy');
-}
-
 export async function openDmpImportDialog(filePath?: string): Promise<void> {
-  await setDmpImportWorkflow('legacy');
-
   // Use default fixture if no path provided
   const resolvedPath = filePath ?? `${process.cwd()}/e2e/fixtures/test_v5.dmp`;
 
@@ -1236,6 +1312,169 @@ export async function importDmpFile(path: string): Promise<{ success: boolean; e
 }
 
 /**
+ * Ensure the DMP wizard dialog is visible.
+ * If map placement mode is active, sends Escape to return to the wizard.
+ */
+export async function ensureDmpNewImportDialogVisible(): Promise<void> {
+  await browser.waitUntil(
+    async () => {
+      const wizard = await $('[data-testid="dmp-new-import-dialog"]');
+      const placementIndicator = await $('[data-testid="placement-mode-indicator"]');
+      return (await wizard.isExisting()) || (await placementIndicator.isExisting());
+    },
+    {
+      timeout: 15000,
+      timeoutMsg: 'Neither DMP wizard nor placement mode indicator appeared',
+    }
+  );
+
+  const wizard = await $('[data-testid="dmp-new-import-dialog"]');
+  if (await wizard.isDisplayed().catch(() => false)) {
+    return;
+  }
+
+  const placementIndicator = await $('[data-testid="placement-mode-indicator"]');
+  if (await placementIndicator.isDisplayed().catch(() => false)) {
+    await browser.keys(['Escape']);
+    await wizard.waitForDisplayed({ timeout: 10000 });
+    return;
+  }
+
+  throw new Error('DMP wizard is not visible and placement mode indicator is not active');
+}
+
+/**
+ * Proceed from DMP selection step to the DMP import wizard.
+ * Handles optional zero-datum selection step by skipping it.
+ */
+export async function proceedToDmpImportWizard(): Promise<void> {
+  const continueButton = await $('[data-testid="continue-button"]');
+  await continueButton.waitForClickable({ timeout: 5000 });
+  await continueButton.click();
+
+  await browser.waitUntil(
+    async () => {
+      const zeroDatumDialog = await $('[data-testid="zero-datum-selection-dialog"]');
+      const wizard = await $('[data-testid="dmp-new-import-dialog"]');
+      const placementIndicator = await $('[data-testid="placement-mode-indicator"]');
+      return (
+        (await zeroDatumDialog.isExisting()) ||
+        (await wizard.isExisting()) ||
+        (await placementIndicator.isExisting())
+      );
+    },
+    {
+      timeout: 10000,
+      timeoutMsg: 'DMP workflow did not advance past selection step',
+    }
+  );
+
+  const zeroDatumDialog = await $('[data-testid="zero-datum-selection-dialog"]');
+  if (await zeroDatumDialog.isDisplayed().catch(() => false)) {
+    const skipButton = await zeroDatumDialog.$('[data-testid="zero-datum-selection-skip"]');
+    await skipButton.waitForClickable({ timeout: 5000 });
+    await skipButton.click();
+  }
+
+  await ensureDmpNewImportDialogVisible();
+}
+
+/**
+ * Drive the DMP wizard until sections are placed/imported.
+ * Falls back to discard mode if manual placement is required.
+ */
+export async function placeAllSectionsInDmpWizard(maxIterations = 80): Promise<void> {
+  await ensureDmpNewImportDialogVisible();
+
+  for (let attempt = 0; attempt < maxIterations; attempt += 1) {
+    const wizard = await $('[data-testid="dmp-new-import-dialog"]');
+    const wizardVisible = await wizard.isDisplayed().catch(() => false);
+    if (!wizardVisible) {
+      const placementIndicator = await $('[data-testid="placement-mode-indicator"]');
+      if (await placementIndicator.isDisplayed().catch(() => false)) {
+        await browser.keys(['Escape']);
+        await wizard.waitForDisplayed({ timeout: 10000 });
+        continue;
+      }
+      return;
+    }
+
+    const confirmButton = await wizard.$('[data-testid="confirm-button"]');
+    if (await confirmButton.isDisplayed().catch(() => false) && await confirmButton.isEnabled()) {
+      await confirmButton.click();
+      await waitForUiIdle(200);
+      continue;
+    }
+
+    const skipButton = await wizard.$('[data-testid="skip-button"]');
+    if (await skipButton.isDisplayed().catch(() => false) && await skipButton.isEnabled()) {
+      await skipButton.click();
+      await waitForUiIdle(200);
+      continue;
+    }
+
+    const segmentPlaceButton = await wizard.$('[data-testid="segment-place-button"]');
+    if (await segmentPlaceButton.isDisplayed().catch(() => false) && await segmentPlaceButton.isEnabled()) {
+      await segmentPlaceButton.click();
+      await waitForUiIdle(200);
+      continue;
+    }
+
+    const segmentDiscardButton = await wizard.$('[data-testid="segment-mode-discard"]');
+    if (
+      await segmentDiscardButton.isDisplayed().catch(() => false) &&
+      await segmentPlaceButton.isDisplayed().catch(() => false)
+    ) {
+      await segmentDiscardButton.click();
+      if (await segmentPlaceButton.isEnabled()) {
+        await segmentPlaceButton.click();
+        await waitForUiIdle(200);
+        continue;
+      }
+    }
+
+    const placeOnMapButton = await wizard.$('[data-testid="segment-place-on-map-button"]');
+    if (await placeOnMapButton.isDisplayed().catch(() => false) && await placeOnMapButton.isEnabled()) {
+      await placeOnMapButton.click();
+      const mapCanvas = await $('[data-testid="map-canvas"]');
+      await mapCanvas.waitForDisplayed({ timeout: 10000 });
+      const mapLocation = await mapCanvas.getLocation();
+      const mapSize = await mapCanvas.getSize();
+      await browser.action('pointer')
+        .move({
+          x: Math.round(mapLocation.x + mapSize.width * 0.5),
+          y: Math.round(mapLocation.y + mapSize.height * 0.5),
+        })
+        .down()
+        .up()
+        .perform();
+      await waitForUiIdle(200);
+      continue;
+    }
+
+    const allPlaced = await wizard.$('[data-testid="wizard-all-placed"]');
+    if (await allPlaced.isDisplayed().catch(() => false)) {
+      await waitForUiIdle(200);
+      continue;
+    }
+
+    await waitForUiIdle(100);
+  }
+
+  const wizard = await $('[data-testid="dmp-new-import-dialog"]');
+  if (await wizard.isDisplayed().catch(() => false)) {
+    const cancelButton = await wizard.$('[data-testid="cancel-button"]');
+    await cancelButton.click();
+    const cancelConfirmDialog = await $('[data-testid="cancel-confirm-dialog"]');
+    await cancelConfirmDialog.waitForDisplayed({ timeout: 5000 });
+    const confirmCancelButton = await cancelConfirmDialog.$('[data-testid="confirm-cancel-button"]');
+    await confirmCancelButton.click();
+  }
+
+  throw new Error(`DMP wizard did not complete within ${maxIterations} iterations`);
+}
+
+/**
  * Open DMP import dialog (Step 1: DmpSelectionDialog) with a specific DMP file.
  *
  * This helper:
@@ -1248,8 +1487,6 @@ export async function importDmpFile(path: string): Promise<{ success: boolean; e
  * @param filePath - Absolute path to the DMP file to import
  */
 export async function openDmpImportWithFile(filePath: string): Promise<void> {
-  await setDmpImportWorkflow('legacy');
-
   // Close any existing dialog first to ensure clean state
   await browser.execute(() => {
     const e2e = (window as unknown as {
