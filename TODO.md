@@ -18,10 +18,10 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 100% |
 | Integrations | 0 | 3 | 0% |
 | Testing | 0 | 1 | 0% |
-| User Testing: Bugs | 4 | 6 | 67% |
+| User Testing: Bugs | 5 | 6 | 83% |
 | User Testing: UX | 5 | 5 | 100% |
 | User Testing: Features | 3 | 5 | 60% |
-| **Total** | **74** | **81** | **91%** |
+| **Total** | **75** | **81** | **93%** |
 
 ---
 
@@ -198,12 +198,12 @@ Tracks v1.0 spec completion and user testing feedback.
 | Performance & Stability | 9 | 9 | 0 | 0 |
 | Integrations | 3 | 0 | 0 | 3 |
 | Testing | 1 | 0 | 0 | 1 |
-| User Testing: Bugs | 6 | 4 | 0 | 2 |
+| User Testing: Bugs | 6 | 5 | 0 | 1 |
 | User Testing: UX | 5 | 5 | 0 | 0 |
 | User Testing: Features | 5 | 3 | 0 | 2 |
-| **Total** | **81** | **74** | **0** | **7** |
+| **Total** | **81** | **75** | **0** | **6** |
 
-**Overall Progress**: 74/81 = ~91% complete
+**Overall Progress**: 75/81 = ~93% complete
 
 ---
 
@@ -211,11 +211,11 @@ Tracks v1.0 spec completion and user testing feedback.
 
 Source: `docs/transcripts/1-summary.md` — usability session importing real Mnemo DMP data.
 
-### Bugs (4/6 done)
+### Bugs (5/6 done)
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Fix segment merge orphaning section | ❌ | After merging, one section not placed with the rest; reference shots auto-deleted but section orphaned *(~line 359)* |
+| Fix segment merge orphaning section | ✅ | Fixed overlap/skip placement races and merge-station persistence so confirmed suggestions stay attached to the correct segment/station during final placement *(~line 359)* |
 | Fix depth gradient colors overridden by theme | ✅ | Depth gradient now uses the same dark-theme shallow/deep endpoints across all themes, preventing theme-specific gradient drift *(~line 675)* |
 | Add per-shot depth gradient | ✅ | Depth mode now renders shot-specific segmented color transitions between `depth_in` and `depth_out`, preserving normal shot visibility outside depth mode *(~line 677)* |
 | Fix Ariane export zero datum placement | ❌ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
