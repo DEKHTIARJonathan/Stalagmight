@@ -12,7 +12,7 @@
 //! - The ID element uses all-caps `<ID>` (not `<Id>`).
 //! - Every shot carries `<Locked>`, `<Name>`, and `<Profiletype>` fields.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Cursor, Write as _};
 use std::path::Path;
 
@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
-use crate::models::{Project, SectionId, StationRef};
+use crate::models::{Project, Section, SectionId, StationRef};
 
 // ============================================================================
 // Element‐name map (long vs. short)
@@ -143,8 +143,8 @@ struct ExportShot {
     section: String,
     azimuth: f64,
     length: f64,
-    depth: f64,       // absolute station depth (cumulative)
-    depth_in: f64,    // -1.0 if same as previous depth
+    depth: f64,    // absolute station depth (cumulative)
+    depth_in: f64, // -1.0 if same as previous depth
     inclination: f64,
     left: f64,
     right: f64,
@@ -154,6 +154,8 @@ struct ExportShot {
     explorer: Option<String>,
     date: Option<String>,
     color: String, // "0xRRGGBBff"
+    latitude: f64,
+    longitude: f64,
     closure_to_id: i64,
     locked: bool,
 }
@@ -277,21 +279,17 @@ fn write_shot<W: std::io::Write>(
     write_text_element(writer, n.from_id, &shot.from_id.to_string())?;
     write_text_element(writer, n.id, &shot.id.to_string())?;
     write_text_element(writer, n.inclination, &format_f64(shot.inclination))?;
-    write_text_element(writer, n.latitude, "0.0")?;
+    write_text_element(writer, n.latitude, &format_f64(shot.latitude))?;
     write_text_element(writer, n.left, &format_f64(shot.left))?;
     write_text_element(writer, n.length, &format_f64(shot.length))?;
-    write_text_element(
-        writer,
-        n.locked,
-        if shot.locked { "true" } else { "false" },
-    )?;
-    write_text_element(writer, n.longitude, "0.0")?;
+    write_text_element(writer, n.locked, if shot.locked { "true" } else { "false" })?;
+    write_text_element(writer, n.longitude, &format_f64(shot.longitude))?;
 
-    // Name field: START shots get "START", others get empty
-    let name_str = if shot.shot_type == "START" {
-        "START"
-    } else {
-        ""
+    // Ariane conventions: START has START name, CLOSURE uses CLOSURE:CLOSURE.
+    let name_str = match shot.shot_type {
+        "START" => "START",
+        "CLOSURE" => "CLOSURE:CLOSURE",
+        _ => "",
     };
     write_text_element(writer, n.name, name_str)?;
 
@@ -351,26 +349,24 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
         return Vec::new();
     }
 
-    // Build a merge lookup: for each section, find which station in another
-    // section it is connected to (child → parent).
-    let parent_map = build_parent_map(project);
-
-    // Find the root section (the one with no parent in parent_map).
-    // If multiple roots exist, pick the one with the lowest ID.
+    // Ariane supports one START; when a primary zero datum exists, root the
+    // topology from that section so GPS can be placed on START without remapping.
     let root_section_id = project
-        .sections
-        .iter()
-        .map(|s| s.id)
-        .find(|id| !parent_map.contains_key(id))
-        .unwrap_or(project.sections[0].id);
+        .zero_datums
+        .first()
+        .map(|d| d.station_ref.section_id)
+        .filter(|sid| project.sections.iter().any(|s| s.id == *sid))
+        .unwrap_or_else(|| choose_default_root_section_id(project));
+
+    // Build rooted parent links from station merges.
+    let parent_map = build_parent_map(project, root_section_id);
+    let primary_datum = project.zero_datums.first();
 
     let mut next_id: i64 = 0;
 
     struct SectionBlock {
         section_id: SectionId,
-        /// Index of the first shot in `shots` that needs its from_id resolved
-        /// (for child sections, the first REAL/VIRTUAL shot).
-        needs_parent_link: bool,
+        apply_parent_link: bool,
         shots: Vec<ExportShot>,
     }
 
@@ -389,6 +385,182 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
         let color = color_to_ariane(&section.color);
         let explorer = section.surveyor.clone();
         let date = section.date.map(|d| d.format("%Y-%m-%d").to_string());
+
+        let split_root_at = if is_root {
+            primary_datum
+                .filter(|datum| datum.station_ref.section_id == section.id)
+                .and_then(|datum| {
+                    let idx = datum.station_ref.station_index as usize;
+                    if idx > section.shots.len() {
+                        tracing::warn!(
+                            section_id = section.id,
+                            station_index = datum.station_ref.station_index,
+                            shot_count = section.shots.len(),
+                            "Zero datum station is out of bounds; exporting section without split"
+                        );
+                        None
+                    } else if idx > 0 {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+
+        if let Some(split_idx) = split_root_at {
+            let start_id = next_id;
+            next_id += 1;
+            let start_depth = station_depth(section, split_idx);
+
+            let mut root_shots = Vec::new();
+            root_shots.push(ExportShot {
+                id: start_id,
+                from_id: -1,
+                shot_type: "START",
+                section: section_name.clone(),
+                azimuth: 0.0,
+                length: 0.0,
+                depth: start_depth,
+                depth_in: start_depth,
+                inclination: 0.0,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                comment: Some("START".to_string()),
+                explorer: explorer.clone(),
+                date: date.clone(),
+                color: color.clone(),
+                latitude: 0.0,
+                longitude: 0.0,
+                closure_to_id: -1,
+                locked: true,
+            });
+            station_to_ariane.insert((section.id, split_idx as u32), start_id);
+
+            // Forward segment: datum station -> original section end.
+            let mut cumulative_depth = start_depth;
+            for shot_idx in split_idx..section.shots.len() {
+                let shot = &section.shots[shot_idx];
+                let shot_ariane_id = next_id;
+                next_id += 1;
+
+                let prev_id = if shot_idx == split_idx {
+                    start_id
+                } else {
+                    shot_ariane_id - 1
+                };
+                let prev_depth = cumulative_depth;
+                cumulative_depth = shot.depth_out;
+                let depth_in_val = if (shot.depth_in - prev_depth).abs() < 1e-9 {
+                    -1.0
+                } else {
+                    shot.depth_in
+                };
+
+                root_shots.push(ExportShot {
+                    id: shot_ariane_id,
+                    from_id: prev_id,
+                    shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                    section: section_name.clone(),
+                    azimuth: shot.azimuth_in,
+                    length: shot.length,
+                    depth: shot.depth_out,
+                    depth_in: depth_in_val,
+                    inclination: shot.pitch_in.unwrap_or(0.0),
+                    left: shot.left.unwrap_or(0.0),
+                    right: shot.right.unwrap_or(0.0),
+                    up: shot.up.unwrap_or(0.0),
+                    down: shot.down.unwrap_or(0.0),
+                    comment: shot.comment.clone(),
+                    explorer: explorer.clone(),
+                    date: date.clone(),
+                    color: color.clone(),
+                    latitude: 0.0,
+                    longitude: 0.0,
+                    closure_to_id: -1,
+                    locked: false,
+                });
+
+                station_to_ariane.insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
+            }
+
+            blocks.push(SectionBlock {
+                section_id: section.id,
+                apply_parent_link: false,
+                shots: root_shots,
+            });
+
+            // Reverse segment: datum station -> original section start.
+            if split_idx > 0 {
+                let split_name = format!("{section_name} (pre-zero-datum)");
+                let mut reverse_shots = Vec::new();
+                let mut cumulative_depth = start_depth;
+
+                for shot_idx in (0..split_idx).rev() {
+                    let shot = &section.shots[shot_idx];
+                    let shot_ariane_id = next_id;
+                    next_id += 1;
+
+                    let prev_id = if shot_idx == split_idx - 1 {
+                        start_id
+                    } else {
+                        shot_ariane_id - 1
+                    };
+
+                    let reversed_depth_in = shot.depth_out;
+                    let reversed_depth_out = shot.depth_in;
+                    let prev_depth = cumulative_depth;
+                    cumulative_depth = reversed_depth_out;
+                    let depth_in_val = if (reversed_depth_in - prev_depth).abs() < 1e-9 {
+                        -1.0
+                    } else {
+                        reversed_depth_in
+                    };
+
+                    reverse_shots.push(ExportShot {
+                        id: shot_ariane_id,
+                        from_id: prev_id,
+                        shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                        section: split_name.clone(),
+                        azimuth: normalize_azimuth(shot.azimuth_out),
+                        length: shot.length,
+                        depth: reversed_depth_out,
+                        depth_in: depth_in_val,
+                        inclination: shot
+                            .pitch_out
+                            .or_else(|| shot.pitch_in.map(|p| -p))
+                            .unwrap_or(0.0),
+                        left: shot.right.unwrap_or(0.0),
+                        right: shot.left.unwrap_or(0.0),
+                        up: shot.up.unwrap_or(0.0),
+                        down: shot.down.unwrap_or(0.0),
+                        comment: shot.comment.clone(),
+                        explorer: explorer.clone(),
+                        date: date.clone(),
+                        color: color.clone(),
+                        latitude: 0.0,
+                        longitude: 0.0,
+                        closure_to_id: -1,
+                        locked: false,
+                    });
+
+                    // Reversed shot from station (shot_idx + 1) to shot_idx:
+                    // it ends at the original station shot_idx.
+                    station_to_ariane.insert((section.id, shot_idx as u32), shot_ariane_id);
+                }
+
+                blocks.push(SectionBlock {
+                    section_id: section.id,
+                    apply_parent_link: false,
+                    shots: reverse_shots,
+                });
+            }
+
+            continue;
+        }
 
         let mut shots = Vec::new();
 
@@ -421,14 +593,14 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                 explorer: explorer.clone(),
                 date: date.clone(),
                 color: color.clone(),
+                latitude: 0.0,
+                longitude: 0.0,
                 closure_to_id: -1,
                 locked: true,
             });
 
             station_to_ariane.insert((section.id, 0), start_id);
         }
-        // For non-root sections, station 0 will be mapped when we assign
-        // the first shot's ariane ID (handled below after the loop).
 
         let mut cumulative_depth: f64 = if let Some(first_shot) = section.shots.first() {
             first_shot.depth_in
@@ -479,6 +651,8 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                 explorer: explorer.clone(),
                 date: date.clone(),
                 color: color.clone(),
+                latitude: 0.0,
+                longitude: 0.0,
                 closure_to_id: -1,
                 locked: false,
             });
@@ -487,121 +661,286 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
             station_to_ariane.insert((section.id, (i + 1) as u32), shot_ariane_id);
         }
 
-        // For non-root sections, map station 0 to the first shot's ariane ID.
-        // The first shot itself represents the connection from the parent station.
-        if !is_root {
-            if let Some(first_real) = shots.first() {
-                station_to_ariane.insert((section.id, 0), first_real.id);
-            }
-        }
-
         blocks.push(SectionBlock {
             section_id: section.id,
-            needs_parent_link: !is_root && !shots.is_empty(),
+            apply_parent_link: !is_root && !shots.is_empty(),
             shots,
         });
     }
 
-    // Second pass: for child sections, resolve the first shot's from_id
-    // to point to the parent station's ariane ID.
+    // Second pass: resolve parent links from station merges.
     for block in &mut blocks {
-        if !block.needs_parent_link {
+        if !block.apply_parent_link || block.shots.is_empty() {
             continue;
         }
-        if let Some((parent_station, _child_station_idx)) = parent_map.get(&block.section_id) {
-            if let Some(&parent_ariane_id) =
-                station_to_ariane.get(&(parent_station.section_id, parent_station.station_index))
-            {
-                // First shot in block is the first REAL/VIRTUAL shot
-                block.shots[0].from_id = parent_ariane_id;
-            }
+
+        let Some(parent_link) = parent_map.get(&block.section_id) else {
+            continue;
+        };
+
+        let Some(&parent_ariane_id) = station_to_ariane.get(&(
+            parent_link.parent_station.section_id,
+            parent_link.parent_station.station_index,
+        )) else {
+            tracing::warn!(
+                child_section_id = block.section_id,
+                parent_section_id = parent_link.parent_station.section_id,
+                parent_station_index = parent_link.parent_station.station_index,
+                "Skipping parent link: parent station is not representable in Ariane export"
+            );
+            continue;
+        };
+
+        let child_station_idx = parent_link.child_station_index as usize;
+        if child_station_idx < block.shots.len() {
+            block.shots[child_station_idx].from_id = parent_ariane_id;
+        } else {
+            tracing::warn!(
+                child_section_id = block.section_id,
+                child_station_index = parent_link.child_station_index,
+                shot_count = block.shots.len(),
+                "Skipping parent from_id rewrite: child merge station has no outgoing shot"
+            );
         }
+
+        // Treat merged stations as the same Ariane node ID so closures and GPS
+        // references resolve to the parent-attached node.
+        station_to_ariane.insert(
+            (block.section_id, parent_link.child_station_index),
+            parent_ariane_id,
+        );
     }
 
     // Third pass: generate CLOSURE shots from loop_closures
     let mut closure_shots = Vec::new();
     for closure in &project.loop_closures {
-        let from_ariane = station_to_ariane
-            .get(&(closure.station_a.section_id, closure.station_a.station_index));
-        let to_ariane = station_to_ariane
-            .get(&(closure.station_b.section_id, closure.station_b.station_index));
+        let Some(&from_id) = station_to_ariane.get(&(
+            closure.station_a.section_id,
+            closure.station_a.station_index,
+        )) else {
+            tracing::warn!(
+                closure_id = closure.id,
+                from_section_id = closure.station_a.section_id,
+                from_station_index = closure.station_a.station_index,
+                to_section_id = closure.station_b.section_id,
+                to_station_index = closure.station_b.station_index,
+                "Skipping closure export: from station is not representable in Ariane topology"
+            );
+            continue;
+        };
 
-        if let (Some(&from_id), Some(&to_id)) = (from_ariane, to_ariane) {
-            let closure_id = next_id;
-            next_id += 1;
+        let Some(&to_id) = station_to_ariane.get(&(
+            closure.station_b.section_id,
+            closure.station_b.station_index,
+        )) else {
+            tracing::warn!(
+                closure_id = closure.id,
+                from_section_id = closure.station_a.section_id,
+                from_station_index = closure.station_a.station_index,
+                to_section_id = closure.station_b.section_id,
+                to_station_index = closure.station_b.station_index,
+                "Skipping closure export: target station is not representable in Ariane topology"
+            );
+            continue;
+        };
 
-            let section_name = project
-                .sections
-                .iter()
-                .find(|s| s.id == closure.station_a.section_id)
-                .and_then(|s| s.name.clone())
-                .unwrap_or_else(|| format!("Section {}", closure.station_a.section_id));
-
-            let color = project
-                .sections
-                .iter()
-                .find(|s| s.id == closure.station_a.section_id)
-                .map(|s| color_to_ariane(&s.color))
-                .unwrap_or_else(|| "0x4ecdc4ff".to_string());
-
-            closure_shots.push(ExportShot {
-                id: closure_id,
-                from_id,
-                shot_type: "CLOSURE",
-                section: section_name,
-                azimuth: 0.0,
-                length: 0.0,
-                depth: 0.0,
-                depth_in: -1.0,
-                inclination: 0.0,
-                left: 0.0,
-                right: 0.0,
-                up: 0.0,
-                down: 0.0,
-                comment: None,
-                explorer: None,
-                date: None,
-                color,
-                closure_to_id: to_id,
-                locked: false,
-            });
+        if from_id == to_id {
+            tracing::warn!(
+                closure_id = closure.id,
+                section_id = closure.station_a.section_id,
+                station_index = closure.station_a.station_index,
+                "Skipping closure export: closure endpoints collapse to the same Ariane node"
+            );
+            continue;
         }
+
+        let closure_id = next_id;
+        next_id += 1;
+
+        let section_name = project
+            .sections
+            .iter()
+            .find(|s| s.id == closure.station_a.section_id)
+            .and_then(|s| s.name.clone())
+            .unwrap_or_else(|| format!("Section {}", closure.station_a.section_id));
+
+        let color = project
+            .sections
+            .iter()
+            .find(|s| s.id == closure.station_a.section_id)
+            .map(|s| color_to_ariane(&s.color))
+            .unwrap_or_else(|| "0x4ecdc4ff".to_string());
+
+        closure_shots.push(ExportShot {
+            id: closure_id,
+            from_id,
+            shot_type: "CLOSURE",
+            section: section_name,
+            azimuth: 0.0,
+            length: 0.0,
+            depth: 0.0,
+            depth_in: 0.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: to_id,
+            locked: false,
+        });
     }
 
     // Flatten all blocks + closure shots
     let mut all_shots: Vec<ExportShot> = blocks.into_iter().flat_map(|b| b.shots).collect();
     all_shots.extend(closure_shots);
 
+    // Final pass: Ariane stores GPS on the single START shot.
+    let start_idx = all_shots.iter().position(|s| s.shot_type == "START");
+    if let Some(start_idx) = start_idx {
+        if let Some(primary_datum) = primary_datum {
+            all_shots[start_idx].latitude = primary_datum.gps.latitude;
+            all_shots[start_idx].longitude = primary_datum.gps.longitude;
+
+            if project.zero_datums.len() > 1 {
+                tracing::warn!(
+                    datum_count = project.zero_datums.len(),
+                    "Ariane export supports only one GPS anchor; using the first zero datum"
+                );
+            }
+        }
+    }
+
     all_shots
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ParentLink {
+    parent_station: StationRef,
+    child_station_index: u32,
+}
+
+/// Pick a deterministic root using the legacy "lowest section ID wins parent"
+/// heuristic so exports without zero datums remain stable.
+fn choose_default_root_section_id(project: &Project) -> SectionId {
+    let mut child_sections: HashSet<SectionId> = HashSet::new();
+    for merge in &project.station_merges {
+        let child = if merge.station_a.section_id <= merge.station_b.section_id {
+            merge.station_b.section_id
+        } else {
+            merge.station_a.section_id
+        };
+        child_sections.insert(child);
+    }
+
+    project
+        .sections
+        .iter()
+        .map(|s| s.id)
+        .find(|id| !child_sections.contains(id))
+        .unwrap_or(project.sections[0].id)
+}
+
+fn station_depth(section: &Section, station_index: usize) -> f64 {
+    if section.shots.is_empty() {
+        return 0.0;
+    }
+    if station_index == 0 {
+        section.shots[0].depth_in
+    } else if station_index >= section.shots.len() {
+        section.shots[section.shots.len() - 1].depth_out
+    } else {
+        section.shots[station_index].depth_in
+    }
+}
+
+fn normalize_azimuth(azimuth: f64) -> f64 {
+    azimuth.rem_euclid(360.0)
 }
 
 /// Build a parent map from station_merges.
 ///
 /// Returns: child_section_id → (parent_station_ref, child_station_index)
 ///
-/// For each merge, the section with the lower ID is considered the parent.
-fn build_parent_map(project: &Project) -> HashMap<SectionId, (StationRef, u32)> {
-    let mut map: HashMap<SectionId, (StationRef, u32)> = HashMap::new();
+/// Parent links are chosen by traversing the merge graph from `root_section_id`.
+fn build_parent_map(project: &Project, root_section_id: SectionId) -> HashMap<SectionId, ParentLink> {
+    #[derive(Debug, Clone, Copy)]
+    struct NeighborLink {
+        neighbor_section_id: SectionId,
+        parent_station: StationRef,
+        child_station_index: u32,
+    }
 
+    let mut adjacency: HashMap<SectionId, Vec<NeighborLink>> = HashMap::new();
     for merge in &project.station_merges {
-        let (parent, child, child_station_idx) =
-            if merge.station_a.section_id <= merge.station_b.section_id {
-                (
-                    merge.station_a,
-                    merge.station_b,
-                    merge.station_b.station_index,
-                )
-            } else {
-                (
-                    merge.station_b,
-                    merge.station_a,
-                    merge.station_a.station_index,
-                )
-            };
+        adjacency
+            .entry(merge.station_a.section_id)
+            .or_default()
+            .push(NeighborLink {
+                neighbor_section_id: merge.station_b.section_id,
+                parent_station: merge.station_a,
+                child_station_index: merge.station_b.station_index,
+            });
+        adjacency
+            .entry(merge.station_b.section_id)
+            .or_default()
+            .push(NeighborLink {
+                neighbor_section_id: merge.station_a.section_id,
+                parent_station: merge.station_b,
+                child_station_index: merge.station_a.station_index,
+            });
+    }
 
-        // Only set parent once per child section
-        map.entry(child.section_id)
-            .or_insert((parent, child_station_idx));
+    for links in adjacency.values_mut() {
+        links.sort_by_key(|l| {
+            (
+                l.neighbor_section_id,
+                l.child_station_index,
+                l.parent_station.station_index,
+            )
+        });
+    }
+
+    let mut map: HashMap<SectionId, ParentLink> = HashMap::new();
+    let mut visited: HashSet<SectionId> = HashSet::new();
+    let mut queue = VecDeque::new();
+    visited.insert(root_section_id);
+    queue.push_back(root_section_id);
+
+    while let Some(parent_section_id) = queue.pop_front() {
+        let Some(links) = adjacency.get(&parent_section_id) else {
+            continue;
+        };
+        for link in links {
+            if visited.insert(link.neighbor_section_id) {
+                map.insert(
+                    link.neighbor_section_id,
+                    ParentLink {
+                        parent_station: link.parent_station,
+                        child_station_index: link.child_station_index,
+                    },
+                );
+                queue.push_back(link.neighbor_section_id);
+            }
+        }
+    }
+
+    for section in &project.sections {
+        if section.id == root_section_id || map.contains_key(&section.id) {
+            continue;
+        }
+        if adjacency.contains_key(&section.id) {
+            tracing::warn!(
+                section_id = section.id,
+                root_section_id,
+                "Section has merges but is disconnected from export root; leaving section without parent link"
+            );
+        }
     }
 
     map
@@ -625,7 +964,10 @@ fn color_to_ariane(hex: &str) -> String {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::models::{
+        ClosureStrategy, GpsCoordinates, LoopClosure, SectionData, ShotData, StationMerge,
+        ZeroDatum,
+    };
     use tempfile::NamedTempFile;
 
     fn simple_project() -> Project {
@@ -808,8 +1150,6 @@ mod tests {
 
     #[test]
     fn test_multi_section_no_extra_starts() {
-        use crate::models::StationMerge;
-
         let mut project = Project::new("Multi".to_string(), None);
 
         // Section 0: 2 shots (root)
@@ -875,6 +1215,378 @@ mod tests {
         // Section B's first shot should reference ariane ID of section A station 1
         // Station 1 in section A = ariane ID 1 (first real shot)
         assert_eq!(shots[3].from_id, 1);
+    }
+
+    #[test]
+    fn test_child_merge_station_index_rewrites_matching_shot() {
+        let mut project = Project::new("Child Merge Index".to_string(), None);
+
+        // Root section with 3 shots: station IDs become START(0), 1, 2, 3.
+        project.add_section(SectionData {
+            name: Some("Root".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Child section with 3 shots.
+        project.add_section(SectionData {
+            name: Some("Child".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Merge child station 1 to root station 2.
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 2,
+            },
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 1,
+            },
+            merged_at: chrono::Utc::now(),
+        });
+
+        let shots = build_export_shots(&project);
+
+        // IDs: 0 START, 1..3 root REALs, 4..6 child REALs.
+        let child_shot0 = shots.iter().find(|s| s.id == 4).unwrap();
+        let child_shot1 = shots.iter().find(|s| s.id == 5).unwrap();
+        assert_eq!(
+            child_shot0.from_id, -1,
+            "child shot 0 should remain untouched when merge station is 1"
+        );
+        assert_eq!(
+            child_shot1.from_id, 2,
+            "child shot 1 should link to root station 2 Ariane ID"
+        );
+    }
+
+    #[test]
+    fn test_child_station_zero_closure_resolves_to_parent_node() {
+        let mut project = Project::new("Child Station Zero".to_string(), None);
+
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 4.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 4.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        project.add_section(SectionData {
+            name: Some("B".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![ShotData {
+                length: 3.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        // B:0 merges to A:1.
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            },
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 0,
+            },
+            merged_at: chrono::Utc::now(),
+        });
+
+        // Closure from B:0 (merged) to A:2 should resolve to IDs 1 -> 2.
+        project.loop_closures.push(LoopClosure {
+            id: 42,
+            station_a: StationRef {
+                section_id: 1,
+                station_index: 0,
+            },
+            station_b: StationRef {
+                section_id: 0,
+                station_index: 2,
+            },
+            path_length: 10.0,
+            misclosure_distance: 0.4,
+            error_percentage: 4.0,
+            horizontal_misclosure: 0.4,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::Batch,
+            is_aligned: false,
+        });
+
+        let shots = build_export_shots(&project);
+        let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
+        assert_eq!(
+            closure.from_id, 1,
+            "B:0 should map to merged parent Ariane ID"
+        );
+        assert_eq!(closure.closure_to_id, 2, "A:2 should map to Ariane ID 2");
+    }
+
+    #[test]
+    fn test_closure_export_uses_ariane_name_and_depth_in() {
+        let mut project = Project::new("Closure Name".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 4.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 4.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        project.loop_closures.push(LoopClosure {
+            id: 7,
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            },
+            station_b: StationRef {
+                section_id: 0,
+                station_index: 2,
+            },
+            path_length: 8.0,
+            misclosure_distance: 0.2,
+            error_percentage: 2.5,
+            horizontal_misclosure: 0.2,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::Batch,
+            is_aligned: false,
+        });
+
+        let shots = build_export_shots(&project);
+        let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
+        assert!(
+            closure.depth_in.abs() < f64::EPSILON,
+            "closure DepthIn should be exported as 0.0"
+        );
+
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(&project, file.path()).unwrap();
+        let content = std::fs::read_to_string(file.path()).unwrap();
+        assert!(content.contains("<TY>CLOSURE</TY>"));
+        assert!(content.contains("<DPI>0.0</DPI>"));
+        assert!(content.contains("<NM>CLOSURE:CLOSURE</NM>"));
+    }
+
+    #[test]
+    fn test_zero_datum_coordinates_export_to_start_shot() {
+        let mut project = Project::new("Datum Node".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 3.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 3.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 3.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 2,
+            },
+            gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project);
+
+        let start = shots.iter().find(|s| s.id == 0).unwrap();
+        assert!((start.latitude - 20.25).abs() < f64::EPSILON);
+        assert!((start.longitude - (-87.5)).abs() < f64::EPSILON);
+
+        let shot_for_station_2 = shots.iter().find(|s| s.id == 2).unwrap();
+        assert!(shot_for_station_2.latitude.abs() < f64::EPSILON);
+        assert!(shot_for_station_2.longitude.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_nonzero_root_datum_splits_section_into_two_branches() {
+        let mut project = Project::new("Split Root".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    azimuth_in: 10.0,
+                    azimuth_out: 210.0,
+                    length: 1.0,
+                    depth_in: 0.0,
+                    depth_out: 1.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 20.0,
+                    azimuth_out: 220.0,
+                    length: 1.0,
+                    depth_in: 1.0,
+                    depth_out: 2.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 30.0,
+                    azimuth_out: 230.0,
+                    length: 1.0,
+                    depth_in: 2.0,
+                    depth_out: 3.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 2,
+            },
+            gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project);
+        let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
+
+        // Split produces two first shots from START: forward segment and reversed prefix.
+        let from_start: Vec<&ExportShot> = shots
+            .iter()
+            .filter(|s| s.shot_type != "START" && s.from_id == start.id)
+            .collect();
+        assert_eq!(from_start.len(), 2);
+        assert!(
+            from_start.iter().any(|s| (s.azimuth - 30.0).abs() < f64::EPSILON),
+            "forward branch should keep original azimuth at datum"
+        );
+        assert!(
+            from_start.iter().any(|s| (s.azimuth - 220.0).abs() < f64::EPSILON),
+            "reverse branch should use backsight azimuth of prefix shot"
+        );
+    }
+
+    #[test]
+    fn test_parent_links_reoriented_when_datum_forces_root() {
+        let mut project = Project::new("Datum Root Orientation".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.add_section(SectionData {
+            name: Some("B".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            },
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 2,
+            },
+            merged_at: chrono::Utc::now(),
+        });
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 1,
+                station_index: 2,
+            },
+            gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project);
+        let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
+        assert_eq!(start.section, "B");
+
+        // Section A should now link into the forced-root section B.
+        let link_into_root = shots
+            .iter()
+            .find(|s| s.section == "A" && s.from_id == start.id);
+        assert!(
+            link_into_root.is_some(),
+            "expected a section A shot to link to B START after rooting at datum"
+        );
     }
 
     #[test]
