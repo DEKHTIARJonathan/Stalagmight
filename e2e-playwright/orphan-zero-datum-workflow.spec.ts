@@ -116,9 +116,8 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
 
     await page.getByTestId('zero-datum-config-confirm').click();
-    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 15000 });
-
-    await page.getByTestId('cancel-button').click();
+    // New workflow auto-starts map placement and hides the wizard dialog until Esc.
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 10000 });
+    await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 15000 });
   });
 });

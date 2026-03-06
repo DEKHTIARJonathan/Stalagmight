@@ -52,7 +52,6 @@ export const defaultConfig: Config = {
     splash_screen: false,
     onboarding_enabled: true,
     onboarding_completed_flows: [],
-    legacy_dmp_import: false,
   },
   units: {
     length: 'meters',
