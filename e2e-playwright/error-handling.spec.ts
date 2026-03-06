@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { setupMockedPage, createProject as createProjectViaApp } from './helpers/app';
 
 /**
  * Error Handling E2E Tests
@@ -20,6 +21,39 @@ async function createProject(page: Page, name: string): Promise<void> {
   await page.getByTestId('new-project-name-input').fill(name);
   await page.getByTestId('new-project-create-button').click();
   await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
+}
+
+async function setIpcOverrides(page: Page, overrides: Record<string, unknown>): Promise<void> {
+  await page.evaluate((nextOverrides) => {
+    const current =
+      (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
+        | Record<string, unknown>
+        | undefined;
+    (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
+      ...(current ?? {}),
+      ...nextOverrides,
+    };
+  }, overrides);
+}
+
+async function clearIpcOverrideKeys(page: Page, commands: string[]): Promise<void> {
+  await page.evaluate((keys) => {
+    const current =
+      (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
+        | Record<string, unknown>
+        | undefined;
+    if (!current) {
+      return;
+    }
+
+    for (const key of keys) {
+      delete current[key];
+    }
+
+    (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ = {
+      ...current,
+    };
+  }, commands);
 }
 
 /**
@@ -581,15 +615,11 @@ test.describe('Error Handling', () => {
      * clearly communicated to the user via error notification.
      */
     test('should display error notification on save failure', async ({ page }) => {
-      await setupTauriMocksWithErrorSimulation(page);
-      await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await setupMockedPage(page);
+      await createProjectViaApp(page, 'Error Test Project');
 
-      await createProject(page, 'Error Test Project');
-
-      // Enable save error mode
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'save_permission_denied';
+      await setIpcOverrides(page, {
+        save_project: { __throw: 'Permission denied: cannot write to file' },
       });
 
       // Trigger save with Ctrl+S
@@ -613,9 +643,9 @@ test.describe('Error Handling', () => {
       // Verify app remains functional after error
       await expect(page.getByTestId('map-canvas')).toBeVisible();
 
-      // Test disk full error as well
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'save_disk_full';
+      // Test disk full error as well.
+      await setIpcOverrides(page, {
+        save_project: { __throw: 'Disk full: no space left on device' },
       });
 
       await page.keyboard.press('Control+s');
@@ -633,13 +663,11 @@ test.describe('Error Handling', () => {
      * clearly communicated to the user.
      */
     test('should display error on file open failure', async ({ page }) => {
-      await setupTauriMocksWithErrorSimulation(page);
-      await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await setupMockedPage(page);
 
-      // Enable file open error mode (corrupted file)
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'open_corrupted';
+      await setIpcOverrides(page, {
+        load_project_full: { __throw: 'File corrupted: invalid project format' },
+        load_project: { __throw: 'File corrupted: invalid project format' },
       });
 
       // Try to open a file via Open button
@@ -677,9 +705,10 @@ test.describe('Error Handling', () => {
       const title = page.locator('h1:has-text("Stalagmight")');
       await expect(title).toBeVisible({ timeout: 5000 });
 
-      // Reset error mode and test file not found
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'open_not_found';
+      // Swap to "file not found" and retry.
+      await setIpcOverrides(page, {
+        load_project_full: { __throw: 'File not found: the specified file does not exist' },
+        load_project: { __throw: 'File not found: the specified file does not exist' },
       });
 
       // Try open again
@@ -716,14 +745,12 @@ test.describe('Error Handling', () => {
 
   test.describe('DMP Parse Errors', () => {
     test('shows error dialog for invalid DMP header', async ({ page }) => {
-      await setupTauriMocksWithErrorSimulation(page);
-      await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await setupMockedPage(page);
+      await createProjectViaApp(page, 'DMP Error Test');
 
-      await createProject(page, 'DMP Error Test');
-
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'dmp_parse_error';
+      await setIpcOverrides(page, {
+        import_dmp: { __throw: 'Invalid DMP header: expected version 2-5, got invalid data' },
+        parse_dmp: { __throw: 'Invalid DMP header: expected version 2-5, got invalid data' },
       });
 
       await page.keyboard.press('Control+i');
@@ -740,14 +767,12 @@ test.describe('Error Handling', () => {
     });
 
     test('shows error dialog for truncated DMP file', async ({ page }) => {
-      await setupTauriMocksWithErrorSimulation(page);
-      await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await setupMockedPage(page);
+      await createProjectViaApp(page, 'DMP Truncated Test');
 
-      await createProject(page, 'DMP Truncated Test');
-
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'dmp_truncated';
+      await setIpcOverrides(page, {
+        import_dmp: { __throw: 'Truncated DMP file: unexpected end of data' },
+        parse_dmp: { __throw: 'Truncated DMP file: unexpected end of data' },
       });
 
       await page.keyboard.press('Control+i');
@@ -856,15 +881,11 @@ test.describe('Error Handling', () => {
      * remains functional.
      */
     test('should recover from undo/redo errors', async ({ page }) => {
-      await setupTauriMocksWithErrorSimulation(page);
-      await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await setupMockedPage(page);
+      await createProjectViaApp(page, 'Undo Error Test');
 
-      await createProject(page, 'Undo Error Test');
-
-      // Enable undo error mode
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'undo_error';
+      await setIpcOverrides(page, {
+        undo: { __throw: 'Undo failed: command stack corrupted' },
       });
 
       // Try undo - should handle error gracefully
@@ -873,9 +894,8 @@ test.describe('Error Handling', () => {
       // App should remain functional
       await expect(page.getByTestId('map-canvas')).toBeVisible();
 
-      // Enable redo error mode
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string }).__TAURI_ERROR_MODE__ = 'redo_error';
+      await setIpcOverrides(page, {
+        redo: { __throw: 'Redo failed: no commands to redo' },
       });
 
       // Try redo - should handle error gracefully
@@ -884,10 +904,8 @@ test.describe('Error Handling', () => {
       // App should still be functional
       await expect(page.getByTestId('map-canvas')).toBeVisible();
 
-      // Disable error mode and verify normal operations work
-      await page.evaluate(() => {
-        (window as unknown as { __TAURI_ERROR_MODE__: string | null }).__TAURI_ERROR_MODE__ = null;
-      });
+      // Disable overrides and verify normal operations work.
+      await clearIpcOverrideKeys(page, ['undo', 'redo']);
 
       // Undo/redo should work normally now
       await page.keyboard.press('Control+z');
