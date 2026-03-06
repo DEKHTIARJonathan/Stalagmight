@@ -4,7 +4,6 @@ import {
   createProject,
   createSectionViaStore,
   openDmpSelectionDialog,
-  setDmpImportWorkflow,
 } from './helpers/app';
 
 async function openOrphanDialog(page: Page): Promise<void> {
@@ -101,8 +100,7 @@ test.describe('Orphan + Zero Datum Workflow', () => {
 
   test('walks through zero datum selection into new import wizard', async ({ page }) => {
     await createProject(page, 'Zero Datum Calibration');
-    await setDmpImportWorkflow(page, 'new');
-    await openDmpSelectionDialog(page, { workflow: 'new' });
+    await openDmpSelectionDialog(page);
 
     const selectionDialog = page.getByTestId('dmp-selection-dialog');
     await expect(selectionDialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
