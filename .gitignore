@@ -24,6 +24,8 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+evidence-fn-*.json
+summary-fn-*.md
 
 # Tauri
 src-tauri/WixTools/
