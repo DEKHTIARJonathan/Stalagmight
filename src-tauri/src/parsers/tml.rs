@@ -676,49 +676,176 @@ fn linearize_section(
     }
 
     let shot_ids: std::collections::HashSet<i64> = shots.iter().map(|s| s.id).collect();
-    let shot_by_id: HashMap<i64, &&RawShot> = shots.iter().map(|s| (s.id, s)).collect();
+    let shot_by_id: HashMap<i64, &RawShot> = shots.iter().map(|s| (s.id, *s)).collect();
 
-    // Find chain roots: shots whose from_id is not in this section's shot set
+    // Preserve deterministic chain selection by ranking shots in encounter order.
+    let order_rank: HashMap<i64, usize> = shots
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id, i))
+        .collect();
+    let rank_key = |id: &i64| (order_rank.get(id).copied().unwrap_or(usize::MAX), *id);
+
+    // Successors constrained to this section, sorted deterministically.
+    let mut in_section_successors: HashMap<i64, Vec<i64>> = HashMap::new();
+    for shot in shots {
+        let mut succs: Vec<i64> = successors
+            .get(&shot.id)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|id| shot_ids.contains(id))
+            .collect();
+        succs.sort_by_key(&rank_key);
+        succs.dedup();
+        in_section_successors.insert(shot.id, succs);
+    }
+
+    // Find chain roots: shots whose from_id is not in this section's shot set.
     let mut roots: Vec<i64> = shots
         .iter()
         .filter(|s| !shot_ids.contains(&s.from_id))
         .map(|s| s.id)
         .collect();
-    roots.sort_unstable();
+    roots.sort_by_key(&rank_key);
 
-    if roots.is_empty() {
-        // Fallback: use first shot
-        roots.push(shots[0].id);
+    let needs_split = roots.len() > 1 || has_branching_within(shots, successors);
+    let mut visited: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut pending_starts = std::collections::VecDeque::new();
+    let mut chains: Vec<Vec<i64>> = Vec::new();
+
+    // Walk natural roots first.
+    for root_id in roots {
+        let chain = collect_linear_chain(
+            root_id,
+            &shot_ids,
+            &in_section_successors,
+            &mut visited,
+            &mut pending_starts,
+        );
+        if !chain.is_empty() {
+            chains.push(chain);
+        }
+    }
+
+    // Then walk branch starts discovered while traversing roots.
+    while let Some(start_id) = pending_starts.pop_front() {
+        let chain = collect_linear_chain(
+            start_id,
+            &shot_ids,
+            &in_section_successors,
+            &mut visited,
+            &mut pending_starts,
+        );
+        if !chain.is_empty() {
+            chains.push(chain);
+        }
+    }
+
+    // Guard pass for malformed/disconnected graphs:
+    // backtrack through in-section parents to find an upstream start.
+    let mut unvisited_ids: Vec<i64> = shots
+        .iter()
+        .map(|s| s.id)
+        .filter(|id| !visited.contains(id))
+        .collect();
+    unvisited_ids.sort_by_key(&rank_key);
+
+    for shot_id in unvisited_ids {
+        if visited.contains(&shot_id) {
+            continue;
+        }
+
+        let mut start = shot_id;
+        let mut seen_backtrack = std::collections::HashSet::new();
+        loop {
+            if !seen_backtrack.insert(start) {
+                tracing::warn!(
+                    section = section_name,
+                    shot_id = start,
+                    "Cycle detected while finding branch start; using cycle member as start"
+                );
+                break;
+            }
+
+            let Some(current) = shot_by_id.get(&start) else {
+                tracing::warn!(
+                    section = section_name,
+                    shot_id = start,
+                    "Shot missing while finding branch start; using current node as start"
+                );
+                break;
+            };
+
+            let parent_id = current.from_id;
+            if !shot_ids.contains(&parent_id) || visited.contains(&parent_id) {
+                break;
+            }
+            start = parent_id;
+        }
+
+        let chain = collect_linear_chain(
+            start,
+            &shot_ids,
+            &in_section_successors,
+            &mut visited,
+            &mut pending_starts,
+        );
+        if !chain.is_empty() {
+            chains.push(chain);
+        }
+
+        while let Some(extra_start) = pending_starts.pop_front() {
+            let extra_chain = collect_linear_chain(
+                extra_start,
+                &shot_ids,
+                &in_section_successors,
+                &mut visited,
+                &mut pending_starts,
+            );
+            if !extra_chain.is_empty() {
+                chains.push(extra_chain);
+            }
+        }
+    }
+
+    // Last-resort guard: ensure every shot is emitted exactly once.
+    let mut still_unvisited: Vec<i64> = shots
+        .iter()
+        .map(|s| s.id)
+        .filter(|id| !visited.contains(id))
+        .collect();
+    still_unvisited.sort_by_key(&rank_key);
+    for shot_id in still_unvisited {
+        let chain = collect_linear_chain(
+            shot_id,
+            &shot_ids,
+            &in_section_successors,
+            &mut visited,
+            &mut pending_starts,
+        );
+        if !chain.is_empty() {
+            tracing::warn!(
+                section = section_name,
+                shot_id,
+                "Recovered unvisited shot via final guard pass"
+            );
+            chains.push(chain);
+        }
     }
 
     let mut result = Vec::new();
-    let mut visited: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    let needs_split = roots.len() > 1 || has_branching_within(shots, successors);
-
-    for (branch_idx, root_id) in roots.iter().enumerate() {
-        let mut chain = Vec::new();
-        let mut current = *root_id;
-
-        loop {
-            if !visited.insert(current) {
-                break;
-            }
-            if let Some(&&shot) = shot_by_id.get(&current) {
-                chain.push(shot.clone());
-            }
-            // Find next shot in this section
-            let next = successors
-                .get(&current)
-                .into_iter()
-                .flatten()
-                .find(|id| shot_ids.contains(id) && !visited.contains(id));
-            match next {
-                Some(&next_id) => {
-                    // Check for branching: if there are multiple unvisited successors
-                    // in this section, we'll come back to them via roots or later passes
-                    current = next_id;
-                }
-                None => break,
+    for chain_ids in chains {
+        let mut chain = Vec::with_capacity(chain_ids.len());
+        for shot_id in chain_ids {
+            if let Some(shot) = shot_by_id.get(&shot_id) {
+                chain.push((*shot).clone());
+            } else {
+                tracing::warn!(
+                    section = section_name,
+                    shot_id,
+                    "Skipping missing shot while building linearized section"
+                );
             }
         }
 
@@ -726,11 +853,14 @@ fn linearize_section(
             continue;
         }
 
-        let name = if needs_split {
-            format!("{section_name} (branch {branch})", branch = branch_idx + 1)
+        let has_prior_chains = !result.is_empty();
+        let branch_number = result.len() + 1;
+        let name = if needs_split || has_prior_chains {
+            format!("{section_name} (branch {branch_number})")
         } else {
             section_name.to_string()
         };
+        let is_branch_split = needs_split || has_prior_chains;
 
         let first_shot = &chain[0];
         let last_shot = &chain[chain.len() - 1];
@@ -779,74 +909,59 @@ fn linearize_section(
             surveyor,
             date,
             color,
-            is_branch_split: needs_split,
-            start_depth,
-        });
-    }
-
-    // Catch any shots not reachable from roots
-    let remaining: Vec<&RawShot> = shots
-        .iter()
-        .filter(|s| !visited.contains(&s.id))
-        .copied()
-        .collect();
-
-    if !remaining.is_empty() {
-        let name = if needs_split || !result.is_empty() {
-            let n = result.len() + 1;
-            format!("{section_name} (branch {n})")
-        } else {
-            section_name.to_string()
-        };
-
-        let first_shot = remaining[0];
-        let last_shot = remaining[remaining.len() - 1];
-
-        let tml_shots: Vec<TmlShot> = remaining
-            .iter()
-            .map(|s| TmlShot {
-                id: s.id,
-                from_id: s.from_id,
-                shot_type: s.shot_type,
-                azimuth: s.azimuth,
-                length: s.length,
-                depth: s.depth,
-                depth_in: s.depth_in,
-                inclination: s.inclination,
-                left: s.left,
-                right: s.right,
-                up: s.up,
-                down: s.down,
-                comment: s.comment.clone(),
-                explorer: s.explorer.clone(),
-                date: s.date,
-                color: s.color.clone(),
-                excluded: s.excluded,
-                latitude: s.latitude,
-                longitude: s.longitude,
-                closure_to_id: s.closure_to_id,
-                section: s.section.clone(),
-            })
-            .collect();
-
-        let start_depth = all_shots
-            .get(&first_shot.from_id)
-            .map_or(0.0, |parent| parent.depth);
-
-        result.push(TmlSection {
-            name,
-            start_ariane_id: first_shot.from_id,
-            end_ariane_id: last_shot.id,
-            shots: tml_shots,
-            surveyor: first_shot.explorer.clone(),
-            date: first_shot.date,
-            color: first_shot.color.clone(),
-            is_branch_split: true,
+            is_branch_split,
             start_depth,
         });
     }
 
     result
+}
+
+/// Walk a single linear chain, queueing extra branch starts when a node has
+/// multiple unvisited successors within the same section.
+fn collect_linear_chain(
+    start_id: i64,
+    shot_ids: &std::collections::HashSet<i64>,
+    in_section_successors: &HashMap<i64, Vec<i64>>,
+    visited: &mut std::collections::HashSet<i64>,
+    pending_starts: &mut std::collections::VecDeque<i64>,
+) -> Vec<i64> {
+    if !shot_ids.contains(&start_id) || visited.contains(&start_id) {
+        return Vec::new();
+    }
+
+    let mut chain = Vec::new();
+    let mut current = start_id;
+
+    loop {
+        if !visited.insert(current) {
+            break;
+        }
+        chain.push(current);
+
+        let Some(successors) = in_section_successors.get(&current) else {
+            break;
+        };
+
+        let mut unvisited_successors = successors
+            .iter()
+            .copied()
+            .filter(|id| !visited.contains(id))
+            .collect::<Vec<_>>();
+
+        if unvisited_successors.is_empty() {
+            break;
+        }
+
+        let next_id = unvisited_successors.remove(0);
+        for extra in unvisited_successors {
+            pending_starts.push_back(extra);
+        }
+
+        current = next_id;
+    }
+
+    chain
 }
 
 /// Check if any shot in the group has multiple successors within the same group.
@@ -2016,6 +2131,87 @@ mod tests {
         assert!(sections.len() >= 2);
         assert!(sections.iter().all(|s| s.is_branch_split));
         assert!(sections[0].name.contains("branch"));
+    }
+
+    #[test]
+    fn test_branch_leftovers_preserve_parent_child_topology() {
+        // Interleaved order that used to trigger fallback flattening:
+        // 2 branches to (3, 6), and 3 branches to (4, 5). The 6→7→8 chain
+        // must stay connected and must not absorb shot 5.
+        let xml = wrap_xml(&[
+            tml_shot_xml(0, -1, "START", "Start"),
+            tml_shot_xml(1, 0, "REAL", "Section 1"),
+            tml_shot_xml(2, 1, "REAL", "Section 1"),
+            tml_shot_xml(3, 2, "REAL", "Section 1"),
+            tml_shot_xml(6, 2, "VIRTUAL", "Section 1"),
+            tml_shot_xml(4, 3, "REAL", "Section 1"),
+            tml_shot_xml(5, 3, "REAL", "Section 1"),
+            tml_shot_xml(7, 6, "REAL", "Section 1"),
+            tml_shot_xml(8, 7, "REAL", "Section 1"),
+        ].join("\n"));
+
+        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
+            (Vec::new(), FileMetadata::default())
+        });
+        let (sections, _) = build_sections(raw_shots);
+
+        let mut id_to_section: HashMap<i64, usize> = HashMap::new();
+        let mut seen = std::collections::HashSet::new();
+        for (si, sec) in sections.iter().enumerate() {
+            for shot in &sec.shots {
+                assert!(seen.insert(shot.id), "shot {} emitted multiple times", shot.id);
+                id_to_section.insert(shot.id, si);
+            }
+        }
+
+        for id in [1_i64, 2, 3, 4, 5, 6, 7, 8] {
+            assert!(id_to_section.contains_key(&id), "missing shot {id}");
+        }
+
+        let sec_6 = *id_to_section.get(&6).unwrap();
+        let sec_7 = *id_to_section.get(&7).unwrap();
+        let sec_8 = *id_to_section.get(&8).unwrap();
+        let sec_5 = *id_to_section.get(&5).unwrap();
+
+        assert_eq!(sec_6, sec_7, "6 and 7 must stay in the same branch");
+        assert_eq!(sec_7, sec_8, "7 and 8 must stay in the same branch");
+        assert_ne!(sec_5, sec_6, "shot 5 must not be merged into the 6→7→8 chain");
+
+        let chain_6_ids: Vec<i64> = sections[sec_6].shots.iter().map(|s| s.id).collect();
+        assert_eq!(chain_6_ids, vec![6, 7, 8], "expected preserved 6→7→8 chain");
+        assert_eq!(sections[sec_6].start_ariane_id, 2);
+        assert_eq!(sections[sec_5].start_ariane_id, 3);
+    }
+
+    #[test]
+    fn test_malformed_cycle_and_self_loop_are_guarded() {
+        // Malformed graph with a 2<->3 cycle and a self-loop at 4.
+        // Parser should still terminate and emit each shot exactly once.
+        let xml = wrap_xml(&[
+            tml_shot_xml(0, -1, "START", "Start"),
+            tml_shot_xml(1, 0, "REAL", "Section 1"),
+            tml_shot_xml(2, 3, "REAL", "Section 1"),
+            tml_shot_xml(3, 2, "REAL", "Section 1"),
+            tml_shot_xml(4, 4, "REAL", "Section 1"),
+        ].join("\n"));
+
+        let (raw_shots, _) = parse_raw_shots(&xml).unwrap_or_else(|_| {
+            (Vec::new(), FileMetadata::default())
+        });
+        let (sections, _) = build_sections(raw_shots);
+
+        let ids: Vec<i64> = sections
+            .iter()
+            .flat_map(|s| s.shots.iter().map(|shot| shot.id))
+            .collect();
+        let unique: std::collections::HashSet<i64> = ids.iter().copied().collect();
+
+        assert_eq!(ids.len(), 4, "all non-START shots should be emitted");
+        assert_eq!(unique.len(), 4, "no shot should be emitted more than once");
+        assert!(unique.contains(&1));
+        assert!(unique.contains(&2));
+        assert!(unique.contains(&3));
+        assert!(unique.contains(&4));
     }
 
     // -------------------------------------------------------------------
