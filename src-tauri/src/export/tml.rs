@@ -525,7 +525,9 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                         from_id: prev_id,
                         shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
                         section: split_name.clone(),
-                        azimuth: normalize_azimuth(shot.azimuth_out),
+                        // Reverse leg goes from station (i+1) -> i, so its
+                        // heading must be the forward azimuth flipped by 180°.
+                        azimuth: normalize_azimuth(shot.azimuth_in + 180.0),
                         length: shot.length,
                         depth: reversed_depth_out,
                         depth_in: depth_in_val,
@@ -1475,7 +1477,7 @@ mod tests {
                 },
                 ShotData {
                     azimuth_in: 20.0,
-                    azimuth_out: 220.0,
+                    azimuth_out: 15.0,
                     length: 1.0,
                     depth_in: 1.0,
                     depth_out: 2.0,
@@ -1514,8 +1516,8 @@ mod tests {
             "forward branch should keep original azimuth at datum"
         );
         assert!(
-            from_start.iter().any(|s| (s.azimuth - 220.0).abs() < f64::EPSILON),
-            "reverse branch should use backsight azimuth of prefix shot"
+            from_start.iter().any(|s| (s.azimuth - 200.0).abs() < f64::EPSILON),
+            "reverse branch should invert forward azimuth of prefix shot"
         );
     }
 
