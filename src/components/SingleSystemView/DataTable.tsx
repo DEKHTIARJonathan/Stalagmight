@@ -314,6 +314,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const handleRowDoubleClick = useCallback(
     (shot: Shot, _index: number) => {
       if (selectedSection) {
+        setSource('data-table');
         triggerPanToShot(selectedSection.id, shot.id);
       }
     },
@@ -537,6 +538,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   const handleStationRowDoubleClick = useCallback(
     (row: StationRow, _index: number) => {
+      setSource('data-table');
       triggerCenterOnStation(row.station_ref);
     },
     [triggerCenterOnStation]

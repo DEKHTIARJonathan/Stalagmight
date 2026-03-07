@@ -495,19 +495,34 @@ export const useUIStore = create<UIStore>((set) => ({
   setMapCenter: (mapCenter) => set({ mapCenter }),
   setMapZoom: (mapZoom) => set({ mapZoom }),
   requestFitToBounds: false as false | 'animate' | 'snap',
-  triggerFitToBounds: (options?) => set({ requestFitToBounds: options?.snap ? 'snap' : 'animate' }),
+  triggerFitToBounds: (options?) => {
+    trackAction('nav.fit-to-bounds');
+    set({ requestFitToBounds: options?.snap ? 'snap' : 'animate' });
+  },
   clearFitToBoundsRequest: () => set({ requestFitToBounds: false }),
   requestZoomToSection: null,
-  triggerZoomToSection: (sectionId: SectionId) => set({ requestZoomToSection: sectionId }),
+  triggerZoomToSection: (sectionId: SectionId) => {
+    trackAction('nav.zoom-to-section');
+    set({ requestZoomToSection: sectionId });
+  },
   clearZoomToSectionRequest: () => set({ requestZoomToSection: null }),
   requestPanToShot: null,
-  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => set({ requestPanToShot: { sectionId, shotId } }),
+  triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => {
+    trackAction('nav.pan-to-shot');
+    set({ requestPanToShot: { sectionId, shotId } });
+  },
   clearPanToShotRequest: () => set({ requestPanToShot: null }),
   requestCenterOnStation: null,
-  triggerCenterOnStation: (ref: StationRef) => set({ requestCenterOnStation: ref }),
+  triggerCenterOnStation: (ref: StationRef) => {
+    trackAction('nav.center-on-station');
+    set({ requestCenterOnStation: ref });
+  },
   clearCenterOnStationRequest: () => set({ requestCenterOnStation: null }),
   requestCenterOnShot: null,
-  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => set({ requestCenterOnShot: { sectionId, shotId } }),
+  triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => {
+    trackAction('nav.center-on-shot');
+    set({ requestCenterOnShot: { sectionId, shotId } });
+  },
   clearCenterOnShotRequest: () => set({ requestCenterOnShot: null }),
 
   // Display toggles (initial values from DISPLAY_DEFAULTS - single source of truth)
