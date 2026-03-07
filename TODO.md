@@ -218,7 +218,7 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 | Fix segment merge orphaning section | ✅ | Fixed overlap/skip placement races and merge-station persistence so confirmed suggestions stay attached to the correct segment/station during final placement *(~line 359)* |
 | Fix depth gradient colors overridden by theme | ✅ | Depth gradient now uses the same dark-theme shallow/deep endpoints across all themes, preventing theme-specific gradient drift *(~line 675)* |
 | Add per-shot depth gradient | ✅ | Depth mode now renders shot-specific segmented color transitions between `depth_in` and `depth_out`, preserving normal shot visibility outside depth mode *(~line 677)* |
-| Fix Ariane export zero datum placement | ❌ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
+| Fix Ariane export zero datum placement | ✅ | Zero datum placed incorrectly, nothing else exported; floating shots silently dropped *(~line 827)* |
 | Fix question mark tooltip | ✅ | Replaced with themed custom hover tooltip for closure-adjustment `?` help icon |
 | Fix duplicate save location on "Save now" | ✅ | Save-now now performs a single write to the selected path; default/autosave flow no longer duplicates files |
 
