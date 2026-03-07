@@ -27,6 +27,9 @@ let _dialogCompleted: string | null = null;
 /** When true, trackAction/trackCommand calls are suppressed (for programmatic UI changes). */
 let _silent = false;
 
+/** Current workflow state for dwell time tracking. */
+let _dwellState: { key: string; since: number } | null = null;
+
 /** Last undoable command — for regret detection. */
 let _lastUndoable: { command: string; time: number } | null = null;
 const REGRET_WINDOW_MS = 15_000;
@@ -98,6 +101,32 @@ export function consumeSource(): string {
 export function withTrackingSuppressed(fn: () => void): void {
   _silent = true;
   try { fn(); } finally { _silent = false; }
+}
+
+/**
+ * Switch the dwell-time state. Flushes accumulated seconds on the previous
+ * state and starts timing the new one. Passing the same key is a no-op.
+ */
+export function setDwellState(key: string): void {
+  if (_dwellState && _dwellState.key === key) return;
+  const now = Date.now();
+  if (_dwellState) {
+    const secs = Math.round((now - _dwellState.since) / 1000);
+    if (secs > 0) {
+      counts[`dwell.${_dwellState.key}`] = (counts[`dwell.${_dwellState.key}`] || 0) + secs;
+    }
+  }
+  _dwellState = { key, since: now };
+}
+
+/** Flush the current dwell state's accumulated time (e.g., before app close). */
+function flushDwell(): void {
+  if (!_dwellState) return;
+  const secs = Math.round((Date.now() - _dwellState.since) / 1000);
+  if (secs > 0) {
+    counts[`dwell.${_dwellState.key}`] = (counts[`dwell.${_dwellState.key}`] || 0) + secs;
+  }
+  _dwellState = { ..._dwellState, since: Date.now() };
 }
 
 /** Track a user action with source. */
@@ -200,6 +229,7 @@ export async function flushTelemetry(): Promise<void> {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
+  flushDwell();
   await flushToRust();
 
   if (available) {

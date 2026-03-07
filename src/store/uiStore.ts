@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState } from '../utils/telemetry';
+import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState } from '../utils/telemetry';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -320,7 +320,10 @@ export type DisplayToggleKey =
 export const useUIStore = create<UIStore>((set) => ({
   // View state
   view: 'global',
-  setView: (view) => set({ view }),
+  setView: (view) => {
+    setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
+    set({ view });
+  },
 
   // Tool state
   activeTool: 'select',
@@ -328,6 +331,9 @@ export const useUIStore = create<UIStore>((set) => ({
   setActiveTool: (activeTool) =>
     set((state) => {
       trackAction(`tool.${activeTool}`);
+      if (!useUIStore.getState().activeDialog && !useUIStore.getState().placementMode) {
+        setDwellState(`tool.${activeTool}`);
+      }
       // Track last-used subtool per group
       const group = getGroupForTool(activeTool);
       const lastSubtoolByGroup = group
@@ -719,11 +725,13 @@ export const useUIStore = create<UIStore>((set) => ({
       checkDialogCancel(prev);
     }
     trackAction(`dialog.${activeDialog}`);
+    setDwellState(`dialog.${activeDialog}`);
     set({ activeDialog, dialogData, dmpImportWizardPhase: null });
   },
   closeDialog: () => {
-    const dialogName = useUIStore.getState().activeDialog;
+    const { activeDialog: dialogName, activeTool, placementMode } = useUIStore.getState();
     if (dialogName) checkDialogCancel(dialogName);
+    setDwellState(placementMode ? 'placement' : `tool.${activeTool}`);
     set({ activeDialog: null, dialogData: {}, dmpImportWizardPhase: null });
   },
   setDmpImportWizardPhase: (dmpImportWizardPhase) => set({ dmpImportWizardPhase }),
@@ -738,7 +746,8 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Placement mode state
   placementMode: null,
-  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) =>
+  startPlacementMode: (sectionData, alignStationIndex, onComplete, onCancel, additionalSections) => {
+    setDwellState('placement');
     set({
       placementMode: {
         sectionData,
@@ -749,7 +758,8 @@ export const useUIStore = create<UIStore>((set) => ({
         ...(onCancel !== undefined && { onCancel }),
         ...(additionalSections !== undefined && { additionalSections }),
       },
-    }),
+    });
+  },
   updatePlacementCursor: (position) =>
     set((state) =>
       state.placementMode
@@ -772,10 +782,14 @@ export const useUIStore = create<UIStore>((set) => ({
           }
         : state
     ),
-  cancelPlacementMode: () => set({ placementMode: null }),
+  cancelPlacementMode: () => {
+    setDwellState(`tool.${useUIStore.getState().activeTool}`);
+    set({ placementMode: null });
+  },
   confirmPlacement: (): PlacementModeState | null => {
     const currentPlacement = useUIStore.getState().placementMode;
     // Clear placement mode and return the state for the caller to use
+    setDwellState(`tool.${useUIStore.getState().activeTool}`);
     set({ placementMode: null });
     return currentPlacement;
   },
