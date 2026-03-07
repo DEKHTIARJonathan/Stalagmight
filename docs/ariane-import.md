@@ -26,7 +26,7 @@ Both formats use the same XML schema. TML files use long element names (`Azimut`
 - Section color (converted from Ariane's integer RGB format)
 
 ### Per-shot
-- Azimuth (normalized to 0–360)
+- Azimuth (normalized to 0–360; Ariane stores a single forward azimuth, not a backsight pair)
 - Length
 - Depth in / depth out
 - Inclination
@@ -75,6 +75,10 @@ Ariane stores survey data as a flat list of shots with `FromID` linkage. The par
 ## Unit Conversion
 
 When the file specifies imperial units, lengths and LRUD values are converted from feet to meters and depths from feet to meters during parsing. All data enters Stalagmight in metric.
+
+## Azimuth Semantics
+
+Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates that value into internal `azimuth_in` and `azimuth_out` on import for model compatibility, but `azimuth_out` must not be interpreted as an Ariane backsight measurement.
 
 ## Implementation
 
