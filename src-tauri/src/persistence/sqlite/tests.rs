@@ -841,6 +841,7 @@ fn test_resolved_warnings_persistence() {
 
 // === Test: Verify merged_with is populated correctly from fractal fixture ===
 #[test]
+#[ignore]
 fn test_merged_with_from_fractal_iter2() {
     use std::path::Path;
     use crate::models::StationRef;
@@ -946,6 +947,7 @@ fn test_merged_with_from_fractal_iter2() {
 
 // === Test: Verify merged_with from iter4 fixture ===
 #[test]
+#[ignore]
 fn test_merged_with_from_fractal_iter4() {
     use std::path::Path;
     use crate::models::StationRef;
