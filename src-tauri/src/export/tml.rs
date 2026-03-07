@@ -525,9 +525,10 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                         from_id: prev_id,
                         shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
                         section: split_name.clone(),
-                        // Reverse leg goes from station (i+1) -> i, so its
-                        // heading must be the forward azimuth flipped by 180°.
-                        azimuth: normalize_azimuth(shot.azimuth_in + 180.0),
+                        // Reverse leg goes from station (i+1) -> i.
+                        // Prefer a plausible backsight azimuth when present; otherwise
+                        // force the forward azimuth to its reciprocal (+180°).
+                        azimuth: reverse_pre_zero_azimuth(shot.azimuth_in, shot.azimuth_out),
                         length: shot.length,
                         depth: reversed_depth_out,
                         depth_in: depth_in_val,
@@ -865,6 +866,27 @@ fn normalize_azimuth(azimuth: f64) -> f64 {
     azimuth.rem_euclid(360.0)
 }
 
+fn angular_distance_deg(a: f64, b: f64) -> f64 {
+    let diff = (a - b).rem_euclid(360.0);
+    if diff > 180.0 { 360.0 - diff } else { diff }
+}
+
+/// Compute azimuth for the generated pre-zero-datum reverse segment.
+///
+/// Ariane exports often have no backsight (`azimuth_out == azimuth_in`), in which
+/// case we must explicitly flip by 180°. If a real backsight exists and is close
+/// to that reciprocal heading, prefer it to preserve measured backsight values.
+fn reverse_pre_zero_azimuth(azimuth_in: f64, azimuth_out: f64) -> f64 {
+    let reciprocal = normalize_azimuth(azimuth_in + 180.0);
+    let backsight = normalize_azimuth(azimuth_out);
+
+    if angular_distance_deg(reciprocal, backsight) <= 45.0 {
+        backsight
+    } else {
+        reciprocal
+    }
+}
+
 /// Build a parent map from station_merges.
 ///
 /// Returns: child_section_id → (parent_station_ref, child_station_index)
@@ -1079,6 +1101,20 @@ mod tests {
         assert_eq!(format_f64(3.14159), "3.14159");
         assert_eq!(format_f64(1.5), "1.5");
         assert_eq!(format_f64(-2.0), "-2.0");
+    }
+
+    #[test]
+    fn test_reverse_pre_zero_azimuth_forces_reciprocal_without_backsight() {
+        // Ariane-origin shots often carry identical in/out azimuths.
+        assert!((reverse_pre_zero_azimuth(42.0, 42.0) - 222.0).abs() < 1e-9);
+        assert!((reverse_pre_zero_azimuth(350.0, 350.0) - 170.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_reverse_pre_zero_azimuth_prefers_plausible_backsight() {
+        // When azimuth_out looks like a measured reciprocal heading, keep it.
+        assert!((reverse_pre_zero_azimuth(40.0, 219.5) - 219.5).abs() < 1e-9);
+        assert!((reverse_pre_zero_azimuth(315.0, 134.2) - 134.2).abs() < 1e-9);
     }
 
     #[test]
