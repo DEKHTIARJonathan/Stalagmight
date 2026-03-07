@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
-import { setSource, trackAction } from '../../utils/telemetry';
+import { setSource, trackAction, trackDialogComplete } from '../../utils/telemetry';
 
 interface ContextMenuItem {
   label: string;
@@ -123,6 +123,7 @@ export default function ContextMenu() {
           action: () => {
             setActiveTool('merge');
             setMergeStationA(target.ref);
+            trackDialogComplete('context-menu');
             closeDialog();
           },
         },
@@ -140,6 +141,7 @@ export default function ContextMenu() {
                 return direct || reverse;
               }) ?? false;
               trackAction('unmerge', 'context-menu');
+              trackDialogComplete('context-menu');
               closeDialog();
               void (isDirectMerge
                 ? unmergeStationPair(target.ref, mergeTarget)
@@ -161,6 +163,7 @@ export default function ContextMenu() {
           action: () => {
             if (directClosures.length === 1) {
               trackAction('remove-closure', 'context-menu');
+              trackDialogComplete('context-menu');
               closeDialog();
               void removeLoopClosure(directClosures[0]!.closureId);
               return;
@@ -277,6 +280,7 @@ export default function ContextMenu() {
           action: async () => {
             trackAction('toggle-reference', 'context-menu');
             await setShotReference(target.sectionId, target.shotId, !shot?.is_reference);
+            trackDialogComplete('context-menu');
             closeDialog();
           },
         },
@@ -375,6 +379,7 @@ export default function ContextMenu() {
           label: 'Zoom to Section',
           action: () => {
             triggerZoomToSection(target.sectionId);
+            trackDialogComplete('context-menu');
             closeDialog();
           },
         },

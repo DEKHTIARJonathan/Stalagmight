@@ -6,7 +6,7 @@ import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -81,6 +81,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       const result = await executeTmlImport(filePath, fileHash, includeExcluded, commentsOnStations);
 
       if (!result.success) {
+        trackDialogComplete('tml-import');
         closeDialog();
         setView('single');
         triggerFitToBounds();
@@ -109,6 +110,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         }
       }
 
+      trackDialogComplete('tml-import');
       closeDialog();
       setView('single');
       triggerFitToBounds();

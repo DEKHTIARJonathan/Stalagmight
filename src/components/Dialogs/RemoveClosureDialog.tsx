@@ -6,6 +6,7 @@ import type { StationRef } from '../../types/project';
 import { formatStationId } from '../../utils/formatters';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 interface ClosureChoice {
   closureId: bigint;
@@ -81,6 +82,7 @@ export default function RemoveClosureDialog() {
         setError(result.error ?? 'Failed to remove closure');
         return;
       }
+      trackDialogComplete('remove-closure');
       closeDialog();
     } catch (e) {
       setError(getErrorMessage(e, 'Failed to remove closure'));

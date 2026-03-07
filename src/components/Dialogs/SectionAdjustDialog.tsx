@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { trackDialogComplete } from '../../utils/telemetry';
 import type { SectionId } from '../../types/project';
 
 /**
@@ -106,6 +107,7 @@ export default function SectionAdjustDialog() {
           }
         }
       }
+      trackDialogComplete('section-adjust');
       closeDialog();
     } catch (e) {
       setError(getErrorMessage(e, 'Failed to adjust section position'));

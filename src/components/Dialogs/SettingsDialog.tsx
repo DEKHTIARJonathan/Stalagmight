@@ -28,6 +28,7 @@ import {
   getThemedSectionColorDefaults,
 } from '../../types/config';
 import type { ResolvedTheme } from '../../store/uiStore';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -429,6 +430,7 @@ export default function SettingsDialog() {
 
     const result = await updateConfig(localConfig);
     if (result.success) {
+      trackDialogComplete('settings');
       closeDialog();
     }
   }, [localConfig, isDirty, hasAnyError, updateConfig, closeDialog]);
@@ -453,6 +455,7 @@ export default function SettingsDialog() {
     if (isDirty) {
       setShowUnsavedDialog(true);
     } else {
+      trackDialogComplete('settings');
       closeDialog();
     }
   }, [isDirty, closeDialog, showAbout, showResetConfirm, showUnsavedDialog]);
@@ -464,6 +467,7 @@ export default function SettingsDialog() {
     const result = await updateConfig(localConfig);
     if (result.success) {
       setShowUnsavedDialog(false);
+      trackDialogComplete('settings');
       closeDialog();
     }
   }, [localConfig, updateConfig, closeDialog]);
@@ -471,6 +475,7 @@ export default function SettingsDialog() {
   // Handle custom unsaved dialog - Discard
   const handleDiscardAndClose = useCallback(() => {
     setShowUnsavedDialog(false);
+    trackDialogComplete('settings');
     closeDialog();
   }, [closeDialog]);
 

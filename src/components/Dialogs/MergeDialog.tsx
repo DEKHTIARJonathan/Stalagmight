@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
@@ -55,6 +56,7 @@ export default function MergeDialog() {
         : await mergeStations(stationA, stationB);
       if (result.success) {
         clearMergeStations();
+        trackDialogComplete('merge');
         closeDialog();
       } else {
         setError(result.error ?? 'Failed to merge stations');

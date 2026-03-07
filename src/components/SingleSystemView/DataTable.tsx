@@ -262,6 +262,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
     // When entering cell edit mode, set selection to this shot
     internalSelectionRef.current = true;
+    setSource('data-table');
     setSelection({
       type: 'shot',
       sectionId: selectedSection.id,
@@ -300,6 +301,7 @@ export default function DataTable({ sections }: DataTableProps) {
     (shot: Shot, _index: number) => {
       if (selectedSection) {
         internalSelectionRef.current = true;
+        setSource('data-table');
         setSelection({
           type: 'shot',
           sectionId: selectedSection.id,
@@ -369,6 +371,7 @@ export default function DataTable({ sections }: DataTableProps) {
       const newSectionId = Number(value);
       // Manual dropdown change - select the section and clear any shot selection
       setSelectedSectionId(newSectionId);
+      setSource('data-table');
       setSelection({ type: 'section', sectionId: newSectionId });
     },
     [setSelection]
@@ -531,6 +534,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const handleStationRowClick = useCallback(
     (row: StationRow, _index: number) => {
       internalSelectionRef.current = true;
+      setSource('data-table');
       setSelection({ type: 'station', stationRef: row.station_ref });
     },
     [setSelection]

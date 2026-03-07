@@ -166,6 +166,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       }
 
       const mouseEvent = event.originalEvent;
+      setSource('map');
 
       switch (activeTool) {
         case 'select': {
@@ -183,7 +184,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         case 'delete': {
           // For now, we can't delete individual stations - need to delete shots
           // Show a message or open a dialog explaining this
-          setSource('map');
           openDialog('confirm-delete', {
             type: 'station',
             stationRef: ref,
@@ -228,7 +228,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'draw': {
-          setSource('map');
           setDrawFromStation(ref);
           openDialog('draw-shot', { fromStation: ref });
           break;
@@ -297,7 +296,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             const targetComment = mcStation?.comment ?? '';
             if (targetComment) {
               // Target has comment — open swap dialog
-              setSource('map');
               openDialog('swap-comments', {
                 source: moveCommentSource,
                 target: { type: 'station', stationRef: ref, comment: targetComment },
@@ -353,6 +351,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       }
 
       const mouseEvent = event.originalEvent;
+      setSource('map');
 
       switch (activeTool) {
         case 'select': {
@@ -368,7 +367,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'delete': {
-          setSource('map');
           openDialog('confirm-delete', {
             type: 'shot',
             sectionId,
@@ -455,7 +453,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             const targetComment = mcShot?.comment ?? '';
             if (targetComment) {
               // Target has comment — open swap dialog
-              setSource('map');
               openDialog('swap-comments', {
                 source: moveCommentSource,
                 target: { type: 'shot', sectionId, shotId, comment: targetComment },
@@ -617,6 +614,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       if (isNonInteractiveTool(activeTool)) return;
 
       if (target) {
+        setSource('map');
         // Select the target first
         if (target.type === 'station') {
           setSelection({ type: 'station', stationRef: target.ref });
@@ -625,7 +623,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         // Open context menu
-        setSource('map');
         openDialog('context-menu', {
           target,
           position: { x: event.originalEvent.clientX, y: event.originalEvent.clientY },

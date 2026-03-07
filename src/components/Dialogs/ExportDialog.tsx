@@ -13,6 +13,7 @@ import ExportPreview, { type ExportTheme, type DepthPresetColors } from './Expor
 import type { ExportImageOptions, ImageFormat, DepthPreset } from '../../types/commands';
 import type { LoadingProgressPayload } from '../../types/loading';
 import { ensureExtension, exportSaveFilters } from '../../utils/fileDialogs';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 /** Phase label mapping for export phases (matches backend LoadingPhase) */
 const EXPORT_PHASE_LABELS: Record<string, string> = {
@@ -245,6 +246,7 @@ export default function ExportDialog() {
       }
 
       if (isMountedRef.current) {
+        trackDialogComplete('export');
         closeDialog();
       }
     } catch (e) {

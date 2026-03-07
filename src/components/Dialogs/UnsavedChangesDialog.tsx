@@ -2,6 +2,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 export default function UnsavedChangesDialog() {
   const { closeDialog, setView } = useUIStore();
@@ -10,6 +11,7 @@ export default function UnsavedChangesDialog() {
   const handleDiscard = async () => {
     // Concurrency guard is handled at store level (store.isClosing)
     // This prevents double-click and race conditions with Back button
+    trackDialogComplete('unsaved-changes');
     closeDialog();
     const result = await closeProject();
     if (result.success) {

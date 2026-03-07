@@ -6,7 +6,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { SECTION_COLORS } from '../../utils/colors';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 /**
  * Step 2 dialog for GPX import.
@@ -137,6 +137,7 @@ export default function GpxPlacementDialog() {
         depthInverted
       );
 
+      trackDialogComplete('gpx-placement');
       closeDialog();
       setView('single');
       triggerFitToBounds();

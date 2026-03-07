@@ -61,6 +61,7 @@ export default function DetailPanel() {
             warnings={warnings}
             project={project}
             onWarningClick={(warning) => {
+              setSource('detail-panel');
               setSelection({
                 type: 'shot',
                 sectionId: warning.sectionId,
@@ -349,6 +350,7 @@ function StationDetail({ station }: { station: Station }) {
     if (section && prevShotExists) {
       const shot = section.shots[prevShotIndex];
       if (shot) {
+        setSource('detail-panel');
         setSelection({ type: 'shot', sectionId, shotId: shot.id });
       }
     }
@@ -358,16 +360,19 @@ function StationDetail({ station }: { station: Station }) {
     if (section && nextShotExists) {
       const shot = section.shots[nextShotIndex];
       if (shot) {
+        setSource('detail-panel');
         setSelection({ type: 'shot', sectionId, shotId: shot.id });
       }
     }
   };
 
   const handleSelectSection = () => {
+    setSource('detail-panel');
     setSelection({ type: 'section', sectionId });
   };
 
   const handleSelectMergedStation = (ref: { section_id: number; station_index: number }) => {
+    setSource('detail-panel');
     setSelection({
       type: 'station',
       stationRef: { section_id: ref.section_id, station_index: ref.station_index },
@@ -658,6 +663,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   };
 
   const handleSelectStartStation = () => {
+    setSource('detail-panel');
     setSelection({
       type: 'station',
       stationRef: { section_id: section.id, station_index: startStationIndex },
@@ -665,6 +671,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   };
 
   const handleSelectEndStation = () => {
+    setSource('detail-panel');
     setSelection({
       type: 'station',
       stationRef: { section_id: section.id, station_index: endStationIndex },
@@ -672,6 +679,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   };
 
   const handleSelectSection = () => {
+    setSource('detail-panel');
     setSelection({ type: 'section', sectionId: section.id });
   };
 
@@ -872,6 +880,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   );
 
   const handleSelectFirstStation = () => {
+    setSource('detail-panel');
     setSelection({
       type: 'station',
       stationRef: { section_id: section.id, station_index: firstStationIndex },
@@ -879,6 +888,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   };
 
   const handleSelectLastStation = () => {
+    setSource('detail-panel');
     setSelection({
       type: 'station',
       stationRef: { section_id: section.id, station_index: lastStationIndex },

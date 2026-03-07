@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 export default function OverwriteConfirmDialog() {
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
@@ -14,6 +15,7 @@ export default function OverwriteConfirmDialog() {
 
   const handleConfirm = async () => {
     if (!path) {
+      trackDialogComplete('overwrite-confirm');
       closeDialog();
       return;
     }
@@ -22,9 +24,11 @@ export default function OverwriteConfirmDialog() {
     try {
       const result = await saveProject(path);
       if (result && !result.success && result.error) {
+        trackDialogComplete('overwrite-confirm');
         closeDialog();
         showDialog('error', { message: result.error, title: 'Save Failed' });
       } else {
+        trackDialogComplete('overwrite-confirm');
         closeDialog();
       }
     } finally {

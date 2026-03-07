@@ -9,6 +9,7 @@ import type { ProjectMetadata } from '../../types/project';
 import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 /**
  * MergeProjectsDialog allows users to merge multiple projects into a single new project.
@@ -99,6 +100,7 @@ export default function MergeProjectsDialog() {
       const result = await mergeProjects(sourcePaths, finalPath, outputName.trim(), archiveOriginals);
 
       if (result.success) {
+        trackDialogComplete('merge-projects');
         closeDialog();
         // Open the merged project if requested
         // loadProject handles view switching internally
