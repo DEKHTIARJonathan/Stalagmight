@@ -14,6 +14,7 @@ import DetailPanel from './DetailPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
+import { withTrackingSuppressed } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -100,11 +101,11 @@ export default function SingleSystemView() {
       if (shouldShowSectionsPanel) {
         if (!sectionsPanelOpen) {
           sectionsPanelOpenedByOnboardingRef.current = true;
-          toggleSectionsPanel();
+          withTrackingSuppressed(() => toggleSectionsPanel());
         }
       } else if (sectionsPanelOpenedByOnboardingRef.current && sectionsPanelOpen) {
         sectionsPanelOpenedByOnboardingRef.current = false;
-        toggleSectionsPanel();
+        withTrackingSuppressed(() => toggleSectionsPanel());
       } else if (!shouldShowSectionsPanel) {
         sectionsPanelOpenedByOnboardingRef.current = false;
       }
@@ -112,11 +113,11 @@ export default function SingleSystemView() {
       if (shouldShowDetailPanel) {
         if (!detailPanelOpen) {
           detailPanelOpenedByOnboardingRef.current = true;
-          toggleDetailPanel();
+          withTrackingSuppressed(() => toggleDetailPanel());
         }
       } else if (detailPanelOpenedByOnboardingRef.current && detailPanelOpen) {
         detailPanelOpenedByOnboardingRef.current = false;
-        toggleDetailPanel();
+        withTrackingSuppressed(() => toggleDetailPanel());
       } else if (!shouldShowDetailPanel) {
         detailPanelOpenedByOnboardingRef.current = false;
       }
@@ -124,14 +125,14 @@ export default function SingleSystemView() {
       if (shouldShowDataTable) {
         if (!dataTableOpen) {
           dataTableOpenedByOnboardingRef.current = true;
-          toggleDataTable();
+          withTrackingSuppressed(() => toggleDataTable());
         }
         return;
       }
 
       if (dataTableOpenedByOnboardingRef.current && dataTableOpen) {
         dataTableOpenedByOnboardingRef.current = false;
-        toggleDataTable();
+        withTrackingSuppressed(() => toggleDataTable());
         return;
       }
 

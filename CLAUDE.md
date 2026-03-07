@@ -79,6 +79,7 @@ Implementation plans are stored in `docs/plans/`.
 | [Configuration](docs/configuration.md) | Config file locations, options, logging |
 | [Saving](docs/saving.md) | Save pipeline, auto-save, undo persistence, atomic writes |
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
+| [Telemetry](docs/telemetry.md) | Event reference, source tracking, adding telemetry to new features |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
 | [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
 | [macOS Build](docs/macos-build.md) | macOS build scripts, Scaleway remote builds, known issues |

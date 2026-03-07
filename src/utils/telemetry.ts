@@ -24,6 +24,9 @@ let _sourceTimer: ReturnType<typeof setTimeout> | null = null;
 /** Dialog completion flag — set before closeDialog() in success paths. */
 let _dialogCompleted: string | null = null;
 
+/** When true, trackAction/trackCommand calls are suppressed (for programmatic UI changes). */
+let _silent = false;
+
 /** Last undoable command — for regret detection. */
 let _lastUndoable: { command: string; time: number } | null = null;
 const REGRET_WINDOW_MS = 15_000;
@@ -91,8 +94,15 @@ export function consumeSource(): string {
   return s;
 }
 
+/** Run a callback with tracking suppressed (for programmatic UI changes like onboarding). */
+export function withTrackingSuppressed(fn: () => void): void {
+  _silent = true;
+  try { fn(); } finally { _silent = false; }
+}
+
 /** Track a user action with source. */
 export function trackAction(action: string, source?: string): void {
+  if (_silent) return;
   const src = source ?? consumeSource();
   const key = `action.${action}:${src}`;
   counts[key] = (counts[key] || 0) + 1;
