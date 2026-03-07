@@ -3279,6 +3279,7 @@ export default function DmpNewImportDialog({
     startSegmentPlacement(segmentQueue, segmentAnchor, [...directPlacementsRef.current]);
 
     // Close dialog so user can interact with the map
+    trackDialogComplete('dmp-import-new');
     closeDialog();
   }, [
     currentSegment,
