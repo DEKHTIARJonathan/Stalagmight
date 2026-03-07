@@ -7,6 +7,30 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Added
+- Middle-click panning everywhere Ctrl+drag pan is supported
+- Targeted station unmerge and loop-closure removal from map context menu and detail panel
+- TML/TMLU export warning when sections are not connected to a zero datum
+- Guided onboarding overlays for DMP import, zero-datum setup, and survey workspace
+- Thin collapse bars for workspace panels
+- DMP manual placement metadata editing
+
+### Fixed
+- Ariane export: round-trip topology, closure parity, pre-zero-datum azimuth reversal, azimuth_out semantics, and child sections with non-zero merge station
+- DMP import: segment detachment during overlap/skip, stale merge-station defaults, skipped-suggestion placement mismatch, and duplicate sections after manual placement
+- Per-shot depth gradient rendering with consistent dark-theme colors across all themes
+- Themed hover tooltip for closure-adjustment help icon (no longer clipped)
+- Save-now flow performs a single write to the selected path
+- Default project autosave path moved to Documents/stalagmight
+- Non-map controls locked during segment placement to prevent stale state
+
+### Changed
+- Renamed "reference shot" to "jump line" in user-facing labels
+- Removed legacy DMP section-config import workflow
+- Redesigned onboarding guided flows with visual tool references
+- Import dialog "Place on Map" promoted to primary CTA
+- Suppressed ts-rs serde attribute warnings in build output
+
 ## [0.1.1] - 2026-03-03
 
 ### Fixed
