@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { setSource } from '../../utils/telemetry';
 import { formatDate, formatRelativeTime, formatNumber } from '../../i18n/format';
 import type { CommandResult, UndoHistoryItem, PreviewData } from '../../types/commands';
 import {
@@ -559,6 +560,7 @@ export default function UndoHistoryDropdown({
 
   // Handle item click with index validation - closes dropdown after action
   const handleItemClick = useCallback(async (index: number) => {
+    setSource('toolbar');
     // Validate index before sending to backend
     if (!Number.isInteger(index) || index < 0) {
       console.error('Invalid undo/redo index:', index);
@@ -698,6 +700,7 @@ export default function UndoHistoryDropdown({
   // to chain refresh logic. onSingleAction is fire-and-forget and used only for the closed-dropdown path.
   const handleButtonClick = useCallback(() => {
     if (disabledRef.current) return;
+    setSource('toolbar');
 
     if (isOpenRef.current) {
       // Dropdown is open: perform single undo/redo and refresh (stay open)

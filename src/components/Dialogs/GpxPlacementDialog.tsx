@@ -6,6 +6,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
 import { SECTION_COLORS } from '../../utils/colors';
+import { setSource } from '../../utils/telemetry';
 
 /**
  * Step 2 dialog for GPX import.
@@ -95,6 +96,7 @@ export default function GpxPlacementDialog() {
   }, []);
 
   const handleBack = () => {
+    setSource('dialog');
     openDialog('gpx-selection', {
       gpxFile,
       filePath,

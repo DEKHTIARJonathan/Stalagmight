@@ -10,6 +10,7 @@ import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
+import { setSource } from '../../utils/telemetry';
 
 export default function EditSectionDialog() {
   const { closeDialog, dialogData, openDialog } = useUIStore();
@@ -194,6 +195,7 @@ export default function EditSectionDialog() {
   const confirmSplitMidDelete = useCallback(() => {
     if (!pendingMidDelete || sectionId === undefined) return;
     const targetName = section?.name ?? `Section ${sectionId}`;
+    setSource('dialog');
     openDialog('split-section', {
       sectionId,
       shotId: pendingMidDelete.shotId,

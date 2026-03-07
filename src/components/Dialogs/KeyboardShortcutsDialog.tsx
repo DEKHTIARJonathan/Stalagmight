@@ -15,6 +15,7 @@ import {
 } from '../../utils/shortcutCategories';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
+import { setSource } from '../../utils/telemetry';
 
 export default function KeyboardShortcutsDialog() {
   const { t } = useTranslation();
@@ -65,6 +66,7 @@ export default function KeyboardShortcutsDialog() {
 
   const handleCustomize = useCallback(() => {
     closeDialog();
+    setSource('dialog');
     setTimeout(() => openDialog('settings', { initialCategory: 'shortcuts' }), 0);
   }, [closeDialog, openDialog]);
 

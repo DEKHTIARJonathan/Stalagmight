@@ -6,6 +6,7 @@ import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile } from '../../types/commands';
+import { setSource } from '../../utils/telemetry';
 
 interface GpxSelectionDialogProps {
   gpxFile: GpxFile;
@@ -68,6 +69,7 @@ export default function GpxSelectionDialog({ gpxFile, filePath }: GpxSelectionDi
 
   const handleContinue = () => {
     // Proceed to Step 2 (placement)
+    setSource('dialog');
     openDialog('gpx-placement', {
       gpxFile,
       filePath,

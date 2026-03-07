@@ -42,6 +42,7 @@ import {
   computeSegmentLayout,
 } from '../../utils/segmentContext';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
+import { setSource } from '../../utils/telemetry';
 import {
   adjustStationForDeletedShots,
   findReverseImportConnection,
@@ -3178,6 +3179,7 @@ export default function DmpNewImportDialog({
       anchor: { sectionIndex: number; stationIndex: number },
       directPlacements: DirectPlacement[],
     ) => {
+      setSource('dialog');
       openDialog('dmp-import-new', {
         ...reopenData,
         autoStartManualPlacement: false,

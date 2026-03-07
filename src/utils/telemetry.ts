@@ -16,6 +16,10 @@ const counts: Record<string, number> = {};
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let available: boolean | null = null;
 
+/** Source hint for the next action — consumed by dispatchers. */
+let _source = 'unknown';
+let _sourceTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
  * Check if the telemetry feature is compiled into the Rust backend.
  * Cached after first call.
@@ -51,6 +55,29 @@ async function flushToRust(): Promise<void> {
       counts[key] = (counts[key] || 0) + value;
     }
   }
+}
+
+/** Set source for the next action. Auto-resets after 50ms to prevent bleed. */
+export function setSource(source: string): void {
+  _source = source;
+  if (_sourceTimer) clearTimeout(_sourceTimer);
+  _sourceTimer = setTimeout(() => { _source = 'unknown'; }, 50);
+}
+
+/** Read and reset the current source. */
+export function consumeSource(): string {
+  const s = _source;
+  _source = 'unknown';
+  if (_sourceTimer) { clearTimeout(_sourceTimer); _sourceTimer = null; }
+  return s;
+}
+
+/** Track a user action with source. */
+export function trackAction(action: string, source?: string): void {
+  const src = source ?? consumeSource();
+  const key = `action.${action}:${src}`;
+  counts[key] = (counts[key] || 0) + 1;
+  scheduleFlush();
 }
 
 /**
