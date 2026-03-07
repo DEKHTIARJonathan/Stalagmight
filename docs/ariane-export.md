@@ -46,6 +46,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | Sequential integer | `ID` | Assigned starting from 0, incrementing across all sections |
 | Previous shot ID | `FromID` / `FRID` | Chains shots linearly within a section; START has -1 |
 | `shot.azimuth_in` | `Azimut` / `AZ` | Front-sight azimuth |
+| `shot.azimuth_out` | — | Not exported. Ariane does not encode backsight azimuth. |
 | `shot.length` | `Length` / `LG` | |
 | `shot.depth_out` | `Depth` / `DP` | Absolute station depth |
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
@@ -69,6 +70,8 @@ Only the **root section** (the first section, or the one with no parent) gets a 
 ### Section connectivity
 
 Parent–child relationships are derived from `station_merges`. When section B's entry station merges with a station in section A, section B's first shot has its `FromID` set to the Ariane ID of the corresponding station in section A.
+
+When a root section is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
 
 ### Loop closures
 
