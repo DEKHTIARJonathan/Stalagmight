@@ -525,7 +525,9 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                         from_id: prev_id,
                         shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
                         section: split_name.clone(),
-                        azimuth: normalize_azimuth(shot.azimuth_out),
+                        // Ariane carries a single forward azimuth per shot. The reverse
+                        // pre-zero leg must therefore be synthesized as reciprocal heading.
+                        azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
                         length: shot.length,
                         depth: reversed_depth_out,
                         depth_in: depth_in_val,
@@ -863,6 +865,14 @@ fn normalize_azimuth(azimuth: f64) -> f64 {
     azimuth.rem_euclid(360.0)
 }
 
+/// Compute azimuth for the generated pre-zero-datum reverse segment.
+///
+/// Ariane does not provide a backsight field, so `azimuth_out` from Stalagmight
+/// must not be interpreted as an Ariane backsight during export.
+fn reverse_pre_zero_azimuth(azimuth_in: f64) -> f64 {
+    normalize_azimuth(azimuth_in + 180.0)
+}
+
 /// Build a parent map from station_merges.
 ///
 /// Returns: child_section_id → (parent_station_ref, child_station_index)
@@ -1077,6 +1087,12 @@ mod tests {
         assert_eq!(format_f64(3.14159), "3.14159");
         assert_eq!(format_f64(1.5), "1.5");
         assert_eq!(format_f64(-2.0), "-2.0");
+    }
+
+    #[test]
+    fn test_reverse_pre_zero_azimuth_is_reciprocal() {
+        assert!((reverse_pre_zero_azimuth(42.0) - 222.0).abs() < 1e-9);
+        assert!((reverse_pre_zero_azimuth(350.0) - 170.0).abs() < 1e-9);
     }
 
     #[test]
@@ -1475,7 +1491,7 @@ mod tests {
                 },
                 ShotData {
                     azimuth_in: 20.0,
-                    azimuth_out: 220.0,
+                    azimuth_out: 15.0,
                     length: 1.0,
                     depth_in: 1.0,
                     depth_out: 2.0,
@@ -1514,8 +1530,8 @@ mod tests {
             "forward branch should keep original azimuth at datum"
         );
         assert!(
-            from_start.iter().any(|s| (s.azimuth - 220.0).abs() < f64::EPSILON),
-            "reverse branch should use backsight azimuth of prefix shot"
+            from_start.iter().any(|s| (s.azimuth - 200.0).abs() < f64::EPSILON),
+            "reverse branch should invert forward azimuth of prefix shot"
         );
     }
 

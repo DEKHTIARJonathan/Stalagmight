@@ -524,18 +524,10 @@
       "sections": {
         "debug": "Debug",
         "logging": "Logging",
-        "import": "Import",
         "closureAdjustment": "Closure Adjustment",
         "placementSuggestion": "Placement Suggestion",
         "panels": "Panel Dimensions",
         "configFile": "Configuration File"
-      },
-      "import": {
-        "legacyDmpImport": {
-          "label": "Use legacy DMP import",
-          "help": "Use the classic per-section configuration dialog when importing DMP files. Disable to use the new streamlined import workflow.",
-          "aria": "Toggle legacy DMP import workflow"
-        }
       },
       "debug": {
         "showHitboxes": {

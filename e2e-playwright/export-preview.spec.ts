@@ -2,9 +2,7 @@ import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  openDmpSelectionDialog,
-  proceedToDmpSectionConfig,
-  placeAllSections,
+  createSectionViaStore,
 } from './helpers/app';
 
 /**
@@ -12,29 +10,21 @@ import {
  */
 async function createProjectWithData(page: import('./fixtures/coverage').Page) {
   await createProject(page, 'Export Test Project');
-  await openDmpSelectionDialog(page);
-  const dialog = page.getByTestId('dmp-selection-dialog');
-  await expect(dialog.getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
-
-  // Deselect problematic sections to avoid validation-blocked imports
-  const validationSection = dialog.locator('[data-testid^="section-row-"]').filter({
-    hasText: 'Validation Test Section',
+  await createSectionViaStore(page, {
+    name: 'Main Passage',
+    shots: [
+      { azimuth_in: 10, azimuth_out: 10, length: 12, depth_in: -1.0, depth_out: -1.8 },
+      { azimuth_in: 25, azimuth_out: 25, length: 9, depth_in: -1.8, depth_out: -2.4 },
+      { azimuth_in: 40, azimuth_out: 40, length: 8, depth_in: -2.4, depth_out: -3.0 },
+    ],
   });
-  const validationCheckbox = validationSection.locator('input[type="checkbox"]');
-  if (await validationCheckbox.isVisible()) {
-    await validationCheckbox.click();
-  }
-
-  const mixedLrudSection = dialog.locator('[data-testid^="section-row-"]').filter({
-    hasText: 'Mixed LRUD Section',
+  await createSectionViaStore(page, {
+    name: 'Side Tunnel',
+    shots: [
+      { azimuth_in: 95, azimuth_out: 95, length: 6, depth_in: -2.4, depth_out: -2.6 },
+      { azimuth_in: 115, azimuth_out: 115, length: 5, depth_in: -2.6, depth_out: -2.9 },
+    ],
   });
-  const mixedCheckbox = mixedLrudSection.locator('input[type="checkbox"]');
-  if (await mixedCheckbox.isVisible()) {
-    await mixedCheckbox.click();
-  }
-
-  await proceedToDmpSectionConfig(page);
-  await placeAllSections(page);
 }
 
 /**

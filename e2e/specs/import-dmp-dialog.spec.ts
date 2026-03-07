@@ -3,6 +3,8 @@ import {
   resetAppState,
   createNewProject,
   openDmpImportDialog,
+  proceedToDmpImportWizard,
+  ensureDmpNewImportDialogVisible,
 } from '../helpers/app';
 
 /**
@@ -10,7 +12,7 @@ import {
  *
  * Tests the two-step DMP import flow:
  * - Step 1: DmpSelectionDialog - section selection with metadata
- * - Step 2: DmpSectionConfigDialog - per-section configuration and placement
+ * - Step 2: Zero-datum selection (optional) + DmpNewImportDialog placement wizard
  *
  * Note: These tests run against the full Tauri application.
  * For faster iteration, use the Playwright tests in e2e-playwright/.
@@ -86,7 +88,7 @@ describe('DMP Import Dialog', () => {
     await dialog.waitForDisplayed({ reverse: true, timeout: 5000 });
   });
 
-  it('should proceed from Step 1 to Step 2', async () => {
+  it('should proceed from Step 1 to the import wizard', async () => {
     await createNewProject('Step Navigation Test');
     await openDmpImportDialog();
 
@@ -94,29 +96,32 @@ describe('DMP Import Dialog', () => {
     const step1Dialog = await $('[data-testid="dmp-selection-dialog"]');
     await expect(step1Dialog).toBeDisplayed();
 
-    // Click Continue to proceed to Step 2
-    const continueBtn = await step1Dialog.$('[data-testid="continue-button"]');
-    await continueBtn.click();
+    // Continue through optional zero-datum step into the wizard
+    await proceedToDmpImportWizard();
+    await ensureDmpNewImportDialogVisible();
 
-    // Wait for Step 2 dialog (DmpSectionConfigDialog)
-    const step2Dialog = await $('[data-testid="dmp-section-config-dialog"]');
-    await step2Dialog.waitForDisplayed({ timeout: 5000 });
-    await expect(step2Dialog).toBeDisplayed();
+    const wizard = await $('[data-testid="dmp-new-import-dialog"]');
+    await expect(wizard).toBeDisplayed();
 
-    // Step 2 should show Placement options
-    const placementHeading = await step2Dialog.$('h3*=Placement');
-    await expect(placementHeading).toBeExisting();
+    // Wizard should expose progress text
+    const progress = await wizard.$('[data-testid="wizard-progress"]');
+    await expect(progress).toBeExisting();
 
     // Close the dialog - clicking Cancel shows a confirmation dialog
-    const cancelBtn = await step2Dialog.$('[data-testid="cancel-button"]');
+    const cancelBtn = await wizard.$('[data-testid="cancel-button"]');
     await cancelBtn.click();
 
-    // Wait for and click the confirm cancel button in the confirmation dialog
+    // Confirm dialog only appears when placements/changes exist in the wizard.
     const confirmCancelDialog = await $('[data-testid="cancel-confirm-dialog"]');
-    await confirmCancelDialog.waitForDisplayed({ timeout: 3000 });
-    const confirmCancelBtn = await confirmCancelDialog.$('[data-testid="confirm-cancel-button"]');
-    await confirmCancelBtn.click();
+    const hasConfirmDialog = await confirmCancelDialog
+      .waitForDisplayed({ timeout: 1500 })
+      .then(() => true)
+      .catch(() => false);
+    if (hasConfirmDialog) {
+      const confirmCancelBtn = await confirmCancelDialog.$('[data-testid="confirm-cancel-button"]');
+      await confirmCancelBtn.click();
+    }
 
-    await step2Dialog.waitForDisplayed({ reverse: true, timeout: 5000 });
+    await wizard.waitForDisplayed({ reverse: true, timeout: 5000 });
   });
 });

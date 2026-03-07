@@ -50,7 +50,6 @@ impl Default for GeneralConfig {
             splash_screen: false,
             onboarding_enabled: true,
             onboarding_completed_flows: Vec::new(),
-            legacy_dmp_import: false,
         }
     }
 }
