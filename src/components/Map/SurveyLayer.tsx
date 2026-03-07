@@ -23,6 +23,7 @@ import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors'
 import { metersToMapCoords } from '../../utils/coordinates';
 import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
+import { trackAction } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import {
   distanceToLineSegment,
@@ -1078,7 +1079,36 @@ export default class SurveyLayer {
 
     // UNIFIED context menu handler - queries both hitbox layers with station priority
     this.map.on('contextmenu', this.handleContextMenu);
+
+    // Track user-initiated map navigation (zoom & pan) for telemetry
+    this.map.on('zoomend', this.handleZoomEndTelemetry);
+    this.map.on('moveend', this.handleMoveEndTelemetry);
   }
+
+  /** Track user-initiated zoom (scroll wheel, pinch, double-click). Skip programmatic zooms. */
+  private handleZoomEndTelemetry = (e: maplibregl.MapLibreEvent): void => {
+    const orig = e.originalEvent;
+    if (!orig) return; // programmatic — already tracked by trigger functions
+    if (orig instanceof WheelEvent) {
+      trackAction('nav.zoom', 'mouse');
+    } else if (orig instanceof TouchEvent) {
+      trackAction('nav.zoom', 'touch');
+    } else if (orig instanceof MouseEvent) {
+      trackAction('nav.zoom', 'dblclick');
+    }
+  };
+
+  /** Track user-initiated pan (click-drag, touch-drag). Skip programmatic pans and zoom-induced moves. */
+  private handleMoveEndTelemetry = (e: maplibregl.MapLibreEvent): void => {
+    const orig = e.originalEvent;
+    if (!orig) return; // programmatic — already tracked by trigger functions
+    if (orig instanceof WheelEvent) return; // zoom gesture — tracked by zoomend
+    if (orig instanceof MouseEvent) {
+      trackAction('nav.pan', 'mouse');
+    } else if (orig instanceof TouchEvent) {
+      trackAction('nav.pan', 'touch');
+    }
+  };
 
   /**
    * UNIFIED click handler - queries both hitbox layers and resolves priority.
@@ -3441,6 +3471,8 @@ export default class SurveyLayer {
       if (this.boundMapLeave) {
         this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
       }
+      this.map.off('zoomend', this.handleZoomEndTelemetry);
+      this.map.off('moveend', this.handleMoveEndTelemetry);
 
       // Remove all layers first (must be done before removing their sources)
       if (this.map.getLayer(this.labelsLayerId)) {
