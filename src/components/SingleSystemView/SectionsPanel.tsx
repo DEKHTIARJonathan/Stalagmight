@@ -151,6 +151,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     // Ensure selection happens (in case mouseDown was prevented)
     handleSectionClick(section, e);
     // Trigger zoom to section
+    setSource('sections-panel');
     triggerZoomToSection(section.id);
   }, [handleSectionClick, triggerZoomToSection]);
 

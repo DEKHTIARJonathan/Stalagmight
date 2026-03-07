@@ -375,6 +375,7 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   const handleCenterOnStation = () => {
+    setSource('detail-panel');
     triggerCenterOnStation(station.station_ref);
   };
 
@@ -675,6 +676,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   };
 
   const handleCenterOnShot = () => {
+    setSource('detail-panel');
     triggerCenterOnShot(section.id, shot.id);
   };
 
@@ -884,6 +886,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   };
 
   const handleCenterOnSection = () => {
+    setSource('detail-panel');
     triggerZoomToSection(section.id);
   };
 
