@@ -20,6 +20,21 @@ let available: boolean | null = null;
 let _source = 'unknown';
 let _sourceTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Last undoable command — for regret detection. */
+let _lastUndoable: { command: string; time: number } | null = null;
+const REGRET_WINDOW_MS = 15_000;
+
+/** Commands that push to the undo stack. */
+const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
+  'create_section', 'update_section', 'delete_section', 'move_section', 'move_segment',
+  'create_shot', 'update_shot', 'delete_shot', 'set_shot_reference',
+  'merge_stations', 'unmerge_stations', 'unmerge_station_pair',
+  'set_zero_datum', 'remove_zero_datum', 'set_station_comment', 'move_comment', 'move_station',
+  'create_loop_closure', 'remove_loop_closure', 'adjust_loop_closures',
+  'create_section_and_merge', 'delete_shot_and_split', 'delete_last_shot_and_section',
+  'import_sections', 'execute_tml_import', 'execute_gpx_import', 'execute_batch',
+]);
+
 /**
  * Check if the telemetry feature is compiled into the Rust backend.
  * Cached after first call.
@@ -86,6 +101,15 @@ export function trackAction(action: string, source?: string): void {
  */
 export function trackCommand(command: string): void {
   counts[`command.${command}`] = (counts[`command.${command}`] || 0) + 1;
+
+  if (command === 'undo' && _lastUndoable && (Date.now() - _lastUndoable.time) < REGRET_WINDOW_MS) {
+    const key = `undo-after.${_lastUndoable.command}`;
+    counts[key] = (counts[key] || 0) + 1;
+    _lastUndoable = null;
+  } else if (UNDOABLE_COMMANDS.has(command)) {
+    _lastUndoable = { command, time: Date.now() };
+  }
+
   scheduleFlush();
 }
 
