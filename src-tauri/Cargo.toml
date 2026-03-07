@@ -28,7 +28,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
-ts-rs = "7"
+ts-rs = { version = "7", features = ["no-serde-warnings"] }
 thiserror = "1"
 anyhow = "1"
 toml = "0.8"
