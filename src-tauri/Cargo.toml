@@ -8,6 +8,7 @@ default-run = "stalagmight"
 
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
+telemetry = []
 
 [lib]
 name = "stalagmight_lib"
