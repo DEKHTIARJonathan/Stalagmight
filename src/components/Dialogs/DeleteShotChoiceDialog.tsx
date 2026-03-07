@@ -6,6 +6,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotImpact } from '../../types/commands';
+import { setSource } from '../../utils/telemetry';
 
 export default function DeleteShotChoiceDialog() {
   const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore();
@@ -41,6 +42,7 @@ export default function DeleteShotChoiceDialog() {
 
   const handleSplit = () => {
     if (sectionId === undefined || shotId === undefined) return;
+    setSource('dialog');
     openDialog('split-section', {
       sectionId,
       shotId,

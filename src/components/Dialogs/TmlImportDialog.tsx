@@ -6,6 +6,7 @@ import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
+import { setSource } from '../../utils/telemetry';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -99,6 +100,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
             { purpose: 'suggest orphan placements after TML import' }
           );
           if (suggestions.length > 0) {
+            setSource('dialog');
             openDialog('orphan-placement', { suggestions });
             return;
           }

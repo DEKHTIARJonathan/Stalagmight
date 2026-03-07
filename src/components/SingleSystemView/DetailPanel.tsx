@@ -13,6 +13,7 @@ import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { setSource, trackAction } from '../../utils/telemetry';
 
 export default function DetailPanel() {
   const { t } = useTranslation();
@@ -340,6 +341,7 @@ function StationDetail({ station }: { station: Station }) {
   const isLastStation = section ? stationIndex >= section.shots.length : true;
 
   const handleEdit = () => {
+    setSource('detail-panel');
     openDialog('edit-station', { stationRef: station.station_ref });
   };
 
@@ -389,6 +391,7 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   const handleUnmergeFromStation = async (ref: { section_id: number; station_index: number }) => {
+    trackAction('unmerge', 'detail-panel');
     const targetKey = `${ref.section_id}:${ref.station_index}`;
     setUnmergeTargetKey(targetKey);
     try {
@@ -633,10 +636,12 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   );
 
   const handleToggleReference = async () => {
+    trackAction('toggle-reference', 'detail-panel');
     await setShotReference(section.id, shot.id, !shot.is_reference);
   };
 
   const handleDelete = () => {
+    setSource('detail-panel');
     const totalShots = section.shots.length;
     const isFirst = shotIndex === 0;
     const isLast = shotIndex === totalShots - 1;
@@ -883,6 +888,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   };
 
   const handleEditSection = () => {
+    setSource('detail-panel');
     openDialog('edit-section', { sectionId: section.id });
   };
 
@@ -1220,6 +1226,7 @@ function ClosuresSection({
   }, [closures]);
 
   const handleRemoveClosure = async (closureId: bigint) => {
+    trackAction('remove-closure', 'detail-panel');
     setRemovingClosureId(closureId);
     try {
       await removeLoopClosure(closureId);
@@ -1249,7 +1256,7 @@ function ClosuresSection({
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => openDialog('adjust-closures', { anchorStation })}
+              onClick={() => { setSource('detail-panel'); openDialog('adjust-closures', { anchorStation }); }}
               data-testid="adjust-closures-button"
             >
               Adjust Closures

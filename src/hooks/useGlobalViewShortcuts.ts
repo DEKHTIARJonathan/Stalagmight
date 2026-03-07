@@ -24,6 +24,7 @@ import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
 import { importOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
 import { getErrorMessage } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
+import { setSource } from '../utils/telemetry';
 import { defaultConfig } from '../types/config';
 import type { ShortcutsConfig } from '../types/config';
 import type { ProjectMetadata } from '../types/project';
@@ -141,6 +142,8 @@ export function useGlobalViewShortcuts({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      setSource('keyboard');
+
       // Don't handle if loading is active
       if (loadingRef.current.isLoading) return;
 

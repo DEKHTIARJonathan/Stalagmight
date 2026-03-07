@@ -12,6 +12,7 @@ import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { setSource } from '../../utils/telemetry';
 
 interface DataTableProps {
   sections: Section[];
@@ -336,6 +337,8 @@ export default function DataTable({ sections }: DataTableProps) {
     (shot: Shot, index: number, event: React.MouseEvent) => {
       event.preventDefault();
       if (!selectedSection) return;
+
+      setSource('data-table');
 
       const totalShots = selectedSection.shots.length;
       const isFirst = index === 0;

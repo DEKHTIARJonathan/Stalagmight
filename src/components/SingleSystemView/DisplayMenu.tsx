@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, EyeIcon } from '../common/icons';
+import { setSource } from '../../utils/telemetry';
 
 interface DisplayOption {
   key: DisplayToggleKey;
@@ -245,7 +246,7 @@ export default function DisplayMenu() {
                   return (
                   <div key={item.key}>
                     <button
-                      onClick={() => !disabled && toggleDisplay(item.key)}
+                      onClick={() => { if (disabled) return; setSource('display-menu'); toggleDisplay(item.key); }}
                       disabled={disabled}
                       aria-disabled={disabled || undefined}
                       className={`

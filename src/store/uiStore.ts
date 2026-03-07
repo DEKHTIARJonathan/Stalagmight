@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackUIEvent } from '../utils/telemetry';
+import { trackAction } from '../utils/telemetry';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -327,7 +327,7 @@ export const useUIStore = create<UIStore>((set) => ({
   lastSubtoolByGroup: {},
   setActiveTool: (activeTool) =>
     set((state) => {
-      trackUIEvent(`tool.${activeTool}`);
+      trackAction(`tool.${activeTool}`);
       // Track last-used subtool per group
       const group = getGroupForTool(activeTool);
       const lastSubtoolByGroup = group
@@ -527,6 +527,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showDevStats: DISPLAY_DEFAULTS.showDevStats,
   gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
   toggleDisplay: (key) => {
+    trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
     const newValue = !state[key];
     set({ [key]: newValue });
@@ -677,8 +678,10 @@ export const useUIStore = create<UIStore>((set) => ({
   activeDialog: null,
   dialogData: {},
   dmpImportWizardPhase: null,
-  openDialog: (activeDialog, dialogData = {}) =>
-    set({ activeDialog, dialogData, dmpImportWizardPhase: null }),
+  openDialog: (activeDialog, dialogData = {}) => {
+    trackAction(`dialog.${activeDialog}`);
+    set({ activeDialog, dialogData, dmpImportWizardPhase: null });
+  },
   closeDialog: () => set({ activeDialog: null, dialogData: {}, dmpImportWizardPhase: null }),
   setDmpImportWizardPhase: (dmpImportWizardPhase) => set({ dmpImportWizardPhase }),
 

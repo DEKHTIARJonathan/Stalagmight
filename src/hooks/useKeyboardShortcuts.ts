@@ -15,6 +15,7 @@ import {
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
+import { setSource } from '../utils/telemetry';
 import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
 import { defaultConfig } from '../types/config';
 
@@ -326,6 +327,8 @@ export function useKeyboardShortcuts() {
           return;
         }
       }
+
+      setSource('keyboard');
 
       const placementModeActive = useUIStore.getState().placementMode !== null;
 

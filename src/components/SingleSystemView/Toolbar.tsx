@@ -23,6 +23,7 @@ import {
 import DisplayMenu from './DisplayMenu';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
+import { setSource } from '../../utils/telemetry';
 import { defaultConfig } from '../../types/config';
 
 interface ToolbarProps {
@@ -157,13 +158,13 @@ export default function Toolbar({
         >
           {t('common.actions.back')}
         </Button>
-        <Button onClick={onSave} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
+        <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
         </Button>
-        <Button onClick={() => onImport()} disabled={placementModeActive} size="sm" data-testid="toolbar-import-button">
+        <Button onClick={() => { setSource('toolbar'); onImport(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-import-button">
           {t('common.actions.import')}
         </Button>
-        <Button onClick={() => openDialog('export')} disabled={placementModeActive} size="sm" data-testid="toolbar-export-button">
+        <Button onClick={() => { setSource('toolbar'); openDialog('export'); }} disabled={placementModeActive} size="sm" data-testid="toolbar-export-button">
           {t('common.actions.export')}
         </Button>
         <div className="w-px h-6 bg-border mx-2" />
@@ -240,7 +241,7 @@ export default function Toolbar({
         <DisplayMenu />
         <IconButton
           icon={<BugIcon />}
-          onClick={() => openDialog('debug')}
+          onClick={() => { setSource('toolbar'); openDialog('debug'); }}
           tooltip="Debug Logs"
           aria-label="Debug Logs"
           size="sm"
@@ -303,6 +304,7 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
 
   const handleClick = useCallback(() => {
     if (disabled) return;
+    setSource('toolbar');
     onClick();
     setFlyoutOpen(false);
   }, [disabled, onClick]);
@@ -392,6 +394,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
   // Left-click: If group inactive, activate last-used subtool. If active, cycle.
   const handleClick = useCallback(() => {
     if (disabled) return;
+    setSource('toolbar');
     if (!isGroupActive) {
       onActivateTool(displayTool);
     } else {
@@ -534,6 +537,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
   // Handle clicking a subtool in the flyout (mouse path also restores focus)
   const handleSubtoolClick = useCallback((tool: ToolType) => {
     if (disabled) return;
+    setSource('toolbar');
     onActivateTool(tool);
     closeFlyout();
   }, [disabled, onActivateTool, closeFlyout]);

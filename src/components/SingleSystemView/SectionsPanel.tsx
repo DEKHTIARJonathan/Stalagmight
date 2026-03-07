@@ -7,6 +7,7 @@ import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
 import { CloseIcon, PlusIcon } from '../common/icons';
+import { setSource } from '../../utils/telemetry';
 
 interface SectionsPanelProps {
   sections: Section[];
@@ -165,11 +166,13 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   }, [setHoveredSectionId]);
 
   const handleAddSection = () => {
+    setSource('sections-panel');
     openDialog('import');
   };
 
   const handleDeleteSection = useCallback((sectionId: number, e: React.MouseEvent) => {
     e.stopPropagation();
+    setSource('sections-panel');
     openDialog('confirm-delete', {
       type: 'section',
       sectionId,
@@ -179,6 +182,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const handleSectionContextMenu = useCallback((e: React.MouseEvent, sectionId: number) => {
     e.preventDefault();
     e.stopPropagation();
+    setSource('sections-panel');
     openDialog('context-menu', {
       target: { type: 'section', sectionId },
       position: { x: e.clientX, y: e.clientY },
