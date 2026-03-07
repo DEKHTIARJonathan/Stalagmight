@@ -10,6 +10,7 @@ import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { defaultConfig } from '../../../types/config';
 import type { ShortcutFeedback } from '../../../types/config';
+import { isTelemetryAvailable } from '../../../utils/telemetry';
 
 /**
  * General settings category content.
@@ -106,6 +107,10 @@ export function GeneralSettings({
     (v) => ({ general: { ...config.general, number_format: v } }));
   const handleDateFormatChange = createSelectHandler(onChange,
     (v) => ({ general: { ...config.general, date_format: v } }));
+
+  // --- Telemetry ---
+  const handleTelemetryToggle = createToggleHandler(onChange,
+    (v) => ({ general: { ...config.general, telemetry_enabled: v } }));
 
   const canRestartOnboarding =
     (config.general.onboarding_completed_flows?.length ?? 0) > 0 ||
@@ -366,6 +371,26 @@ export function GeneralSettings({
           </Button>
         </SettingRow>
       </SettingsSection>
+
+      {isTelemetryAvailable() && (
+        <SettingsSection title={t('settings.general.sections.privacy', 'Privacy')} data-testid="section-privacy">
+          <SettingRow
+            label={t('settings.general.telemetry.label', 'Share anonymous usage statistics')}
+            helpText={t('settings.general.telemetry.help', 'Help improve Stalagmight by sharing which features you use. No personal data or survey content is collected.')}
+            isChanged={isFieldChanged(changedFields, 'general.telemetry_enabled')}
+            onReset={() => onChange({ general: { ...config.general, telemetry_enabled: defaultConfig.general.telemetry_enabled } })}
+            isDefault={config.general.telemetry_enabled === defaultConfig.general.telemetry_enabled}
+            data-testid="setting-telemetry"
+          >
+            <Toggle
+              checked={config.general.telemetry_enabled}
+              onChange={handleTelemetryToggle}
+              aria-label={t('settings.general.telemetry.aria', 'Toggle anonymous usage statistics')}
+              data-testid="toggle-telemetry"
+            />
+          </SettingRow>
+        </SettingsSection>
+      )}
     </div>
   );
 }

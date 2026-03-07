@@ -1,6 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
+import { trackCommand } from './telemetry';
 
 const IPC_TRACE = import.meta.env.VITE_IPC_TRACE === 'true';
+
+/** Commands that should not be tracked (telemetry's own IPC calls). */
+const UNTRACKED_COMMANDS = new Set([
+  'track_events',
+  'flush_telemetry',
+  'is_telemetry_available',
+  'set_telemetry_enabled',
+]);
 
 export type IpcMeta = {
   purpose?: string;
@@ -27,6 +36,7 @@ export type InvokeIpc = <T>(
 ) => Promise<T>;
 
 const invokeWithTrace: InvokeIpc = async <T>(command: string, args?: Record<string, unknown>, meta?: IpcMeta) => {
+  if (!UNTRACKED_COMMANDS.has(command)) trackCommand(command);
   const start = nowMs();
   const purpose = meta?.purpose ?? 'unspecified purpose';
   const fields = meta?.fields ?? {};
@@ -52,8 +62,10 @@ const invokeWithTrace: InvokeIpc = async <T>(command: string, args?: Record<stri
   }
 };
 
-const invokeNoTrace: InvokeIpc = <T>(command: string, args?: Record<string, unknown>, _meta?: IpcMeta) =>
-  invoke<T>(command, args);
+const invokeNoTrace: InvokeIpc = <T>(command: string, args?: Record<string, unknown>, _meta?: IpcMeta) => {
+  if (!UNTRACKED_COMMANDS.has(command)) trackCommand(command);
+  return invoke<T>(command, args);
+};
 
 /**
  * Invoke a Tauri IPC command with optional trace logging.

@@ -14,14 +14,15 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog } from './components/Dialogs';
+import { initTelemetry, flushTelemetry } from './utils/telemetry';
 import { ContextMenu } from './components/common';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
-  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseGpx } = useProjectStore();
+  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseGpx, setConfig } = useProjectStore();
   const {
     view,
     setView,
@@ -78,6 +79,13 @@ function App() {
   useEffect(() => {
     // Load config on startup
     loadConfig();
+    // Initialize telemetry (detects feature availability)
+    void initTelemetry();
+
+    // Flush telemetry on page unload (best-effort)
+    const handleUnload = () => { void flushTelemetry(); };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => window.removeEventListener('beforeunload', handleUnload);
   }, [loadConfig]);
 
   // Hide splash once config has loaded (or immediately if splash is disabled)
@@ -558,6 +566,11 @@ function App() {
           onSkipCurrent={onboarding.skip}
           onSkipAll={disableOnboardingGuides}
         />
+      )}
+
+      {/* Telemetry opt-in (shown once on first launch when feature is available) */}
+      {config && (
+        <TelemetryOptInDialog config={config} onConfigChanged={setConfig} />
       )}
 
       {/* Toast notification (via Portal for z-index reliability) */}

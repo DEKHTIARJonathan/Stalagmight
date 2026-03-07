@@ -52,6 +52,8 @@ export const defaultConfig: Config = {
     splash_screen: false,
     onboarding_enabled: true,
     onboarding_completed_flows: [],
+    telemetry_enabled: false,
+    telemetry_opt_in_shown: false,
   },
   units: {
     length: 'meters',
