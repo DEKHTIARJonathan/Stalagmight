@@ -116,6 +116,39 @@ display-state.gridSpacing:5          — user changed spacing from default 10
 
 New projects with default settings emit nothing.
 
+### Workflow Dwell Time — `dwell.<state>`
+
+Tracks cumulative seconds spent in each workflow state per session. States are
+mutually exclusive — switching to a new state flushes the accumulated time on
+the previous one.
+
+```
+dwell.tool.select              — seconds with Select tool active
+dwell.tool.draw                — seconds with Draw tool active
+dwell.dialog.settings          — seconds in Settings dialog
+dwell.dialog.import            — seconds in Import dialog
+dwell.placement                — seconds in placement mode
+dwell.global-view              — seconds on the Welcome/project-list screen
+```
+
+**Integration points** (all in `uiStore.ts`):
+
+| Trigger | Dwell key |
+|---------|-----------|
+| `setView('single-system')` | `tool.{activeTool}` |
+| `setView('global')` | `global-view` |
+| `setActiveTool(tool)` | `tool.{tool}` (skipped when dialog/placement active) |
+| `openDialog(name)` | `dialog.{name}` |
+| `closeDialog()` | Resumes `placement` or `tool.{activeTool}` |
+| `startPlacementMode()` | `placement` |
+| `cancelPlacementMode()` / `confirmPlacement()` | `tool.{activeTool}` |
+
+**Flush on close**: `flushTelemetry()` calls `flushDwell()` to capture the
+final state's accumulated time before sending.
+
+**Same-key no-op**: Calling `setDwellState` with the same key is a no-op —
+prevents timer resets from redundant calls.
+
 ## Key Files
 
 | File | Role |
