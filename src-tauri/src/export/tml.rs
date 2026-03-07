@@ -367,6 +367,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
     struct SectionBlock {
         section_id: SectionId,
         apply_parent_link: bool,
+        merge_station_index_override: Option<u32>,
         shots: Vec<ExportShot>,
     }
 
@@ -490,6 +491,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
             blocks.push(SectionBlock {
                 section_id: section.id,
                 apply_parent_link: false,
+                merge_station_index_override: None,
                 shots: root_shots,
             });
 
@@ -557,11 +559,218 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                 blocks.push(SectionBlock {
                     section_id: section.id,
                     apply_parent_link: false,
+                    merge_station_index_override: None,
                     shots: reverse_shots,
                 });
             }
 
             continue;
+        }
+
+        // Non-root child sections merged at a non-zero station need splitting
+        // or reversal so the merge point becomes the first shot in each block.
+        if !is_root {
+            if let Some(parent_link) = parent_map.get(&section.id) {
+                let child_merge_idx = parent_link.child_station_index as usize;
+
+                if child_merge_idx > 0 && child_merge_idx < section.shots.len() {
+                    // Mid-section merge: split into forward + reverse blocks.
+
+                    // Forward block: shots from child_merge_idx to end.
+                    let mut fwd_shots = Vec::new();
+                    let mut cumulative_depth = station_depth(section, child_merge_idx);
+                    for shot_idx in child_merge_idx..section.shots.len() {
+                        let shot = &section.shots[shot_idx];
+                        let shot_ariane_id = next_id;
+                        next_id += 1;
+
+                        let prev_id = if shot_idx == child_merge_idx {
+                            -1 // placeholder — resolved in second pass
+                        } else {
+                            shot_ariane_id - 1
+                        };
+
+                        let prev_depth = cumulative_depth;
+                        cumulative_depth = shot.depth_out;
+                        let depth_in_val = if (shot.depth_in - prev_depth).abs() < 1e-9 {
+                            -1.0
+                        } else {
+                            shot.depth_in
+                        };
+
+                        fwd_shots.push(ExportShot {
+                            id: shot_ariane_id,
+                            from_id: prev_id,
+                            shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                            section: section_name.clone(),
+                            azimuth: shot.azimuth_in,
+                            length: shot.length,
+                            depth: shot.depth_out,
+                            depth_in: depth_in_val,
+                            inclination: shot.pitch_in.unwrap_or(0.0),
+                            left: shot.left.unwrap_or(0.0),
+                            right: shot.right.unwrap_or(0.0),
+                            up: shot.up.unwrap_or(0.0),
+                            down: shot.down.unwrap_or(0.0),
+                            comment: shot.comment.clone(),
+                            explorer: explorer.clone(),
+                            date: date.clone(),
+                            color: color.clone(),
+                            latitude: 0.0,
+                            longitude: 0.0,
+                            closure_to_id: -1,
+                            locked: false,
+                        });
+
+                        station_to_ariane
+                            .insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
+                    }
+
+                    blocks.push(SectionBlock {
+                        section_id: section.id,
+                        apply_parent_link: true,
+                        merge_station_index_override: Some(0),
+                        shots: fwd_shots,
+                    });
+
+                    // Reverse block: shots from child_merge_idx-1 down to 0, reversed.
+                    let rev_name = format!("{section_name} (reversed)");
+                    let mut rev_shots = Vec::new();
+                    let mut cumulative_depth = station_depth(section, child_merge_idx);
+
+                    for shot_idx in (0..child_merge_idx).rev() {
+                        let shot = &section.shots[shot_idx];
+                        let shot_ariane_id = next_id;
+                        next_id += 1;
+
+                        let prev_id = if shot_idx == child_merge_idx - 1 {
+                            -1 // placeholder — resolved in second pass
+                        } else {
+                            shot_ariane_id - 1
+                        };
+
+                        let reversed_depth_in = shot.depth_out;
+                        let reversed_depth_out = shot.depth_in;
+                        let prev_depth = cumulative_depth;
+                        cumulative_depth = reversed_depth_out;
+                        let depth_in_val =
+                            if (reversed_depth_in - prev_depth).abs() < 1e-9 {
+                                -1.0
+                            } else {
+                                reversed_depth_in
+                            };
+
+                        rev_shots.push(ExportShot {
+                            id: shot_ariane_id,
+                            from_id: prev_id,
+                            shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                            section: rev_name.clone(),
+                            azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
+                            length: shot.length,
+                            depth: reversed_depth_out,
+                            depth_in: depth_in_val,
+                            inclination: shot
+                                .pitch_out
+                                .or_else(|| shot.pitch_in.map(|p| -p))
+                                .unwrap_or(0.0),
+                            left: shot.right.unwrap_or(0.0),
+                            right: shot.left.unwrap_or(0.0),
+                            up: shot.up.unwrap_or(0.0),
+                            down: shot.down.unwrap_or(0.0),
+                            comment: shot.comment.clone(),
+                            explorer: explorer.clone(),
+                            date: date.clone(),
+                            color: color.clone(),
+                            latitude: 0.0,
+                            longitude: 0.0,
+                            closure_to_id: -1,
+                            locked: false,
+                        });
+
+                        // Reversed shot ends at original station shot_idx.
+                        station_to_ariane
+                            .insert((section.id, shot_idx as u32), shot_ariane_id);
+                    }
+
+                    blocks.push(SectionBlock {
+                        section_id: section.id,
+                        apply_parent_link: true,
+                        merge_station_index_override: Some(0),
+                        shots: rev_shots,
+                    });
+
+                    continue;
+                } else if child_merge_idx > 0 && child_merge_idx >= section.shots.len() {
+                    // End-of-section merge: reverse the entire section.
+                    let rev_name = format!("{section_name} (reversed)");
+                    let mut rev_shots = Vec::new();
+                    let mut cumulative_depth =
+                        station_depth(section, section.shots.len());
+
+                    for shot_idx in (0..section.shots.len()).rev() {
+                        let shot = &section.shots[shot_idx];
+                        let shot_ariane_id = next_id;
+                        next_id += 1;
+
+                        let prev_id = if shot_idx == section.shots.len() - 1 {
+                            -1 // placeholder — resolved in second pass
+                        } else {
+                            shot_ariane_id - 1
+                        };
+
+                        let reversed_depth_in = shot.depth_out;
+                        let reversed_depth_out = shot.depth_in;
+                        let prev_depth = cumulative_depth;
+                        cumulative_depth = reversed_depth_out;
+                        let depth_in_val =
+                            if (reversed_depth_in - prev_depth).abs() < 1e-9 {
+                                -1.0
+                            } else {
+                                reversed_depth_in
+                            };
+
+                        rev_shots.push(ExportShot {
+                            id: shot_ariane_id,
+                            from_id: prev_id,
+                            shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                            section: rev_name.clone(),
+                            azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
+                            length: shot.length,
+                            depth: reversed_depth_out,
+                            depth_in: depth_in_val,
+                            inclination: shot
+                                .pitch_out
+                                .or_else(|| shot.pitch_in.map(|p| -p))
+                                .unwrap_or(0.0),
+                            left: shot.right.unwrap_or(0.0),
+                            right: shot.left.unwrap_or(0.0),
+                            up: shot.up.unwrap_or(0.0),
+                            down: shot.down.unwrap_or(0.0),
+                            comment: shot.comment.clone(),
+                            explorer: explorer.clone(),
+                            date: date.clone(),
+                            color: color.clone(),
+                            latitude: 0.0,
+                            longitude: 0.0,
+                            closure_to_id: -1,
+                            locked: false,
+                        });
+
+                        // Reversed shot ends at original station shot_idx.
+                        station_to_ariane
+                            .insert((section.id, shot_idx as u32), shot_ariane_id);
+                    }
+
+                    blocks.push(SectionBlock {
+                        section_id: section.id,
+                        apply_parent_link: true,
+                        merge_station_index_override: Some(0),
+                        shots: rev_shots,
+                    });
+
+                    continue;
+                }
+            }
         }
 
         let mut shots = Vec::new();
@@ -666,6 +875,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
         blocks.push(SectionBlock {
             section_id: section.id,
             apply_parent_link: !is_root && !shots.is_empty(),
+            merge_station_index_override: None,
             shots,
         });
     }
@@ -693,7 +903,9 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
             continue;
         };
 
-        let child_station_idx = parent_link.child_station_index as usize;
+        let child_station_idx = block
+            .merge_station_index_override
+            .unwrap_or(parent_link.child_station_index) as usize;
         if child_station_idx < block.shots.len() {
             block.shots[child_station_idx].from_id = parent_ariane_id;
         } else {
@@ -1294,16 +1506,23 @@ mod tests {
 
         let shots = build_export_shots(&project);
 
-        // IDs: 0 START, 1..3 root REALs, 4..6 child REALs.
-        let child_shot0 = shots.iter().find(|s| s.id == 4).unwrap();
-        let child_shot1 = shots.iter().find(|s| s.id == 5).unwrap();
+        // With non-zero merge at station 1, child is split:
+        // Forward block (shots 1,2): id=4 from_id=2 (parent), id=5 from_id=4
+        // Reverse block (shot 0 reversed): id=6 from_id=2 (parent)
+        let fwd_shot0 = shots.iter().find(|s| s.id == 4).unwrap();
+        let fwd_shot1 = shots.iter().find(|s| s.id == 5).unwrap();
+        let rev_shot0 = shots.iter().find(|s| s.id == 6).unwrap();
         assert_eq!(
-            child_shot0.from_id, -1,
-            "child shot 0 should remain untouched when merge station is 1"
+            fwd_shot0.from_id, 2,
+            "forward block first shot should link to parent (root station 2)"
         );
         assert_eq!(
-            child_shot1.from_id, 2,
-            "child shot 1 should link to root station 2 Ariane ID"
+            fwd_shot1.from_id, 4,
+            "forward block second shot should chain from previous"
+        );
+        assert_eq!(
+            rev_shot0.from_id, 2,
+            "reverse block first shot should link to parent (root station 2)"
         );
     }
 
@@ -1755,5 +1974,309 @@ mod tests {
         assert!(content.contains("<LCK>"));
         assert!(content.contains("<NM>"));
         assert!(content.contains("<PT>VERTICAL</PT>"));
+    }
+
+    #[test]
+    fn test_child_nonzero_merge_splits_section() {
+        let mut project = Project::new("Split Child".to_string(), None);
+
+        // Root: 2 shots → stations 0,1,2
+        project.add_section(SectionData {
+            name: Some("Root".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Child: 4 shots → stations 0,1,2,3,4. Merge at station 2.
+        project.add_section(SectionData {
+            name: Some("Branch".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 3.0,
+                    azimuth_in: 10.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 4.0,
+                    azimuth_in: 20.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 30.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 6.0,
+                    azimuth_in: 40.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Merge child station 2 → root station 1.
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            },
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 2,
+            },
+            merged_at: chrono::Utc::now(),
+        });
+
+        let shots = build_export_shots(&project);
+
+        // Root: START(0), shot0(1), shot1(2). parent station 1 → ariane id 1.
+        // Forward block (child shots 2,3): id=3 from_id=1, id=4 from_id=3
+        // Reverse block (child shots 1,0 reversed): id=5 from_id=1, id=6 from_id=5
+
+        // Forward block shots chain from parent
+        let fwd0 = shots.iter().find(|s| s.id == 3).unwrap();
+        let fwd1 = shots.iter().find(|s| s.id == 4).unwrap();
+        assert_eq!(fwd0.from_id, 1, "forward first shot links to parent");
+        assert_eq!(fwd0.section, "Branch");
+        assert_eq!(fwd1.from_id, 3, "forward second shot chains from previous");
+
+        // Reverse block shots chain from parent
+        let rev0 = shots.iter().find(|s| s.id == 5).unwrap();
+        let rev1 = shots.iter().find(|s| s.id == 6).unwrap();
+        assert_eq!(rev0.from_id, 1, "reverse first shot links to parent");
+        assert_eq!(rev0.section, "Branch (reversed)");
+        assert_eq!(rev1.from_id, 5, "reverse second shot chains from previous");
+
+        // Verify reversal: reverse shots should have reciprocal azimuths
+        // Shot 1 (azimuth_in=20) reversed → 200
+        assert!(
+            (rev0.azimuth - 200.0).abs() < 1e-9,
+            "first reversed shot should have reciprocal azimuth of shot 1"
+        );
+        // Shot 0 (azimuth_in=10) reversed → 190
+        assert!(
+            (rev1.azimuth - 190.0).abs() < 1e-9,
+            "second reversed shot should have reciprocal azimuth of shot 0"
+        );
+
+        // No orphaned from_id = -1 in any non-START shot
+        for s in &shots {
+            if s.shot_type != "START" {
+                assert_ne!(s.from_id, -1, "shot id={} has orphaned from_id", s.id);
+            }
+        }
+    }
+
+    #[test]
+    fn test_child_end_merge_reverses_section() {
+        let mut project = Project::new("End Merge".to_string(), None);
+
+        // Root: 2 shots
+        project.add_section(SectionData {
+            name: Some("Root".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Child: 3 shots → stations 0,1,2,3. Merge at station 3 (= shots.len()).
+        project.add_section(SectionData {
+            name: Some("Tail".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 3.0,
+                    azimuth_in: 10.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 4.0,
+                    azimuth_in: 20.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 30.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Merge child station 3 (end) → root station 2.
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 2,
+            },
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 3,
+            },
+            merged_at: chrono::Utc::now(),
+        });
+
+        let shots = build_export_shots(&project);
+
+        // Root: START(0), shot0(1), shot1(2).
+        // Reversed child: shots 2,1,0 reversed → id=3 from_id=2, id=4 from_id=3, id=5 from_id=4
+        let rev0 = shots.iter().find(|s| s.id == 3).unwrap();
+        let rev1 = shots.iter().find(|s| s.id == 4).unwrap();
+        let rev2 = shots.iter().find(|s| s.id == 5).unwrap();
+        assert_eq!(rev0.from_id, 2, "first reversed shot links to parent");
+        assert_eq!(rev0.section, "Tail (reversed)");
+        assert_eq!(rev1.from_id, 3, "second reversed shot chains");
+        assert_eq!(rev2.from_id, 4, "third reversed shot chains");
+
+        // Verify reciprocal azimuths
+        assert!(
+            (rev0.azimuth - 210.0).abs() < 1e-9,
+            "shot 2 (az=30) reversed → 210"
+        );
+        assert!(
+            (rev1.azimuth - 200.0).abs() < 1e-9,
+            "shot 1 (az=20) reversed → 200"
+        );
+        assert!(
+            (rev2.azimuth - 190.0).abs() < 1e-9,
+            "shot 0 (az=10) reversed → 190"
+        );
+
+        // No orphaned from_id = -1 in non-START shots
+        for s in &shots {
+            if s.shot_type != "START" {
+                assert_ne!(s.from_id, -1, "shot id={} has orphaned from_id", s.id);
+            }
+        }
+    }
+
+    #[test]
+    fn test_downstream_of_split_child_resolves() {
+        let mut project = Project::new("Downstream".to_string(), None);
+
+        // Section A (root): 2 shots → stations 0,1,2
+        project.add_section(SectionData {
+            name: Some("A".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Section B: 3 shots → stations 0,1,2,3. Merge at station 1 (non-zero).
+        project.add_section(SectionData {
+            name: Some("B".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 3.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 4.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Section C: 1 shot → stations 0,1. Merge at station 0 (standard child).
+        project.add_section(SectionData {
+            name: Some("C".to_string()),
+            color: "#0000ff".to_string(),
+            shots: vec![ShotData {
+                length: 2.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        // B:1 merges to A:1
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            },
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 1,
+            },
+            merged_at: chrono::Utc::now(),
+        });
+
+        // C:0 merges to B:3 (end of B's forward block)
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 1,
+                station_index: 3,
+            },
+            station_b: StationRef {
+                section_id: 2,
+                station_index: 0,
+            },
+            merged_at: chrono::Utc::now(),
+        });
+
+        let shots = build_export_shots(&project);
+
+        // A: START(0), shot0(1), shot1(2)
+        // B forward (shots 1,2): id=3 from_id→1, id=4 from_id=3
+        //   station_to_ariane: (1,2)→3, (1,3)→4
+        // B reverse (shot 0 reversed): id=5 from_id→1
+        //   station_to_ariane: (1,0)→5
+        // C: shot0(id=6). C merges at station 0 → normal child block.
+        //   parent is B:3 → station_to_ariane[(1,3)] = 4
+        //   second pass: child_station_idx=0, shots[0].from_id = 4
+
+        let c_shot = shots.iter().find(|s| s.id == 6).unwrap();
+        assert_eq!(
+            c_shot.from_id, 4,
+            "C's first shot should chain from B's forward block station 3"
+        );
+        assert_eq!(c_shot.section, "C");
+
+        // No orphaned from_id = -1 in non-START shots
+        for s in &shots {
+            if s.shot_type != "START" {
+                assert_ne!(s.from_id, -1, "shot id={} has orphaned from_id", s.id);
+            }
+        }
     }
 }
