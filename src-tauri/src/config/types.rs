@@ -515,6 +515,12 @@ pub struct GeneralConfig {
     /// Onboarding flow IDs already completed/skipped by the user
     #[serde(default)]
     pub onboarding_completed_flows: Vec<String>,
+    /// Whether anonymous telemetry is enabled
+    #[serde(default)]
+    pub telemetry_enabled: bool,
+    /// Whether the telemetry opt-in dialog has been shown
+    #[serde(default)]
+    pub telemetry_opt_in_shown: bool,
 }
 
 fn default_locale() -> String {

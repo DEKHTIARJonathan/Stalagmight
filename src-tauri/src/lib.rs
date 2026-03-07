@@ -7,6 +7,7 @@ pub mod logging;
 pub mod models;
 pub mod parsers;
 pub mod persistence;
+pub mod telemetry;
 #[cfg(test)]
 pub mod test_helpers;
 pub mod tile_providers;
@@ -1042,6 +1043,13 @@ pub fn run() {
             let state = app.state::<core::state::AppState>();
             state.set_app_handle(app.handle().clone());
 
+            // Initialize telemetry (no-op when feature is disabled)
+            let telemetry_config = state.get_config();
+            let collector = telemetry::TelemetryCollector::new(telemetry_config.general.telemetry_enabled);
+            app.manage(collector.clone());
+            telemetry::start_periodic_flush(collector.clone());
+            collector.send_buffered();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1152,6 +1160,11 @@ pub fn run() {
             // Logging
             commands::logging::get_recent_logs,
             commands::logging::push_frontend_log,
+            // Telemetry
+            commands::telemetry::track_events,
+            commands::telemetry::flush_telemetry,
+            commands::telemetry::is_telemetry_available,
+            commands::telemetry::set_telemetry_enabled,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

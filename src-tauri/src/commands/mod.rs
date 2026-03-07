@@ -11,6 +11,7 @@ pub mod shot;
 pub mod station;
 pub mod survey_geometry;
 pub mod validation;
+pub mod telemetry;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr, unsafe_code, clippy::float_cmp)]
