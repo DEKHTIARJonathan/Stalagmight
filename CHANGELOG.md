@@ -7,6 +7,8 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-03-07
+
 ### Added
 - Middle-click panning everywhere Ctrl+drag pan is supported
 - Targeted station unmerge and loop-closure removal from map context menu and detail panel
