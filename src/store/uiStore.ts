@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
+import { trackUIEvent } from '../utils/telemetry';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -326,6 +327,7 @@ export const useUIStore = create<UIStore>((set) => ({
   lastSubtoolByGroup: {},
   setActiveTool: (activeTool) =>
     set((state) => {
+      trackUIEvent(`tool.${activeTool}`);
       // Track last-used subtool per group
       const group = getGroupForTool(activeTool);
       const lastSubtoolByGroup = group
