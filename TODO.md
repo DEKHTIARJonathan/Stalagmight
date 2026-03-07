@@ -260,6 +260,7 @@ Source: `docs/transcripts/1-summary.md` — usability session importing real Mne
 
 ### Data & Editing (v2.0)
 - [ ] Raw Data Table dialog - Displays all raw data including closures and other relationships much closer to what it is stored as in SQLite for advanced user operations
+- [ ] Multi-select for stations/sections/shots - Bulk operations (delete, move, edit properties) on multi-selected items across map, data table, and sections panel
 
 ### Display Features (v2.0)
 - [ ] LRUD passage wall visualization
