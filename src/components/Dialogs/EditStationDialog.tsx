@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { formatFixed } from '../../i18n/format';
@@ -160,6 +161,7 @@ export default function EditStationDialog() {
         }
       }
 
+      trackDialogComplete('edit-station');
       closeDialog();
     } catch (e) {
       setError(getErrorMessage(e, 'An error occurred'));

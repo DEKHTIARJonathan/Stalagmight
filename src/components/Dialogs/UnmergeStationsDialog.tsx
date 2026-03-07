@@ -6,6 +6,7 @@ import type { StationRef } from '../../types/project';
 import { formatStationId } from '../../utils/formatters';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 function stationRefKey(ref: StationRef): string {
   return `${ref.section_id}:${ref.station_index}`;
@@ -81,6 +82,7 @@ export default function UnmergeStationsDialog() {
         setError(result.error ?? 'Failed to unmerge stations');
         return;
       }
+      trackDialogComplete('unmerge-stations');
       closeDialog();
     } catch (e) {
       setError(getErrorMessage(e, 'Failed to unmerge stations'));

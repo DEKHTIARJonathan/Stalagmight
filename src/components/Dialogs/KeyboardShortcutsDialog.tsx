@@ -15,7 +15,7 @@ import {
 } from '../../utils/shortcutCategories';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 export default function KeyboardShortcutsDialog() {
   const { t } = useTranslation();
@@ -64,7 +64,13 @@ export default function KeyboardShortcutsDialog() {
 
   const hasResults = filteredCategories.length > 0 || filteredReserved.length > 0;
 
+  const handleClose = useCallback(() => {
+    trackDialogComplete('keyboard-shortcuts');
+    closeDialog();
+  }, [closeDialog]);
+
   const handleCustomize = useCallback(() => {
+    trackDialogComplete('keyboard-shortcuts');
     closeDialog();
     setSource('dialog');
     setTimeout(() => openDialog('settings', { initialCategory: 'shortcuts' }), 0);
@@ -73,7 +79,7 @@ export default function KeyboardShortcutsDialog() {
   return (
     <DialogWrapper
       title={t('keyboardShortcuts.title')}
-      onClose={closeDialog}
+      onClose={handleClose}
       size="5xl"
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col overflow-hidden"

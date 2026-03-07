@@ -10,7 +10,7 @@ import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 export default function EditSectionDialog() {
   const { closeDialog, dialogData, openDialog } = useUIStore();
@@ -347,6 +347,7 @@ export default function EditSectionDialog() {
         }
       }
 
+      trackDialogComplete('edit-section');
       closeDialog();
     } catch (e) {
       setError(getErrorMessage(e, 'Failed to update section'));

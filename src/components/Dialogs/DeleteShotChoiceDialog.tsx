@@ -6,7 +6,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotImpact } from '../../types/commands';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 export default function DeleteShotChoiceDialog() {
   const { closeDialog, dialogData, openDialog, clearSelection } = useUIStore();
@@ -58,6 +58,7 @@ export default function DeleteShotChoiceDialog() {
       const result = await deleteShot(sectionId, shotId);
       if (result.success) {
         clearSelection();
+        trackDialogComplete('delete-shot-choice');
         closeDialog();
       } else {
         setError(result.error ?? 'Failed to delete shot');

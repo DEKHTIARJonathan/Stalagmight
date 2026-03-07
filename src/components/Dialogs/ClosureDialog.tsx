@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { getErrorColor } from '../../utils/colors';
@@ -63,6 +64,7 @@ export default function ClosureDialog() {
         : await createLoopClosure(stationA, stationB, effectiveStrategy);
       if (result.success) {
         clearMergeStations();
+        trackDialogComplete('closure');
         closeDialog();
       } else {
         setError(result.error ?? 'Failed to create loop closure');

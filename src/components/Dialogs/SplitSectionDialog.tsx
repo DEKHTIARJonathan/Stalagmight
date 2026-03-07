@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -42,6 +43,7 @@ export default function SplitSectionDialog() {
       if (result.success) {
         // Select section A (keeps original ID) after split
         setSelection({ type: 'section', sectionId });
+        trackDialogComplete('split-section');
         closeDialog();
       } else {
         setError(result.error ?? 'Failed to split section');

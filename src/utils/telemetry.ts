@@ -7,6 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { DISPLAY_DEFAULTS } from '../store/displaySelectors';
 
 /** How often (ms) to flush batched counts to Rust. */
 const FLUSH_INTERVAL_MS = 60_000;
@@ -19,6 +20,9 @@ let available: boolean | null = null;
 /** Source hint for the next action — consumed by dispatchers. */
 let _source = 'unknown';
 let _sourceTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Dialog completion flag — set before closeDialog() in success paths. */
+let _dialogCompleted: string | null = null;
 
 /** Last undoable command — for regret detection. */
 let _lastUndoable: { command: string; time: number } | null = null;
@@ -119,6 +123,36 @@ export function trackCommand(command: string): void {
  */
 export function trackUIEvent(name: string): void {
   counts[name] = (counts[name] || 0) + 1;
+  scheduleFlush();
+}
+
+/** Mark dialog as completed. Call before closeDialog() in success paths. */
+export function trackDialogComplete(dialogName: string): void {
+  _dialogCompleted = dialogName;
+}
+
+/** Called from closeDialog(). Emits cancel event if no completion was registered. */
+export function checkDialogCancel(dialogName: string): void {
+  if (_dialogCompleted === dialogName) {
+    _dialogCompleted = null;
+    return;
+  }
+  _dialogCompleted = null;
+  const key = `dialog-cancel.${dialogName}`;
+  counts[key] = (counts[key] || 0) + 1;
+  scheduleFlush();
+}
+
+/** Emit events for display toggles that differ from defaults. */
+export function trackDisplayState(current: object): void {
+  const state = current as Record<string, unknown>;
+  for (const [key, defaultValue] of Object.entries(DISPLAY_DEFAULTS)) {
+    const value = state[key];
+    if (value !== undefined && value !== defaultValue) {
+      const eventKey = `display-state.${key}:${String(value)}`;
+      counts[eventKey] = (counts[eventKey] || 0) + 1;
+    }
+  }
   scheduleFlush();
 }
 

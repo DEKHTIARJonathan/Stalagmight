@@ -9,6 +9,7 @@ import type { OrphanPlacementSuggestion } from '../../types/commands';
 import type { Section } from '../../types/project';
 import type { DmpSection } from '../../types/ipc/DmpSection';
 import type { OverlapMode } from '../../types/ipc/OverlapMode';
+import { trackDialogComplete } from '../../utils/telemetry';
 import {
   computeMergeOptions,
   computeActionableIds,
@@ -285,6 +286,7 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
 
   const finish = useCallback(async () => {
     await refreshProjectState();
+    trackDialogComplete('orphan-placement');
     closeDialog();
     setView('single');
     triggerFitToBounds();

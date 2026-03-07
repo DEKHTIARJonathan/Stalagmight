@@ -6,7 +6,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 import type { DmpFile, TmlFile, GpxFile } from '../../types/commands';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 /**
  * New Project dialog variant used during the DMP/TML import flow.
@@ -135,6 +135,7 @@ export default function NewProjectForImportDialog() {
       );
 
       if (result.success) {
+        trackDialogComplete('new-project-for-import');
         closeDialog();
         if (isGpx && gpxFile) {
           // Open GPX selection dialog

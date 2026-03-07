@@ -29,6 +29,7 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { FitToViewIcon } from '../common/icons';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
+import { setSource } from '../../utils/telemetry';
 
 // Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
@@ -746,6 +747,7 @@ export default function MapCanvas() {
       if (features.length > 0) {
         // Clear existing selection if not holding shift
         clearSelection();
+        setSource('map');
 
         // Add all stations in box to selection
         features.forEach((feature) => {

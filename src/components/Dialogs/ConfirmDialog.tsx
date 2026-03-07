@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
@@ -78,6 +79,7 @@ export default function ConfirmDialog() {
       // Last remaining shot: delete shot + entire section
       await deleteLastShotAndSection(sectionId, shotId);
       clearSelection();
+      trackDialogComplete('confirm-delete');
       closeDialog();
       return;
     }
@@ -104,6 +106,7 @@ export default function ConfirmDialog() {
       // For now, show a message that this is not directly supported
       // The user should delete the shots instead
     }
+    trackDialogComplete('confirm-delete');
     closeDialog();
   };
 

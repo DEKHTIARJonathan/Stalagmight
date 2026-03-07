@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
 export default function ErrorDialog() {
   const { closeDialog, dialogData } = useUIStore();
+
+  const handleClose = useCallback(() => {
+    trackDialogComplete('error');
+    closeDialog();
+  }, [closeDialog]);
 
   // Normalize dialogData values to strings to guard against non-string callers
   const rawMessage = dialogData.message;
@@ -50,7 +56,7 @@ export default function ErrorDialog() {
   }, [message, stackTrace]);
 
   return (
-    <DialogWrapper title={title} onClose={closeDialog} size="md" data-testid="error-dialog">
+    <DialogWrapper title={title} onClose={handleClose} size="md" data-testid="error-dialog">
       <div className="space-y-4">
         <p className="text-text-secondary">{message ?? 'An error occurred.'}</p>
 
@@ -78,7 +84,7 @@ export default function ErrorDialog() {
           >
             {copyFeedback === 'copied' ? 'Copied!' : copyFeedback === 'failed' ? 'Failed' : 'Copy to clipboard'}
           </button>
-          <Button onClick={closeDialog}>OK</Button>
+          <Button onClick={handleClose}>OK</Button>
         </div>
       </div>
     </DialogWrapper>

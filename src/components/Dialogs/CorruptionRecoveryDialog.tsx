@@ -9,6 +9,7 @@ import { DialogWrapper } from './DialogWrapper';
 import type { RepairResult } from '../../types/ipc/RepairResult';
 import type { BackupInfo } from '../../types/ipc/BackupInfo';
 import type { SalvagedData } from '../../types/ipc/SalvagedData';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 type Step = 'choose' | 'repairing' | 'listing-backups' | 'pick-backup' | 'restoring' | 'salvaging' | 'result';
 
@@ -181,6 +182,7 @@ export default function CorruptionRecoveryDialog() {
 
   // ── Re-open after successful repair/restore ─────────────────────
   const handleReopen = useCallback(async () => {
+    trackDialogComplete('corruption-recovery');
     closeDialog();
     await loadProject(filePath);
   }, [closeDialog, filePath, loadProject]);
@@ -314,7 +316,7 @@ export default function CorruptionRecoveryDialog() {
             {result.canReopen ? (
               <Button variant="primary" onClick={handleReopen}>Open Project</Button>
             ) : (
-              <Button onClick={closeDialog}>Close</Button>
+              <Button onClick={() => { trackDialogComplete('corruption-recovery'); closeDialog(); }}>Close</Button>
             )}
           </div>
         </div>

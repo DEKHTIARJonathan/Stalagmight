@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { trackDialogComplete } from '../../utils/telemetry';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import type { CommentHolder } from '../../types/commands';
 
@@ -45,6 +46,7 @@ export default function SwapCommentsDialog() {
     try {
       await useProjectStore.getState().moveComment(toIpcHolder(source), toIpcHolder(target), false);
       clearMoveCommentSource();
+      trackDialogComplete('swap-comments');
       closeDialog();
     } finally {
       setBusy(false);
@@ -57,6 +59,7 @@ export default function SwapCommentsDialog() {
     try {
       await useProjectStore.getState().moveComment(toIpcHolder(source), toIpcHolder(target), true);
       clearMoveCommentSource();
+      trackDialogComplete('swap-comments');
       closeDialog();
     } finally {
       setBusy(false);

@@ -51,6 +51,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
     if (e && e.button !== 0) return;
+    setSource('sections-panel');
     setSelection({
       type: 'section',
       sectionId: section.id,

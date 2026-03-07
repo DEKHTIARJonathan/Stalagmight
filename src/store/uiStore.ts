@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackAction } from '../utils/telemetry';
+import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState } from '../utils/telemetry';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -360,12 +360,16 @@ export const useUIStore = create<UIStore>((set) => ({
   // Selection state
   selection: null,
   multiSelection: [],
-  setSelection: (selection) => set({ selection, multiSelection: selection ? [selection] : [] }),
+  setSelection: (selection) => {
+    if (selection) trackAction(`select.${selection.type}`);
+    set({ selection, multiSelection: selection ? [selection] : [] });
+  },
   addToSelection: (selection) =>
     set((state) => {
       // Don't add duplicates
       const exists = state.multiSelection.some((s) => selectionsEqual(s, selection));
       if (exists) return state;
+      trackAction(`select-add.${selection.type}`);
       return {
         multiSelection: [...state.multiSelection, selection],
         selection: selection,
@@ -585,6 +589,7 @@ export const useUIStore = create<UIStore>((set) => ({
       }
       if (hasLoadedSettings) {
         set({ ...displayState, ...(gridSpacing !== undefined ? { gridSpacing } : {}) });
+        trackDisplayState(useUIStore.getState());
       }
     } catch (e) {
       // No project open or other error - use defaults
@@ -640,6 +645,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showStationComments: settings.showStationComments ?? state.showStationComments,
       gridSpacing: settings.gridSpacing ?? state.gridSpacing,
     }));
+    trackDisplayState(useUIStore.getState());
   },
 
   // Hover state
@@ -694,10 +700,20 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   dmpImportWizardPhase: null,
   openDialog: (activeDialog, dialogData = {}) => {
+    const prev = useUIStore.getState().activeDialog;
+    if (prev) {
+      // Dialog chaining — previous dialog transitions, not cancelled
+      trackDialogComplete(prev);
+      checkDialogCancel(prev);
+    }
     trackAction(`dialog.${activeDialog}`);
     set({ activeDialog, dialogData, dmpImportWizardPhase: null });
   },
-  closeDialog: () => set({ activeDialog: null, dialogData: {}, dmpImportWizardPhase: null }),
+  closeDialog: () => {
+    const dialogName = useUIStore.getState().activeDialog;
+    if (dialogName) checkDialogCancel(dialogName);
+    set({ activeDialog: null, dialogData: {}, dmpImportWizardPhase: null });
+  },
   setDmpImportWizardPhase: (dmpImportWizardPhase) => set({ dmpImportWizardPhase }),
 
   // Import flow context

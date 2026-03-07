@@ -42,7 +42,7 @@ import {
   computeSegmentLayout,
 } from '../../utils/segmentContext';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
-import { setSource } from '../../utils/telemetry';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import {
   adjustStationForDeletedShots,
   findReverseImportConnection,
@@ -2056,6 +2056,7 @@ export default function DmpNewImportDialog({
       }
 
       // No unreachable — all done
+      trackDialogComplete('dmp-import-new');
       onComplete(importedSectionIdsRef.current);
     } finally {
       transitionToPlacingInFlightRef.current = false;
@@ -2264,6 +2265,7 @@ export default function DmpNewImportDialog({
       // If this was the last segment, finish the import — don't wait for the
       // placing phase which would race with isImporting state.
       if (segmentQueue.length === 0) {
+        trackDialogComplete('dmp-import-new');
         onComplete(importedSectionIdsRef.current);
       }
     };
@@ -2353,6 +2355,7 @@ export default function DmpNewImportDialog({
         }
       }
 
+      trackDialogComplete('dmp-import-new');
       onComplete(importedSectionIdsRef.current);
     };
 
@@ -2388,6 +2391,7 @@ export default function DmpNewImportDialog({
       }
     }
 
+    trackDialogComplete('dmp-import-new');
     onComplete(importedSectionIdsRef.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, isImporting, isCalculating]);

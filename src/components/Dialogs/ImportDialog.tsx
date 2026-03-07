@@ -8,6 +8,7 @@ import { DialogWrapper } from './DialogWrapper';
 import type { ShotData, SectionData } from '../../types/project';
 import { getNextSectionColor } from '../../utils/colors';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 /** Editable column keys in display order (without LRUD). */
 const BASE_COLS: EditableField[] = ['length', 'azimuth', 'depth_in', 'depth_out'];
@@ -272,6 +273,7 @@ export default function ImportDialog() {
     const formState: SavedFormState = { name, surveyor, date, color, shots, showLrud };
 
     // Close dialog and enter placement mode
+    trackDialogComplete('import');
     closeDialog();
     startPlacementMode(
       sectionData,

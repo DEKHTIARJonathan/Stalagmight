@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { trackDialogComplete } from '../../utils/telemetry';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
 
@@ -90,6 +91,11 @@ function LogLine({ line }: { line: string }) {
 
 export default function DebugDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
+
+  const handleClose = useCallback(() => {
+    trackDialogComplete('debug');
+    closeDialog();
+  }, [closeDialog]);
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<LevelFilter>('all');
@@ -148,7 +154,7 @@ export default function DebugDialog() {
   return (
     <DialogWrapper
       title="Debug Logs"
-      onClose={closeDialog}
+      onClose={handleClose}
       size="5xl"
       overflow="hidden"
       data-testid="debug-dialog"
