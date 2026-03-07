@@ -51,9 +51,10 @@ pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
 pub struct Shot {
     /// Internal immutable ID
     pub id: ShotId,
-    /// Azimuth reading when entering the shot (degrees, 0-360)
+    /// First forward azimuth reading for the shot (degrees, 0-360)
     pub azimuth_in: f64,
-    /// Azimuth reading when exiting the shot (degrees, 0-360)
+    /// Second forward azimuth reading for the shot (degrees, 0-360).
+    /// This is not a backsight/reciprocal field.
     pub azimuth_out: f64,
     /// Length of the shot in meters
     pub length: f64,

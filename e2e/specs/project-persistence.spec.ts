@@ -642,12 +642,14 @@ describe('Project Persistence', () => {
       return e2e.projectStore.getState().recentProjects;
     });
 
-    // Verify our project is in the recent list (name includes timestamp suffix from E2E helper)
-    const foundProject = recentProjects.find(
-      (p) => (p.path || p.file_path)?.includes('Recent Test')
-    );
+    // Verify our saved file is present in recents (match by path/filename, not transient project name)
+    const expectedFileName = path.basename(projectPath);
+    const foundProject = recentProjects.find((p) => {
+      const candidatePath = p.path || p.file_path || '';
+      return candidatePath.includes(expectedFileName);
+    });
     expect(foundProject).toBeDefined();
-    expect(foundProject?.name?.startsWith('Recent Test')).toBe(true);
+    expect((foundProject?.path || foundProject?.file_path) ?? '').toContain(expectedFileName);
   });
 
   /**

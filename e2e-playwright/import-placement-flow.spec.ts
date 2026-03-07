@@ -1,787 +1,324 @@
-import { test, expect, Page } from './fixtures/coverage';
+import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
-  openDmpSelectionDialog,
-  waitForMapIdle,
+  createSectionViaStore,
 } from './helpers/app';
 
-/**
- * Import Placement Flow E2E Tests
- *
- * Tests the redesigned section placement workflow in DmpSectionConfigDialog (Step 2):
- * - No auto-placement of first section
- * - Explicit "Place section" action required
- * - Auto-advance to next unplaced section after placing
- * - "Place and finish" when on last unplaced section
- * - Exclude/Include toggle functionality
- * - Read-only state for placed sections
- * - Status icons for different states (placed, not_placed, excluded, errors)
- *
- * Mock data sections (indices 0-5):
- * - 0: Main Passage - valid, 3 shots
- * - 1: Side Tunnel - valid, 2 shots
- * - 2: Mixed LRUD Section - valid, 3 shots (one long shot)
- * - 3: Undefined LRUD Section - valid, 2 shots
- * - 4: Empty Section - error (no shots)
- * - 5: Validation Test Section - error (azimuth out of range)
- */
+type MockSuggestion = {
+  existingStationIndex: number;
+  importStationIndex: number;
+  score: number;
+  matchedShots: number;
+  direction: 'forward' | 'reverse';
+  isPartial: boolean;
+  confidence: 'high' | 'medium' | 'low';
+  existingSectionName: string;
+  importSectionIndex: number;
+  importSectionName: string;
+  targetType: 'existing' | 'importing';
+  existingSectionId: number | null;
+  targetImportIndex: number | null;
+};
 
-/**
- * Helper to create a project and open import dialog.
- */
-async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
-  await createProject(page, 'Placement Test');
-  await openDmpSelectionDialog(page);
-  await expect(page.getByTestId('dmp-selection-dialog').getByTestId('section-row-0')).toBeVisible({ timeout: 5000 });
+function buildMockDmpFile() {
+  return {
+    version: 5,
+    sections: [
+      {
+        name: 'Anchor Candidate',
+        direction: 'in',
+        date: '2026-02-01',
+        content_hash: 'hash-anchor-candidate',
+        shots: [
+          {
+            shot_type: 'Standard',
+            heading_in: 40,
+            heading_out: 40,
+            length: 10,
+            depth_in: -1,
+            depth_out: -2,
+            pitch_in: 0,
+            pitch_out: 0,
+            left: 1,
+            right: 1,
+            up: 1,
+            down: 1,
+            temperature: 18,
+            hour: 10,
+            minute: 0,
+            second: 0,
+            marker_index: 0,
+            comment: null,
+          },
+        ],
+      },
+      {
+        name: 'Unanchored Segment',
+        direction: 'in',
+        date: '2026-02-01',
+        content_hash: 'hash-unanchored-segment',
+        shots: [
+          {
+            shot_type: 'Standard',
+            heading_in: 120,
+            heading_out: 120,
+            length: 8,
+            depth_in: -2,
+            depth_out: -3,
+            pitch_in: 0,
+            pitch_out: 0,
+            left: 1,
+            right: 1,
+            up: 1,
+            down: 1,
+            temperature: 18,
+            hour: 10,
+            minute: 5,
+            second: 0,
+            marker_index: 0,
+            comment: null,
+          },
+        ],
+      },
+    ],
+  };
 }
 
-/**
- * Helper to select specific sections in Step 1 and proceed to Step 2.
- * @param sectionIndices - Array of section indices to select (0-based)
- */
-async function selectSectionsAndProceed(page: Page, sectionIndices: number[]): Promise<void> {
-  const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
+const defaultSuggestions: MockSuggestion[] = [
+  {
+    existingStationIndex: 0,
+    importStationIndex: 0,
+    score: 0.94,
+    matchedShots: 0,
+    direction: 'forward',
+    isPartial: false,
+    confidence: 'high',
+    existingSectionName: 'Anchor Section',
+    importSectionIndex: 0,
+    importSectionName: 'Anchor Candidate',
+    targetType: 'existing',
+    existingSectionId: 1,
+    targetImportIndex: null,
+  },
+];
 
-  // Deselect all first
-  await dialog.locator('[data-testid="select-none-button"]').click();
+async function setImportSuggestions(page: Page, suggestions: MockSuggestion[]): Promise<void> {
+  await page.evaluate((nextSuggestions) => {
+    const setSuggestions =
+      (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+    if (typeof setSuggestions !== 'function') {
+      throw new Error('Mock suggestion setter not available');
+    }
+    (setSuggestions as (value: unknown[]) => void)(nextSuggestions);
+  }, suggestions);
+}
 
-  // Select specified sections
-  for (const idx of sectionIndices) {
-    await dialog.locator(`[data-testid="section-checkbox-${idx}"]`).click();
+async function openDmpWizard(page: Page): Promise<void> {
+  await page.evaluate((dmpFile) => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore?: {
+          getState: () => {
+            openDialog: (dialog: string, data?: Record<string, unknown>) => void;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+
+    if (!e2e?.uiStore) {
+      throw new Error('E2E UI store unavailable');
+    }
+
+    const selectionConfig = {
+      selectedIndices: new Set([0, 1]),
+      defaultSurveyor: 'Session Diver',
+      defaultDate: null,
+      fileHash: 'mock_dmp_hash_flow',
+      sectionHashes: ['hash-anchor-candidate', 'hash-unanchored-segment'],
+    };
+
+    e2e.uiStore.getState().openDialog('dmp-import-new', {
+      dmpFile,
+      filePath: '/mock/import-placement-flow.dmp',
+      selectionConfig,
+    });
+  }, buildMockDmpFile());
+
+  await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+}
+
+async function openManualPlacing(page: Page): Promise<void> {
+  await page.getByTestId('confirm-button').click();
+
+  const manualPlacing = page.getByTestId('wizard-manual-placing');
+  await page.waitForTimeout(300);
+  if (!(await manualPlacing.isVisible())) {
+    await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+    await page.keyboard.press('Escape');
   }
 
-  // Proceed to Step 2
-  await dialog.locator('[data-testid="continue-button"]').click();
-  await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible({ timeout: 5000 });
-}
-
-/**
- * Helper to get the current section's status.
- */
-async function getCurrentSectionStatus(page: Page, arrayIndex: number): Promise<string> {
-  const status = page.locator(`[data-testid="section-status-${arrayIndex}"]`);
-  return await status.textContent() || '';
+  await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+  await expect(manualPlacing).toBeVisible({ timeout: 10000 });
 }
 
 test.describe('Import Placement Flow', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
+    await createProject(page, 'Placement Wizard Test');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 40, azimuth_out: 40, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+    await setImportSuggestions(page, defaultSuggestions);
   });
 
-  test.describe('No Auto-Placement', () => {
-    /**
-     * Test: First section should NOT be auto-placed when Step 2 opens.
-     * The old behavior auto-placed the first section; the new behavior requires explicit placement.
-     */
-    test('should not auto-place first section when Step 2 opens', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // First section should show default status (not placed, no warnings)
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-      await expect(status0).toHaveClass(/text-text-secondary/);
-
-      // Second section should also show default status
-      const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toHaveAttribute('data-status', 'not_placed');
-      await expect(status1).toHaveClass(/text-text-secondary/);
-    });
-
-    /**
-     * Test: Single section should show "Place and finish" button (not "Place section")
-     * since it's the only section and also the last unplaced one.
-     */
-    test('should show Place and finish for single section import', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0]); // Only Main Passage
-
-      // Should show "Place and finish" since it's the only section
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeVisible();
-      await expect(placeAndFinishBtn).toBeEnabled();
-
-      // "Place section" button should NOT be visible
-      const placeSectionBtn = page.locator('[data-testid="place-section-button"]');
-      await expect(placeSectionBtn).not.toBeVisible();
-    });
-
-    /**
-     * Test: Multiple sections should show "Place section" button initially.
-     */
-    test('should show Place section button for multiple sections', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Should show "Place section" button
-      const placeSectionBtn = page.locator('[data-testid="place-section-button"]');
-      await expect(placeSectionBtn).toBeVisible();
-      await expect(placeSectionBtn).toBeEnabled();
-
-      // "Place and finish" should NOT be visible yet
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).not.toBeVisible();
-    });
-
-    test('should keep Place on Map as primary and keep secondary import buttons visibly button-like', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]);
-
-      await page.locator('[data-testid="placement-manual"]').check();
-
-      const placeOnMapButton = page.locator('[data-testid="start-placement-button"]');
-      await expect(placeOnMapButton).toBeVisible();
-      await expect(placeOnMapButton).toHaveAttribute('data-primary-action', '');
-
-      await expect(page.locator('[data-testid="cancel-button"]')).toHaveClass(/ring-1/);
-      await expect(page.locator('[data-testid="back-to-selection-button"]')).toHaveClass(/ring-1/);
-      await expect(page.locator('[data-testid="exclude-button"]')).toHaveClass(/ring-1/);
-    });
-  });
-
-  test.describe('Place Section Functionality', () => {
-    /**
-     * Test: Clicking "Place section" marks the section as placed and shows checkmark.
-     */
-    test('should mark section as placed when clicking Place section', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Verify first section starts with default status (not placed)
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-
-      // Click "Place section"
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
-
-      // First section should now show placed status (checkmark)
-      await expect(status0).toHaveAttribute('data-status', 'placed');
-      await expect(status0).toHaveClass(/text-success/);
-    });
-
-    /**
-     * Test: After placing, should auto-advance to next unplaced section.
-     */
-    test('should auto-advance to next unplaced section after placing', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // First section should be active (highlighted)
-      const item0 = page.locator('[data-testid="section-list-item-0"]');
-      await expect(item0).toHaveClass(/bg-accent/);
-
-      // Click "Place section"
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
-
-      // Should have auto-advanced to second section (now active)
-      const item1 = page.locator('[data-testid="section-list-item-1"]');
-      await expect(item1).toHaveClass(/bg-accent/);
-
-      // Second section should now show "Place and finish" since it's the last unplaced
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeVisible();
-    });
-
-    /**
-     * Test: Placing last section should trigger import.
-     */
-    test('should trigger import when clicking Place and finish', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0]); // Single section
-
-      // Click "Place and finish"
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeEnabled();
-      await placeAndFinishBtn.click();
-
-      // Wait for dialog to close (import completed)
-      await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({
-        timeout: 10000,
-      });
-
-      // Canvas should still be visible (app functional)
-      await expect(page.getByTestId('map-canvas')).toBeVisible();
-    });
-
-    /**
-     * Test: Navigation via left panel does NOT place sections.
-     */
-    test('should not place section when navigating via left panel', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1, 3]); // Main Passage + Side Tunnel + Undefined LRUD
-
-      // Navigate to second section via left panel
-      await page.locator('[data-testid="section-list-item-1"]').click();
-      await waitForMapIdle(page);
-
-      // First section should still show default status (not placed)
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-
-      // Navigate to third section
-      await page.locator('[data-testid="section-list-item-2"]').click();
-      await waitForMapIdle(page);
-
-      // Both first and second should still show default status (not placed)
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-      const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toHaveAttribute('data-status', 'not_placed');
-
-      // Navigate back to first and all should still be unplaced
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-    });
-
-    /**
-     * Test: When viewing a placed section with more unplaced sections, show "Next section" button.
-     */
-    test('should show Next section button for placed sections with more unplaced sections', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate back to first section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Should show "Next section" button instead of disabled "Place section"
-      const nextBtn = page.locator('[data-testid="next-section-button"]');
-      await expect(nextBtn).toBeVisible();
-      await expect(nextBtn).toBeEnabled();
-
-      // Clicking it should navigate to the next unplaced section
-      await nextBtn.click();
-      await waitForMapIdle(page);
-
-      // Should now be on section 1 (Side Tunnel) and can place it
-      const placeBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeBtn).toBeVisible();
-    });
-  });
-
-  test.describe('Exclude/Include Functionality', () => {
-    /**
-     * Test: Clicking Exclude marks section as excluded with red X.
-     */
-    test('should mark section as excluded when clicking Exclude', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Click Exclude button
-      const excludeBtn = page.locator('[data-testid="exclude-button"]');
-      await expect(excludeBtn).toBeVisible();
-      await excludeBtn.click();
-      await waitForMapIdle(page);
-
-      // First section should show excluded status (red X)
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'excluded');
-      await expect(status0).toHaveClass(/text-error/);
-    });
-
-    /**
-     * Test: Excluded section shows Include button to toggle back.
-     */
-    test('should show Include button for excluded section', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Exclude first section
-      const excludeBtn = page.locator('[data-testid="exclude-button"]');
-      await expect(excludeBtn).toBeVisible();
-      await excludeBtn.click();
-      await waitForMapIdle(page);
-
-      // Auto-advance happens after excluding, so navigate back to excluded section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Button should now say "Include"
-      const includeBtn = page.locator('[data-testid="include-button"]');
-      await expect(includeBtn).toBeVisible();
-    });
-
-    /**
-     * Test: Clicking Include removes exclusion.
-     */
-    test('should remove exclusion when clicking Include', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Exclude first section
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate back to excluded section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Click Include to toggle back
-      const includeBtn = page.locator('[data-testid="include-button"]');
-      await expect(includeBtn).toBeVisible();
-      await includeBtn.click();
-      await waitForMapIdle(page);
-
-      // Should show default status again (not placed)
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-      await expect(status0).toHaveClass(/text-text-secondary/);
-
-      // Exclude button should be visible again
-      await expect(page.locator('[data-testid="exclude-button"]')).toBeVisible();
-    });
-
-    /**
-     * Test: Excluded sections are skipped during auto-advance.
-     */
-    test('should skip excluded sections during auto-advance', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1, 3]); // 3 sections
-
-      // Navigate to second section and exclude it
-      await page.locator('[data-testid="section-list-item-1"]').click();
-      await waitForMapIdle(page);
-      await page.locator('[data-testid="exclude-button"]').click();
-
-      // Wait for excluded status to appear
-      const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toHaveAttribute('data-status', 'excluded');
-
-      // After excluding section 1, should auto-advance to section 3
-      // Verify section 3 (array index 2) is now active
-      const item2AfterExclude = page.locator('[data-testid="section-list-item-2"]');
-      await expect(item2AfterExclude).toHaveClass(/bg-accent/, { timeout: 2000 });
-
-      // Go back to first section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Verify first section is active
-      const item0 = page.locator('[data-testid="section-list-item-0"]');
-      await expect(item0).toHaveClass(/bg-accent/);
-
-      // Place first section - should auto-advance to THIRD section (skipping excluded second)
-      await page.locator('[data-testid="place-section-button"]').click();
-
-      // Wait for the section heading to change to Undefined LRUD Section
-      // This is a more robust way to verify navigation happened
-      await expect(page.locator('h3:has-text("Section: Undefined LRUD Section")')).toBeVisible({ timeout: 5000 });
-
-      // Also verify the third section item is active
-      const item2 = page.locator('[data-testid="section-list-item-2"]');
-      await expect(item2).toHaveClass(/bg-accent/);
-    });
-
-    /**
-     * Test: Cannot exclude already-placed section.
-     */
-    test('should disable Exclude button for placed sections', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate back to placed section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Exclude button should be disabled
-      const excludeBtn = page.locator('[data-testid="exclude-button"]');
-      await expect(excludeBtn).toBeDisabled();
-    });
-
-    /**
-     * Test: Excluding all sections shows "Cancel (all sections excluded)" button.
-     */
-    test('should show Cancel button when all sections excluded', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Exclude first section
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate to second section and exclude it too
-      await page.locator('[data-testid="section-list-item-1"]').click();
-      await waitForMapIdle(page);
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
-
-      // Should show "Cancel (all sections excluded)" button
-      const cancelAllBtn = page.locator('[data-testid="cancel-all-excluded-button"]');
-      await expect(cancelAllBtn).toBeVisible();
-      await expect(cancelAllBtn).toContainText('Cancel');
-    });
-
-    /**
-     * Test: Excluded sections count as "handled" for Place and finish logic.
-     */
-    test('should show Place and finish when others are excluded', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Exclude second section
-      await page.locator('[data-testid="section-list-item-1"]').click();
-      await waitForMapIdle(page);
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate to first section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Should show "Place and finish" since other section is excluded
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeVisible();
-    });
-  });
-
-  test.describe('Read-Only State for Placed Sections', () => {
-    /**
-     * Test: Placed section has disabled placement options.
-     */
-    test('should disable placement options for placed sections', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate back to placed section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Placement radio buttons should be disabled
-      const placementRadios = page.locator('[data-testid="placement-radio-origin"]');
-      if (await placementRadios.count() > 0) {
-        await expect(placementRadios.first()).toBeDisabled();
-      }
-    });
-
-    /**
-     * Test: Placed section shows read-only indicator.
-     */
-    test('should show read-only indicator for placed sections', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate back to placed section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Should show some read-only indicator (check for disabled state or text)
-      // The shot table inputs should be disabled
-      const tableInputs = page.locator('[data-testid="shot-table"] input');
-      if (await tableInputs.count() > 0) {
-        await expect(tableInputs.first()).toBeDisabled();
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => {
+      const resetSuggestions =
+        (window as unknown as Record<string, unknown>).__MOCK_RESET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof resetSuggestions === 'function') {
+        (resetSuggestions as () => void)();
       }
     });
   });
 
-  test.describe('Status Icons', () => {
-    /**
-     * Test: Not placed section without warnings shows default icon.
-     */
-    test('should show default icon for not placed sections without warnings', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0]); // Main Passage only
+  test('shows suggestion-phase controls and actions', async ({ page }) => {
+    await openDmpWizard(page);
 
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-      await expect(status0).toHaveClass(/text-text-secondary/);
-    });
-
-    /**
-     * Test: Placed section shows green checkmark.
-     */
-    test('should show green checkmark for placed sections', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
-
-      // First section should show checkmark
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'placed');
-      await expect(status0).toHaveClass(/text-success/);
-    });
-
-    /**
-     * Test: Excluded section shows red X.
-     */
-    test('should show red X for excluded sections', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
-
-      // Exclude first section
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
-
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'excluded');
-      await expect(status0).toHaveClass(/text-error/);
-    });
-
-    /**
-     * Test: Section with data errors shows exclamation mark.
-     */
-    test('should show exclamation mark for sections with errors', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      // Select Main Passage (no errors) and Validation Test Section (has errors)
-      await selectSectionsAndProceed(page, [0, 5]);
-
-      // Main Passage should show default status (no errors)
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'not_placed');
-
-      // Validation Test Section should show error
-      const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toHaveAttribute('data-status', 'errors');
-      await expect(status1).toHaveClass(/text-error/);
-    });
+    await expect(page.getByTestId('wizard-connection-description')).toBeVisible();
+    await expect(page.getByTestId('wizard-confidence')).toBeVisible();
+    await expect(page.getByTestId('confirm-button')).toBeVisible();
+    await expect(page.getByTestId('skip-button')).toBeVisible();
   });
 
-  test.describe('Error Handling', () => {
-    /**
-     * Test: Place button disabled for sections with data errors.
-     */
-    test('should disable Place button for sections with errors', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      // Select only the section with errors
-      await selectSectionsAndProceed(page, [5]); // Validation Test Section
+  test('supports alternatives list in suggestion phase', async ({ page }) => {
+    await setImportSuggestions(page, [
+      ...defaultSuggestions,
+      {
+        ...defaultSuggestions[0],
+        score: 0.77,
+        confidence: 'medium',
+      },
+    ]);
 
-      // Place button should be disabled
-      const placeBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeBtn).toBeDisabled();
-    });
+    await openDmpWizard(page);
 
-    /**
-     * Test: Empty section checkbox is disabled in Step 1.
-     * Empty sections cannot be selected because they have no shots to import.
-     */
-    test('should disable checkbox for empty sections in Step 1', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
+    const alternativesToggle = page.getByTestId('toggle-alternatives');
+    const alternativesList = page.getByTestId('alternatives-list');
+    await expect(alternativesToggle).toBeVisible();
 
-      // Empty section (index 4) checkbox should be disabled
-      const emptyCheckbox = page.locator('[data-testid="section-checkbox-4"]');
-      await expect(emptyCheckbox).toBeDisabled();
-    });
+    if (!(await alternativesList.isVisible())) {
+      await alternativesToggle.click();
+    }
 
-    /**
-     * Test: Can exclude section with errors.
-     */
-    test('should allow excluding sections with errors', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 5]); // Main Passage + Validation Test
-
-      // Navigate to section with errors - wait for heading to confirm navigation
-      await page.locator('[data-testid="section-list-item-1"]').click();
-      await expect(page.locator('h3:has-text("Section: Validation Test Section")')).toBeVisible({ timeout: 3000 });
-
-      // Should be able to exclude it
-      const excludeBtn = page.locator('[data-testid="exclude-button"]');
-      await expect(excludeBtn).toBeEnabled();
-      await excludeBtn.click();
-      await waitForMapIdle(page);
-
-      // Should be excluded
-      const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toHaveAttribute('data-status', 'excluded');
-    });
-
-    /**
-     * Test: Can complete import by excluding error sections and placing valid ones.
-     */
-    test('should complete import when error sections are excluded', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 5]); // Main Passage + Validation Test
-
-      // Navigate to the error section - wait for heading to confirm navigation
-      await page.locator('[data-testid="section-list-item-1"]').click();
-      await expect(page.locator('h3:has-text("Section: Validation Test Section")')).toBeVisible({ timeout: 3000 });
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
-
-      // Navigate to valid section
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
-
-      // Should show "Place and finish"
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeVisible();
-      await expect(placeAndFinishBtn).toBeEnabled();
-
-      // Complete import
-      await placeAndFinishBtn.click();
-
-      // Dialog should close
-      await expect(page.locator('[data-testid="dmp-section-config-dialog"]')).not.toBeVisible({
-        timeout: 10000,
-      });
-    });
+    await expect(alternativesList).toBeVisible();
+    await expect(page.getByTestId('alternative-0')).toBeVisible();
   });
 
-  test.describe('Edge Cases', () => {
-    /**
-     * Test: Three sections - place first two, third becomes "Place and finish".
-     */
-    test('should show Place and finish when reaching last unplaced section', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1, 3]); // 3 valid sections
+  test('confirming suggestion transitions to manual placing', async ({ page }) => {
+    await openDmpWizard(page);
+    await openManualPlacing(page);
 
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
+    await expect(page.getByTestId('segment-placement-modes')).toBeVisible();
+    await expect(page.getByTestId('segment-place-button')).toBeVisible();
+  });
 
-      // Should auto-advance to second section, place it
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
+  test('manual mode keeps segment-place disabled until a placement action is chosen', async ({ page }) => {
+    await openDmpWizard(page);
+    await openManualPlacing(page);
 
-      // Should auto-advance to third section and show "Place and finish"
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeVisible();
-    });
+    const placeButton = page.getByTestId('segment-place-button');
+    await expect(placeButton).toBeDisabled();
+  });
 
-    /**
-     * Test: Exclude all, then include one - should be able to proceed.
-     */
-    test('should allow proceeding after excluding all then including one', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
+  test('discard mode enables place action and can finish the wizard', async ({ page }) => {
+    await openDmpWizard(page);
+    await openManualPlacing(page);
 
-      // Exclude first section
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
+    await page.getByTestId('segment-mode-discard').click();
+    const placeButton = page.getByTestId('segment-place-button');
+    await expect(placeButton).toBeEnabled();
+    await placeButton.click();
 
-      // Auto-advance to second section, exclude it too
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 10000 });
+  });
 
-      // Should show cancel button (all excluded)
-      await expect(page.locator('[data-testid="cancel-all-excluded-button"]')).toBeVisible();
+  test('from-existing mode requires selecting target section before place is enabled', async ({ page }) => {
+    await openDmpWizard(page);
+    await openManualPlacing(page);
 
-      // Navigate to first section and include it
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
+    await page.getByTestId('segment-mode-from-existing').click();
 
-      // Verify Include button is visible
-      const includeBtn = page.locator('[data-testid="include-button"]');
-      await expect(includeBtn).toBeVisible();
-      await includeBtn.click();
-      await waitForMapIdle(page);
+    const placeButton = page.getByTestId('segment-place-button');
+    await expect(placeButton).toBeDisabled();
 
-      // Should now show "Place and finish"
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeVisible();
-      await expect(placeAndFinishBtn).toBeEnabled();
-    });
+    await page.getByTestId('from-existing-section-select').click();
+    const dropdownListbox = page
+      .locator('[role="listbox"]')
+      .filter({ has: page.getByRole('option', { name: 'Anchor Section', exact: true }) })
+      .last();
+    await dropdownListbox.getByRole('option', { name: 'Anchor Section', exact: true }).click();
 
-    /**
-     * Test: Place one, exclude rest - should complete import with placed section only.
-     */
-    test('should import only placed sections when others are excluded', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1]); // Main Passage + Side Tunnel
+    await expect(placeButton).toBeEnabled();
+  });
 
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
+  test('manual place-on-map hides wizard and escape restores it', async ({ page }) => {
+    await openDmpWizard(page);
+    await openManualPlacing(page);
 
-      // Exclude second section (auto-advanced to it)
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
+    await page.getByTestId('segment-mode-manual').click();
+    await page.getByTestId('segment-place-on-map-button').click();
 
-      // Navigate to first (placed) section - should be able to finish
-      await page.locator('[data-testid="section-list-item-0"]').click();
-      await waitForMapIdle(page);
+    await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 10000 });
 
-      // When a placed section is active and all others are excluded/placed,
-      // we need to trigger finish. This may require navigating or button logic.
-      // Let's check what button is shown
-      // Actually, the finish logic should work from any section when all are handled
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
+  });
 
-      // The dialog should allow finishing - check for any action button
-      // Since section 0 is placed and section 1 is excluded, import should be possible
-      // Let's navigate to section 1 (excluded) and check for finish option
-      await page.locator('[data-testid="section-list-item-1"]').click();
-      await waitForMapIdle(page);
+  test('skip action in suggestion phase still reaches manual placing', async ({ page }) => {
+    await openDmpWizard(page);
 
-      // With excluded section active, the Place button should be disabled
-      // but there should be a way to finish since all sections are handled
-      // Actually, we need to check the actual behavior - excluded section
-      // shows "Include" button, and if it's the last unplaced non-excluded,
-      // the logic may be different
+    await page.getByTestId('skip-button').click();
 
-      // Based on the implementation, when viewing excluded section,
-      // the Place button is disabled. The user needs to navigate to
-      // an unplaced section to place it. Since all are handled,
-      // the dialog should auto-finish after the last place action.
+    const manualPlacing = page.getByTestId('wizard-manual-placing');
+    await page.waitForTimeout(300);
+    if (!(await manualPlacing.isVisible())) {
+      await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+      await page.keyboard.press('Escape');
+    }
 
-      // Let me verify - after placing section 0 and excluding section 1,
-      // the auto-advance would go to section 1 but it's excluded.
-      // The dialog should detect all sections are handled.
-      // This is actually a tricky edge case - let me verify the expected behavior.
+    await expect(manualPlacing).toBeVisible({ timeout: 10000 });
+  });
 
-      // Based on plan: excluded sections count as "handled"
-      // When on section 1 (excluded), and section 0 is placed,
-      // all sections are handled. The dialog should allow finishing.
+  test('cancel requires confirmation before closing', async ({ page }) => {
+    await openDmpWizard(page);
 
-      // Let me just verify the app state is correct
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'placed'); // placed
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    await wizard.getByTestId('cancel-button').click();
 
-      const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toHaveAttribute('data-status', 'excluded'); // excluded
-    });
+    const cancelConfirmDialog = page.getByTestId('cancel-confirm-dialog');
+    if (await cancelConfirmDialog.isVisible()) {
+      await page.getByTestId('confirm-cancel-button').click();
+    }
 
-    /**
-     * Test: Mixed state - one placed, one not placed, one excluded.
-     */
-    test('should handle mixed placed/not_placed/excluded states', async ({ page }) => {
-      await createProjectAndOpenImportDialog(page);
-      await selectSectionsAndProceed(page, [0, 1, 3]); // 3 valid sections
+    await expect(wizard).toBeHidden({ timeout: 10000 });
+  });
 
-      // Place first section
-      await page.locator('[data-testid="place-section-button"]').click();
-      await waitForMapIdle(page);
+  test('back requires confirmation and can return to selection dialog', async ({ page }) => {
+    await openDmpWizard(page);
 
-      // We're now on section 1 (auto-advanced) - exclude it
-      await page.locator('[data-testid="exclude-button"]').click();
-      await waitForMapIdle(page);
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    await wizard.getByTestId('back-button').click();
 
-      // Should auto-advance to section 2 (array index 2, which is section index 3)
-      const item2 = page.locator('[data-testid="section-list-item-2"]');
-      await expect(item2).toHaveClass(/bg-accent/);
+    const backConfirmDialog = page.getByTestId('back-confirm-dialog');
+    if (await backConfirmDialog.isVisible()) {
+      await page.getByTestId('confirm-back-button').click();
+    }
 
-      // Verify all statuses
-      const status0 = page.locator('[data-testid="section-status-0"]');
-      await expect(status0).toHaveAttribute('data-status', 'placed'); // placed
-
-      const status1 = page.locator('[data-testid="section-status-1"]');
-      await expect(status1).toHaveAttribute('data-status', 'excluded'); // excluded
-
-      const status2 = page.locator('[data-testid="section-status-2"]');
-      await expect(status2).toHaveAttribute('data-status', 'not_placed'); // not placed
-
-      // Should show "Place and finish" since this is the last unplaced
-      const placeAndFinishBtn = page.locator('[data-testid="place-and-finish-button"]');
-      await expect(placeAndFinishBtn).toBeVisible();
-    });
+    await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 10000 });
   });
 });

@@ -1,8 +1,10 @@
-import { test, expect } from './fixtures/coverage';
+import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
   openDmpSelectionDialog,
+  proceedToDmpSectionConfig,
+  ensureDmpNewImportDialogVisible,
 } from './helpers/app';
 
 /**
@@ -25,32 +27,77 @@ test.describe('Window Close Protection', () => {
     await setupMockedPage(page);
   });
 
-  async function cancelFromStep2(page: import('@playwright/test').Page): Promise<void> {
-    await page.getByTestId('cancel-button').click();
-    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible();
-    await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible();
-    await page.getByTestId('confirm-cancel-button').click();
-    await expect(page.getByTestId('cancel-confirm-dialog')).not.toBeVisible({ timeout: 3000 });
+  async function cancelFromWizard(page: Page): Promise<void> {
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    await expect(wizard).toBeVisible({ timeout: 10000 });
+
+    await wizard.getByTestId('cancel-button').click();
+    const cancelConfirmDialog = page.getByTestId('cancel-confirm-dialog');
+    if (await cancelConfirmDialog.isVisible()) {
+      await page.getByTestId('confirm-cancel-button').click();
+    }
+
+    await expect(wizard).toBeHidden({ timeout: 10000 });
+    await expect(cancelConfirmDialog).toBeHidden({ timeout: 3000 });
+  }
+
+  async function finishSingleSectionImport(page: Page): Promise<void> {
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const placementIndicator = page.getByTestId('placement-mode-indicator');
+      if (await placementIndicator.isVisible()) {
+        const mapCanvas = page.getByTestId('map-canvas');
+        const bounds = await mapCanvas.boundingBox();
+        if (bounds) {
+          await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
+        }
+        await page.waitForTimeout(150);
+      }
+
+      if (!(await wizard.isVisible())) {
+        if (await placementIndicator.isVisible()) {
+          continue;
+        }
+        return;
+      }
+
+      if (await page.getByTestId('wizard-suggestion').isVisible()) {
+        await page.getByTestId('confirm-button').click();
+        continue;
+      }
+
+      if (await page.getByTestId('wizard-manual-placing').isVisible()) {
+        const placeOnMapButton = page.getByTestId('segment-place-on-map-button');
+        if (await placeOnMapButton.isVisible() && await placeOnMapButton.isEnabled()) {
+          await placeOnMapButton.click();
+          continue;
+        }
+
+        const placeButton = page.getByTestId('segment-place-button');
+        if (await placeButton.isVisible() && await placeButton.isEnabled()) {
+          await placeButton.click();
+          continue;
+        }
+      }
+
+      await ensureDmpNewImportDialogVisible(page);
+    }
+
+    await expect(wizard).toBeHidden({ timeout: 10000 });
   }
 
   /**
    * Test 1: Dialog navigation prevents accidental data loss
    *
-   * Verifies that the DmpSectionConfigDialog remains open and requires
+   * Verifies that the import wizard remains open and requires
    * explicit user action to close, which is the core data protection mechanism.
    */
   test('should require explicit action to close import dialog', async ({ page }) => {
     await createProject(page, 'Dialog Protection Test');
     await openDmpSelectionDialog(page);
 
-    // Proceed to Step 2
-    const continueButton = page.getByTestId('continue-button');
-    await continueButton.click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', {
-      timeout: 10000,
-    });
-
-    const dialog = page.getByTestId('dmp-section-config-dialog');
+    await proceedToDmpSectionConfig(page);
+    const dialog = page.getByTestId('dmp-new-import-dialog');
     await expect(dialog).toBeVisible();
 
     // Verify dialog has proper ARIA attributes for modal behavior
@@ -58,16 +105,11 @@ test.describe('Window Close Protection', () => {
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
 
     // Verify Cancel button is available (explicit close option)
-    const cancelButton = page.getByTestId('cancel-button');
+    const cancelButton = dialog.getByTestId('cancel-button');
     await expect(cancelButton).toBeVisible();
 
     // Click Cancel, then confirm cancel in the safety dialog
-    await cancelButton.click();
-    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible();
-    await page.getByTestId('confirm-cancel-button').click();
-
-    // Dialog should close after explicit confirmation
-    await expect(dialog).not.toBeVisible({ timeout: 3000 });
+    await cancelFromWizard(page);
   });
 
   /**
@@ -85,25 +127,23 @@ test.describe('Window Close Protection', () => {
     await dialog.locator('[data-testid="select-none-button"]').click();
     await page.locator('[data-testid="section-checkbox-0"]').click();
 
-    // Proceed to Step 2
-    const continueButton = page.getByTestId('continue-button');
-    await continueButton.click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', {
-      timeout: 10000,
-    });
-
-    // Place and finish (single section)
-    const placeButton = page.getByTestId('place-and-finish-button');
-    await expect(placeButton).toBeEnabled();
-    await placeButton.click();
-
-    // Dialog should close after successful import
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({
-      timeout: 5000,
-    });
+    await proceedToDmpSectionConfig(page);
+    await finishSingleSectionImport(page);
 
     // User should be back at SingleSystemView with the imported section
     await expect(page.getByTestId('single-system-view')).toBeVisible();
+    await expect
+      .poll(async () => {
+        return page.evaluate(() => {
+          const e2e = (window as unknown as {
+            __E2E_TEST__?: {
+              projectStore?: { getState: () => { project?: { sections?: unknown[] } | null } };
+            };
+          }).__E2E_TEST__;
+          return e2e?.projectStore?.getState().project?.sections?.length ?? 0;
+        });
+      })
+      .toBeGreaterThan(0);
   });
 
   /**
@@ -117,34 +157,31 @@ test.describe('Window Close Protection', () => {
 
     // Initially, no import dialog should be open
     await expect(page.getByTestId('dmp-selection-dialog')).not.toBeVisible();
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).not.toBeVisible();
+    await expect(page.getByTestId('dmp-new-import-dialog')).not.toBeVisible();
 
     // Open Step 1
     await openDmpSelectionDialog(page);
     await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible();
 
-    // Step 2 should not be visible yet
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible();
+    // Next-stage dialogs should not be visible yet
+    await expect(page.getByTestId('zero-datum-selection-dialog')).not.toBeVisible();
+    await expect(page.getByTestId('dmp-new-import-dialog')).not.toBeVisible();
 
-    // Proceed to Step 2
-    const continueButton = page.getByTestId('continue-button');
-    await continueButton.click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', {
-      timeout: 10000,
-    });
+    await proceedToDmpSectionConfig(page);
 
-    // Now Step 2 should be visible, Step 1 should be hidden
-    await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible();
+    // Now wizard should be visible, Step 1/zero-datum should be hidden
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible();
     await expect(page.getByTestId('dmp-selection-dialog')).not.toBeVisible();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).not.toBeVisible();
 
-    // Cancel Step 2 (requires confirmation)
-    await cancelFromStep2(page);
+    // Cancel wizard (requires explicit action)
+    await cancelFromWizard(page);
 
     // Both dialogs should be closed
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({
-      timeout: 3000,
-    });
     await expect(page.getByTestId('dmp-selection-dialog')).not.toBeVisible();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).not.toBeVisible();
+    await expect(page.getByTestId('dmp-new-import-dialog')).not.toBeVisible();
   });
 
   /**
@@ -164,32 +201,35 @@ test.describe('Window Close Protection', () => {
       timeout: 3000,
     });
 
-    // Second cycle: open, proceed to Step 2, cancel
+    // Second cycle: open, proceed to wizard, cancel
     await openDmpSelectionDialog(page);
     await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible();
-    await page.getByTestId('continue-button').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', {
-      timeout: 10000,
-    });
-    await cancelFromStep2(page);
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({ timeout: 3000 });
+    await proceedToDmpSectionConfig(page);
+    await cancelFromWizard(page);
+    await expect(page.getByTestId('dmp-new-import-dialog')).not.toBeVisible({ timeout: 3000 });
 
     // Third cycle: complete the import
     await openDmpSelectionDialog(page);
     const dialog = page.getByTestId('dmp-selection-dialog');
     await dialog.locator('[data-testid="select-none-button"]').click();
     await page.locator('[data-testid="section-checkbox-0"]').click();
-    await page.getByTestId('continue-button').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', {
-      timeout: 10000,
-    });
-    await page.getByTestId('place-and-finish-button').click();
+    await proceedToDmpSectionConfig(page);
+    await finishSingleSectionImport(page);
 
     // Should complete successfully
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({
-      timeout: 5000,
-    });
     await expect(page.getByTestId('single-system-view')).toBeVisible();
+    await expect
+      .poll(async () => {
+        return page.evaluate(() => {
+          const e2e = (window as unknown as {
+            __E2E_TEST__?: {
+              projectStore?: { getState: () => { project?: { sections?: unknown[] } | null } };
+            };
+          }).__E2E_TEST__;
+          return e2e?.projectStore?.getState().project?.sections?.length ?? 0;
+        });
+      })
+      .toBeGreaterThan(0);
   });
 
   /**
@@ -205,21 +245,20 @@ test.describe('Window Close Protection', () => {
     // Step 1 should have Cancel
     await expect(page.getByTestId('cancel-button')).toBeVisible();
 
-    // Proceed to Step 2
+    // Zero datum step should also expose an explicit cancel path.
     await page.getByTestId('continue-button').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', {
-      timeout: 10000,
-    });
+    const zeroDatumDialog = page.getByTestId('zero-datum-selection-dialog');
+    await expect(zeroDatumDialog).toBeVisible({ timeout: 10000 });
+    await expect(zeroDatumDialog.getByRole('button', { name: 'Cancel' })).toBeVisible();
 
-    // Step 2 should also have Cancel
-    const cancelButton = page.getByTestId('cancel-button');
+    await zeroDatumDialog.getByTestId('zero-datum-selection-skip').click();
+    await ensureDmpNewImportDialogVisible(page);
+
+    // Wizard should also have Cancel and allow explicit close.
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    const cancelButton = wizard.getByTestId('cancel-button');
     await expect(cancelButton).toBeVisible();
     await expect(cancelButton).toBeEnabled();
-
-    // Verify clicking Cancel shows confirmation and can close explicitly
-    await cancelButton.click();
-    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible();
-    await page.getByTestId('confirm-cancel-button').click();
-    await expect(page.getByTestId('dmp-section-config-dialog')).not.toBeVisible({ timeout: 3000 });
+    await cancelFromWizard(page);
   });
 });

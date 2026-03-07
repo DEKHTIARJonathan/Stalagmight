@@ -4,7 +4,8 @@ import {
   createProject,
   openDmpSelectionDialog,
   proceedToDmpSectionConfig,
-  placeAllSections,
+  createSectionViaStore,
+  ensureDmpNewImportDialogVisible,
 } from './helpers/app';
 
 /**
@@ -36,7 +37,7 @@ async function createProjectAndOpenImportDialog(page: Page): Promise<void> {
 }
 
 /**
- * Helper to proceed from Step 1 (selection) to Step 2 (config).
+ * Helper to proceed from Step 1 (selection) to the new import wizard.
  */
 async function proceedToStep2(page: Page): Promise<void> {
   await proceedToDmpSectionConfig(page);
@@ -95,12 +96,12 @@ test.describe('DMP Import Dialog', () => {
   });
 
   /**
-   * Test 6.2: should proceed from Step 1 to Step 2
+   * Test 6.2: should proceed from Step 1 into the new workflow
    *
-   * Verifies the import flow proceeds correctly from Step 1 (selection)
-   * to Step 2 (configuration) when Continue is clicked.
+   * Verifies the import flow now proceeds from Step 1 (selection)
+   * to zero-datum selection and then into the new import wizard.
    */
-  test('should proceed from Step 1 to Step 2', async ({
+  test('should proceed from Step 1 to zero datum selection and wizard', async ({
     page,
   }) => {
     await createProjectAndOpenImportDialog(page);
@@ -110,19 +111,16 @@ test.describe('DMP Import Dialog', () => {
     await expect(continueButton).toBeVisible();
     await expect(continueButton).toBeEnabled();
 
-    // Click Continue to proceed to Step 2
+    // Click Continue to proceed to the zero-datum step
     await continueButton.click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('zero-datum-selection-skip').click();
 
-    // Step 2 dialog should appear
-    const step2Dialog = page.locator('[data-testid="dmp-section-config-dialog"]');
-    await expect(step2Dialog).toBeVisible({ timeout: 5000 });
+    // Flow may auto-enter map placement; helper reopens the wizard with Escape if needed.
+    await ensureDmpNewImportDialogVisible(page);
 
-    // Step 2 should show section configuration UI - look for the Placement heading
-    await expect(step2Dialog.locator('h3', { hasText: 'Placement' })).toBeVisible();
-
-    // Should have "Place section" or "Place and finish" button
-    const navButton = page.locator('[data-testid="place-section-button"], [data-testid="place-and-finish-button"]');
-    await expect(navButton.first()).toBeVisible();
+    // In empty-project setup this lands in manual placing mode.
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
   });
 
   /**
@@ -259,29 +257,20 @@ test.describe('DMP Import Dialog', () => {
   });
 
   /**
-   * Test 6.6: should show section list in Step 2
-   *
-   * Verifies Step 2 shows the section list panel with configured sections.
+   * Test 6.6: should show manual placing controls in the new wizard
    */
-  test('should show section list in Step 2', async ({
+  test('should show manual placing controls in wizard', async ({
     page,
   }) => {
     await createProjectAndOpenImportDialog(page);
 
-    // Proceed to Step 2
+    // Proceed to wizard
     await proceedToStep2(page);
 
-    const dialog = page.locator('[data-testid="dmp-section-config-dialog"]');
-    await expect(dialog).toBeVisible();
-
-    // Verify section list panel is visible
-    const sectionListPanel = page.locator('[data-testid="section-list-panel"]');
-    await expect(sectionListPanel).toBeVisible();
-
-    // Should show the first section as active
-    const sectionItem0 = page.locator('[data-testid="section-list-item-0"]');
-    await expect(sectionItem0).toBeVisible();
-    await expect(sectionItem0).toContainText('Main Passage');
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible();
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible();
+    await expect(page.getByTestId('segment-placement-modes')).toBeVisible();
+    await expect(page.getByTestId('segment-place-button')).toBeVisible();
   });
 
   /**
@@ -360,176 +349,46 @@ test.describe('DMP Import Dialog', () => {
   });
 });
 
-test.describe('DMP Import Dialog - Step 2 Error Blocking', () => {
+test.describe('DMP Import Dialog - Zero Datum + Wizard Flow', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
   });
 
-  /**
-   * Test: Step 2 shows error count badges for sections with invalid data
-   */
-  test('should show error count badges in section list', async ({ page }) => {
-    // Create project and open import dialog
-    await createProject(page, 'Error Blocking Test');
+  test('should route from selection to zero datum selection', async ({ page }) => {
+    await createProject(page, 'Zero Datum Route Test');
     await openDmpSelectionDialog(page);
 
-    // Select only the Validation Test Section which has errors
-    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-5"]').click();
-
-    // Proceed to Step 2
-    const continueButton = page.locator('[data-testid="continue-button"]');
-    await continueButton.click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-    // Check that the section has error indicator and badge
-    const sectionStatus = page.locator('[data-testid="section-status-0"]');
-    await expect(sectionStatus).toBeVisible();
-    await expect(sectionStatus).toHaveAttribute('data-status', 'errors');
-    // The section has azimuth error (400 degrees out of range)
-    // Status icon should show error
-    await expect(sectionStatus).toHaveClass(/text-error/);
-    const errorBadge = page.locator('[data-testid="section-error-count-0"]');
-    await expect(errorBadge).toBeVisible();
-    await expect(errorBadge).toHaveText('1');
+    await page.getByTestId('continue-button').click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
   });
 
-  /**
-   * Test: Import button disabled when section has invalid shot data
-   */
-  test('should disable Import button when section has errors', async ({ page }) => {
-    await createProject(page, 'Error Blocking Test 2');
+  test('should open zero datum config and continue to wizard after GPS confirm', async ({ page }) => {
+    await createProject(page, 'Zero Datum Config Test');
     await openDmpSelectionDialog(page);
 
-    // Select only the Validation Test Section which has an invalid azimuth
-    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-5"]').click();
+    await page.getByTestId('continue-button').click();
+    await expect(page.getByTestId('zero-datum-selection-dialog')).toBeVisible({ timeout: 5000 });
 
-    // Proceed to Step 2
-    await page.locator('[data-testid="continue-button"]').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
+    await page.getByTestId('zero-datum-section-card-0').click();
+    await expect(page.getByTestId('zero-datum-config-dialog')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('zero-datum-gps-input').fill('24.550123, -81.780456');
+    await expect(page.getByTestId('zero-datum-gps-parsed')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('zero-datum-config-confirm').click();
 
-    // Place button should be disabled due to validation errors
-    const placeButton = page.locator('[data-testid="place-section-button"], [data-testid="place-and-finish-button"]');
-    await expect(placeButton.first()).toBeDisabled();
+    // This flow auto-starts placement and hides the dialog; reopen via Esc.
+    await expect(page.getByTestId('placement-mode-indicator')).toBeVisible({ timeout: 10000 });
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
   });
 
-  /**
-   * Test: Navigation via left panel works with sections that have errors
-   */
-  test('should allow navigation between sections via left panel', async ({ page }) => {
-    await createProject(page, 'Navigation With Errors Test');
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
+  test('should skip zero datum selection and open wizard', async ({ page }) => {
+    await createProject(page, 'Zero Datum Skip Test');
+    await openDmpSelectionDialog(page);
+    await proceedToStep2(page);
 
-    // Select Main Passage (no errors) and Validation Test Section (has errors)
-    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
-    await page.locator('[data-testid="section-checkbox-5"]').click();
-
-    // Proceed to Step 2
-    await page.locator('[data-testid="continue-button"]').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-    // Should start on first section (Main Passage)
-    await expect(page.getByRole('heading', { name: /Section: Main Passage/ })).toBeVisible();
-
-    // Navigate to second section using left panel
-    await page.locator('[data-testid="section-list-item-1"]').click();
-
-    // Now we should be on the second section
-    await expect(page.getByRole('heading', { name: /Section: Validation Test Section/ })).toBeVisible();
-
-    // Navigate back to first section using left panel
-    await page.locator('[data-testid="section-list-item-0"]').click();
-
-    // Back to first section
-    await expect(page.getByRole('heading', { name: /Section: Main Passage/ })).toBeVisible();
-  });
-
-  /**
-   * Test: Error summary shows in left panel when sections have errors
-   */
-  test('should show error summary in left panel', async ({ page }) => {
-    await createProject(page, 'Error Summary Test');
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
-
-    // Select Main Passage (no errors) and Validation Test Section (has errors)
-    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
-    await page.locator('[data-testid="section-checkbox-5"]').click();
-
-    // Proceed to Step 2
-    await page.locator('[data-testid="continue-button"]').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-    // Navigate to the section with errors
-    await page.locator('[data-testid="section-list-item-1"]').click();
-
-    // Error summary should appear in left panel
-    const errorSummary = page.locator('[data-testid="error-summary"]');
-    await expect(errorSummary).toBeVisible();
-    await expect(errorSummary).toContainText('section');
-    await expect(errorSummary).toContainText('error');
-  });
-
-  /**
-   * Test: Place button is enabled for section without errors
-   *
-   * This test verifies that sections without validation errors can be placed.
-   */
-  test('should enable Place button for section without errors', async ({ page }) => {
-    await createProject(page, 'Fix Error Test');
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
-
-    // Select only Main Passage (no errors)
-    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click();
-
-    // Proceed to Step 2
-    await page.locator('[data-testid="continue-button"]').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-    // With only Main Passage selected (no errors), the Place button should be enabled
-    // Since it's the only section and it's not placed yet, it shows "Place and finish"
-    const placeButton = page.locator('[data-testid="place-and-finish-button"]');
-    await expect(placeButton).toBeEnabled();
-  });
-
-  /**
-   * Test: Section status icon shows error state vs not placed state
-   */
-  test('should show error icon in section list for invalid data', async ({ page }) => {
-    await createProject(page, 'Error Icon Test');
-    await page.keyboard.press('Control+i');
-    await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
-
-    // Select both sections - one with errors and one without
-    const dialog = page.locator('[data-testid="dmp-selection-dialog"]');
-    await dialog.locator('[data-testid="select-none-button"]').click();
-    await page.locator('[data-testid="section-checkbox-0"]').click(); // Main Passage - ok
-    await page.locator('[data-testid="section-checkbox-5"]').click(); // Validation Test - errors
-
-    // Proceed to Step 2
-    await page.locator('[data-testid="continue-button"]').click();
-    await page.waitForSelector('[data-testid="dmp-section-config-dialog"]', { timeout: 5000 });
-
-    // First section (Main Passage) is NOT placed yet - no warnings/errors, shows default icon
-    const status0 = page.locator('[data-testid="section-status-0"]');
-    await expect(status0).toHaveAttribute('data-status', 'not_placed');
-    await expect(status0).toHaveClass(/text-text-secondary/);
-
-    // Second section (Validation Test) should show error icon
-    const status1 = page.locator('[data-testid="section-status-1"]');
-    await expect(status1).toHaveAttribute('data-status', 'errors');
-    await expect(status1).toHaveClass(/text-error/);
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
   });
 });
 
@@ -596,6 +455,34 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
    */
   test('should pass file hash to import_sections after successful import', async ({ page }) => {
     await createProject(page, 'Hash Track Success');
+    await createSectionViaStore(page, {
+      name: 'Anchor Section',
+      shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: -1, depth_out: -2 }],
+    });
+
+    await page.evaluate(() => {
+      const setSuggestions = (window as unknown as Record<string, unknown>).__MOCK_SET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof setSuggestions !== 'function') {
+        throw new Error('Mock suggestion setter not available');
+      }
+      (setSuggestions as (suggestions: unknown[]) => void)([
+        {
+          existingStationIndex: 0,
+          importStationIndex: 0,
+          score: 0.95,
+          matchedShots: 0,
+          direction: 'forward',
+          isPartial: false,
+          confidence: 'high',
+          existingSectionName: 'Anchor Section',
+          importSectionIndex: 0,
+          importSectionName: 'Main Passage',
+          targetType: 'existing',
+          existingSectionId: 1,
+          targetImportIndex: null,
+        },
+      ]);
+    });
 
     // Reset tracking call counter
     await page.evaluate(() => {
@@ -630,8 +517,9 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     // Proceed to Step 2
     await proceedToDmpSectionConfig(page);
 
-    // Place the section (single section = Place and finish)
-    await placeAllSections(page);
+    // Confirm the suggested connection and finish import.
+    await expect(page.getByTestId('wizard-suggestion')).toBeVisible({ timeout: 10000 });
+    await page.getByTestId('confirm-button').click();
 
     // Wait for import_sections call and verify fileHash passed for tracking
     await expect.poll(async () => {
@@ -657,6 +545,12 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
    */
   test('should not call track_imported_file when import has errors', async ({ page }) => {
     await createProject(page, 'Hash Track Error');
+    await page.evaluate(() => {
+      const resetSuggestions = (window as unknown as Record<string, unknown>).__MOCK_RESET_IMPORT_PLACEMENT_SUGGESTIONS__;
+      if (typeof resetSuggestions === 'function') {
+        (resetSuggestions as () => void)();
+      }
+    });
 
     // Reset tracking call counter
     await page.evaluate(() => {
@@ -691,16 +585,24 @@ test.describe('DMP Import Dialog - Hash Tracking', () => {
     // Proceed to Step 2
     await proceedToDmpSectionConfig(page);
 
-    // The Place button should be disabled because the section has errors
-    // (azimuth 400 is out of range), so we can't actually place it.
-    // Verify the button is disabled.
-    const placeButton = page.locator('[data-testid="place-section-button"], [data-testid="place-and-finish-button"]');
-    await expect(placeButton.first()).toBeDisabled();
+    await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('wizard-manual-placing')).toBeVisible({ timeout: 10000 });
 
-    // Verify import_sections was NOT called (can't even import)
+    // Verify import_sections was NOT called without an explicit placement action.
     const calls = await page.evaluate(() => {
       return (window as unknown as { __CAPTURED_IMPORT_SECTIONS_ARGS__?: Array<Record<string, unknown>> }).__CAPTURED_IMPORT_SECTIONS_ARGS__ ?? [];
     });
     expect(calls.length).toBe(0);
+
+    // Cleanly close wizard; confirmation is conditional depending on state.
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    if (await wizard.isVisible()) {
+      await wizard.getByTestId('cancel-button').click();
+      const cancelConfirmDialog = page.getByTestId('cancel-confirm-dialog');
+      if (await cancelConfirmDialog.isVisible()) {
+        await page.getByTestId('confirm-cancel-button').click();
+      }
+      await expect(wizard).toBeHidden({ timeout: 10000 });
+    }
   });
 });

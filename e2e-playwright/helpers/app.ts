@@ -28,9 +28,6 @@ export async function setupMockedPage(page: Page): Promise<void> {
   await setupTauriMocks(page);
   await page.goto('/');
   await waitForAppReady(page);
-  // Most Playwright DMP specs assert legacy Step-2 behavior.
-  // Keep tests deterministic by defaulting the workflow to legacy.
-  await setDmpImportWorkflow(page, 'legacy');
 }
 
 export async function waitForAppReady(page: Page): Promise<void> {
@@ -41,47 +38,6 @@ export async function waitForAppReady(page: Page): Promise<void> {
         document.querySelector('[data-testid="map-canvas"]')
     );
   });
-}
-
-type DmpImportWorkflow = 'legacy' | 'new';
-
-export async function setDmpImportWorkflow(page: Page, workflow: DmpImportWorkflow): Promise<void> {
-  await page.waitForFunction(() => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore?: {
-          getState: () => { config: unknown | null; setConfig: (config: unknown) => void };
-        };
-      };
-    }).__E2E_TEST__;
-    return Boolean(e2e?.projectStore?.getState().config);
-  }, undefined, { timeout: 10000 });
-
-  await page.evaluate((useLegacy) => {
-    const e2e = (window as unknown as {
-      __E2E_TEST__?: {
-        projectStore?: {
-          getState: () => {
-            config: {
-              general: { legacy_dmp_import: boolean };
-            } | null;
-            setConfig: (config: unknown) => void;
-          };
-        };
-      };
-    }).__E2E_TEST__;
-    const store = e2e?.projectStore?.getState();
-    if (!store?.config) {
-      throw new Error('projectStore config is not available');
-    }
-    store.setConfig({
-      ...store.config,
-      general: {
-        ...store.config.general,
-        legacy_dmp_import: useLegacy,
-      },
-    });
-  }, workflow === 'legacy');
 }
 
 export async function waitForMapReady(page: Page): Promise<void> {
@@ -179,62 +135,139 @@ export async function createProject(page: Page, name: string): Promise<void> {
   await waitForMapReady(page);
 }
 
-export async function openDmpSelectionDialog(
-  page: Page,
-  options?: { workflow?: DmpImportWorkflow },
-): Promise<void> {
-  if (options?.workflow) {
-    await setDmpImportWorkflow(page, options.workflow);
-  }
+export async function openDmpSelectionDialog(page: Page): Promise<void> {
   await page.keyboard.press('Control+i');
   await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 10000 });
 }
 
-export async function proceedToDmpSectionConfig(page: Page): Promise<void> {
+export async function ensureDmpNewImportDialogVisible(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const wizard = document.querySelector('[data-testid="dmp-new-import-dialog"]');
+    const placement = document.querySelector('[data-testid="placement-mode-indicator"]');
+    return Boolean(wizard || placement);
+  }, undefined, { timeout: 15000 });
+
+  const wizard = page.getByTestId('dmp-new-import-dialog');
+  if (await wizard.isVisible()) {
+    return;
+  }
+
+  const placementIndicator = page.getByTestId('placement-mode-indicator');
+  await expect(placementIndicator).toBeVisible({ timeout: 10000 });
+  await page.keyboard.press('Escape');
+  await expect(wizard).toBeVisible({ timeout: 10000 });
+}
+
+export async function proceedToDmpImportWizard(page: Page): Promise<void> {
   const continueButton = page.getByTestId('continue-button');
   await expect(continueButton).toBeEnabled();
   await continueButton.click();
-  await expect(page.getByTestId('dmp-section-config-dialog')).toBeVisible({ timeout: 10000 });
+
+  const zeroDatumSelection = page.getByTestId('zero-datum-selection-dialog');
+  const dmpWizard = page.getByTestId('dmp-new-import-dialog');
+  const placementIndicator = page.getByTestId('placement-mode-indicator');
+
+  await page.waitForFunction(() => {
+    const dialogs = [
+      document.querySelector('[data-testid="zero-datum-selection-dialog"]'),
+      document.querySelector('[data-testid="dmp-new-import-dialog"]'),
+      document.querySelector('[data-testid="placement-mode-indicator"]'),
+    ];
+    return dialogs.some(Boolean);
+  }, undefined, { timeout: 10000 });
+
+  if (await zeroDatumSelection.isVisible()) {
+    await zeroDatumSelection.getByTestId('zero-datum-selection-skip').click();
+  }
+
+  if (!(await dmpWizard.isVisible()) && !(await placementIndicator.isVisible())) {
+    await page.waitForFunction(() => {
+      return Boolean(
+        document.querySelector('[data-testid="dmp-new-import-dialog"]') ||
+          document.querySelector('[data-testid="placement-mode-indicator"]')
+      );
+    }, undefined, { timeout: 10000 });
+  }
+
+  await ensureDmpNewImportDialogVisible(page);
+}
+
+// Backward-compatible alias used by older specs.
+export async function proceedToDmpSectionConfig(page: Page): Promise<void> {
+  await proceedToDmpImportWizard(page);
 }
 
 export async function placeAllSections(page: Page): Promise<void> {
-  const dialog = page.getByTestId('dmp-section-config-dialog');
-  await expect(dialog).toBeVisible();
+  await ensureDmpNewImportDialogVisible(page);
 
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const placeAndFinish = page.getByTestId('place-and-finish-button');
-    const placeSection = page.getByTestId('place-section-button');
-    const finishImport = page.getByTestId('finish-import-button');
-    const nextSection = page.getByTestId('next-section-button');
-    const excludeSection = page.getByTestId('exclude-button');
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const wizard = page.getByTestId('dmp-new-import-dialog');
+    const confirm = page.getByTestId('confirm-button');
+    const skip = page.getByTestId('skip-button');
+    const segmentPlace = page.getByTestId('segment-place-button');
+    const segmentDiscard = page.getByTestId('segment-mode-discard');
+    const placeOnMap = page.getByTestId('segment-place-on-map-button');
 
-    if (await placeAndFinish.isVisible() && await placeAndFinish.isEnabled()) {
-      await placeAndFinish.click();
+    if (!(await wizard.isVisible())) {
+      const placementIndicator = page.getByTestId('placement-mode-indicator');
+      if (await placementIndicator.isVisible()) {
+        await page.keyboard.press('Escape');
+        await expect(wizard).toBeVisible({ timeout: 10000 });
+      } else {
+        return;
+      }
+      continue;
+    }
+
+    if (await confirm.isVisible() && await confirm.isEnabled()) {
+      await confirm.click();
+      continue;
+    }
+
+    if (await skip.isVisible() && await skip.isEnabled()) {
+      await skip.click();
+      continue;
+    }
+
+    if (await segmentPlace.isVisible() && await segmentPlace.isEnabled()) {
+      await segmentPlace.click();
+      continue;
+    }
+
+    if (await segmentDiscard.isVisible() && await segmentPlace.isVisible()) {
+      await segmentDiscard.click();
+      if (await segmentPlace.isEnabled()) {
+        await segmentPlace.click();
+        continue;
+      }
+    }
+
+    if (await placeOnMap.isVisible() && await placeOnMap.isEnabled()) {
+      await placeOnMap.click();
+      const mapCanvas = page.getByTestId('map-canvas');
+      await expect(mapCanvas).toBeVisible({ timeout: 10000 });
+      const mapBounds = await mapCanvas.boundingBox();
+      if (mapBounds) {
+        await page.mouse.click(
+          mapBounds.x + mapBounds.width * 0.5,
+          mapBounds.y + mapBounds.height * 0.5
+        );
+      }
+      continue;
+    }
+
+    if (await page.getByTestId('wizard-all-placed').isVisible()) {
       break;
     }
 
-    if (await finishImport.isVisible() && await finishImport.isEnabled()) {
-      await finishImport.click();
-      break;
-    }
-
-    if (await placeSection.isVisible() && await placeSection.isEnabled()) {
-      await placeSection.click();
-      continue;
-    }
-
-    if (await nextSection.isVisible() && await nextSection.isEnabled()) {
-      await nextSection.click();
-      continue;
-    }
-
-    if (await excludeSection.isVisible() && await excludeSection.isEnabled()) {
-      await excludeSection.click();
-      continue;
-    }
-
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(100);
   }
 
-  await waitForDialogClosed(page, 'dmp-section-config-dialog');
+  const wizard = page.getByTestId('dmp-new-import-dialog');
+  if (await wizard.isVisible()) {
+    await page.getByTestId('cancel-button').click();
+    await expect(page.getByTestId('cancel-confirm-dialog')).toBeVisible({ timeout: 5000 });
+    await page.getByTestId('confirm-cancel-button').click();
+    await expect(wizard).toBeHidden({ timeout: 10000 });
+  }
 }
