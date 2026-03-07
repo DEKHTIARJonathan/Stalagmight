@@ -464,9 +464,21 @@ export const useUIStore = create<UIStore>((set) => ({
   detailPanelTab: 'details',
   dataTableOpen: false,
   dataTableHeight: 200,
-  toggleSectionsPanel: () => set((state) => ({ sectionsPanelOpen: !state.sectionsPanelOpen })),
-  toggleDetailPanel: () => set((state) => ({ detailPanelOpen: !state.detailPanelOpen })),
-  toggleDataTable: () => set((state) => ({ dataTableOpen: !state.dataTableOpen })),
+  toggleSectionsPanel: () => {
+    const opening = !useUIStore.getState().sectionsPanelOpen;
+    trackAction(opening ? 'panel-open.sections' : 'panel-close.sections');
+    set({ sectionsPanelOpen: opening });
+  },
+  toggleDetailPanel: () => {
+    const opening = !useUIStore.getState().detailPanelOpen;
+    trackAction(opening ? 'panel-open.detail' : 'panel-close.detail');
+    set({ detailPanelOpen: opening });
+  },
+  toggleDataTable: () => {
+    const opening = !useUIStore.getState().dataTableOpen;
+    trackAction(opening ? 'panel-open.data-table' : 'panel-close.data-table');
+    set({ dataTableOpen: opening });
+  },
   setDetailPanelTab: (detailPanelTab) => set({ detailPanelTab }),
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),
   setDetailPanelWidth: (detailPanelWidth) => set({ detailPanelWidth }),

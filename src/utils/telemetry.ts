@@ -102,9 +102,12 @@ export function trackAction(action: string, source?: string): void {
 /**
  * Track an IPC command invocation.
  * Called from `invokeIpc` for every IPC call.
+ * Includes source hint (keyboard, toolbar, etc.) when available.
  */
 export function trackCommand(command: string): void {
-  counts[`command.${command}`] = (counts[`command.${command}`] || 0) + 1;
+  const src = consumeSource();
+  const key = src !== 'unknown' ? `command.${command}:${src}` : `command.${command}`;
+  counts[key] = (counts[key] || 0) + 1;
 
   if (command === 'undo' && _lastUndoable && (Date.now() - _lastUndoable.time) < REGRET_WINDOW_MS) {
     const key = `undo-after.${_lastUndoable.command}`;
