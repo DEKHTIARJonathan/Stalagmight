@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq } from '../utils/telemetry';
+import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackSelect, trackSelectAdd } from '../utils/telemetry';
 import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -370,7 +370,7 @@ export const useUIStore = create<UIStore>((set) => ({
   selection: null,
   multiSelection: [],
   setSelection: (selection) => {
-    if (selection) trackAction(`select.${selection.type}`);
+    if (selection) trackSelect(selection.type);
     set({ selection, multiSelection: selection ? [selection] : [] });
   },
   addToSelection: (selection) =>
@@ -378,7 +378,7 @@ export const useUIStore = create<UIStore>((set) => ({
       // Don't add duplicates
       const exists = state.multiSelection.some((s) => selectionsEqual(s, selection));
       if (exists) return state;
-      trackAction(`select-add.${selection.type}`);
+      trackSelectAdd(selection.type);
       return {
         multiSelection: [...state.multiSelection, selection],
         selection: selection,
@@ -475,17 +475,17 @@ export const useUIStore = create<UIStore>((set) => ({
   dataTableHeight: 200,
   toggleSectionsPanel: () => {
     const opening = !useUIStore.getState().sectionsPanelOpen;
-    trackAction(opening ? 'panel-open.sections' : 'panel-close.sections');
+    trackPanelToggle('sections', opening);
     set({ sectionsPanelOpen: opening });
   },
   toggleDetailPanel: () => {
     const opening = !useUIStore.getState().detailPanelOpen;
-    trackAction(opening ? 'panel-open.detail' : 'panel-close.detail');
+    trackPanelToggle('detail', opening);
     set({ detailPanelOpen: opening });
   },
   toggleDataTable: () => {
     const opening = !useUIStore.getState().dataTableOpen;
-    trackAction(opening ? 'panel-open.data-table' : 'panel-close.data-table');
+    trackPanelToggle('data-table', opening);
     set({ dataTableOpen: opening });
   },
   setDetailPanelTab: (detailPanelTab) => set({ detailPanelTab }),
@@ -521,31 +521,31 @@ export const useUIStore = create<UIStore>((set) => ({
   setMapZoom: (mapZoom) => set({ mapZoom }),
   requestFitToBounds: false as false | 'animate' | 'snap',
   triggerFitToBounds: (options?) => {
-    trackAction('nav.fit-to-bounds');
+    trackNav('fit-to-bounds');
     set({ requestFitToBounds: options?.snap ? 'snap' : 'animate' });
   },
   clearFitToBoundsRequest: () => set({ requestFitToBounds: false }),
   requestZoomToSection: null,
   triggerZoomToSection: (sectionId: SectionId) => {
-    trackAction('nav.zoom-to-section');
+    trackNav('zoom-to-section');
     set({ requestZoomToSection: sectionId });
   },
   clearZoomToSectionRequest: () => set({ requestZoomToSection: null }),
   requestPanToShot: null,
   triggerPanToShot: (sectionId: SectionId, shotId: ShotId) => {
-    trackAction('nav.pan-to-shot');
+    trackNav('pan-to-shot');
     set({ requestPanToShot: { sectionId, shotId } });
   },
   clearPanToShotRequest: () => set({ requestPanToShot: null }),
   requestCenterOnStation: null,
   triggerCenterOnStation: (ref: StationRef) => {
-    trackAction('nav.center-on-station');
+    trackNav('center-on-station');
     set({ requestCenterOnStation: ref });
   },
   clearCenterOnStationRequest: () => set({ requestCenterOnStation: null }),
   requestCenterOnShot: null,
   triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => {
-    trackAction('nav.center-on-shot');
+    trackNav('center-on-shot');
     set({ requestCenterOnShot: { sectionId, shotId } });
   },
   clearCenterOnShotRequest: () => set({ requestCenterOnShot: null }),

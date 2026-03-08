@@ -37,6 +37,51 @@ let _dwellState: { key: string; since: number } | null = null;
 let _lastUndoable: { command: string; time: number } | null = null;
 const REGRET_WINDOW_MS = 15_000;
 
+/** Canonical navigation action names — parsed by registry exhaustiveness tests. */
+export type NavigationAction =
+  | 'center-on-shot'
+  | 'center-on-station'
+  | 'fit-to-bounds'
+  | 'pan'
+  | 'pan-to-shot'
+  | 'zoom'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'zoom-to-section';
+
+/** Canonical panel names — parsed by registry exhaustiveness tests. */
+export type PanelName =
+  | 'data-table'
+  | 'detail'
+  | 'sections';
+
+/** Canonical selection types — parsed by registry exhaustiveness tests. */
+export type SelectionType =
+  | 'section'
+  | 'shot'
+  | 'station';
+
+/** Canonical context-menu action names — parsed by registry exhaustiveness tests. */
+export type ContextMenuAction =
+  | 'remove-closure'
+  | 'toggle-reference'
+  | 'unmerge';
+
+/** Canonical source names — parsed by registry exhaustiveness tests. */
+export type SourceName =
+  | 'context-menu'
+  | 'data-table'
+  | 'dblclick'
+  | 'detail-panel'
+  | 'dialog'
+  | 'display-menu'
+  | 'keyboard'
+  | 'map'
+  | 'mouse'
+  | 'sections-panel'
+  | 'toolbar'
+  | 'touch';
+
 /** Commands that push to the undo stack. */
 const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
   'create_section', 'update_section', 'delete_section', 'move_section', 'move_segment',
@@ -86,7 +131,7 @@ async function flushToRust(): Promise<void> {
 }
 
 /** Set source for the next action. Auto-resets after 50ms to prevent bleed. */
-export function setSource(source: string): void {
+export function setSource(source: SourceName): void {
   _source = source;
   if (_sourceTimer) clearTimeout(_sourceTimer);
   _sourceTimer = setTimeout(() => { _source = 'unknown'; }, 50);
@@ -148,6 +193,31 @@ export function trackAction(action: string, source?: string): void {
   scheduleFlush();
 }
 
+/** Track a navigation action. */
+export function trackNav(nav: NavigationAction, source?: SourceName): void {
+  trackAction(`nav.${nav}`, source);
+}
+
+/** Track a panel open/close toggle. */
+export function trackPanelToggle(panel: PanelName, opening: boolean): void {
+  trackAction(opening ? `panel-open.${panel}` : `panel-close.${panel}`);
+}
+
+/** Track a selection event. */
+export function trackSelect(type: SelectionType): void {
+  trackAction(`select.${type}`);
+}
+
+/** Track an add-to-selection event. */
+export function trackSelectAdd(type: SelectionType): void {
+  trackAction(`select-add.${type}`);
+}
+
+/** Track a context-menu action. */
+export function trackContextMenuAction(action: ContextMenuAction, source?: SourceName): void {
+  trackAction(action, source);
+}
+
 /**
  * Track an IPC command invocation.
  * Called from `invokeIpc` for every IPC call.
@@ -166,15 +236,6 @@ export function trackCommand(command: string): void {
     _lastUndoable = { command, time: Date.now() };
   }
 
-  scheduleFlush();
-}
-
-/**
- * Track a UI-only event (tool switch, dialog open, etc.)
- * that doesn't go through IPC.
- */
-export function trackUIEvent(name: string): void {
-  counts[name] = (counts[name] || 0) + 1;
   scheduleFlush();
 }
 

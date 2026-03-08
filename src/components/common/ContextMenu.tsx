@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
-import { setSource, trackAction, trackDialogComplete } from '../../utils/telemetry';
+import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 
 interface ContextMenuItem {
   label: string;
@@ -140,7 +140,7 @@ export default function ContextMenu() {
                 const reverse = sameStationRef(merge.station_a, mergeTarget) && sameStationRef(merge.station_b, target.ref);
                 return direct || reverse;
               }) ?? false;
-              trackAction('unmerge', 'context-menu');
+              trackContextMenuAction('unmerge', 'context-menu');
               trackDialogComplete('context-menu');
               closeDialog();
               void (isDirectMerge
@@ -162,7 +162,7 @@ export default function ContextMenu() {
           label: 'Remove Closure',
           action: () => {
             if (directClosures.length === 1) {
-              trackAction('remove-closure', 'context-menu');
+              trackContextMenuAction('remove-closure', 'context-menu');
               trackDialogComplete('context-menu');
               closeDialog();
               void removeLoopClosure(directClosures[0]!.closureId);
@@ -278,7 +278,7 @@ export default function ContextMenu() {
         {
           label: shot?.is_reference ? 'Mark as Permanent' : 'Mark as Jump/Reference',
           action: async () => {
-            trackAction('toggle-reference', 'context-menu');
+            trackContextMenuAction('toggle-reference', 'context-menu');
             await setShotReference(target.sectionId, target.shotId, !shot?.is_reference);
             trackDialogComplete('context-menu');
             closeDialog();

@@ -15,7 +15,7 @@ import {
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
-import { setSource, trackAction } from '../utils/telemetry';
+import { setSource, trackNav } from '../utils/telemetry';
 import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
 import { defaultConfig } from '../types/config';
 
@@ -577,14 +577,14 @@ export function useKeyboardShortcuts() {
 
         case 'zoom_in':
           event.preventDefault();
-          trackAction('nav.zoom-in', 'keyboard');
+          trackNav('zoom-in', 'keyboard');
           handleZoomIn(zoomStep, zoomMax);
           maybeShowToast(action);
           break;
 
         case 'zoom_out':
           event.preventDefault();
-          trackAction('nav.zoom-out', 'keyboard');
+          trackNav('zoom-out', 'keyboard');
           handleZoomOut(zoomStep, zoomMin);
           maybeShowToast(action);
           break;
