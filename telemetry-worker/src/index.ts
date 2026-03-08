@@ -12,7 +12,7 @@ import { decode } from '@msgpack/msgpack';
 import { EVENT_NAMES, SOURCE_NAMES } from './registry';
 
 const MAX_BODY_BYTES = 65_536; // 64 KB
-const RATE_LIMIT_MAX_SESSIONS = 10;
+const RATE_LIMIT_MAX_FLUSHES_PER_MIN = 10;
 
 interface Env {
   DB: D1Database;
@@ -150,12 +150,15 @@ export default {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
-    // Rate limit: count sessions from this IP active in the last hour (read-only)
+    // Rate limit: count flushes from this IP in the last minute (read-only)
+    // Each flush inserts event rows with received_at, so we count distinct
+    // flush batches by counting distinct received_at values per IP.
     const { results: rateRows } = await env.DB.prepare(
-      `SELECT COUNT(*) as cnt FROM sessions
-       WHERE ip_hash = ?1 AND received_at > datetime('now', '-1 hour')`
+      `SELECT COUNT(DISTINCT e.received_at) as cnt
+       FROM events e JOIN sessions s ON e.session_id = s.session_id
+       WHERE s.ip_hash = ?1 AND e.received_at > datetime('now', '-1 minute')`
     ).bind(ipHash).all();
-    if (rateRows.length > 0 && (rateRows[0].cnt as number) >= RATE_LIMIT_MAX_SESSIONS) {
+    if (rateRows.length > 0 && (rateRows[0].cnt as number) >= RATE_LIMIT_MAX_FLUSHES_PER_MIN) {
       return new Response('Too many requests', { status: 429 });
     }
 

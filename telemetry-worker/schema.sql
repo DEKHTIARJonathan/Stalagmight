@@ -15,10 +15,12 @@ CREATE TABLE IF NOT EXISTS events (
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
   event_name TEXT NOT NULL,
   count INTEGER NOT NULL,
-  project_seq INTEGER NOT NULL DEFAULT 0
+  project_seq INTEGER NOT NULL DEFAULT 0,
+  received_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_name ON events(event_name);
+CREATE INDEX IF NOT EXISTS idx_events_received ON events(received_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_received ON sessions(received_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_ip_hash ON sessions(ip_hash);
