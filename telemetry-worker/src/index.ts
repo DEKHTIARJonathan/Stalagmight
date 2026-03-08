@@ -15,6 +15,7 @@ interface TelemetryPayload {
   os: string;
   session_id: string;
   duration_secs: number;
+  project_seq?: number;
   events: Record<string, number>;
 }
 
@@ -69,11 +70,12 @@ export default {
        ON CONFLICT(session_id) DO UPDATE SET duration_secs = ?4, received_at = datetime('now')`
     ).bind(body.session_id, body.app_version, body.os, body.duration_secs);
 
-    // Insert events
+    // Insert events (project_seq defaults to 0 for backward compat)
+    const projectSeq = body.project_seq ?? 0;
     const eventStmts = eventEntries.map(([name, count]) =>
       env.DB.prepare(
-        'INSERT INTO events (session_id, event_name, count) VALUES (?1, ?2, ?3)'
-      ).bind(body.session_id, name.slice(0, 128), Math.min(count, 1_000_000))
+        'INSERT INTO events (session_id, event_name, count, project_seq) VALUES (?1, ?2, ?3, ?4)'
+      ).bind(body.session_id, name.slice(0, 128), Math.min(count, 1_000_000), projectSeq)
     );
 
     try {

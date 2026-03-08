@@ -9,8 +9,9 @@ use crate::telemetry::TelemetryCollector;
 pub fn track_events(
     state: State<'_, TelemetryCollector>,
     events: HashMap<String, u64>,
+    project_seq: u32,
 ) -> Result<(), String> {
-    state.track_batch(&events);
+    state.track_batch(&events, project_seq);
     Ok(())
 }
 

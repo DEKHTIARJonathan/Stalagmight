@@ -49,6 +49,7 @@ struct TelemetryPayload {
     os: String,
     session_id: String,
     duration_secs: u64,
+    project_seq: u32,
     events: HashMap<String, u64>,
 }
 
@@ -57,7 +58,8 @@ struct TelemetryPayload {
 #[cfg(feature = "telemetry")]
 #[derive(Debug)]
 struct TelemetryInner {
-    events: HashMap<String, u64>,
+    /// Events bucketed by project_seq (0 = global/Rust-originated).
+    events: HashMap<u32, HashMap<String, u64>>,
     session_id: String,
     session_start: Instant,
     enabled: bool,
@@ -87,24 +89,25 @@ impl TelemetryCollector {
         }
     }
 
-    /// Track a single event by name.
+    /// Track a single event by name (Rust-originated, always project_seq 0).
     pub fn track(&self, event: &str) {
         if let Ok(mut inner) = self.inner.lock() {
             if !inner.enabled {
                 return;
             }
-            *inner.events.entry(event.to_string()).or_insert(0) += 1;
+            *inner.events.entry(0).or_default().entry(event.to_string()).or_insert(0) += 1;
         }
     }
 
-    /// Track multiple events at once (batch from frontend).
-    pub fn track_batch(&self, events: &HashMap<String, u64>) {
+    /// Track multiple events at once (batch from frontend), bucketed by project_seq.
+    pub fn track_batch(&self, events: &HashMap<String, u64>, project_seq: u32) {
         if let Ok(mut inner) = self.inner.lock() {
             if !inner.enabled {
                 return;
             }
+            let bucket = inner.events.entry(project_seq).or_default();
             for (name, count) in events {
-                *inner.events.entry(name.clone()).or_insert(0) += count;
+                *bucket.entry(name.clone()).or_insert(0) += count;
             }
         }
     }
@@ -123,30 +126,42 @@ impl TelemetryCollector {
 
     /// Flush current events to the telemetry backend.
     ///
-    /// On network failure, buffers the payload to disk for later retry.
+    /// Sends one payload per project_seq bucket. On network failure, buffers
+    /// each payload individually to disk for later retry.
     pub fn flush(&self) {
-        let payload = {
+        let payloads = {
             let Ok(mut inner) = self.inner.lock() else {
                 return;
             };
             if !inner.enabled || inner.events.is_empty() {
                 return;
             }
-            let payload = TelemetryPayload {
-                v: PAYLOAD_VERSION,
-                app_version: env!("CARGO_PKG_VERSION").to_string(),
-                os: std::env::consts::OS.to_string(),
-                session_id: inner.session_id.clone(),
-                duration_secs: inner.session_start.elapsed().as_secs(),
-                events: inner.events.clone(),
-            };
-            inner.events.clear();
-            payload
+            let app_version = env!("CARGO_PKG_VERSION").to_string();
+            let os = std::env::consts::OS.to_string();
+            let session_id = inner.session_id.clone();
+            let duration_secs = inner.session_start.elapsed().as_secs();
+
+            let payloads: Vec<TelemetryPayload> = inner
+                .events
+                .drain()
+                .map(|(project_seq, events)| TelemetryPayload {
+                    v: PAYLOAD_VERSION,
+                    app_version: app_version.clone(),
+                    os: os.clone(),
+                    session_id: session_id.clone(),
+                    duration_secs,
+                    project_seq,
+                    events,
+                })
+                .collect();
+            payloads
         };
 
-        if let Err(e) = send_payload(&payload) {
-            tracing::debug!(error = %e, "Telemetry flush failed, buffering to disk");
-            buffer_to_disk(&payload);
+        for payload in &payloads {
+            if let Err(e) = send_payload(payload) {
+                tracing::debug!(error = %e, "Telemetry flush failed, buffering to disk");
+                buffer_to_disk(payload);
+            }
         }
     }
 
@@ -207,7 +222,7 @@ impl TelemetryCollector {
         Self
     }
     pub fn track(&self, _event: &str) {}
-    pub fn track_batch(&self, _events: &HashMap<String, u64>) {}
+    pub fn track_batch(&self, _events: &HashMap<String, u64>, _project_seq: u32) {}
     pub fn set_enabled(&self, _enabled: bool) {}
     pub fn is_enabled(&self) -> bool {
         false
@@ -341,8 +356,9 @@ mod tests {
         collector.track("command.save_project");
 
         let inner = collector.inner.lock().unwrap();
-        assert_eq!(inner.events.get("command.create_project"), Some(&2));
-        assert_eq!(inner.events.get("command.save_project"), Some(&1));
+        let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
+        assert_eq!(bucket.get("command.create_project"), Some(&2));
+        assert_eq!(bucket.get("command.save_project"), Some(&1));
     }
 
     #[test]
@@ -357,16 +373,42 @@ mod tests {
     #[test]
     fn track_batch_merges_counts() {
         let collector = TelemetryCollector::new(true);
+        // track() goes into project_seq 0
         collector.track("command.save_project");
 
+        // Batch into project_seq 0 to merge with single-event track
         let mut batch = HashMap::new();
         batch.insert("command.save_project".to_string(), 3);
         batch.insert("command.undo".to_string(), 5);
-        collector.track_batch(&batch);
+        collector.track_batch(&batch, 0);
 
         let inner = collector.inner.lock().unwrap();
-        assert_eq!(inner.events.get("command.save_project"), Some(&4));
-        assert_eq!(inner.events.get("command.undo"), Some(&5));
+        let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
+        assert_eq!(bucket.get("command.save_project"), Some(&4));
+        assert_eq!(bucket.get("command.undo"), Some(&5));
+    }
+
+    #[test]
+    fn track_batch_separates_project_seqs() {
+        let collector = TelemetryCollector::new(true);
+
+        let mut batch1 = HashMap::new();
+        batch1.insert("command.create_shot".to_string(), 2);
+        collector.track_batch(&batch1, 1);
+
+        let mut batch2 = HashMap::new();
+        batch2.insert("command.create_shot".to_string(), 3);
+        collector.track_batch(&batch2, 2);
+
+        let inner = collector.inner.lock().unwrap();
+        assert_eq!(
+            inner.events.get(&1).and_then(|b| b.get("command.create_shot")),
+            Some(&2)
+        );
+        assert_eq!(
+            inner.events.get(&2).and_then(|b| b.get("command.create_shot")),
+            Some(&3)
+        );
     }
 
     #[test]
@@ -377,10 +419,9 @@ mod tests {
 
         collector.set_enabled(true);
         collector.track("event.a");
-        assert_eq!(
-            collector.inner.lock().unwrap().events.get("event.a"),
-            Some(&1)
-        );
+        let inner = collector.inner.lock().unwrap();
+        let bucket = inner.events.get(&0).expect("project_seq 0 bucket");
+        assert_eq!(bucket.get("event.a"), Some(&1));
     }
 
     #[test]
@@ -413,6 +454,7 @@ mod tests {
             os: "test".to_string(),
             session_id: "test-session".to_string(),
             duration_secs: 60,
+            project_seq: 0,
             events: HashMap::new(),
         };
 
