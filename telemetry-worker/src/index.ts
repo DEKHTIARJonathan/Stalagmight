@@ -12,6 +12,7 @@ import { decode } from '@msgpack/msgpack';
 import { EVENT_NAMES, SOURCE_NAMES } from './registry';
 
 const MAX_BODY_BYTES = 65_536; // 64 KB
+const RATE_LIMIT_MAX_SESSIONS = 10;
 
 interface Env {
   DB: D1Database;
@@ -148,6 +149,15 @@ export default {
     const ipHash = Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
+
+    // Rate limit: count sessions from this IP active in the last hour (read-only)
+    const { results: rateRows } = await env.DB.prepare(
+      `SELECT COUNT(*) as cnt FROM sessions
+       WHERE ip_hash = ?1 AND received_at > datetime('now', '-1 hour')`
+    ).bind(ipHash).all();
+    if (rateRows.length > 0 && (rateRows[0].cnt as number) >= RATE_LIMIT_MAX_SESSIONS) {
+      return new Response('Too many requests', { status: 429 });
+    }
 
     // Upsert session (update duration + ip_hash on repeated flushes from same session)
     const sessionStmt = env.DB.prepare(
