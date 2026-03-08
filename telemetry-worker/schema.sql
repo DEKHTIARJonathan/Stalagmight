@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   app_version TEXT NOT NULL,
   os TEXT NOT NULL,
   duration_secs INTEGER NOT NULL,
+  ip_hash TEXT,
   received_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -20,3 +21,4 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_name ON events(event_name);
 CREATE INDEX IF NOT EXISTS idx_sessions_received ON sessions(received_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_ip_hash ON sessions(ip_hash);

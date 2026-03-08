@@ -1,6 +1,7 @@
 # Telemetry
 
-Anonymous, session-level usage telemetry. Opt-in only, no PII.
+Anonymous, session-level usage telemetry. Opt-in only, no PII. IP addresses
+are SHA-256 hashed server-side for abuse detection — no raw IPs are stored.
 
 ## Architecture
 
@@ -452,6 +453,21 @@ Apply with `--remote` to target the production database:
 ```bash
 CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... \
   npx wrangler d1 execute stalagmight-telemetry --file=schema.sql --remote
+```
+
+### IP hash for abuse detection
+
+The worker hashes the `CF-Connecting-IP` header (SHA-256) and stores the hex
+digest in `sessions.ip_hash`. No raw IPs are stored. This allows bulk cleanup
+if a single source floods the database:
+
+```sql
+-- Find sessions from a specific IP hash
+SELECT * FROM sessions WHERE ip_hash = '<hash>';
+
+-- Delete all data from an abusive source
+DELETE FROM events WHERE session_id IN (SELECT session_id FROM sessions WHERE ip_hash = '<hash>');
+DELETE FROM sessions WHERE ip_hash = '<hash>';
 ```
 
 ### Configuration files
