@@ -3,7 +3,14 @@
  *
  * Receives anonymous usage event batches from the desktop app and stores
  * them in a D1 database. No PII is collected or stored.
+ *
+ * Supports two wire formats:
+ * - v1: JSON (`application/json`) — legacy / backward compat
+ * - v2: Packed msgpack (`application/msgpack`) — compact binary
  */
+
+import { decode } from '@msgpack/msgpack';
+import { EVENT_NAMES, SOURCE_NAMES } from './registry';
 
 interface Env {
   DB: D1Database;
@@ -17,6 +24,17 @@ interface TelemetryPayload {
   duration_secs: number;
   project_seq?: number;
   events: Record<string, number>;
+}
+
+interface PackedPayload {
+  v: number;
+  a: string;
+  o: string;
+  s: Uint8Array;
+  d: number;
+  p: number;
+  e: number[];
+  x?: Record<string, number>;
 }
 
 function isValidPayload(body: unknown): body is TelemetryPayload {
@@ -33,6 +51,95 @@ function isValidPayload(body: unknown): body is TelemetryPayload {
   );
 }
 
+function isValidPackedPayload(body: unknown): body is PackedPayload {
+  if (typeof body !== 'object' || body === null) return false;
+  const p = body as Record<string, unknown>;
+  return (
+    typeof p.v === 'number' &&
+    typeof p.a === 'string' &&
+    typeof p.o === 'string' &&
+    p.s instanceof Uint8Array &&
+    typeof p.d === 'number' &&
+    typeof p.p === 'number' &&
+    Array.isArray(p.e)
+  );
+}
+
+/** Convert 16 raw bytes to UUID string format. */
+function sessionIdFromBytes(bytes: Uint8Array): string {
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** Unpack flat event array + overflow into string event map. */
+function unpackEvents(packed: PackedPayload): Record<string, number> {
+  const events: Record<string, number> = {};
+  const { e, x } = packed;
+
+  for (let i = 0; i + 2 < e.length; i += 3) {
+    const eventId = e[i];
+    const sourceId = e[i + 1];
+    const count = e[i + 2];
+
+    const eventName = EVENT_NAMES[eventId];
+    if (!eventName) continue;
+
+    const sourceName = SOURCE_NAMES[sourceId] ?? '';
+    const key = sourceName ? `${eventName}:${sourceName}` : eventName;
+    events[key] = (events[key] ?? 0) + count;
+  }
+
+  if (x) {
+    for (const [key, count] of Object.entries(x)) {
+      events[key] = (events[key] ?? 0) + count;
+    }
+  }
+
+  return events;
+}
+
+/** Convert packed v2 payload to normalized TelemetryPayload. */
+function unpackPayload(packed: PackedPayload): TelemetryPayload {
+  return {
+    v: packed.v,
+    app_version: packed.a,
+    os: packed.o,
+    session_id: sessionIdFromBytes(packed.s),
+    duration_secs: packed.d,
+    project_seq: packed.p,
+    events: unpackEvents(packed),
+  };
+}
+
+async function parseRequest(request: Request): Promise<TelemetryPayload | null> {
+  const contentType = request.headers.get('content-type') ?? '';
+
+  if (contentType.includes('msgpack')) {
+    const buffer = await request.arrayBuffer();
+    const raw = decode(new Uint8Array(buffer));
+
+    if (!isValidPackedPayload(raw)) return null;
+
+    // Flat event array must be divisible by 3
+    if (raw.e.length % 3 !== 0) return null;
+
+    return unpackPayload(raw);
+  }
+
+  // Default: JSON
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return null;
+  }
+
+  if (!isValidPayload(body)) return null;
+  return body;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     // Only accept POST to /v1/events
@@ -41,24 +148,17 @@ export default {
       return new Response('Not Found', { status: 404 });
     }
 
-    // Parse and validate
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return new Response('Invalid JSON', { status: 400 });
-    }
-
-    if (!isValidPayload(body)) {
-      return new Response('Invalid payload shape', { status: 400 });
+    const payload = await parseRequest(request);
+    if (!payload) {
+      return new Response('Invalid payload', { status: 400 });
     }
 
     // Basic sanity limits
-    if (body.session_id.length > 64 || body.app_version.length > 32 || body.os.length > 32) {
+    if (payload.session_id.length > 64 || payload.app_version.length > 32 || payload.os.length > 32) {
       return new Response('Field too long', { status: 400 });
     }
 
-    const eventEntries = Object.entries(body.events);
+    const eventEntries = Object.entries(payload.events);
     if (eventEntries.length > 500) {
       return new Response('Too many events', { status: 400 });
     }
@@ -68,14 +168,14 @@ export default {
       `INSERT INTO sessions (session_id, app_version, os, duration_secs)
        VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT(session_id) DO UPDATE SET duration_secs = ?4, received_at = datetime('now')`
-    ).bind(body.session_id, body.app_version, body.os, body.duration_secs);
+    ).bind(payload.session_id, payload.app_version, payload.os, payload.duration_secs);
 
     // Insert events (project_seq defaults to 0 for backward compat)
-    const projectSeq = body.project_seq ?? 0;
+    const projectSeq = payload.project_seq ?? 0;
     const eventStmts = eventEntries.map(([name, count]) =>
       env.DB.prepare(
         'INSERT INTO events (session_id, event_name, count, project_seq) VALUES (?1, ?2, ?3, ?4)'
-      ).bind(body.session_id, name.slice(0, 128), Math.min(count, 1_000_000), projectSeq)
+      ).bind(payload.session_id, name.slice(0, 128), Math.min(count, 1_000_000), projectSeq)
     );
 
     try {

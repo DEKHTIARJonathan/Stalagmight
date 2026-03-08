@@ -29,6 +29,38 @@ prompted on first launch via `TelemetryOptInDialog`.
 
 ## Payload
 
+### v2 — Packed MsgPack (current wire format)
+
+Sent with `Content-Type: application/msgpack`. Event keys are replaced with
+numeric IDs from a shared registry, session ID is 16 raw bytes, and the whole
+payload is msgpack-encoded.
+
+```
+{
+  v: 2,                          // version
+  a: "0.8.0",                   // app_version
+  o: "linux",                   // os
+  s: <16 bytes>,                // session_id (binary UUID)
+  d: 3600,                      // duration_secs
+  p: 1,                         // project_seq
+  e: [16, 1, 42, 95, 1, 10],   // flat [event_id, source_id, count, ...]
+  x: { "display-state.showGrid:true": 1 }  // overflow (unregistered keys)
+}
+```
+
+The `e` array is a flat sequence of `(event_id, source_id, count)` triples.
+IDs are defined in `src-tauri/src/telemetry/registry.rs` (Rust) and
+`telemetry-worker/src/registry.ts` (worker). Source ID 0 means no source
+suffix; known sources (keyboard, toolbar, etc.) map to IDs 1-13.
+
+Events not found in the registry go into the `x` overflow map with their
+original string keys — no data is ever lost.
+
+### v1 — JSON (disk buffer / legacy)
+
+Used for on-disk buffering and backward compatibility. Sent with
+`Content-Type: application/json`.
+
 ```json
 {
   "v": 1,
@@ -44,6 +76,19 @@ prompted on first launch via `TelemetryOptInDialog`.
   }
 }
 ```
+
+Buffered v1 payloads are automatically converted to v2 packed format when
+retried via `send_buffered()`.
+
+### Registry files
+
+| File | Role |
+|------|------|
+| `src-tauri/src/telemetry/registry.rs` | Rust: event/source name → numeric ID |
+| `telemetry-worker/src/registry.ts` | Worker: numeric ID → event/source name |
+
+Both files must stay in sync. Add new events at the end of the relevant
+category section to avoid shifting existing IDs.
 
 **`project_seq`** — auto-incrementing project context counter. `0` means global
 view (no project open) or Rust-originated events. Each time the user opens a
@@ -163,8 +208,10 @@ prevents timer resets from redundant calls.
 | `src/utils/telemetry.ts` | Frontend batching, source hints, dialog/display tracking |
 | `src/utils/ipc.ts` | Calls `trackCommand` for every IPC invocation |
 | `src/store/uiStore.ts` | Wires tracking into `closeDialog`, `openDialog`, `setSelection`, `addToSelection`, panel toggles, display settings |
-| `src-tauri/src/telemetry.rs` | Rust collector, HTTP send, disk buffer, periodic flush |
+| `src-tauri/src/telemetry/mod.rs` | Rust collector, HTTP send, disk buffer, periodic flush |
+| `src-tauri/src/telemetry/registry.rs` | Event/source string ↔ numeric ID registry |
 | `src-tauri/src/commands/telemetry.rs` | IPC commands: `track_events`, `flush_telemetry`, etc. |
+| `telemetry-worker/src/registry.ts` | Worker-side reverse lookup arrays (ID → string) |
 | `src/store/displaySelectors.ts` | `DISPLAY_DEFAULTS` — single source of truth for default values |
 
 ## Source Tracking

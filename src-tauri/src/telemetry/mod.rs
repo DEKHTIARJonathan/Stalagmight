@@ -12,6 +12,9 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "telemetry")]
+mod registry;
+
 // ── Feature-gated imports ────────────────────────────────────────────
 
 #[cfg(feature = "telemetry")]
@@ -51,6 +54,26 @@ struct TelemetryPayload {
     duration_secs: u64,
     project_seq: u32,
     events: HashMap<String, u64>,
+}
+
+// ── Packed payload (v2 msgpack wire format) ─────────────────────────
+
+#[cfg(feature = "telemetry")]
+const PACKED_PAYLOAD_VERSION: u32 = 2;
+
+#[cfg(feature = "telemetry")]
+#[derive(Debug, Serialize)]
+struct PackedPayload {
+    v: u32,
+    a: String,
+    o: String,
+    #[serde(with = "serde_bytes")]
+    s: Vec<u8>,
+    d: u64,
+    p: u32,
+    e: Vec<u64>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    x: HashMap<String, u64>,
 }
 
 // ── Inner state ──────────────────────────────────────────────────────
@@ -126,8 +149,8 @@ impl TelemetryCollector {
 
     /// Flush current events to the telemetry backend.
     ///
-    /// Sends one payload per project_seq bucket. On network failure, buffers
-    /// each payload individually to disk for later retry.
+    /// Builds packed msgpack payloads (v2) for the wire. On network failure,
+    /// buffers the original JSON payload (v1) to disk for later retry.
     pub fn flush(&self) {
         let payloads = {
             let Ok(mut inner) = self.inner.lock() else {
@@ -158,7 +181,8 @@ impl TelemetryCollector {
         };
 
         for payload in &payloads {
-            if let Err(e) = send_payload(payload) {
+            let packed = to_packed(payload);
+            if let Err(e) = send_packed(&packed) {
                 tracing::debug!(error = %e, "Telemetry flush failed, buffering to disk");
                 buffer_to_disk(payload);
             }
@@ -201,7 +225,8 @@ impl TelemetryCollector {
                 }
             };
 
-            if send_payload(&payload).is_ok() {
+            let packed = to_packed(&payload);
+            if send_packed(&packed).is_ok() {
                 let _ = fs::remove_file(&path);
             }
         }
@@ -233,9 +258,56 @@ impl TelemetryCollector {
 
 // ── Helper functions (feature-gated) ─────────────────────────────────
 
+/// Convert a JSON `TelemetryPayload` to a packed wire-format payload.
 #[cfg(feature = "telemetry")]
-fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
-    let body = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+fn to_packed(payload: &TelemetryPayload) -> PackedPayload {
+    let event_map = registry::event_map();
+    let mut packed_events: Vec<u64> = Vec::new();
+    let mut overflow: HashMap<String, u64> = HashMap::new();
+
+    for (key, &count) in &payload.events {
+        let (base, source_id) = registry::split_event_key(key);
+        if let Some(&event_id) = event_map.get(base) {
+            packed_events.push(u64::from(event_id));
+            packed_events.push(u64::from(source_id));
+            packed_events.push(count);
+        } else {
+            overflow.insert(key.clone(), count);
+        }
+    }
+
+    PackedPayload {
+        v: PACKED_PAYLOAD_VERSION,
+        a: payload.app_version.clone(),
+        o: payload.os.clone(),
+        s: session_id_to_bytes(&payload.session_id),
+        d: payload.duration_secs,
+        p: payload.project_seq,
+        e: packed_events,
+        x: overflow,
+    }
+}
+
+/// Convert UUID string (with dashes) to 16 raw bytes.
+#[cfg(feature = "telemetry")]
+fn session_id_to_bytes(session_id: &str) -> Vec<u8> {
+    let hex: String = session_id.chars().filter(|c| *c != '-').collect();
+    let mut bytes = Vec::with_capacity(16);
+    let mut i = 0;
+    while i + 1 < hex.len() && bytes.len() < 16 {
+        if let Ok(b) = u8::from_str_radix(&hex[i..i + 2], 16) {
+            bytes.push(b);
+        }
+        i += 2;
+    }
+    bytes.resize(16, 0);
+    bytes
+}
+
+/// Serialize packed payload as msgpack and POST to the telemetry endpoint.
+#[cfg(feature = "telemetry")]
+fn send_packed(packed: &PackedPayload) -> Result<(), String> {
+    let body = rmp_serde::to_vec(packed).map_err(|e| e.to_string())?;
 
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
@@ -244,7 +316,7 @@ fn send_payload(payload: &TelemetryPayload) -> Result<(), String> {
 
     let response = agent
         .post(ENDPOINT_URL)
-        .content_type("application/json")
+        .content_type("application/msgpack")
         .send(&body[..]);
 
     match response {
@@ -444,6 +516,126 @@ mod tests {
 
         let inner = collector.inner.lock().unwrap();
         assert!(inner.events.is_empty());
+    }
+
+    #[test]
+    fn session_id_to_bytes_roundtrip() {
+        let uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let bytes = session_id_to_bytes(uuid);
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(
+            bytes,
+            vec![0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x78, 0x90, 0xab, 0xcd, 0xef, 0x12, 0x34, 0x56, 0x78, 0x90]
+        );
+    }
+
+    #[test]
+    fn session_id_to_bytes_pads_short_input() {
+        let bytes = session_id_to_bytes("abcd");
+        assert_eq!(bytes.len(), 16);
+        assert_eq!(bytes[0], 0xab);
+        assert_eq!(bytes[1], 0xcd);
+        assert_eq!(bytes[2..], [0u8; 14]);
+    }
+
+    #[test]
+    fn to_packed_known_events() {
+        let mut events = HashMap::new();
+        events.insert("command.create_shot:keyboard".to_string(), 5);
+        events.insert("command.save_project".to_string(), 3);
+
+        let payload = TelemetryPayload {
+            v: 1,
+            app_version: "0.1.0".to_string(),
+            os: "linux".to_string(),
+            session_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
+            duration_secs: 300,
+            project_seq: 1,
+            events,
+        };
+
+        let packed = to_packed(&payload);
+        assert_eq!(packed.v, 2);
+        assert_eq!(packed.a, "0.1.0");
+        assert_eq!(packed.o, "linux");
+        assert_eq!(packed.s.len(), 16);
+        assert_eq!(packed.d, 300);
+        assert_eq!(packed.p, 1);
+        // 2 events * 3 fields each = 6 entries in flat array
+        assert_eq!(packed.e.len(), 6);
+        assert!(packed.x.is_empty());
+
+        // Verify the flat array contains expected (eid, sid, count) triples
+        let mut found_create_shot = false;
+        let mut found_save = false;
+        for triple in packed.e.chunks_exact(3) {
+            let eid = triple[0] as u16;
+            let sid = triple[1] as u8;
+            let count = triple[2];
+            let event_name = registry::EVENT_NAMES[eid as usize];
+            if event_name == "command.create_shot" && sid == 1 && count == 5 {
+                found_create_shot = true;
+            }
+            if event_name == "command.save_project" && sid == 0 && count == 3 {
+                found_save = true;
+            }
+        }
+        assert!(found_create_shot, "command.create_shot:keyboard not found");
+        assert!(found_save, "command.save_project not found");
+    }
+
+    #[test]
+    fn to_packed_overflow() {
+        let mut events = HashMap::new();
+        events.insert("display-state.showGrid:true".to_string(), 1);
+        events.insert("completely.unknown.event".to_string(), 7);
+        events.insert("command.undo".to_string(), 2);
+
+        let payload = TelemetryPayload {
+            v: 1,
+            app_version: "0.1.0".to_string(),
+            os: "linux".to_string(),
+            session_id: "00000000-0000-0000-0000-000000000000".to_string(),
+            duration_secs: 60,
+            project_seq: 0,
+            events,
+        };
+
+        let packed = to_packed(&payload);
+        // command.undo is known → 1 triple in e
+        assert_eq!(packed.e.len(), 3);
+        // 2 unknown events in overflow
+        assert_eq!(packed.x.len(), 2);
+        assert_eq!(packed.x.get("display-state.showGrid:true"), Some(&1));
+        assert_eq!(packed.x.get("completely.unknown.event"), Some(&7));
+    }
+
+    #[test]
+    fn packed_msgpack_roundtrip() {
+        let mut events = HashMap::new();
+        events.insert("command.create_shot:keyboard".to_string(), 10);
+
+        let payload = TelemetryPayload {
+            v: 1,
+            app_version: "0.1.0".to_string(),
+            os: "linux".to_string(),
+            session_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
+            duration_secs: 120,
+            project_seq: 0,
+            events,
+        };
+
+        let packed = to_packed(&payload);
+        let bytes = rmp_serde::to_vec(&packed).unwrap();
+        assert!(!bytes.is_empty());
+        // Verify it's smaller than the JSON equivalent
+        let json_bytes = serde_json::to_vec(&payload).unwrap();
+        assert!(
+            bytes.len() < json_bytes.len(),
+            "msgpack ({}) should be smaller than JSON ({})",
+            bytes.len(),
+            json_bytes.len()
+        );
     }
 
     #[test]
