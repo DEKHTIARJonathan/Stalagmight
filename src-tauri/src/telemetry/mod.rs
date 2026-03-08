@@ -315,7 +315,7 @@ fn session_id_to_bytes(session_id: &str) -> Vec<u8> {
 /// Serialize packed payload as msgpack and POST to the telemetry endpoint.
 #[cfg(feature = "telemetry")]
 fn send_packed(packed: &PackedPayload) -> Result<(), String> {
-    let body = rmp_serde::to_vec(packed).map_err(|e| e.to_string())?;
+    let body = rmp_serde::to_vec_named(packed).map_err(|e| e.to_string())?;
 
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
