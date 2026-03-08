@@ -46,6 +46,16 @@ fi
 [[ -f "$PROJECT_DIR/package.json" ]] || die "Not a valid project directory: $PROJECT_DIR"
 
 # ── Environment ──────────────────────────────────────────────────────────────
+# Treat this as a CI build (suppresses -dev version suffix in telemetry)
+export CI=true
+
+# Load .env if present (contains TELEMETRY_ENDPOINT and other secrets)
+if [[ -f "$PROJECT_DIR/.env" ]]; then
+  # shellcheck disable=SC1091
+  set -a; source "$PROJECT_DIR/.env"; set +a
+  info "Loaded .env"
+fi
+
 # shellcheck disable=SC1091
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
@@ -128,10 +138,16 @@ if [[ "$TEST_E2E" == true ]]; then
 fi
 
 # ── Step 6: Production build ────────────────────────────────────────────────
-# CI=true tells Tauri's DMG bundler to skip AppleScript (needs Finder GUI).
-# Without it, bundle_dmg.sh hangs on the AppleScript step in headless/SSH sessions.
+# CI=true (exported above) tells Tauri's DMG bundler to skip AppleScript
+# (needs Finder GUI). Without it, bundle_dmg.sh hangs in headless/SSH sessions.
 info "Building production macOS app"
-(cd "$PROJECT_DIR" && CI=true pnpm tauri build)
+if [[ -n "${TELEMETRY_ENDPOINT:-}" ]]; then
+  info "  Telemetry enabled (endpoint set)"
+  (cd "$PROJECT_DIR" && pnpm tauri build -- --features telemetry)
+else
+  warn "  Telemetry disabled (TELEMETRY_ENDPOINT not set — add to .env)"
+  (cd "$PROJECT_DIR" && pnpm tauri build)
+fi
 ok "Production build complete"
 
 # ── Step 6a: Ad-hoc code sign ────────────────────────────────────────────────
