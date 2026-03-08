@@ -12,9 +12,13 @@ import { DISPLAY_DEFAULTS } from '../store/displaySelectors';
 /** How often (ms) to flush batched counts to Rust. */
 const FLUSH_INTERVAL_MS = 60_000;
 
+/** How often (ms) to flush dwell time to Rust so the backend's 10-min dwell-only flush works. */
+const DWELL_FLUSH_INTERVAL_MS = 60_000;
+
 /** In-memory event counters. */
 const counts: Record<string, number> = {};
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let dwellFlushInterval: ReturnType<typeof setInterval> | null = null;
 let available: boolean | null = null;
 
 /** Source hint for the next action — consumed by dispatchers. */
@@ -282,6 +286,14 @@ function scheduleFlush(): void {
  */
 export async function initTelemetry(): Promise<void> {
   await checkAvailable();
+  if (available && !dwellFlushInterval) {
+    dwellFlushInterval = setInterval(() => {
+      flushDwell();
+      if (Object.keys(counts).length > 0) {
+        void flushToRust();
+      }
+    }, DWELL_FLUSH_INTERVAL_MS);
+  }
 }
 
 /**
@@ -299,6 +311,10 @@ export async function flushTelemetry(): Promise<void> {
   if (flushTimer !== null) {
     clearTimeout(flushTimer);
     flushTimer = null;
+  }
+  if (dwellFlushInterval !== null) {
+    clearInterval(dwellFlushInterval);
+    dwellFlushInterval = null;
   }
   flushDwell();
   await flushToRust();
