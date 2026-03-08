@@ -18,7 +18,7 @@ User action → telemetry.ts (batch counts) → IPC → Rust TelemetryCollector
 to Rust every 60 seconds.
 
 **Backend** (`src-tauri/src/telemetry.rs`): Aggregates counts per session, flushes
-to `https://TELEMETRY_ENDPOINT/v1/events` every 5 minutes. Buffers to
+to `https://TELEMETRY_ENDPOINT/v1/events` every 60 seconds. Buffers to
 `~/.local/share/stalagmight/Stalagmight/telemetry-buffer/*.json` when offline.
 
 **Feature-gated**: All Rust telemetry is behind `#[cfg(feature = "telemetry")]`.
