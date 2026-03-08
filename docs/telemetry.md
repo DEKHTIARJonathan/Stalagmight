@@ -87,8 +87,8 @@ retried via `send_buffered()`.
 | `src-tauri/src/telemetry/registry.rs` | Rust: event/source name → numeric ID |
 | `telemetry-worker/src/registry.ts` | Worker: numeric ID → event/source name |
 
-Both files must stay in sync. Add new events at the end of the relevant
-category section to avoid shifting existing IDs.
+Both files must stay in sync. See [Registry ID Stability](#registry-id-stability)
+below for the append-only policy and how to add new entries.
 
 **`project_seq`** — auto-incrementing project context counter. `0` means global
 view (no project open) or Rust-originated events. Each time the user opens a
@@ -255,6 +255,66 @@ import { withTrackingSuppressed } from '../../utils/telemetry';
 withTrackingSuppressed(() => toggleSectionsPanel());
 ```
 
+## Registry ID Stability
+
+Event and source IDs are positional — the index in the `EVENT_NAMES` /
+`SOURCE_NAMES` arrays is the numeric ID sent on the wire. Older desktop clients
+that haven't updated continue sending the IDs they were compiled with, so
+**existing IDs must never change**.
+
+### Append-only policy (tied to `v`)
+
+The packed payload version (`v: 2`) implicitly defines a frozen registry
+baseline. For v2, the first 286 event entries and 14 source entries are locked.
+New entries must be appended after the `// ── Appended after v2 baseline ──`
+comment in both `registry.rs` and `registry.ts`.
+
+A compile-time test (`registry_id_stability`) enforces this by hashing the
+frozen portion and failing if any entry is modified, inserted, or removed.
+
+### What is safe
+
+| Operation | Safe? | Reason |
+|-----------|-------|--------|
+| Append new entry at end | Yes | Existing IDs unchanged |
+| Change a string value | **No** | Hash changes, test fails |
+| Insert mid-array | **No** | Shifts all subsequent IDs |
+| Remove an entry | **No** | Shifts all subsequent IDs |
+| Reorder entries | **No** | Changes ID ↔ name mapping |
+
+### Adding a new registry entry
+
+1. Append the entry at the end of `EVENT_NAMES` in `registry.rs` (after the
+   `// ── Appended after v2 baseline ──` comment).
+2. Append the same entry at the same position in `registry.ts`.
+3. Update `event_count` test if needed.
+4. Run `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry -- registry::tests`
+   to verify all checks pass.
+
+### Registry reorganization (version bump)
+
+When the append-at-end approach becomes unwieldy (e.g., after many additions),
+you can reorganize the arrays by bumping the payload version:
+
+1. Increment `PACKED_PAYLOAD_VERSION` in `telemetry/mod.rs` (e.g., 2 → 3).
+2. Reorganize `EVENT_NAMES` / `SOURCE_NAMES` freely (sort, remove stale
+   entries, etc.).
+3. Update `V2_FROZEN_EVENTS`, `V2_FROZEN_SOURCES`, and both FNV hashes in the
+   `registry_id_stability` test to reflect the new baseline (rename to V3).
+4. In the Cloudflare Worker, keep the v2 lookup table alongside the new v3
+   table so payloads from older clients still decode correctly.
+5. After enough time has passed for most users to upgrade, drop the v2 table.
+
+### Automated tests
+
+| Test | What it checks |
+|------|----------------|
+| `registry_id_stability` | FNV-1a hash of frozen entries — catches insertions, removals, renames |
+| `registry_covers_all_commands` | Every `generate_handler![]` command has a `command.*` entry (and vice versa) |
+| `rust_ts_registry_in_sync` | Rust and TypeScript registries are identical element-by-element |
+| `no_duplicate_event_names` | No duplicate strings in `EVENT_NAMES` |
+| `event_count` / `source_count` | Array lengths match expected totals |
+
 ## Adding Telemetry to New Features
 
 ### New dialog
@@ -269,6 +329,10 @@ withTrackingSuppressed(() => toggleSectionsPanel());
 
 Automatic — `invokeIpc` calls `trackCommand` for all non-telemetry commands.
 If the command is undoable, add it to `UNDOABLE_COMMANDS` in `telemetry.ts`.
+
+You must also add a `command.<name>` entry to both registries — append it at the
+end (see [Registry ID Stability](#registry-id-stability)). The
+`registry_covers_all_commands` test will fail if you forget.
 
 ### New selection source
 
