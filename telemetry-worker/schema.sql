@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
   event_name TEXT NOT NULL,
-  count INTEGER NOT NULL
+  count INTEGER NOT NULL,
+  project_seq INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);

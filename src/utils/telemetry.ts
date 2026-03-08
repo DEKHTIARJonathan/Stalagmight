@@ -27,6 +27,9 @@ let _dialogCompleted: string | null = null;
 /** When true, trackAction/trackCommand calls are suppressed (for programmatic UI changes). */
 let _silent = false;
 
+/** Auto-incrementing project sequence (0 = global, 1 = first project opened, etc.). */
+let _projectSeq = 0;
+
 /** Current workflow state for dwell time tracking. */
 let _dwellState: { key: string; since: number } | null = null;
 
@@ -73,7 +76,7 @@ async function flushToRust(): Promise<void> {
   if (!hasEvents) return;
 
   try {
-    await invoke('track_events', { events: snapshot });
+    await invoke('track_events', { events: snapshot, projectSeq: _projectSeq });
   } catch {
     // Restore counts if flush failed — they'll be retried next cycle
     for (const [key, value] of Object.entries(snapshot)) {
@@ -101,6 +104,13 @@ export function consumeSource(): string {
 export function withTrackingSuppressed(fn: () => void): void {
   _silent = true;
   try { fn(); } finally { _silent = false; }
+}
+
+/** Increment project sequence and force-flush pending events from previous project. */
+export async function advanceProjectSeq(): Promise<void> {
+  flushDwell();
+  await flushToRust();
+  _projectSeq++;
 }
 
 /**

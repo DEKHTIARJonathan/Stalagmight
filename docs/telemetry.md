@@ -36,6 +36,7 @@ prompted on first launch via `TelemetryOptInDialog`.
   "os": "linux",
   "session_id": "a1b2c3d4-...",
   "duration_secs": 3600,
+  "project_seq": 1,
   "events": {
     "command.create_shot": 42,
     "action.tool.draw:keyboard": 10,
@@ -43,6 +44,12 @@ prompted on first launch via `TelemetryOptInDialog`.
   }
 }
 ```
+
+**`project_seq`** — auto-incrementing project context counter. `0` means global
+view (no project open) or Rust-originated events. Each time the user opens a
+project (`setView('single')`), the sequence increments. A single flush never
+mixes events from different project contexts — the frontend force-flushes
+pending events before advancing the counter.
 
 No file paths, project names, survey data, coordinates, or user identity.
 
