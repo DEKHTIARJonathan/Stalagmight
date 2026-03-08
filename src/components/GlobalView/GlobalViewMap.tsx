@@ -12,6 +12,7 @@ import { defaultConfig } from '../../types/config';
 import { getTileConfig } from '../../utils/tileConfig';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
+import { useNetworkStore } from '../../store/networkStore';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
@@ -586,6 +587,17 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
       map.current = null;
     };
   }, []);
+
+  // Reload stale satellite tiles after offline→online recovery
+  const tileReloadGeneration = useNetworkStore((s) => s.tileReloadGeneration);
+  useEffect(() => {
+    if (!map.current || !mapLoaded || tileReloadGeneration === 0) return;
+    const source = map.current.getSource('satellite-tiles');
+    if (source && 'clearTiles' in source) {
+      (source as any).clearTiles();
+      map.current.triggerRepaint();
+    }
+  }, [tileReloadGeneration, mapLoaded]);
 
   // Store callbacks in refs to avoid stale closures in map event handlers
   const onProjectSelectRef = useRef(onProjectSelect);

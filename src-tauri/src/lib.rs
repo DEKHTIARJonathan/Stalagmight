@@ -15,7 +15,7 @@ pub mod tilemap_cache;
 
 use std::collections::HashMap as StdHashMap;
 use std::io::Cursor;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use image::{DynamicImage, ImageFormat, GenericImageView};
@@ -103,6 +103,8 @@ pub struct TileFetchStats {
     total_latency_ms: AtomicU64,
     last_latency_ms: AtomicU64,
     in_flight: AtomicU64,
+    /// true = we've notified the frontend that tiles are failing
+    notified_offline: AtomicBool,
 }
 
 /// Snapshot of tile fetch statistics at a point in time.
@@ -128,6 +130,7 @@ impl TileFetchStats {
             total_latency_ms: AtomicU64::new(0),
             last_latency_ms: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
+            notified_offline: AtomicBool::new(false),
         }
     }
 
@@ -158,6 +161,20 @@ impl TileFetchStats {
             total_errors: self.total_errors.load(Ordering::Relaxed),
             total_latency_ms: self.total_latency_ms.load(Ordering::Relaxed),
             last_latency_ms: self.last_latency_ms.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Emit `tile-transport-error` once per online→offline transition.
+    pub fn notify_transport_error<R: tauri::Runtime>(&self, handle: &tauri::AppHandle<R>) {
+        if self.notified_offline.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            let _ = handle.emit("tile-transport-error", ());
+        }
+    }
+
+    /// Emit `tile-transport-success` once per offline→online transition.
+    pub fn notify_transport_success<R: tauri::Runtime>(&self, handle: &tauri::AppHandle<R>) {
+        if self.notified_offline.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            let _ = handle.emit("tile-transport-success", ());
         }
     }
 }
@@ -957,10 +974,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("stalagmight-tiles", |ctx, request, responder| {
             let uri = request.uri().clone();
+            let app_handle = ctx.app_handle().clone();
             let state = ctx.app_handle().state::<core::state::AppState>();
             let tile_cache = state.tile_cache();
             let tilemap_cache = state.tilemap_cache();
             let tile_fetch_stats = state.tile_fetch_stats();
+            let tile_fetch_stats_notify = Arc::clone(&tile_fetch_stats);
 
             // Use Tauri's async runtime with spawn_blocking for bounded concurrency
             // This uses a threadpool instead of spawning unbounded threads
@@ -988,22 +1007,36 @@ pub fn run() {
                     "Processing tile request"
                 );
 
-                // Run the blocking tile fetch in the blocking threadpool
-                let response = tauri::async_runtime::spawn_blocking(move || {
-                    handle_tile_request(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats)
+                // Run the blocking tile fetch in the blocking threadpool.
+                // Snapshot stats before/after to detect whether a network fetch occurred.
+                let result = tauri::async_runtime::spawn_blocking(move || {
+                    let snap_before = tile_fetch_stats.snapshot();
+                    let response = handle_tile_request(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats);
+                    let snap_after = tile_fetch_stats.snapshot();
+                    let had_network_success = snap_after.total_fetched > snap_before.total_fetched;
+                    let had_network_error = snap_after.total_errors > snap_before.total_errors;
+                    (response, had_network_success, had_network_error)
                 })
-                .await
-                .unwrap_or_else(|e| {
+                .await;
+
+                let (response, had_network_success, had_network_error) = result.unwrap_or_else(|e| {
                     tracing::error!(
                         error = %e,
                         purpose = "render map tiles",
                         "Tile request task panicked"
                     );
-                    build_error_response(
+                    (build_error_response(
                         http::StatusCode::INTERNAL_SERVER_ERROR,
                         "Internal error processing tile request",
-                    )
+                    ), false, false)
                 });
+
+                // Notify connectivity changes (debounced — only emits on state transitions)
+                if had_network_success {
+                    tile_fetch_stats_notify.notify_transport_success(&app_handle);
+                } else if had_network_error {
+                    tile_fetch_stats_notify.notify_transport_error(&app_handle);
+                }
 
                 responder.respond(response);
             });

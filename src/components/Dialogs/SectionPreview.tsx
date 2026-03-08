@@ -5,6 +5,7 @@ import type { Section, Station, Shot } from '../../types/project';
 import { metersToMapCoords, getBounds } from '../../utils/coordinates';
 import { circularMeanDegrees } from '../../utils/angles';
 import { useUIStore } from '../../store/uiStore';
+import { useNetworkStore } from '../../store/networkStore';
 import { getMapThemeColors, getThemeColor } from '../../utils/themeColors';
 import { getTileConfig } from '../../utils/tileConfig';
 import type { GpsOrigin } from '../../types/config';
@@ -510,6 +511,17 @@ export default function SectionPreview({
       }
     }
   }, [gpsOrigin, mapLoaded]);
+
+  // Reload stale satellite tiles after offline→online recovery
+  const tileReloadGeneration = useNetworkStore((s) => s.tileReloadGeneration);
+  useEffect(() => {
+    if (!mapRef.current || !mapLoaded || !gpsOrigin || tileReloadGeneration === 0) return;
+    const source = mapRef.current.getSource('satellite-tiles');
+    if (source && 'clearTiles' in source) {
+      (source as any).clearTiles();
+      mapRef.current.triggerRepaint();
+    }
+  }, [tileReloadGeneration, mapLoaded, gpsOrigin]);
 
   // Update data and fit bounds when section changes
   useEffect(() => {

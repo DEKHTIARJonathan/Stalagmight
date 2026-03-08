@@ -28,6 +28,7 @@ import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { FitToViewIcon } from '../common/icons';
+import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { setSource } from '../../utils/telemetry';
 
@@ -2165,6 +2166,17 @@ export default function MapCanvas() {
       }
     };
   }, [showSatellite, getSatelliteTileConfig, mapLoaded]);
+
+  // Reload stale satellite tiles after offline→online recovery
+  const tileReloadGeneration = useNetworkStore((s) => s.tileReloadGeneration);
+  useEffect(() => {
+    if (!map.current || !mapLoaded || !showSatellite || tileReloadGeneration === 0) return;
+    const source = map.current.getSource('satellite-tiles');
+    if (source && 'clearTiles' in source) {
+      (source as any).clearTiles();
+      map.current.triggerRepaint();
+    }
+  }, [tileReloadGeneration, mapLoaded, showSatellite]);
 
   // Shared padding helper: computes { top, bottom, left, right } with 10% margin
   // and optional panel offsets

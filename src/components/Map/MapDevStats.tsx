@@ -4,6 +4,7 @@ import { invokeIpc } from '../../utils/ipc';
 import maplibregl from 'maplibre-gl';
 import { getTileFetchStats, type TileFetchStats } from '../../utils/tileProtocol';
 import { formatFixed, formatNumber } from '../../i18n/format';
+import { useNetworkStore } from '../../store/networkStore';
 
 interface CacheStats {
   total_tiles: bigint;
@@ -132,7 +133,7 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
   // Cache and network stats
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
-  const [networkStatus, setNetworkStatus] = useState<boolean | null>(null);
+  const networkStatus = useNetworkStore((s) => s.isOnline);
   const [tileFetchStats, setTileFetchStats] = useState<TileFetchStats | null>(null);
 
   // Map state — zoom/center stored in refs and flushed to React state periodically
@@ -385,27 +386,6 @@ export function MapDevStats({ map }: MapDevStatsProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch network status periodically
-  useEffect(() => {
-    const fetchNetworkStatus = async () => {
-      try {
-        const status = await invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status for dev stats' });
-        setNetworkStatus(status);
-      } catch (e) {
-        console.debug('[MapDevStats] Failed to fetch network status:', e);
-        setNetworkStatus(null);
-      }
-    };
-
-    // Initial fetch
-    fetchNetworkStatus();
-
-    // Refresh every 10 seconds (network status check is blocking)
-    const interval = setInterval(fetchNetworkStatus, 10000);
-
-    return () => clearInterval(interval);
-  }, []);
-
   // Track map state changes
   useEffect(() => {
     const handleMove = () => {
@@ -599,9 +579,6 @@ export function MapDevStats({ map }: MapDevStatsProps) {
 
   // Get network status indicator
   const getNetworkIndicator = useCallback(() => {
-    if (networkStatus === null) {
-      return { color: 'text-text-secondary', text: t('map.devStats.network.checking') };
-    }
     if (networkStatus) {
       return { color: 'text-success', text: t('map.devStats.network.online') };
     }
