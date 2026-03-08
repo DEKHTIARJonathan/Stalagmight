@@ -431,9 +431,7 @@ pub fn start_periodic_flush(collector: TelemetryCollector) {
                             false
                         } else {
                             let has_action_events = inner.events.values().any(|bucket| {
-                                bucket.keys().any(|k| {
-                                    !k.starts_with("dwell.") && !k.starts_with("display-state.")
-                                })
+                                bucket.keys().any(|k| !k.starts_with("dwell."))
                             });
                             has_action_events
                                 || ticks_since_flush >= DWELL_ONLY_TICKS
