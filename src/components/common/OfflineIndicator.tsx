@@ -1,4 +1,4 @@
-import { useNetworkStatus } from '../../hooks/useNetworkStatus';
+import { useNetworkStore } from '../../store/networkStore';
 import { useTranslation } from 'react-i18next';
 
 interface OfflineIndicatorProps {
@@ -14,7 +14,7 @@ interface OfflineIndicatorProps {
  */
 export function OfflineIndicator({ className = '' }: OfflineIndicatorProps) {
   const { t } = useTranslation();
-  const { isOnline } = useNetworkStatus();
+  const isOnline = useNetworkStore((s) => s.isOnline);
 
   // Only show when offline
   if (isOnline) {

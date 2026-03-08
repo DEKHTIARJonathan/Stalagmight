@@ -1,118 +1,85 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invokeIpc } from '../utils/ipc';
-
-// Number of consecutive failures before backing off
-const MAX_IPC_FAILURES = 3;
-
-// After disabling, retry every N poll intervals to check if IPC recovered
-const RECOVERY_CHECK_INTERVAL = 6; // Every 6th poll (e.g., every 60s if poll is 10s)
+import { useNetworkStore } from '../store/networkStore';
 
 /**
- * Hook to track network connectivity status.
+ * Event-driven network status orchestrator.
  *
- * Combines browser online state with periodic backend connectivity checks
- * to the ESRI tile server. This gives accurate offline detection for
- * the tile caching feature.
+ * Uses tile fetch outcomes as the primary connectivity signal:
+ * - Tauri `tile-transport-error` event → offline
+ * - Tauri `tile-transport-success` event → online
  *
- * @param pollInterval - Interval in ms between network checks (default: 10000)
- * @returns Object with isOnline status and manual refresh function
+ * Only polls the ESRI server when offline (to detect recovery).
+ * On offline→online transition, triggers tile reload for stale tiles.
+ *
+ * Mount once at app root. Consumers read from `useNetworkStore`.
  */
-export function useNetworkStatus(pollInterval = 10000) {
-  // Start with browser's online state
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator !== 'undefined' ? navigator.onLine : true
-  );
+export function useNetworkStatus() {
+  const isOnline = useNetworkStore((s) => s.isOnline);
+  const setOnline = useNetworkStore((s) => s.setOnline);
+  const triggerTileReload = useNetworkStore((s) => s.triggerTileReload);
 
-  // Track consecutive IPC failures
-  // Only back off after multiple failures to handle transient issues
-  const ipcFailureCountRef = useRef(0);
-  const ipcBackedOffRef = useRef(false);
+  // Ref to avoid stale closures in event handlers
+  const isOnlineRef = useRef(isOnline);
+  isOnlineRef.current = isOnline;
 
-  // Counter for recovery attempts (retry periodically even when backed off)
-  const pollCountRef = useRef(0);
-
-  // Check network status via backend
-  const checkNetworkStatus = useCallback(async () => {
-    // If browser reports offline, trust that immediately
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      setIsOnline(false);
-      return;
+  const goOnline = useCallback(() => {
+    if (!isOnlineRef.current) {
+      setOnline(true);
+      triggerTileReload();
+      console.info('[useNetworkStatus] Online — tiles reloading');
     }
+  }, [setOnline, triggerTileReload]);
 
-    // If IPC is backed off, only try recovery periodically
-    if (ipcBackedOffRef.current) {
-      pollCountRef.current++;
-      if (pollCountRef.current < RECOVERY_CHECK_INTERVAL) {
-        // Not time for recovery check yet - use browser state
-        setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
-        return;
-      }
-      // Time for a recovery attempt
-      pollCountRef.current = 0;
+  const goOffline = useCallback(() => {
+    if (isOnlineRef.current) {
+      setOnline(false);
+      console.info('[useNetworkStatus] Offline');
     }
+  }, [setOnline]);
 
-    try {
-      const online = await invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' });
-      // Success - reset failure counter and clear backoff
-      ipcFailureCountRef.current = 0;
-      if (ipcBackedOffRef.current) {
-        ipcBackedOffRef.current = false;
-        console.info('[useNetworkStatus] IPC recovered, resuming backend checks');
-      }
-      setIsOnline(online);
-    } catch (error) {
-      // IPC failure - increment counter
-      ipcFailureCountRef.current++;
-
-      if (ipcFailureCountRef.current >= MAX_IPC_FAILURES && !ipcBackedOffRef.current) {
-        // Too many consecutive failures - back off but allow recovery
-        ipcBackedOffRef.current = true;
-        pollCountRef.current = 0;
-        console.warn(
-          `[useNetworkStatus] Tauri IPC unavailable after ${MAX_IPC_FAILURES} failures, backing off (will retry periodically)`
-        );
-      }
-
-      // Fall back to browser's online state
-      setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
-    }
-  }, []);
-
-  // Listen to browser online/offline events for immediate updates
+  // Listen for Tauri tile transport events + browser online/offline
   useEffect(() => {
-    const handleOnline = () => {
-      // Browser came online - verify with backend
-      // Reset backoff to allow immediate recovery check
-      if (ipcBackedOffRef.current) {
-        pollCountRef.current = RECOVERY_CHECK_INTERVAL; // Force immediate retry
-      }
-      checkNetworkStatus();
-    };
+    const unlisteners: Promise<UnlistenFn>[] = [];
 
-    const handleOffline = () => {
-      // Browser reports offline - trust immediately
-      setIsOnline(false);
-    };
+    unlisteners.push(listen('tile-transport-error', () => goOffline()));
+    unlisteners.push(listen('tile-transport-success', () => goOnline()));
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    const handleBrowserOnline = () => {
+      // Browser reports online — verify with backend
+      invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' })
+        .then((online) => { if (online) goOnline(); })
+        .catch(() => { /* ignore — tile events will confirm */ });
+    };
+    const handleBrowserOffline = () => goOffline();
+
+    window.addEventListener('online', handleBrowserOnline);
+    window.addEventListener('offline', handleBrowserOffline);
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      unlisteners.forEach((p) => p.then((fn) => fn()));
+      window.removeEventListener('online', handleBrowserOnline);
+      window.removeEventListener('offline', handleBrowserOffline);
     };
-  }, [checkNetworkStatus]);
+  }, [goOnline, goOffline]);
 
-  // Periodic polling for network status
+  // Poll get_network_status only when offline (to detect recovery)
   useEffect(() => {
-    // Initial check
-    checkNetworkStatus();
+    if (isOnline) return;
 
-    // Set up interval (will back off but periodically retry)
-    const intervalId = setInterval(checkNetworkStatus, pollInterval);
+    const poll = async () => {
+      try {
+        const online = await invokeIpc<boolean>('get_network_status', undefined, { purpose: 'check network status' });
+        if (online) goOnline();
+      } catch {
+        // Still offline
+      }
+    };
+
+    poll();
+    const intervalId = setInterval(poll, 10000);
 
     return () => clearInterval(intervalId);
-  }, [checkNetworkStatus, pollInterval]);
-
-  return { isOnline, refresh: checkNetworkStatus };
+  }, [isOnline, goOnline]);
 }

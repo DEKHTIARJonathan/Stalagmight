@@ -8,7 +8,7 @@
 //! - Session-level anonymous counters only — no PII
 //! - Opt-in via config (`general.telemetry_enabled`)
 //! - Buffers to disk when offline, retries on next flush
-//! - Periodic flush every 60s (dwell-only batches every 10 min) + flush on app close
+//! - Periodic flush every 60s (low-frequency-only batches every 10 min) + flush on app close
 //! - On network failure, retries every 60s until success
 
 use std::collections::HashMap;
@@ -400,8 +400,9 @@ fn format_session_id(bytes: &[u8; 16]) -> String {
 /// Start a background thread that periodically flushes telemetry.
 ///
 /// Flush policy:
-/// - Every 60s: flush if there are action events (non-dwell) to send
-/// - Every 10 min: flush even if only dwell-time events are pending
+/// - Every 60s: flush if there are action events to send
+/// - Every 10 min: flush even if only low-frequency events are pending
+///   (dwell timers, `get_network_status` polling)
 /// - On flush failure (no internet): retry every 60s until success,
 ///   then resume normal schedule
 pub fn start_periodic_flush(collector: TelemetryCollector) {
@@ -432,7 +433,10 @@ pub fn start_periodic_flush(collector: TelemetryCollector) {
                             false
                         } else {
                             let has_action_events = inner.events.values().any(|bucket| {
-                                bucket.keys().any(|k| !k.starts_with("dwell."))
+                                bucket.keys().any(|k| {
+                                    !k.starts_with("dwell.")
+                                        && !k.starts_with("command.get_network_status")
+                                })
                             });
                             has_action_events
                                 || ticks_since_flush >= DWELL_ONLY_TICKS
