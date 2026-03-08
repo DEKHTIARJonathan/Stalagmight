@@ -1,0 +1,8 @@
+name = "stalagmight-telemetry"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "stalagmight-telemetry"
+database_id = ""  # Run `wrangler d1 list` to find your database ID

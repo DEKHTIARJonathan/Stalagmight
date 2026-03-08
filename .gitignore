@@ -54,3 +54,7 @@ scripts/lib/slice-rs/Cargo.lock
 
 # macOS remote build artifacts
 build/
+
+# Cloudflare Worker
+telemetry-worker/wrangler.toml
+telemetry-worker/.wrangler/
