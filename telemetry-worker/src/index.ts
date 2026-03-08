@@ -5,13 +5,13 @@
  * them in a D1 database. IP addresses are SHA-256 hashed for abuse
  * detection only — no raw IPs or other PII are stored.
  *
- * Supports two wire formats:
- * - v1: JSON (`application/json`) — legacy / backward compat
- * - v2: Packed msgpack (`application/msgpack`) — compact binary
+ * Wire format: packed msgpack (`application/msgpack`) only.
  */
 
 import { decode } from '@msgpack/msgpack';
 import { EVENT_NAMES, SOURCE_NAMES } from './registry';
+
+const MAX_BODY_BYTES = 65_536; // 64 KB
 
 interface Env {
   DB: D1Database;
@@ -36,20 +36,6 @@ interface PackedPayload {
   p: number;
   e: number[];
   x?: Record<string, number>;
-}
-
-function isValidPayload(body: unknown): body is TelemetryPayload {
-  if (typeof body !== 'object' || body === null) return false;
-  const p = body as Record<string, unknown>;
-  return (
-    typeof p.v === 'number' &&
-    typeof p.app_version === 'string' &&
-    typeof p.os === 'string' &&
-    typeof p.session_id === 'string' &&
-    typeof p.duration_secs === 'number' &&
-    typeof p.events === 'object' &&
-    p.events !== null
-  );
 }
 
 function isValidPackedPayload(body: unknown): body is PackedPayload {
@@ -101,7 +87,7 @@ function unpackEvents(packed: PackedPayload): Record<string, number> {
   return events;
 }
 
-/** Convert packed v2 payload to normalized TelemetryPayload. */
+/** Convert packed payload to normalized TelemetryPayload. */
 function unpackPayload(packed: PackedPayload): TelemetryPayload {
   return {
     v: packed.v,
@@ -115,30 +101,15 @@ function unpackPayload(packed: PackedPayload): TelemetryPayload {
 }
 
 async function parseRequest(request: Request): Promise<TelemetryPayload | null> {
-  const contentType = request.headers.get('content-type') ?? '';
+  const buffer = await request.arrayBuffer();
+  const raw = decode(new Uint8Array(buffer));
 
-  if (contentType.includes('msgpack')) {
-    const buffer = await request.arrayBuffer();
-    const raw = decode(new Uint8Array(buffer));
+  if (!isValidPackedPayload(raw)) return null;
 
-    if (!isValidPackedPayload(raw)) return null;
+  // Flat event array must be divisible by 3
+  if (raw.e.length % 3 !== 0) return null;
 
-    // Flat event array must be divisible by 3
-    if (raw.e.length % 3 !== 0) return null;
-
-    return unpackPayload(raw);
-  }
-
-  // Default: JSON
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return null;
-  }
-
-  if (!isValidPayload(body)) return null;
-  return body;
+  return unpackPayload(raw);
 }
 
 export default {
@@ -147,6 +118,12 @@ export default {
     const url = new URL(request.url);
     if (request.method !== 'POST' || url.pathname !== '/v1/events') {
       return new Response('Not Found', { status: 404 });
+    }
+
+    // Reject oversized bodies before reading
+    const contentLength = parseInt(request.headers.get('content-length') ?? '0', 10);
+    if (contentLength > MAX_BODY_BYTES) {
+      return new Response('Payload too large', { status: 413 });
     }
 
     const payload = await parseRequest(request);
