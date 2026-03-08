@@ -121,6 +121,12 @@ export default {
       return new Response('Not Found', { status: 404 });
     }
 
+    // Require Stalagmight user agent — blocks scanners and bots
+    const ua = request.headers.get('User-Agent') ?? '';
+    if (!ua.startsWith('Stalagmight/')) {
+      return new Response('Not Found', { status: 404 });
+    }
+
     // Reject oversized bodies before reading
     const contentLength = parseInt(request.headers.get('content-length') ?? '0', 10);
     if (contentLength > MAX_BODY_BYTES) {
