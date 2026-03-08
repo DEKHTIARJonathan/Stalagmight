@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { isTelemetryAvailable } from '../../utils/telemetry';
+import { isTelemetryAvailable, setTelemetryEnabled } from '../../utils/telemetry';
 import { invokeIpc } from '../../utils/ipc';
 import type { Config } from '../../types/config';
 
@@ -40,6 +40,8 @@ export default function TelemetryOptInDialog({
         });
         onConfigChanged(updatedConfig);
 
+        // Enable/disable JS-side collection + notify Rust collector
+        setTelemetryEnabled(enabled);
         try {
           await invokeIpc('set_telemetry_enabled', { enabled });
         } catch {
