@@ -324,6 +324,7 @@ fn send_packed(packed: &PackedPayload) -> Result<(), String> {
 
     let response = agent
         .post(ENDPOINT_URL)
+        .header("User-Agent", &format!("Stalagmight/{}", env!("APP_VERSION")))
         .content_type("application/msgpack")
         .send(&body[..]);
 

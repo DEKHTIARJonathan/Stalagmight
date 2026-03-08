@@ -18,7 +18,7 @@ User action → telemetry.ts (batch counts) → IPC → Rust TelemetryCollector
 to Rust every 60 seconds.
 
 **Backend** (`src-tauri/src/telemetry.rs`): Aggregates counts per session, flushes
-to `https://TELEMETRY_ENDPOINT/v1/events` every 60 seconds. Buffers to
+to the configured telemetry endpoint every 60 seconds. Buffers to
 `~/.local/share/stalagmight/Stalagmight/telemetry-buffer/*.json` when offline.
 
 **Feature-gated**: All Rust telemetry is behind `#[cfg(feature = "telemetry")]`.
@@ -413,8 +413,8 @@ For keyboard handlers elsewhere, call `setSource('keyboard')` before the action.
 |-----------|----------|
 | Worker | Cloudflare Workers (`stalagmight-telemetry`) |
 | Database | Cloudflare D1 (`stalagmight-telemetry`, region WEUR) |
-| Endpoint | `https://TELEMETRY_ENDPOINT/v1/events` |
-| Worker URL | `https://stalagmight-telemetry.saska-dev.workers.dev` |
+| Endpoint | Set via `TELEMETRY_ENDPOINT` CI secret |
+| Worker URL | Disabled (`workers_dev = false`) |
 
 ### Build configuration
 
@@ -423,7 +423,7 @@ enable it. The telemetry endpoint URL is injected at build time via the
 `TELEMETRY_ENDPOINT` environment variable — it is **not** stored in the repo.
 
 **`TELEMETRY_ENDPOINT`** (required CI/release secret): The full URL where
-telemetry payloads are POSTed (e.g., `https://TELEMETRY_ENDPOINT/v1/events`).
+telemetry payloads are POSTed.
 The build will fail with a clear error if this variable is missing when the
 `telemetry` feature is enabled. Forks that enable telemetry without setting the
 secret get a build error — no data is ever sent to our server by accident.
@@ -467,6 +467,20 @@ CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... \
   npx wrangler d1 execute stalagmight-telemetry --file=schema.sql --remote
 ```
 
+### Request filtering
+
+The Rust client sends `User-Agent: Stalagmight/<version>` on every request.
+The worker rejects any request whose `User-Agent` does not start with
+`Stalagmight/` — returning a silent 404 before any parsing or DB work.
+This blocks automated scanners and bots at near-zero cost.
+
+For additional protection, a Cloudflare WAF custom rule can block non-Stalagmight
+user agents at the edge (before the worker is invoked):
+
+- **Rule name**: `Block non-Stalagmight UA on usage subdomain`
+- **Expression**: `(http.host eq "<telemetry-hostname>" and not starts_with(http.request.headers["user-agent"][0], "Stalagmight/"))`
+- **Action**: Block
+
 ### IP hash for abuse detection
 
 The worker hashes the `CF-Connecting-IP` header (SHA-256) and stores the hex
@@ -481,6 +495,36 @@ SELECT * FROM sessions WHERE ip_hash = '<hash>';
 DELETE FROM events WHERE session_id IN (SELECT session_id FROM sessions WHERE ip_hash = '<hash>');
 DELETE FROM sessions WHERE ip_hash = '<hash>';
 ```
+
+### Observability
+
+Workers Logs are enabled via `[observability]` in `wrangler.toml` (100%
+sampling). Every request logs a structured tag + context to `console.log`,
+visible in the Cloudflare dashboard and via `wrangler tail`.
+
+**Live tail** (streams logs in real time):
+
+```bash
+(cd telemetry-worker && CLOUDFLARE_API_TOKEN=... npx wrangler tail)
+```
+
+**Dashboard**: Workers & Pages > stalagmight-telemetry > Logs — searchable,
+filterable by status code, with invocation traces (wall time, CPU time,
+subrequests).
+
+**Log tags emitted by the worker**:
+
+| Tag | Status | Meaning |
+|-----|--------|---------|
+| `ok` | 200 | Successful ingestion (includes app version, event count, project_seq) |
+| `msgpack_decode_failed` | 400 | Body is not valid msgpack |
+| `invalid_packed_payload` | 400 | Decoded but wrong shape/types (logs field types + keys) |
+| `event_array_bad_length` | 400 | Event array length not divisible by 3 |
+| `field_too_long` | 400 | session_id, app_version, or os exceeds length limit |
+| `too_many_events` | 400 | >500 distinct events in one payload |
+| `payload_too_large` | 413 | Body exceeds 64 KB |
+| `rate_limited` | 429 | >10 flushes/min from same IP hash |
+| `db_batch_failed` | 500 | D1 batch write failed (logs error + event count) |
 
 ### Configuration files
 
