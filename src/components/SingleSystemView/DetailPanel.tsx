@@ -13,7 +13,7 @@ import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { setSource, trackAction } from '../../utils/telemetry';
+import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 
 export default function DetailPanel() {
   const { t } = useTranslation();
@@ -397,7 +397,7 @@ function StationDetail({ station }: { station: Station }) {
   };
 
   const handleUnmergeFromStation = async (ref: { section_id: number; station_index: number }) => {
-    trackAction('unmerge', 'detail-panel');
+    trackContextMenuAction('unmerge', 'detail-panel');
     const targetKey = `${ref.section_id}:${ref.station_index}`;
     setUnmergeTargetKey(targetKey);
     try {
@@ -642,7 +642,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
   );
 
   const handleToggleReference = async () => {
-    trackAction('toggle-reference', 'detail-panel');
+    trackContextMenuAction('toggle-reference', 'detail-panel');
     await setShotReference(section.id, shot.id, !shot.is_reference);
   };
 
@@ -1239,7 +1239,7 @@ function ClosuresSection({
   }, [closures]);
 
   const handleRemoveClosure = async (closureId: bigint) => {
-    trackAction('remove-closure', 'detail-panel');
+    trackContextMenuAction('remove-closure', 'detail-panel');
     setRemovingClosureId(closureId);
     try {
       await removeLoopClosure(closureId);

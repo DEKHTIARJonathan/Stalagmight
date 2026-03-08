@@ -23,7 +23,7 @@ import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors'
 import { metersToMapCoords } from '../../utils/coordinates';
 import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
-import { trackAction } from '../../utils/telemetry';
+import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import {
   distanceToLineSegment,
@@ -1090,11 +1090,11 @@ export default class SurveyLayer {
     const orig = e.originalEvent;
     if (!orig) return; // programmatic — already tracked by trigger functions
     if (orig instanceof WheelEvent) {
-      trackAction('nav.zoom', 'mouse');
+      trackNav('zoom', 'mouse');
     } else if (orig instanceof TouchEvent) {
-      trackAction('nav.zoom', 'touch');
+      trackNav('zoom', 'touch');
     } else if (orig instanceof MouseEvent) {
-      trackAction('nav.zoom', 'dblclick');
+      trackNav('zoom', 'dblclick');
     }
   };
 
@@ -1104,9 +1104,9 @@ export default class SurveyLayer {
     if (!orig) return; // programmatic — already tracked by trigger functions
     if (orig instanceof WheelEvent) return; // zoom gesture — tracked by zoomend
     if (orig instanceof MouseEvent) {
-      trackAction('nav.pan', 'mouse');
+      trackNav('pan', 'mouse');
     } else if (orig instanceof TouchEvent) {
-      trackAction('nav.pan', 'touch');
+      trackNav('pan', 'touch');
     }
   };
 

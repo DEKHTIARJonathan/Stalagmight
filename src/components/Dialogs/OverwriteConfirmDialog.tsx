@@ -15,7 +15,7 @@ export default function OverwriteConfirmDialog() {
 
   const handleConfirm = async () => {
     if (!path) {
-      trackDialogComplete('overwrite-confirm');
+      trackDialogComplete('confirm-overwrite');
       closeDialog();
       return;
     }
@@ -24,11 +24,11 @@ export default function OverwriteConfirmDialog() {
     try {
       const result = await saveProject(path);
       if (result && !result.success && result.error) {
-        trackDialogComplete('overwrite-confirm');
+        trackDialogComplete('confirm-overwrite');
         closeDialog();
         showDialog('error', { message: result.error, title: 'Save Failed' });
       } else {
-        trackDialogComplete('overwrite-confirm');
+        trackDialogComplete('confirm-overwrite');
         closeDialog();
       }
     } finally {

@@ -324,4 +324,10 @@ export const EVENT_NAMES: readonly string[] = [
   // ── Dwell: other (284-285) ──
   'dwell.global-view',
   'dwell.placement',
+  // ── Appended after v2 baseline (286+) ──
+  'command.track_imported_file',
+  'action.dialog.delete-shot-choice',
+  'dialog-cancel.delete-shot-choice',
+  'dwell.dialog.delete-shot-choice',
+  'action.select-add.section',
 ];
