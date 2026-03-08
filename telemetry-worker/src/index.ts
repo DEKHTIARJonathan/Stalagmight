@@ -150,13 +150,11 @@ export default {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
-    // Rate limit: count flushes from this IP in the last minute (read-only)
-    // Each flush inserts event rows with received_at, so we count distinct
-    // flush batches by counting distinct received_at values per IP.
+    // Rate limit: count flushes from this IP in the last minute (read-only).
+    // ip_hash is on event rows directly — no JOIN, no IP-flip exploit.
     const { results: rateRows } = await env.DB.prepare(
-      `SELECT COUNT(DISTINCT e.received_at) as cnt
-       FROM events e JOIN sessions s ON e.session_id = s.session_id
-       WHERE s.ip_hash = ?1 AND e.received_at > datetime('now', '-1 minute')`
+      `SELECT COUNT(DISTINCT received_at) as cnt FROM events
+       WHERE ip_hash = ?1 AND received_at > datetime('now', '-1 minute')`
     ).bind(ipHash).all();
     if (rateRows.length > 0 && (rateRows[0].cnt as number) >= RATE_LIMIT_MAX_FLUSHES_PER_MIN) {
       return new Response('Too many requests', { status: 429 });
@@ -173,8 +171,8 @@ export default {
     const projectSeq = payload.project_seq ?? 0;
     const eventStmts = eventEntries.map(([name, count]) =>
       env.DB.prepare(
-        'INSERT INTO events (session_id, event_name, count, project_seq) VALUES (?1, ?2, ?3, ?4)'
-      ).bind(payload.session_id, name.slice(0, 128), Math.min(count, 1_000_000), projectSeq)
+        'INSERT INTO events (session_id, event_name, count, project_seq, ip_hash) VALUES (?1, ?2, ?3, ?4, ?5)'
+      ).bind(payload.session_id, name.slice(0, 128), Math.min(count, 1_000_000), projectSeq, ipHash)
     );
 
     try {
