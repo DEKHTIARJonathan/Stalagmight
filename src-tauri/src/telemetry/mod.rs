@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 const PAYLOAD_VERSION: u32 = 1;
 
 #[cfg(feature = "telemetry")]
-const ENDPOINT_URL: &str = "https://TELEMETRY_ENDPOINT/v1/events";
+const ENDPOINT_URL: &str = env!("TELEMETRY_ENDPOINT");
 
 #[cfg(feature = "telemetry")]
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -162,7 +162,7 @@ impl TelemetryCollector {
             if !inner.enabled || inner.events.is_empty() {
                 return;
             }
-            let app_version = env!("CARGO_PKG_VERSION").to_string();
+            let app_version = env!("APP_VERSION").to_string();
             let os = std::env::consts::OS.to_string();
             let session_id = inner.session_id.clone();
             let duration_secs = inner.session_start.elapsed().as_secs();
