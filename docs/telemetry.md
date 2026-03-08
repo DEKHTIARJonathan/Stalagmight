@@ -314,8 +314,33 @@ you can reorganize the arrays by bumping the payload version:
 | `rust_ts_registry_in_sync` | Rust and TypeScript registries are identical element-by-element |
 | `no_duplicate_event_names` | No duplicate strings in `EVENT_NAMES` |
 | `event_count` / `source_count` | Array lengths match expected totals |
+| `registry_covers_all_tools` | `ToolType` union ↔ `action.tool.*` / `dwell.tool.*` |
+| `registry_covers_all_undoable_commands` | `UNDOABLE_COMMANDS` ↔ `undo-after.*` |
+| `registry_covers_all_display_toggles` | `DISPLAY_DEFAULTS` keys ↔ `action.toggle.*` |
+| `registry_covers_all_dialogs` | App.tsx `activeDialog` values ↔ `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*` |
+| `registry_covers_all_sources` | `SourceName` union ↔ `SOURCE_NAMES` |
+| `registry_covers_all_nav_events` | `NavigationAction` union ↔ `action.nav.*` |
+| `registry_covers_all_panel_events` | `PanelName` union ↔ `action.panel-open.*` / `action.panel-close.*` |
+| `registry_covers_all_selections` | `SelectionType` union ↔ `action.select.*` / `action.select-add.*` |
+| `registry_covers_all_context_menu_actions` | `ContextMenuAction` union ↔ `action.*` (miscellaneous) |
+| `dialog_complete_calls_match_dialogs` | All `trackDialogComplete('...')` call sites use valid dialog names |
 
 ## Adding Telemetry to New Features
+
+### Type-safe helpers
+
+All telemetry emission should go through typed helpers in `telemetry.ts`
+rather than calling `trackAction()` with raw strings. Each helper has a
+corresponding type union that is parsed by Rust exhaustiveness tests.
+
+| Helper | Type union | Registry entries |
+|--------|-----------|-----------------|
+| `trackNav(nav, source?)` | `NavigationAction` | `action.nav.*` |
+| `trackPanelToggle(panel, opening)` | `PanelName` | `action.panel-open.*` / `action.panel-close.*` |
+| `trackSelect(type)` | `SelectionType` | `action.select.*` |
+| `trackSelectAdd(type)` | `SelectionType` | `action.select-add.*` |
+| `trackContextMenuAction(action, source?)` | `ContextMenuAction` | `action.*` |
+| `setSource(source)` | `SourceName` | `SOURCE_NAMES` |
 
 ### New dialog
 
@@ -324,6 +349,10 @@ you can reorganize the arrays by bumping the payload version:
 2. Cancel/dismiss paths need no changes — `closeDialog()` auto-detects.
 3. For informational dialogs (no meaningful cancel), add
    `trackDialogComplete` before every close path.
+4. Add three registry entries: `action.dialog.my-dialog`,
+   `dialog-cancel.my-dialog`, `dwell.dialog.my-dialog`.
+5. Tests `registry_covers_all_dialogs` and `dialog_complete_calls_match_dialogs`
+   will fail if anything is missing.
 
 ### New IPC command
 
@@ -334,16 +363,98 @@ You must also add a `command.<name>` entry to both registries — append it at t
 end (see [Registry ID Stability](#registry-id-stability)). The
 `registry_covers_all_commands` test will fail if you forget.
 
+### New tool
+
+1. Add the tool name to `ToolType` in `uiStore.ts`.
+2. Add `action.tool.<name>` and `dwell.tool.<name>` to both registries.
+3. The `registry_covers_all_tools` test will fail if anything is missing.
+
+### New navigation action
+
+1. Add the action to the `NavigationAction` type union in `telemetry.ts`.
+2. Use `trackNav('my-action')` at the call site.
+3. Add `action.nav.<name>` to both registries.
+4. The `registry_covers_all_nav_events` test will fail if anything is missing.
+
+### New panel
+
+1. Add the panel name to the `PanelName` type union in `telemetry.ts`.
+2. Use `trackPanelToggle('my-panel', opening)` in the toggle function.
+3. Add `action.panel-open.<name>` and `action.panel-close.<name>` to both
+   registries.
+4. The `registry_covers_all_panel_events` test will fail if anything is missing.
+
 ### New selection source
 
-Call `setSource('my-panel')` before `setSelection()` or `addToSelection()`.
+1. Add the source to the `SourceName` type union in `telemetry.ts`.
+2. Call `setSource('my-panel')` before `setSelection()` or `addToSelection()`.
+3. Add the source to `SOURCE_NAMES` in both registries.
+4. The `registry_covers_all_sources` test will fail if anything is missing.
 
 ### New keyboard shortcut
 
 If added to `useKeyboardShortcuts`, source is automatic (set at handler entry).
 For keyboard handlers elsewhere, call `setSource('keyboard')` before the action.
 
-### New panel toggle
+### New context-menu action
 
-Track in the toggle function with `trackAction('panel-open.name')` /
-`trackAction('panel-close.name')`. See existing panel toggles in `uiStore.ts`.
+1. Add the action to the `ContextMenuAction` type union in `telemetry.ts`.
+2. Use `trackContextMenuAction('my-action', 'context-menu')` at the call site.
+3. Add `action.<name>` to both registries.
+4. The `registry_covers_all_context_menu_actions` test will fail if anything
+   is missing.
+
+## Deployment
+
+### Infrastructure
+
+| Component | Location |
+|-----------|----------|
+| Worker | Cloudflare Workers (`stalagmight-telemetry`) |
+| Database | Cloudflare D1 (`stalagmight-telemetry`, region WEUR) |
+| Endpoint | `https://TELEMETRY_ENDPOINT/v1/events` |
+| Worker URL | `https://telemetry.example.invalid` |
+
+### Build configuration
+
+Telemetry is behind the Rust `telemetry` feature flag. CI and release builds
+enable it:
+
+```yaml
+# CI — runs registry exhaustiveness tests
+cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+
+# Release — compiles telemetry into the binary
+pnpm tauri build -- --features telemetry
+```
+
+### Deploying the worker
+
+Requires a Cloudflare API token with `Workers Scripts: Edit`, `D1: Edit`,
+and `DNS: Edit` on the `stalagmight.com` zone.
+
+```bash
+# Copy the template and fill in the database ID
+cp telemetry-worker/wrangler.toml.example telemetry-worker/wrangler.toml
+# Look up the database ID if needed:
+#   CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... wrangler d1 list
+
+# Deploy
+cd telemetry-worker
+pnpm install
+CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... npx wrangler deploy
+```
+
+### Schema changes
+
+Apply with `--remote` to target the production database:
+
+```bash
+CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... \
+  npx wrangler d1 execute stalagmight-telemetry --file=schema.sql --remote
+```
+
+### Configuration files
+
+`telemetry-worker/wrangler.toml` is gitignored (contains deployment-specific
+database ID). `wrangler.toml.example` is the committed template.
