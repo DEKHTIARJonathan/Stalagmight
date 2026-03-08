@@ -8,7 +8,7 @@ default-run = "stalagmight"
 
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
-telemetry = []
+telemetry = ["rmp-serde", "serde_bytes"]
 
 [lib]
 name = "stalagmight_lib"
@@ -45,6 +45,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
+rmp-serde = { version = "1", optional = true }
+serde_bytes = { version = "0.11", optional = true }
 tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
 
 [profile.release]
