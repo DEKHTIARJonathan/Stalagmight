@@ -40,12 +40,10 @@ export default function TelemetryOptInDialog({
         });
         onConfigChanged(updatedConfig);
 
-        if (enabled) {
-          try {
-            await invokeIpc('set_telemetry_enabled', { enabled: true });
-          } catch {
-            // Non-fatal — setting is saved in config
-          }
+        try {
+          await invokeIpc('set_telemetry_enabled', { enabled });
+        } catch {
+          // Non-fatal — setting is saved in config
         }
       } catch {
         // Config save failed — still dismiss the dialog
