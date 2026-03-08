@@ -2027,5 +2027,20 @@
       "lrudNegative": "{{name}} value {{value}} must be 0 or greater.",
       "lrudTooLarge": "{{name}} value {{value}} exceeds {{max}}."
     }
+  },
+  "telemetry": {
+    "optIn": {
+      "title": "Help Improve Stalagmight",
+      "description": "Help improve Stalagmight by sharing anonymous usage statistics. We only collect which features are used and how often — no personal data, no survey data, no file contents.",
+      "whatWeCollect": "What we collect",
+      "collect": {
+        "commands": "Which commands are used (e.g., import, export, undo)",
+        "tools": "Which map tools are activated (e.g., measure, draw)",
+        "session": "Session duration and OS type",
+        "noPII": "No names, no file paths, no survey data"
+      },
+      "no": "No thanks",
+      "yes": "Yes, share data"
+    }
   }
 }
