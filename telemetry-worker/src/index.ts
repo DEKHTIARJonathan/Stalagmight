@@ -2,7 +2,8 @@
  * Stalagmight Telemetry Worker
  *
  * Receives anonymous usage event batches from the desktop app and stores
- * them in a D1 database. No PII is collected or stored.
+ * them in a D1 database. IP addresses are SHA-256 hashed for abuse
+ * detection only — no raw IPs or other PII are stored.
  *
  * Supports two wire formats:
  * - v1: JSON (`application/json`) — legacy / backward compat
@@ -163,12 +164,20 @@ export default {
       return new Response('Too many events', { status: 400 });
     }
 
-    // Upsert session (update duration on repeated flushes from same session)
+    // Hash the client IP for abuse detection (no raw IPs stored)
+    const clientIp = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    const ipBytes = new TextEncoder().encode(clientIp);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', ipBytes);
+    const ipHash = Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    // Upsert session (update duration + ip_hash on repeated flushes from same session)
     const sessionStmt = env.DB.prepare(
-      `INSERT INTO sessions (session_id, app_version, os, duration_secs)
-       VALUES (?1, ?2, ?3, ?4)
-       ON CONFLICT(session_id) DO UPDATE SET duration_secs = ?4, received_at = datetime('now')`
-    ).bind(payload.session_id, payload.app_version, payload.os, payload.duration_secs);
+      `INSERT INTO sessions (session_id, app_version, os, duration_secs, ip_hash)
+       VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(session_id) DO UPDATE SET duration_secs = ?4, ip_hash = ?5, received_at = datetime('now')`
+    ).bind(payload.session_id, payload.app_version, payload.os, payload.duration_secs, ipHash);
 
     // Insert events (project_seq defaults to 0 for backward compat)
     const projectSeq = payload.project_seq ?? 0;
