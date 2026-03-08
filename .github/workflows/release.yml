@@ -22,11 +22,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Tests
       - run: pnpm tsc --noEmit
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
-      # Build
-      - run: pnpm tauri build
+      # Build (telemetry feature enabled via Cargo args)
+      - run: pnpm tauri build -- --features telemetry
       # Collect artifacts
       - name: Collect release artifacts
         run: |
