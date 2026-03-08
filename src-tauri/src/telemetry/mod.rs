@@ -72,8 +72,10 @@ struct PackedPayload {
     d: u64,
     p: u32,
     e: Vec<u64>,
+    /// Display-state overrides (e.g. "showGrid:true"). These are dynamic
+    /// key:value pairs that don't fit the fixed event registry.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    x: HashMap<String, u64>,
+    ds: HashMap<String, u64>,
 }
 
 // ── Inner state ──────────────────────────────────────────────────────
@@ -263,17 +265,22 @@ impl TelemetryCollector {
 fn to_packed(payload: &TelemetryPayload) -> PackedPayload {
     let event_map = registry::event_map();
     let mut packed_events: Vec<u64> = Vec::new();
-    let mut overflow: HashMap<String, u64> = HashMap::new();
+    let mut display_state: HashMap<String, u64> = HashMap::new();
 
     for (key, &count) in &payload.events {
+        // display-state.* events have dynamic values — keep as strings
+        if let Some(rest) = key.strip_prefix("display-state.") {
+            display_state.insert(rest.to_string(), count);
+            continue;
+        }
         let (base, source_id) = registry::split_event_key(key);
         if let Some(&event_id) = event_map.get(base) {
             packed_events.push(u64::from(event_id));
             packed_events.push(u64::from(source_id));
             packed_events.push(count);
-        } else {
-            overflow.insert(key.clone(), count);
         }
+        // Unregistered events are silently dropped — update the registry
+        // to add new event names rather than relying on overflow.
     }
 
     PackedPayload {
@@ -284,7 +291,7 @@ fn to_packed(payload: &TelemetryPayload) -> PackedPayload {
         d: payload.duration_secs,
         p: payload.project_seq,
         e: packed_events,
-        x: overflow,
+        ds: display_state,
     }
 }
 
@@ -563,7 +570,6 @@ mod tests {
         assert_eq!(packed.p, 1);
         // 2 events * 3 fields each = 6 entries in flat array
         assert_eq!(packed.e.len(), 6);
-        assert!(packed.x.is_empty());
 
         // Verify the flat array contains expected (eid, sid, count) triples
         let mut found_create_shot = false;
@@ -585,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn to_packed_overflow() {
+    fn to_packed_display_state_and_drops() {
         let mut events = HashMap::new();
         events.insert("display-state.showGrid:true".to_string(), 1);
         events.insert("completely.unknown.event".to_string(), 7);
@@ -602,12 +608,12 @@ mod tests {
         };
 
         let packed = to_packed(&payload);
-        // command.undo is known → 1 triple in e
+        // command.undo is registered → 1 triple
         assert_eq!(packed.e.len(), 3);
-        // 2 unknown events in overflow
-        assert_eq!(packed.x.len(), 2);
-        assert_eq!(packed.x.get("display-state.showGrid:true"), Some(&1));
-        assert_eq!(packed.x.get("completely.unknown.event"), Some(&7));
+        // display-state goes to dedicated ds map (prefix stripped)
+        assert_eq!(packed.ds.len(), 1);
+        assert_eq!(packed.ds.get("showGrid:true"), Some(&1));
+        // completely.unknown.event is silently dropped
     }
 
     #[test]

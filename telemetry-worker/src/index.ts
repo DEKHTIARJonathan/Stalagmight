@@ -35,7 +35,7 @@ interface PackedPayload {
   d: number;
   p: number;
   e: number[];
-  x?: Record<string, number>;
+  ds?: Record<string, number>;
 }
 
 function isValidPackedPayload(body: unknown): body is PackedPayload {
@@ -60,15 +60,14 @@ function sessionIdFromBytes(bytes: Uint8Array): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
-/** Unpack flat event array + overflow into string event map. */
+/** Unpack flat event array + display-state into string event map. */
 function unpackEvents(packed: PackedPayload): Record<string, number> {
   const events: Record<string, number> = {};
-  const { e, x } = packed;
 
-  for (let i = 0; i + 2 < e.length; i += 3) {
-    const eventId = e[i];
-    const sourceId = e[i + 1];
-    const count = e[i + 2];
+  for (let i = 0; i + 2 < packed.e.length; i += 3) {
+    const eventId = packed.e[i];
+    const sourceId = packed.e[i + 1];
+    const count = packed.e[i + 2];
 
     const eventName = EVENT_NAMES[eventId];
     if (!eventName) continue;
@@ -78,9 +77,10 @@ function unpackEvents(packed: PackedPayload): Record<string, number> {
     events[key] = (events[key] ?? 0) + count;
   }
 
-  if (x) {
-    for (const [key, count] of Object.entries(x)) {
-      events[key] = (events[key] ?? 0) + count;
+  // Display-state overrides (e.g. "showGrid:true") → "display-state.showGrid:true"
+  if (packed.ds) {
+    for (const [key, count] of Object.entries(packed.ds)) {
+      events[`display-state.${key}`] = (events[`display-state.${key}`] ?? 0) + count;
     }
   }
 
