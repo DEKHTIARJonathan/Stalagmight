@@ -419,14 +419,26 @@ For keyboard handlers elsewhere, call `setSource('keyboard')` before the action.
 ### Build configuration
 
 Telemetry is behind the Rust `telemetry` feature flag. CI and release builds
-enable it:
+enable it. The telemetry endpoint URL is injected at build time via the
+`TELEMETRY_ENDPOINT` environment variable — it is **not** stored in the repo.
+
+**`TELEMETRY_ENDPOINT`** (required CI/release secret): The full URL where
+telemetry payloads are POSTed (e.g., `https://TELEMETRY_ENDPOINT/v1/events`).
+The build will fail with a clear error if this variable is missing when the
+`telemetry` feature is enabled. Forks that enable telemetry without setting the
+secret get a build error — no data is ever sent to our server by accident.
+
+CI tests use a dummy endpoint (`https://test.invalid/v1/events`) since they
+don't make HTTP calls.
 
 ```yaml
-# CI — runs registry exhaustiveness tests
-cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+# CI — runs registry exhaustiveness tests (dummy endpoint, no HTTP)
+TELEMETRY_ENDPOINT=https://test.invalid/v1/events \
+  cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 
-# Release — compiles telemetry into the binary
-pnpm tauri build -- --features telemetry
+# Release — compiles telemetry into the binary (real endpoint from secret)
+TELEMETRY_ENDPOINT=$TELEMETRY_ENDPOINT \
+  pnpm tauri build -- --features telemetry
 ```
 
 ### Deploying the worker
