@@ -31,6 +31,9 @@ let _dialogCompleted: string | null = null;
 /** When true, trackAction/trackCommand calls are suppressed (for programmatic UI changes). */
 let _silent = false;
 
+/** Whether telemetry collection is enabled. Starts false; set by initTelemetry / setTelemetryEnabled. */
+let _enabled = false;
+
 /** Auto-incrementing project sequence (0 = global, 1 = first project opened, etc.). */
 let _projectSeq = 0;
 
@@ -167,6 +170,7 @@ export async function advanceProjectSeq(): Promise<void> {
  * state and starts timing the new one. Passing the same key is a no-op.
  */
 export function setDwellState(key: string): void {
+  if (!_enabled) return;
   if (_dwellState && _dwellState.key === key) return;
   const now = Date.now();
   if (_dwellState) {
@@ -190,7 +194,7 @@ function flushDwell(): void {
 
 /** Track a user action with source. */
 export function trackAction(action: string, source?: string): void {
-  if (_silent) return;
+  if (!_enabled || _silent) return;
   const src = source ?? consumeSource();
   const key = `action.${action}:${src}`;
   counts[key] = (counts[key] || 0) + 1;
@@ -228,6 +232,7 @@ export function trackContextMenuAction(action: ContextMenuAction, source?: Sourc
  * Includes source hint (keyboard, toolbar, etc.) when available.
  */
 export function trackCommand(command: string): void {
+  if (!_enabled) return;
   const src = consumeSource();
   const key = src !== 'unknown' ? `command.${command}:${src}` : `command.${command}`;
   counts[key] = (counts[key] || 0) + 1;
@@ -250,6 +255,7 @@ export function trackDialogComplete(dialogName: string): void {
 
 /** Called from closeDialog(). Emits cancel event if no completion was registered. */
 export function checkDialogCancel(dialogName: string): void {
+  if (!_enabled) { _dialogCompleted = null; return; }
   if (_dialogCompleted === dialogName) {
     _dialogCompleted = null;
     return;
@@ -262,6 +268,7 @@ export function checkDialogCancel(dialogName: string): void {
 
 /** Emit events for display toggles that differ from defaults. */
 export function trackDisplayState(current: object): void {
+  if (!_enabled) return;
   const state = current as Record<string, unknown>;
   for (const [key, defaultValue] of Object.entries(DISPLAY_DEFAULTS)) {
     const value = state[key];
@@ -280,19 +287,57 @@ function scheduleFlush(): void {
   }, FLUSH_INTERVAL_MS);
 }
 
+/** Start the periodic dwell flush interval. */
+function startDwellInterval(): void {
+  if (dwellFlushInterval) return;
+  dwellFlushInterval = setInterval(() => {
+    flushDwell();
+    if (Object.keys(counts).length > 0) {
+      void flushToRust();
+    }
+  }, DWELL_FLUSH_INTERVAL_MS);
+}
+
+/** Stop the periodic dwell flush interval. */
+function stopDwellInterval(): void {
+  if (dwellFlushInterval !== null) {
+    clearInterval(dwellFlushInterval);
+    dwellFlushInterval = null;
+  }
+}
+
 /**
- * Initialize telemetry — checks feature availability.
+ * Initialize telemetry — checks feature availability and reads config.
+ * Telemetry collection only starts if both compiled in and enabled in config.
  * Call once at app startup.
  */
-export async function initTelemetry(): Promise<void> {
+export async function initTelemetry(enabled?: boolean): Promise<void> {
   await checkAvailable();
-  if (available && !dwellFlushInterval) {
-    dwellFlushInterval = setInterval(() => {
-      flushDwell();
-      if (Object.keys(counts).length > 0) {
-        void flushToRust();
-      }
-    }, DWELL_FLUSH_INTERVAL_MS);
+  if (available && enabled) {
+    _enabled = true;
+    startDwellInterval();
+  }
+}
+
+/**
+ * Enable or disable telemetry collection at runtime.
+ * Called from the opt-in dialog and settings.
+ */
+export function setTelemetryEnabled(enabled: boolean): void {
+  _enabled = enabled && available === true;
+  if (_enabled) {
+    startDwellInterval();
+  } else {
+    stopDwellInterval();
+    // Clear any pending data
+    for (const key of Object.keys(counts)) {
+      delete counts[key];
+    }
+    _dwellState = null;
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
   }
 }
 
@@ -312,10 +357,7 @@ export async function flushTelemetry(): Promise<void> {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
-  if (dwellFlushInterval !== null) {
-    clearInterval(dwellFlushInterval);
-    dwellFlushInterval = null;
-  }
+  stopDwellInterval();
   flushDwell();
   await flushToRust();
 

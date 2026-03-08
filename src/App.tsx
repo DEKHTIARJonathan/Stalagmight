@@ -82,14 +82,19 @@ function App() {
   useEffect(() => {
     // Load config on startup
     loadConfig();
-    // Initialize telemetry (detects feature availability)
-    void initTelemetry();
 
     // Flush telemetry on page unload (best-effort)
     const handleUnload = () => { void flushTelemetry(); };
     window.addEventListener('beforeunload', handleUnload);
     return () => window.removeEventListener('beforeunload', handleUnload);
   }, [loadConfig]);
+
+  // Initialize telemetry once config is loaded (only collects if user opted in)
+  useEffect(() => {
+    if (config != null) {
+      void initTelemetry(config.general.telemetry_enabled);
+    }
+  }, [config?.general.telemetry_enabled]);
 
   // Hide splash once config has loaded (or immediately if splash is disabled)
   useEffect(() => {
