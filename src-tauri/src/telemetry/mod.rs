@@ -8,7 +8,8 @@
 //! - Session-level anonymous counters only — no PII
 //! - Opt-in via config (`general.telemetry_enabled`)
 //! - Buffers to disk when offline, retries on next flush
-//! - Periodic flush every 5 minutes + flush on app close
+//! - Periodic flush every 60s (dwell-only batches every 10 min) + flush on app close
+//! - On network failure, retries every 60s until success
 
 use std::collections::HashMap;
 
@@ -396,15 +397,64 @@ fn format_session_id(bytes: &[u8; 16]) -> String {
 }
 
 /// Start a background thread that periodically flushes telemetry.
+///
+/// Flush policy:
+/// - Every 60s: flush if there are action events (non-dwell) to send
+/// - Every 10 min: flush even if only dwell-time events are pending
+/// - On flush failure (no internet): retry every 60s until success,
+///   then resume normal schedule
 pub fn start_periodic_flush(collector: TelemetryCollector) {
     #[cfg(feature = "telemetry")]
     {
         std::thread::Builder::new()
             .name("telemetry-flush".to_string())
             .spawn(move || {
+                const TICK_SECS: u64 = 60;
+                const DWELL_ONLY_TICKS: u64 = 10; // 10 * 60s = 10 min
+                let mut ticks_since_flush: u64 = 0;
+                let mut has_buffered_failure = false;
+
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(300));
-                    collector.flush();
+                    std::thread::sleep(std::time::Duration::from_secs(TICK_SECS));
+                    ticks_since_flush += 1;
+
+                    // Retry buffered payloads from previous failures
+                    if has_buffered_failure {
+                        collector.send_buffered();
+                    }
+
+                    let should_flush = {
+                        let Ok(inner) = collector.inner.lock() else {
+                            continue;
+                        };
+                        if !inner.enabled || inner.events.is_empty() {
+                            false
+                        } else {
+                            let has_action_events = inner.events.values().any(|bucket| {
+                                bucket.keys().any(|k| {
+                                    !k.starts_with("dwell.") && !k.starts_with("display-state.")
+                                })
+                            });
+                            has_action_events
+                                || ticks_since_flush >= DWELL_ONLY_TICKS
+                                || has_buffered_failure
+                        }
+                    };
+
+                    if should_flush {
+                        collector.flush();
+
+                        // Check if any payloads were buffered (flush failure)
+                        has_buffered_failure = telemetry_buffer_dir()
+                            .and_then(|d| fs::read_dir(d).ok())
+                            .map_or(false, |mut entries| entries.next().is_some());
+
+                        if !has_buffered_failure {
+                            ticks_since_flush = 0;
+                        }
+                        // If flush failed, keep ticks_since_flush to avoid
+                        // dwell-only delays on retry
+                    }
                 }
             })
             .ok();
