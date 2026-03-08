@@ -576,8 +576,8 @@ function App() {
         />
       )}
 
-      {/* Telemetry opt-in (shown once on first launch when feature is available) */}
-      {config && (
+      {/* Telemetry opt-in (shown once on first launch when feature is available, deferred during onboarding) */}
+      {config && !onboarding.activeStep && (
         <TelemetryOptInDialog config={config} onConfigChanged={setConfig} />
       )}
 
