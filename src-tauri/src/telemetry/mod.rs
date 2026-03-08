@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 const PAYLOAD_VERSION: u32 = 1;
 
 #[cfg(feature = "telemetry")]
-const ENDPOINT_URL: &str = "https://telemetry.stalagmight.com/v1/events";
+const ENDPOINT_URL: &str = "https://TELEMETRY_ENDPOINT/v1/events";
 
 #[cfg(feature = "telemetry")]
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
