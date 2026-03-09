@@ -95,6 +95,7 @@ export default function TelemetryOptInDialog({
             {t('telemetry.optIn.no', 'No thanks')}
           </Button>
           <Button
+            variant="primary"
             onClick={() => void handleChoice(true)}
             data-testid="telemetry-opt-in-yes"
           >
