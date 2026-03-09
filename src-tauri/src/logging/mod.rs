@@ -169,8 +169,16 @@ pub fn push_to_buffer(line: String) {
     }
 }
 
-/// Get the log directory path
+/// Get the log directory path.
+///
+/// Prefers `app_dirs` (Tauri path resolver, works on Android). Falls back to
+/// the `directories` crate for the pre-setup logging call on desktop where
+/// `app_dirs` has not been initialised yet.
 pub fn log_directory() -> Result<PathBuf> {
+    if let Some(dir) = crate::app_dirs::data_local_dir() {
+        return Ok(dir.join("logs"));
+    }
+    // Pre-setup fallback (desktop only — `directories` returns None on Android)
     let dirs = directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")
         .ok_or_else(|| anyhow::anyhow!("No home directory"))?;
     Ok(dirs.data_local_dir().join("logs"))

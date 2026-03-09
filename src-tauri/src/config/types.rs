@@ -1408,6 +1408,10 @@ impl Config {
 
     /// Get the config file path
     pub fn config_path() -> Result<PathBuf> {
+        if let Some(dir) = crate::app_dirs::config_dir() {
+            return Ok(dir.join("config.toml"));
+        }
+        // Fallback for pre-setup calls on desktop
         let dirs =
             directories::ProjectDirs::from("com", "stalagmight", "Stalagmight").context("No home directory")?;
         Ok(dirs.config_dir().join("config.toml"))
