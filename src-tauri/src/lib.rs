@@ -1,3 +1,4 @@
+pub mod app_dirs;
 pub mod cache;
 pub mod commands;
 pub mod config;
@@ -968,7 +969,7 @@ pub fn run() {
     #[cfg(feature = "e2e")]
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_webdriver_automation::init());
-    builder
+    let builder = builder
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1040,33 +1041,38 @@ pub fn run() {
 
                 responder.respond(response);
             });
-        })
-        .on_window_event(|window, event| {
-            // Intercept window close requests to allow the frontend to show confirmation dialogs
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Prevent the default close behavior
-                api.prevent_close();
-                // Emit the close-requested event so the frontend can handle it
-                if let Err(e) = window.emit("tauri://close-requested", ()) {
+        });
+
+    // Desktop-only: intercept window close to allow frontend confirmation dialogs.
+    // Android has no window close button, so this handler is dead code on mobile.
+    #[cfg(desktop)]
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            if let Err(e) = window.emit("tauri://close-requested", ()) {
+                tracing::error!(
+                    error = %e,
+                    purpose = "allow frontend to confirm close",
+                    "Failed to emit close-requested event"
+                );
+                if let Err(destroy_err) = window.destroy() {
                     tracing::error!(
-                        error = %e,
-                        purpose = "allow frontend to confirm close",
-                        "Failed to emit close-requested event"
+                        error = %destroy_err,
+                        purpose = "close window after emit failure",
+                        "Failed to destroy window after close-requested emit failed"
                     );
-                    // If we can't emit the event, allow the close to proceed
-                    // by destroying the window
-                    if let Err(destroy_err) = window.destroy() {
-                        tracing::error!(
-                            error = %destroy_err,
-                            purpose = "close window after emit failure",
-                            "Failed to destroy window after close-requested emit failed"
-                        );
-                    }
                 }
             }
-        })
-        .setup(|app| {
+        }
+    });
+
+    builder.setup(|app| {
             tracing::info!("Stalagmight starting up");
+
+            // Resolve platform directories before anything else needs them.
+            // On Android, the `directories` crate returns None; Tauri's
+            // PathResolver delegates to the platform-native APIs correctly.
+            app_dirs::init(app.handle());
 
             // Initialize app state
             let app_state = core::state::AppState::new()?;
