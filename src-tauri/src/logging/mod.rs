@@ -104,35 +104,38 @@ where
     }
 }
 
-/// Initialize the logging system
-/// Returns a guard that must be kept alive for the duration of the application
-pub fn init() -> WorkerGuard {
-    let log_dir = log_directory().unwrap_or_else(|_| PathBuf::from("."));
-
-    // Create log directory if it doesn't exist
-    let _ = std::fs::create_dir_all(&log_dir);
-
-    // Create a rolling file appender
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "stalagmight.log");
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-
+/// Initialize the logging system.
+///
+/// Returns a guard that must be kept alive for the duration of the application.
+/// On platforms where file logging is unavailable (e.g. Android before setup),
+/// only stderr and the in-memory ring buffer are used — no panic.
+pub fn init() -> Option<WorkerGuard> {
     // Create the in-memory ring buffer
     let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(RING_BUFFER_CAPACITY)));
     LOG_BUFFER.set(Arc::clone(&buffer)).ok();
     let ring_layer = RingBufferLayer { buffer };
 
-    // Build the subscriber
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,stalagmight=debug"));
 
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(
-            fmt::layer()
+    // Try to set up file logging; skip gracefully if the directory is
+    // unavailable or read-only (common on Android before Tauri setup).
+    let (file_layer, guard) = match log_directory() {
+        Ok(log_dir) if std::fs::create_dir_all(&log_dir).is_ok() => {
+            let file_appender = tracing_appender::rolling::daily(&log_dir, "stalagmight.log");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            let layer = fmt::layer()
                 .with_writer(non_blocking)
                 .with_ansi(false)
-                .json(),
-        )
+                .json();
+            (Some(layer), Some(guard))
+        }
+        _ => (None, None),
+    };
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer)
         .with(
             fmt::layer()
                 .with_writer(std::io::stderr)
@@ -143,7 +146,6 @@ pub fn init() -> WorkerGuard {
         .init();
 
     tracing::info!("Logging initialized");
-    tracing::debug!(log_dir = ?log_dir, "Log directory");
 
     guard
 }
