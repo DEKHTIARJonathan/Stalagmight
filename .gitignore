@@ -55,6 +55,13 @@ scripts/lib/slice-rs/Cargo.lock
 # macOS remote build artifacts
 build/
 
+# Android build artifacts
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/build/
+src-tauri/gen/android/buildSrc/build/
+src-tauri/gen/android/local.properties
+
 # Cloudflare Worker
 telemetry-worker/wrangler.toml
 telemetry-worker/.wrangler/
