@@ -356,8 +356,12 @@ fn buffer_to_disk(payload: &TelemetryPayload) {
 
 #[cfg(feature = "telemetry")]
 fn telemetry_buffer_dir() -> Option<PathBuf> {
-    directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")
-        .map(|dirs| dirs.data_local_dir().join("telemetry-buffer"))
+    crate::app_dirs::data_local_dir()
+        .map(|d| d.join("telemetry-buffer"))
+        .or_else(|| {
+            directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")
+                .map(|dirs| dirs.data_local_dir().join("telemetry-buffer"))
+        })
 }
 
 #[cfg(feature = "telemetry")]
