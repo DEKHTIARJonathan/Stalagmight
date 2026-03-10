@@ -66,14 +66,14 @@ function LogLine({ line }: { line: string }) {
   const isFrontend = target === '[frontend]';
 
   return (
-    <div className="flex items-start gap-2 py-0.5 leading-snug hover:bg-white/5 px-1 rounded">
+    <div className="flex items-start gap-2 py-0.5 leading-snug hover:bg-hover px-1 rounded">
       <span
         className={`inline-block w-12 shrink-0 text-center rounded text-[10px] font-bold uppercase px-1 py-px ${style.badge}`}
       >
         {level}
       </span>
       {isFrontend ? (
-        <span className="shrink-0 text-[10px] font-semibold rounded px-1 py-px bg-purple-700 text-purple-200">
+        <span className="shrink-0 text-[10px] font-semibold rounded px-1 py-px bg-accent text-accent-on">
           FE
         </span>
       ) : (
@@ -182,7 +182,7 @@ export default function DebugDialog() {
                 className={`text-[11px] px-2 py-0.5 rounded font-medium transition-colors ${
                   active
                     ? 'bg-accent text-white'
-                    : 'bg-transparent text-text-secondary hover:bg-white/10'
+                    : 'bg-transparent text-text-secondary hover:bg-hover'
                 }`}
                 data-testid={`debug-filter-${lvl.toLowerCase()}`}
               >
@@ -204,7 +204,7 @@ export default function DebugDialog() {
         {/* Log output */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-auto bg-[#1a1a2e] rounded p-2 text-xs font-mono border border-border"
+          className="flex-1 overflow-auto bg-background rounded p-2 text-xs font-mono border border-border"
           data-testid="debug-log-output"
         >
           {filteredLogs.length > 0 ? (

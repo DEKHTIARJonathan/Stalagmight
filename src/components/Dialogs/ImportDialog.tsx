@@ -411,7 +411,7 @@ export default function ImportDialog() {
                         <td key={field} className="p-0 text-right">
                           <input
                             ref={(el) => setRef(rowIndex, colIndex, el)}
-                            type="number"
+                            type="number" inputMode="decimal"
                             value={getFieldValue(shot, field)}
                             onChange={(e) => handleFieldChange(rowIndex, field, e.target.value)}
                             onFocus={(e) => handleFocus(rowIndex, field, e.currentTarget)}

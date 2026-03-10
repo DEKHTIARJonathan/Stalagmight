@@ -282,7 +282,7 @@ export const lightSectionColorDefaults: SectionColorsConfig = {
 };
 
 /** Themes that use light-mode display defaults (light backgrounds). */
-const LIGHT_THEMES = new Set(['light', 'solarized_light', 'catppuccin_latte']);
+const LIGHT_THEMES = new Set(['light', 'solarized_light', 'catppuccin_latte', 'kaleido_eink']);
 
 /**
  * Get theme-appropriate display defaults.

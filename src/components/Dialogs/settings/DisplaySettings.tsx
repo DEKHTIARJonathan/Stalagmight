@@ -163,7 +163,7 @@ export function DisplaySettings({
           isDefault={config.display.font_size === displayDefaults.font_size}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={8}
             max={32}
             value={config.display.font_size}
@@ -255,7 +255,7 @@ export function DisplaySettings({
           isDefault={config.display.depth_gradient.shallow_depth === displayDefaults.depth_gradient.shallow_depth}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             value={config.display.depth_gradient.shallow_depth}
             onChange={(e) => handleShallowDepthChange(e.target.value)}
@@ -274,7 +274,7 @@ export function DisplaySettings({
           isDefault={config.display.depth_gradient.deep_depth === displayDefaults.depth_gradient.deep_depth}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             value={config.display.depth_gradient.deep_depth}
             onChange={(e) => handleDeepDepthChange(e.target.value)}

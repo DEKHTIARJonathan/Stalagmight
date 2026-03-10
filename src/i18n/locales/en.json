@@ -224,6 +224,10 @@
           "title": "Catppuccin Mocha",
           "description": "Pastel dark theme with blue accents"
         },
+        "kaleidoEinkCard": {
+          "title": "Kaleido E-Ink",
+          "description": "High-contrast theme for color e-ink displays"
+        },
         "options": {
           "dark": {
             "label": "Dark",
