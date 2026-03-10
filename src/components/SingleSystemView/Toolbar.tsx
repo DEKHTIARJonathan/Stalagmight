@@ -266,6 +266,7 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
   const [flyoutOpen, setFlyoutOpen] = useState(false);
   const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPointerTypeRef = useRef('mouse');
 
   const config = useProjectStore((s) => s.config);
   const shortcuts = config?.shortcuts ?? defaultConfig.shortcuts;
@@ -273,6 +274,8 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
 
   const handleMouseEnter = useCallback(() => {
     if (disabled) return;
+    // Suppress informational flyout on touch — no hover on touch devices
+    if (lastPointerTypeRef.current === 'touch') return;
     if (hoverCloseTimerRef.current) {
       clearTimeout(hoverCloseTimerRef.current);
       hoverCloseTimerRef.current = null;
@@ -316,7 +319,12 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
   }, [disabled, flyoutOpen]);
 
   return (
-    <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+    <div
+      className="relative"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onPointerDown={(e) => { lastPointerTypeRef.current = e.pointerType; }}
+    >
       <IconButton
         icon={<ToolIcon tool={tool} />}
         active={active}
@@ -372,6 +380,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
   const flyoutRef = useRef<HTMLDivElement>(null);
   const hoverOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPointerTypeRef = useRef('mouse');
 
   const lastSubtoolByGroup = useUIStore((s) => s.lastSubtoolByGroup);
   const config = useProjectStore((s) => s.config);
@@ -392,8 +401,14 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
   }, []);
 
   // Left-click: If group inactive, activate last-used subtool. If active, cycle.
+  // Touch: toggle flyout instead of cycling (let user pick from list).
   const handleClick = useCallback(() => {
     if (disabled) return;
+    // Touch tap opens/closes flyout instead of cycling
+    if (lastPointerTypeRef.current === 'touch') {
+      setFlyoutOpen((prev) => !prev);
+      return;
+    }
     setSource('toolbar');
     if (!isGroupActive) {
       onActivateTool(displayTool);
@@ -419,6 +434,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
   // Hover: Open flyout after short delay, close after short delay (to survive gap)
   const handleMouseEnter = useCallback(() => {
     if (disabled) return;
+    if (lastPointerTypeRef.current === 'touch') return;
     if (hoverCloseTimerRef.current) {
       clearTimeout(hoverCloseTimerRef.current);
       hoverCloseTimerRef.current = null;
@@ -445,7 +461,7 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
   useEffect(() => {
     if (!flyoutOpen) return;
 
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleClickOutside = (e: PointerEvent) => {
       const target = e.target;
       if (!(target instanceof Node)) return;
       if (buttonRef.current?.contains(target)) return;
@@ -456,12 +472,12 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
     // Use a microtask delay to avoid the click that opened the flyout from
     // immediately closing it
     const timeoutId = setTimeout(() => {
-      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('pointerdown', handleClickOutside);
     }, 0);
 
     return () => {
       clearTimeout(timeoutId);
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('pointerdown', handleClickOutside);
     };
   }, [flyoutOpen, closeFlyout]);
 
@@ -545,7 +561,12 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
   const groupLabel = t(TOOL_GROUP_LABEL_KEYS[group.id] ?? group.id);
 
   return (
-    <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+    <div
+      className="relative"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onPointerDown={(e) => { lastPointerTypeRef.current = e.pointerType; }}
+    >
       <IconButton
         ref={buttonRef}
         icon={(

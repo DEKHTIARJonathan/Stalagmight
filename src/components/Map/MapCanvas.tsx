@@ -692,7 +692,7 @@ export default function MapCanvas() {
 
   // Box select handlers
   const handleBoxSelectStart = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (activeTool !== 'select') return;
       if (!mapContainer.current) return;
 
@@ -713,7 +713,7 @@ export default function MapCanvas() {
   );
 
   const handleBoxSelectMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (!boxSelect.start || !mapContainer.current) return;
 
       const rect = mapContainer.current.getBoundingClientRect();
@@ -772,7 +772,7 @@ export default function MapCanvas() {
 
   // Zoom box handlers (for click-to-zoom and box zoom in task 3)
   const handleZoomBoxStart = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (activeTool !== 'zoom') return;
       if (!mapContainer.current) return;
 
@@ -789,9 +789,9 @@ export default function MapCanvas() {
   );
 
   const handleZoomBoxMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (!zoomBox.start || !mapContainer.current) return;
-      // Only update if left mouse button is still pressed (prevents stuck state on focus loss)
+      // Only update if primary button is still pressed (prevents stuck state on focus loss)
       if (e.buttons !== 1) return;
 
       const rect = mapContainer.current.getBoundingClientRect();
@@ -852,7 +852,7 @@ export default function MapCanvas() {
   // Position is stored in a ref (no re-render), and segment preview is updated
   // synchronously since setPaintProperty is essentially free (shader uniform).
   const handleMoveDragMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (!moveDrag || !map.current || !mapContainer.current) return;
 
       const rect = mapContainer.current.getBoundingClientRect();
@@ -1066,7 +1066,7 @@ export default function MapCanvas() {
   );
 
   const handleMoveDragEnd = useCallback(async () => {
-    // Block while snap-to-merge dialog is pending. The guard in handleMouseUp
+    // Block while snap-to-merge dialog is pending. The guard in handlePointerUp
     // should already prevent this call, but act as defense-in-depth in case
     // the mouseup reaches us through an unexpected path (e.g., portal event
     // propagation, inert removal timing).
@@ -2636,6 +2636,13 @@ export default function MapCanvas() {
     }
   }, [placementMode, activeTool]);
 
+  // Determine touch-action: block browser gestures for interactive tools, allow pan/zoom for pan tool
+  const touchAction = useMemo(() => {
+    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure',
+      'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
+    return (placementMode || noPanTools.includes(activeTool)) ? 'none' : 'manipulation';
+  }, [activeTool, placementMode]);
+
   // Calculate box select overlay style
   const boxSelectStyle = boxSelect.start && boxSelect.end
     ? {
@@ -2646,9 +2653,9 @@ export default function MapCanvas() {
       }
     : null;
 
-  // Combined mouse handlers
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+  // Combined pointer handlers (PointerEvent is a superset of MouseEvent)
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
       // Handle placement mode
       if (placementMode && mapContainer.current && map.current) {
         const rect = mapContainer.current.getBoundingClientRect();
@@ -2699,7 +2706,7 @@ export default function MapCanvas() {
     [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragMove, handleZoomBoxMove, handleBoxSelectMove, checkSnapToStation, placementMode, checkPlacementSnap, updatePlacementCursor, updatePlacementSnap]
   );
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback(() => {
     if (moveDrag) {
       // Block while snap-to-merge dialog is open
       if (snapMergeDialogPendingRef.current) {
@@ -2713,15 +2720,15 @@ export default function MapCanvas() {
     }
   }, [moveDrag, zoomBox.start, boxSelect.start, handleMoveDragEnd, handleZoomBoxEnd, handleBoxSelectEnd]);
 
-  // Mouse leave: keep all move drags alive so user can return the cursor
-  const handleMouseLeave = useCallback(() => {
+  // Pointer leave: keep all move drags alive so user can return the cursor
+  const handlePointerLeave = useCallback(() => {
     if (moveDrag) return;
-    handleMouseUp();
-  }, [moveDrag, handleMouseUp]);
+    handlePointerUp();
+  }, [moveDrag, handlePointerUp]);
 
   // Handle placement mode click
   const handlePlacementClick = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (!placementMode) return;
 
       // Left click confirms placement
@@ -2746,14 +2753,18 @@ export default function MapCanvas() {
     [placementMode, handlePlacementCancel]
   );
 
-  // Determine mousedown handler based on mode and tool
+  // Determine pointerdown handler based on mode and tool
   // Only process events that originate from the map canvas (not UI controls or overlays)
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
       // Ignore clicks on overlay UI (buttons, indicators, MapLibre controls)
       // Gate on canvas element to exclude .maplibregl-control-container clicks
       const canvas = map.current?.getCanvas();
       if (!canvas || !canvas.contains(e.target as Node)) {
+        return;
+      }
+      // Let MapLibre handle touch pan/zoom when pan tool is active
+      if (e.pointerType === 'touch' && activeTool === 'pan') {
         return;
       }
       if (placementMode) {
@@ -2767,18 +2778,19 @@ export default function MapCanvas() {
     [placementMode, activeTool, handlePlacementClick, handleZoomBoxStart, handleBoxSelectStart]
   );
 
-  // Mouse handlers always attached - they check e.ctrlKey internally to decide behavior
+  // Pointer handlers always attached - they check e.ctrlKey internally to decide behavior
   return (
     <div
       className="relative w-full h-full"
+      style={{ touchAction }}
       data-testid="map-canvas"
       data-map-loaded={mapLoaded ? 'true' : 'false'}
       data-active-tool={activeTool}
       data-placement-mode={placementMode ? 'true' : 'false'}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseLeave}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
       onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
@@ -2832,6 +2844,7 @@ export default function MapCanvas() {
           isSnapped={placementMode.snappedToStation !== null}
           pixelsPerMeter={pixelsPerMeter}
           additionalSections={placementMode.additionalSections}
+          onCancel={handlePlacementCancel}
         />
       )}
 
