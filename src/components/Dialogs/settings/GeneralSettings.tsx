@@ -220,7 +220,7 @@ export function GeneralSettings({
           data-testid="setting-auto-save-interval"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={10}
             max={3600}
             value={config.general.auto_save_interval_seconds}
@@ -242,7 +242,7 @@ export function GeneralSettings({
           data-testid="setting-recent-max"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={1}
             max={50}
             value={config.general.recent_projects_max}
@@ -264,7 +264,7 @@ export function GeneralSettings({
           data-testid="setting-undo-limit"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={10}
             max={1000}
             value={config.general.undo_history_limit}
@@ -284,7 +284,7 @@ export function GeneralSettings({
           data-testid="setting-undo-persist"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={0}
             max={config.general.undo_history_limit}
             value={config.general.undo_persist_limit}

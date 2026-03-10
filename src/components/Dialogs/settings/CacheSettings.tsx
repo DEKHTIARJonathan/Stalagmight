@@ -275,7 +275,7 @@ export function CacheSettings({
         >
           <div className="flex items-center gap-2">
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min={MIN_CACHE_SIZE_MB}
               max={MAX_CACHE_SIZE_MB}
               step={100}
@@ -300,7 +300,7 @@ export function CacheSettings({
         >
           <div className="flex items-center gap-2">
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min={1}
               max={365}
               value={config.cache.tile_ttl_days}

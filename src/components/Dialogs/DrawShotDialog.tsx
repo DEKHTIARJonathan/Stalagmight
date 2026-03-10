@@ -229,7 +229,7 @@ export default function DrawShotDialog() {
               Azimuth In (degrees) <span className="text-error">*</span>
             </label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min="0"
               max="359.99"
               step="0.1"
@@ -242,7 +242,7 @@ export default function DrawShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Azimuth Out (degrees)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min="0"
               max="359.99"
               step="0.1"
@@ -259,7 +259,7 @@ export default function DrawShotDialog() {
             Length (meters) <span className="text-error">*</span>
           </label>
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={allowZeroLength ? '0' : '0.01'}
             step="0.01"
             value={length}
@@ -273,7 +273,7 @@ export default function DrawShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Depth In (meters)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               step="0.1"
               value={depthIn}
               onChange={(e) => handleDepthInChange(e.target.value)}
@@ -284,7 +284,7 @@ export default function DrawShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Depth Out (meters)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               step="0.1"
               value={depthOut}
               onChange={(e) => setDepthOut(e.target.value)}
@@ -303,7 +303,7 @@ export default function DrawShotDialog() {
             <div>
               <label className="block text-xs text-text-secondary mb-1">Left</label>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 min="0"
                 step="0.1"
                 value={left}
@@ -314,7 +314,7 @@ export default function DrawShotDialog() {
             <div>
               <label className="block text-xs text-text-secondary mb-1">Right</label>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 min="0"
                 step="0.1"
                 value={right}
@@ -325,7 +325,7 @@ export default function DrawShotDialog() {
             <div>
               <label className="block text-xs text-text-secondary mb-1">Up</label>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 min="0"
                 step="0.1"
                 value={up}
@@ -336,7 +336,7 @@ export default function DrawShotDialog() {
             <div>
               <label className="block text-xs text-text-secondary mb-1">Down</label>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 min="0"
                 step="0.1"
                 value={down}

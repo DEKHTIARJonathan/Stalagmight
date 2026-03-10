@@ -493,7 +493,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -534,7 +534,7 @@ export function ShotTableEditor({
                         (!Number.isFinite(parsed) || (parsed !== null && (parsed < 0 || parsed >= 360)));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) => updateDraft(draftKey, e.target.value)}
@@ -573,7 +573,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -608,7 +608,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -643,7 +643,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -679,7 +679,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -715,7 +715,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -751,7 +751,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>

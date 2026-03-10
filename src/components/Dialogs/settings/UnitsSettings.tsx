@@ -152,7 +152,7 @@ export function UnitsSettings({
             data-testid={`setting-precision-${key}`}
           >
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min={0}
               max={6}
               value={config.units.decimal_precision[key]}
