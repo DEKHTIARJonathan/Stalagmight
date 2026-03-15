@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -12,6 +12,7 @@ import {
   projectOpenFilters,
   projectSaveFilters,
   importOpenFilters,
+  saveDialog,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
@@ -665,7 +666,7 @@ export function useKeyboardShortcuts() {
           if (currentProjectSA) {
             (async () => {
               try {
-                const selected = await save({
+                const selected = await saveDialog({
                   filters: projectSaveFilters(),
                 });
 

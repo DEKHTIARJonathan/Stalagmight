@@ -4,7 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
+import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 import type { DmpFile, TmlFile, GpxFile } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
@@ -99,8 +99,7 @@ export default function NewProjectForImportDialog() {
 
   const handleSelectSavePath = async () => {
     try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      const selected = await save({
+      const selected = await saveDialog({
         title: 'Save Project',
         filters: projectSaveFilters(),
         defaultPath: savePath.trim() || resolvedDefaultSavePath || `${normalizedBaseName}.stalx`,

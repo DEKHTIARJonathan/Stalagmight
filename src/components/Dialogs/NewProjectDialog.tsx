@@ -5,7 +5,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
-import { ensureExtension, projectSaveFilters, PROJECT_EXTENSION } from '../../utils/fileDialogs';
+import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
 
 export default function NewProjectDialog() {
   const { closeDialog } = useUIStore();
@@ -30,9 +30,7 @@ export default function NewProjectDialog() {
     try {
       let explicitSavePath: string | undefined;
       if (saveImmediately) {
-        // Open save dialog before creation so we can create directly at the chosen path.
-        const { save } = await import('@tauri-apps/plugin-dialog');
-        const path = await save({
+        const path = await saveDialog({
           title: 'Save Project',
           filters: projectSaveFilters(),
           defaultPath: `${name.replace(/[^a-zA-Z0-9]/g, '_')}.stalx`,
