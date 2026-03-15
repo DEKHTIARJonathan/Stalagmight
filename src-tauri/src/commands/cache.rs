@@ -145,10 +145,11 @@ pub(crate) async fn fetch_tile_impl(
     let tile_cache = state.tile_cache();
     let tilemap_cache = state.tilemap_cache();
     let tile_fetch_stats = state.tile_fetch_stats();
+    let cache_config = state.get_config().cache;
 
     // Run blocking I/O in a separate thread
     let result = tauri::async_runtime::spawn_blocking(move || {
-        tile_fetch_impl(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats)
+        tile_fetch_impl(&provider, z, y, x, &tile_cache, &tilemap_cache, &tile_fetch_stats, &cache_config)
     })
     .await
     .map_err(|e| format!("Tile fetch task failed: {e}"))?;

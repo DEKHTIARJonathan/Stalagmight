@@ -201,6 +201,7 @@ export const defaultConfig: Config = {
     tile_cache_enabled: true,
     tile_cache_max_mb: 500,
     tile_ttl_days: 30,
+    providers: { esri: { offline_caching: false } },
   },
   debug: {
     map: {
