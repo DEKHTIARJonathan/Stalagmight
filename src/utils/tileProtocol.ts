@@ -10,6 +10,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import maplibregl from 'maplibre-gl';
 
 /**
  * Tile fetch statistics from the Rust native protocol handler.
@@ -55,31 +56,48 @@ export function resetTileFetchStats(): void {
   // No-op - Rust atomic counters are cumulative and don't support reset
 }
 
+const isAndroid = navigator.userAgent.includes('Android');
+
 /**
- * Register the stalagmight-tiles:// protocol for MapLibre.
+ * Register the tile protocol for MapLibre.
  *
- * This is now a no-op. Tile requests go directly to Tauri's native protocol
- * handler which returns binary data efficiently without JSON serialization.
+ * On desktop, this is a no-op — tiles go directly through Tauri's native
+ * protocol handler (register_asynchronous_uri_scheme_protocol).
  *
- * Kept for API compatibility with existing code that calls register/unregister.
+ * On Android, the native protocol handler serializes requests through a single
+ * WebView IO thread (shouldInterceptRequest), limiting concurrency to 1 tile
+ * at a time. Instead, we register a JS-side MapLibre protocol that fetches
+ * tiles via Tauri IPC commands, which run concurrently on the async runtime.
  */
 export function registerTileProtocol(): void {
-  // No-op - Tauri's native protocol handles stalagmight-tiles:// URLs directly
-  // WebView routes these to register_asynchronous_uri_scheme_protocol in Rust
+  if (!isAndroid) return;
+
+  maplibregl.addProtocol('stalagmight-tiles', async (params: { url: string }) => {
+    // Parse provider/z/y/x from URL: stalagmight-tiles://esri/10/500/250
+    const match = params.url.match(/stalagmight-tiles:\/\/([^/]+)\/(\d+)\/(\d+)\/(\d+)/);
+    if (!match) throw new Error(`Invalid tile URL: ${params.url}`);
+    const [, provider, z, y, x] = match;
+    const data = await invoke<number[]>('fetch_tile', {
+      provider,
+      z: Number(z),
+      y: Number(y),
+      x: Number(x),
+    });
+    return { data: new Uint8Array(data) };
+  });
 }
 
 /**
- * Unregister the stalagmight-tiles:// protocol.
- * No-op since we don't register a JS-side protocol anymore.
+ * Unregister the tile protocol.
  */
 export function unregisterTileProtocol(): void {
-  // No-op - nothing to unregister
+  if (!isAndroid) return;
+  maplibregl.removeProtocol('stalagmight-tiles');
 }
 
 /**
  * Force unregister the protocol regardless of ref count.
- * No-op since we don't register a JS-side protocol anymore.
  */
 export function forceUnregisterTileProtocol(): void {
-  // No-op - nothing to unregister
+  unregisterTileProtocol();
 }
