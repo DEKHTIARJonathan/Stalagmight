@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invokeIpc } from '../../utils/ipc';
-import { save } from '@tauri-apps/plugin-dialog';
+import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
@@ -151,7 +151,7 @@ export default function ExportDialog() {
               { name: 'TMLU (XML)', extensions: ['tmlu'] },
             ]
           : exportSaveFilters(dataFormat.toUpperCase(), dataFormat);
-        const selected = await save({ filters });
+        const selected = await saveDialog({ filters });
 
         if (selected) {
           // For TML, preserve the extension the OS dialog appended.
@@ -188,7 +188,7 @@ export default function ExportDialog() {
         }
       } else {
         const extension = imageFormat;
-        const selected = await save({
+        const selected = await saveDialog({
           filters: exportSaveFilters(imageFormat.toUpperCase(), extension),
         });
 

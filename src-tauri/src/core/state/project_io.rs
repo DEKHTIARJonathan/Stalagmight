@@ -90,6 +90,11 @@ impl AppState {
         if !path.exists() {
             return path.clone();
         }
+        // Treat 0-byte files as non-existent: Android's SAF (ACTION_CREATE_DOCUMENT)
+        // creates an empty placeholder at the chosen path before returning.
+        if path.metadata().is_ok_and(|m| m.len() == 0) {
+            return path.clone();
+        }
 
         let parent = path.parent().map(std::path::Path::to_path_buf);
         let stem = path
