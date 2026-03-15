@@ -765,12 +765,11 @@ export default function OnboardingOverlay({
   const placement = step.placement ?? 'bottom';
   const description = t(step.descriptionKey);
   const hasDescription = description.trim().length > 0 && description !== step.descriptionKey;
-  const descriptionItemsRaw = t(`${step.descriptionKey}Items`, {
-    returnObjects: true,
-  }) as unknown;
-  const descriptionItems = Array.isArray(descriptionItemsRaw)
-    ? descriptionItemsRaw.filter((item): item is string => typeof item === 'string')
-    : [];
+  const descriptionItems: string[] = (() => {
+    if (!step.descriptionItemsKey) return [];
+    const raw = t(step.descriptionItemsKey, { returnObjects: true }) as unknown;
+    return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : [];
+  })();
   const illustration = renderStepIllustration(step.illustration, t);
   const targetSelectorList = useMemo(() => {
     if (step.targetSelectors && step.targetSelectors.length > 0) {
