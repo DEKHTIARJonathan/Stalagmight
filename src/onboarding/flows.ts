@@ -15,6 +15,8 @@ export interface OnboardingStepDefinition {
   id: string;
   titleKey: string;
   descriptionKey: string;
+  /** Optional i18n key for a bullet-point list below the description */
+  descriptionItemsKey?: string;
   targetSelector?: string;
   targetSelectors?: string[];
   mergeTargetSpotlights?: boolean;
@@ -269,6 +271,7 @@ const placementModeFlow: OnboardingFlowDefinition = {
       id: 'escape-options',
       titleKey: 'onboarding.flows.placementMode.steps.escapeOptions.title',
       descriptionKey: 'onboarding.flows.placementMode.steps.escapeOptions.description',
+      descriptionItemsKey: 'onboarding.flows.placementMode.steps.escapeOptions.descriptionItems',
       targetSelector: '[data-testid="placement-mode-indicator"]',
       placement: 'bottom',
       interaction: 'locked',
@@ -440,6 +443,7 @@ const zeroDatumConfigFlow: OnboardingFlowDefinition = {
       id: 'gps',
       titleKey: 'onboarding.flows.zeroDatumConfig.steps.gps.title',
       descriptionKey: 'onboarding.flows.zeroDatumConfig.steps.gps.description',
+      descriptionItemsKey: 'onboarding.flows.zeroDatumConfig.steps.gps.descriptionItems',
       targetSelector: '[data-testid="zero-datum-gps-input"]',
       placement: 'bottom',
       interaction: 'locked',
