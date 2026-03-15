@@ -180,6 +180,8 @@ export default function MapCanvas() {
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
+  // True briefly after placement confirmation to suppress the spurious MapLibre click
+  const placementJustConfirmedRef = useRef(false);
   // True while custom panning gesture is active (Ctrl+left-drag or middle-drag)
   const customPanActiveRef = useRef(false);
   // True while custom panning was initiated with Ctrl+left-drag (for keyup filtering)
@@ -507,6 +509,12 @@ export default function MapCanvas() {
 
     const placement = confirmPlacement();
     if (!placement || !placement.cursorPosition) return;
+
+    // Suppress the spurious MapLibre click that follows pointerDown on touch devices.
+    // The browser synthesizes click after pointerup, but placementMode is already null
+    // by then, so the click would be treated as an empty-click and clear selection.
+    placementJustConfirmedRef.current = true;
+    requestAnimationFrame(() => { placementJustConfirmedRef.current = false; });
 
     // If there's a callback, call it with the result
     // The caller is responsible for what to do with the placement
@@ -1958,7 +1966,7 @@ export default function MapCanvas() {
     // on mousedown/mouseup does NOT prevent click from being dispatched. MapLibre listens
     // for 'click' on the canvas, so we must capture it to prevent spurious map clicks.
     const handleClickCapture = (e: MouseEvent) => {
-      if (customPanActiveRef.current) {
+      if (customPanActiveRef.current || placementJustConfirmedRef.current) {
         e.stopPropagation();
         e.preventDefault();
       }
@@ -2729,16 +2737,30 @@ export default function MapCanvas() {
   // Handle placement mode click
   const handlePlacementClick = useCallback(
     (e: React.PointerEvent) => {
-      if (!placementMode) return;
+      if (!placementMode || !map.current || !mapContainer.current) return;
 
       // Left click confirms placement
       if (e.button === 0) {
         e.preventDefault();
         e.stopPropagation();
+
+        // On touch devices, pointerDown fires before any pointerMove, so
+        // cursorPosition may be null. Compute it from the event to ensure
+        // placement always has a valid position.
+        const rect = mapContainer.current.getBoundingClientRect();
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+        const lngLat = map.current.unproject([screenX, screenY]);
+        const meters = mapCoordsToMeters(lngLat.lng, lngLat.lat, gpsOrigin);
+        updatePlacementCursor({ x: meters.x, y: meters.y, z: 0 });
+
+        const snapped = checkPlacementSnap(screenX, screenY);
+        updatePlacementSnap(snapped);
+
         handlePlacementConfirm();
       }
     },
-    [placementMode, handlePlacementConfirm]
+    [placementMode, handlePlacementConfirm, gpsOrigin, updatePlacementCursor, updatePlacementSnap, checkPlacementSnap]
   );
 
   // Handle placement mode right-click (cancel)
