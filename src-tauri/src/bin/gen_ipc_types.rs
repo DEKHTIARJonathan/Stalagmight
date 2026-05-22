@@ -28,11 +28,16 @@ use stalagmight_lib::export::{
     ColorMode, ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
 };
 use stalagmight_lib::models::{
-    ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, ConnectivityResult,
-    Coordinates, DeleteShotImpact, FrozenShotRef, GpsBounds, GpsCoordinates, ImportPlacement,
-    ExistingShotUpdate, ImportSectionConfig, LoopClosure, Project, ProjectMetadata, ProjectStats, ProjectWarning,
-    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot, ShotData,
-    ShotUpdates, Station, StationMerge, StationPair, StationRef, SurveyDirection, ZeroDatum,
+    ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
+    ConnectivityResult, Coordinates, DeleteShotImpact, FrozenShotRef, GpsBounds, GpsCoordinates,
+    ImportPlacement, ExistingShotUpdate, ImportSectionConfig, LoopClosure, Project, ProjectMetadata,
+    ProjectStats, ProjectWarning, Section, SectionData, SectionRelationships, SectionStats,
+    SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMerge,
+    StationPair, StationRef, SurveyDirection, ZeroDatum,
+};
+use stalagmight_lib::core::reconcile::{
+    AddedSection, AddedShot, CollabChangeSet, CollabFieldChange, CollabWarning, EditedShot,
+    MatchQuality, RemovedShot, SectionMetaChange,
 };
 use stalagmight_lib::models::placement_suggest::{
     CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection,
@@ -76,6 +81,18 @@ fn main() {
 
     // Project/model types
     export::<Project>(&out_dir);
+    // Collaboration mode
+    export::<CollabState>(&out_dir);
+    export::<ShotBaselineEntry>(&out_dir);
+    export::<CollabChangeSet>(&out_dir);
+    export::<CollabFieldChange>(&out_dir);
+    export::<AddedShot>(&out_dir);
+    export::<EditedShot>(&out_dir);
+    export::<RemovedShot>(&out_dir);
+    export::<AddedSection>(&out_dir);
+    export::<SectionMetaChange>(&out_dir);
+    export::<CollabWarning>(&out_dir);
+    export::<MatchQuality>(&out_dir);
     export::<ProjectMetadata>(&out_dir);
     export::<ProjectStats>(&out_dir);
     export::<Section>(&out_dir);
@@ -219,6 +236,18 @@ fn main() {
         "CommentHolder",
         "ValidationWarning",
         "WarningSeverity",
+        // Collaboration mode
+        "CollabState",
+        "ShotBaselineEntry",
+        "CollabChangeSet",
+        "CollabFieldChange",
+        "AddedShot",
+        "EditedShot",
+        "RemovedShot",
+        "AddedSection",
+        "SectionMetaChange",
+        "CollabWarning",
+        "MatchQuality",
         "DisplaySettings",
         "LoadingPhase",
         "LoadingProgress",

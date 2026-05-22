@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod collab;
 pub mod config;
 pub mod export;
 pub mod history;
