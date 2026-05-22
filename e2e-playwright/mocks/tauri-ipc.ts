@@ -2362,6 +2362,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'plugin:dialog|save':
             return '/mock/saved-project.stalx';
 
+          // Path plugin: resolve a base directory to an absolute mock path.
+          // Used by documentDir()/downloadDir() in the saveDialog() helper.
+          case 'plugin:path|resolve_directory': {
+            const baseDirs: Record<number, string> = {
+              6: '/mock/documents', // BaseDirectory.Document
+              7: '/mock/downloads', // BaseDirectory.Download
+            };
+            const dir = args?.directory as number | undefined;
+            return (dir !== undefined && baseDirs[dir]) || '/mock/home';
+          }
+
           case 'plugin:fs|read':
           case 'plugin:fs|readFile':
             return new Uint8Array([]);
@@ -2723,6 +2734,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       convertFileSrc: (filePath: string, protocol?: string) => {
         return `asset://localhost/${filePath}`;
       },
+      // sep()/delimiter() in @tauri-apps/api/path read these synchronously.
+      plugins: {
+        path: { sep: '/', delimiter: ':' },
+      },
       metadata: {
         currentWindow: { label: 'main' },
         currentWebview: { label: 'main' },
@@ -2870,6 +2885,10 @@ export async function setupTauriMocksWithProject(
           const id = Math.random().toString(36).substring(7);
           (window as unknown as Record<string, unknown>)[`_${id}`] = callback;
           return id;
+        },
+        // sep()/delimiter() in @tauri-apps/api/path read these synchronously.
+        plugins: {
+          path: { sep: '/', delimiter: ':' },
         },
       };
 
