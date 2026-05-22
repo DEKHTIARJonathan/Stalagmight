@@ -55,6 +55,18 @@ export type {
   OrphanPlacementSuggestion,
   SegmentGeometry,
   SegmentSectionGeometry,
+  // Collaboration mode
+  CollabState,
+  ShotBaselineEntry,
+  CollabChangeSet,
+  CollabFieldChange,
+  AddedShot,
+  EditedShot,
+  RemovedShot,
+  AddedSection,
+  SectionMetaChange,
+  CollabWarning,
+  MatchQuality,
 } from './ipc.generated';
 
 // Batch command types for execute_batch IPC.

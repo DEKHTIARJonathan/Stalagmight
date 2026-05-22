@@ -78,6 +78,7 @@ Implementation plans are stored in `docs/plans/`.
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
 | [Configuration](docs/configuration.md) | Config file locations, options, logging |
 | [Saving](docs/saving.md) | Save pipeline, auto-save, undo persistence, atomic writes |
+| [Collaboration](docs/collaboration.md) | Ariane collab mode: sibling .tml, save-both, reconcile/diff, shot matching tiers |
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
 | [Telemetry](docs/telemetry.md) | Event reference, source tracking, adding telemetry to new features |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |

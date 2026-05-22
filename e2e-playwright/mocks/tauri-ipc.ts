@@ -2710,6 +2710,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return mockGeometry;
           }
 
+          // Collaboration mode
+          case 'set_collab_enabled':
+            console.log('[Mock IPC] set_collab_enabled called with:', args);
+            return { success: true };
+          case 'get_collab_state':
+            return null;
+          case 'detect_collab_changes':
+            return null;
+          case 'apply_collab_changes':
+            console.log('[Mock IPC] apply_collab_changes called with:', args);
+            return { success: true };
+
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':
             return null;

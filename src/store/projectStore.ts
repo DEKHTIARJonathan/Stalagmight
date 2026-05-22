@@ -22,7 +22,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -241,6 +241,11 @@ interface ProjectStore {
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  // Collaboration mode
+  setCollabEnabled: (enabled: boolean, siblingTmlRelative?: string | null) => Promise<CommandResult>;
+  getCollabState: () => Promise<CollabState | null>;
+  detectCollabChanges: () => Promise<CollabChangeSet | null>;
+  applyCollabChanges: () => Promise<CommandResult>;
   parseGpx: (path: string) => Promise<GpxFile>;
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -462,6 +467,28 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       get().resetLoading();
       await get().refreshUndoState();
+
+      // Collaboration mode: if the sibling .tml was edited externally (Ariane),
+      // detect the changes and offer to reconcile them. Non-blocking.
+      void get()
+        .detectCollabChanges()
+        .then((cs) => {
+          if (
+            cs &&
+            cs.shots_added.length +
+              cs.shots_edited.length +
+              cs.shots_removed.length +
+              cs.sections_added.length +
+              cs.section_meta_changed.length >
+              0
+          ) {
+            useUIStore.getState().openDialog('collab-review', { changeSet: cs });
+          }
+        })
+        .catch(() => {
+          /* detection is best-effort; ignore errors */
+        });
+
       return { success: true };
     } catch (e) {
       const error = parseLoadError(e);
@@ -1078,6 +1105,33 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       },
       { purpose: 'import Ariane TML/TMLU', fields: { path } }
     );
+  },
+
+  // Collaboration mode
+  setCollabEnabled: async (enabled: boolean, siblingTmlRelative?: string | null) => {
+    return executeCommand(
+      'set_collab_enabled',
+      { enabled, siblingTmlRelative: siblingTmlRelative ?? null },
+      { purpose: 'toggle collaboration mode' }
+    );
+  },
+
+  getCollabState: async () => {
+    return await invokeIpc<CollabState | null>('get_collab_state', undefined, {
+      purpose: 'read collaboration state',
+    });
+  },
+
+  detectCollabChanges: async () => {
+    return await invokeIpc<CollabChangeSet | null>('detect_collab_changes', undefined, {
+      purpose: 'detect collaborator .tml changes',
+    });
+  },
+
+  applyCollabChanges: async () => {
+    return executeCommand('apply_collab_changes', {}, {
+      purpose: 'apply collaborator changes',
+    });
   },
 
   parseGpx: async (path: string) => {
