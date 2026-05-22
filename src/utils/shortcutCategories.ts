@@ -63,4 +63,5 @@ export const RESERVED_DISPLAY_ENTRIES: ReservedShortcutEntry[] = [
   { shortcuts: ['Ctrl+A'], descriptionKey: 'settings.shortcuts.reserved.selectAll' },
   { shortcuts: ['Ctrl+,'], descriptionKey: 'settings.shortcuts.reserved.openSettings' },
   { shortcuts: ['?'], descriptionKey: 'settings.shortcuts.reserved.keyboardShortcuts' },
+  { shortcuts: ['Ctrl+=', 'Ctrl+-', 'Ctrl+0'], descriptionKey: 'settings.shortcuts.reserved.uiZoom' },
 ];
