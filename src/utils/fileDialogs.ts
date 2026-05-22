@@ -105,9 +105,17 @@ export async function saveDialog(options?: SaveDialogOptions): Promise<string | 
   const { save } = await import('@tauri-apps/plugin-dialog');
 
   if (options?.defaultPath && !isAbsolutePath(options.defaultPath)) {
-    const { documentDir, sep } = await import('@tauri-apps/api/path');
-    const dir = await documentDir();
-    options = { ...options, defaultPath: `${dir}${sep()}${options.defaultPath}` };
+    try {
+      const { documentDir, sep } = await import('@tauri-apps/api/path');
+      const dir = await documentDir();
+      // Only prepend a real absolute documents dir; otherwise let the native
+      // dialog pick its own default rather than producing a relative path.
+      if (dir && isAbsolutePath(dir)) {
+        options = { ...options, defaultPath: `${dir}${sep()}${options.defaultPath}` };
+      }
+    } catch {
+      // Documents dir unavailable — fall back to the native dialog default.
+    }
   }
 
   return save(options);

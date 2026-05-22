@@ -1380,6 +1380,10 @@ mod tests {
         let result = state.resolve_project_path("TestProject", None);
         assert!(result.is_ok(), "should resolve with default dir: {:?}", result.err());
         let path = result.unwrap();
+        // Must be absolute: a relative default (e.g. "./stalagmight/...") breaks
+        // saving. Regression guard for app_dirs::document_dir() returning "."
+        // instead of None and short-circuiting the $HOME/Documents fallback.
+        assert!(path.is_absolute(), "default project path must be absolute: {}", path.display());
         assert_eq!(path.file_name().unwrap().to_str().unwrap(), "TestProject.stalx");
         let parent = path.parent().expect("default path should have parent");
         assert_eq!(parent.file_name().unwrap().to_str().unwrap(), "stalagmight");

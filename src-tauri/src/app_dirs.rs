@@ -20,7 +20,7 @@ struct Dirs {
     data_local: PathBuf,
     config: PathBuf,
     cache: PathBuf,
-    document: PathBuf,
+    document: Option<PathBuf>,
 }
 
 static DIRS: OnceLock<Dirs> = OnceLock::new();
@@ -42,9 +42,11 @@ pub fn init(handle: &tauri::AppHandle) {
         let cache = resolver
             .app_cache_dir()
             .unwrap_or_else(|_| PathBuf::from("."));
-        let document = resolver
-            .document_dir()
-            .unwrap_or_else(|_| PathBuf::from("."));
+        // Unlike the dirs above, do NOT fall back to ".": a relative documents
+        // path produces broken project save paths (e.g. "./stalagmight/foo.stalx").
+        // Returning None lets callers fall through to their own resolution
+        // (directories crate, $HOME/Documents).
+        let document = resolver.document_dir().ok();
 
         tracing::debug!(
             ?data_local,
@@ -79,6 +81,9 @@ pub fn cache_dir() -> Option<&'static Path> {
 }
 
 /// User documents directory (default project location).
+///
+/// `None` if not yet initialized, or if the platform could not resolve a
+/// documents directory — callers should fall back rather than use a relative path.
 pub fn document_dir() -> Option<&'static Path> {
-    DIRS.get().map(|d| d.document.as_path())
+    DIRS.get().and_then(|d| d.document.as_deref())
 }
