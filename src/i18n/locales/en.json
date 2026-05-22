@@ -1757,7 +1757,7 @@
           },
           "panAndZoom": {
             "title": "Pan and Zoom Controls",
-            "description": ""
+            "description": "Drag to pan and scroll to zoom while positioning the section."
           },
           "displayOptions": {
             "title": "Display Options",
@@ -1977,8 +1977,8 @@
           "measure": "Measure distance and depth difference.",
           "comment": "Add comments to station/shot.",
           "moveComment": "Reposition an existing comment.",
-          "moveStation": "",
-          "moveShot": "",
+          "moveStation": "Reposition a station; connected shots follow.",
+          "moveShot": "Reposition an individual shot.",
           "moveSegment": "Move a group of connected sections."
         }
       },
