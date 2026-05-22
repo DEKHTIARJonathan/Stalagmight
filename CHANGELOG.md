@@ -7,6 +7,37 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-22
+
+### Added
+- **Android support** — native Android app target generated via Tauri mobile (`src-tauri/gen/android/`), with build (`scripts/build-android.sh`) and deploy (`scripts/deploy-android.sh`) scripts, network-state and storage permissions, and a verified debug APK build
+- **Touch support for tablets** — pointer-event-based interactions across panels, map canvas, and toolbar; long-press context menus (sections panel, shot table, map features, global-view markers); tap-to-toggle toolbar flyouts and help tooltips; wider resize handles on coarse-pointer devices; and a visible Cancel button during placement. Mouse and keyboard behavior is unchanged
+- **Kaleido e-ink theme** — high-contrast, pre-composited color theme with CSS transitions/animations disabled to prevent ghosting on e-ink displays
+- Decimal on-screen keyboard for numeric inputs (`inputMode="decimal"` across all number fields)
+- Per-provider offline tile caching toggle via TOML config (e.g. `[cache.providers.esri] offline_caching = false`); ESRI satellite tiles are now uncached by default (not exposed in the Settings UI)
+- Cross-platform path resolution (`app_dirs`) routed through Tauri's path resolver, replacing the `directories` crate which returned `None` on Android
+
+### Fixed
+- Android: startup crash from logging initialization on a read-only filesystem
+- Android: status bar overlapping the top toolbar
+- Android: save dialog reliability — `singleTop` launch mode for SAF result callbacks, `content://` URI resolution, in-app directory-picker fallback, and 0-byte SAF placeholder handling
+- Android: satellite tile loading and placement-mode tap handling
+- Spurious i18n warnings from onboarding `descriptionItems`
+
+## [0.1.3] - 2026-03-09
+
+### Added
+- **Opt-in anonymous usage telemetry** — privacy-preserving, consent-gated analytics. A first-launch opt-in dialog and a Settings privacy toggle; a Rust backend behind a `telemetry` Cargo feature (compiles to no-ops when disabled); tracking of IPC commands, tool selection, map navigation, dialogs, selections, and workflow dwell time; and a D1-backed Cloudflare Worker that ingests batched event counts. No data is collected until the user explicitly opts in
+
+### Changed
+- Reactive, tile-driven network status: connectivity is inferred from satellite tile fetch outcomes (ESRI is polled only while offline, and stale tiles reload automatically on recovery) instead of unconditional polling
+- Telemetry opt-in dialog is deferred while onboarding is active, and its "Yes, share data" action is now the primary button
+
+### Fixed
+- Telemetry is disabled immediately in the current session when the user declines
+- Workflow dwell time now reaches the Rust backend while the app is idle
+- False dialog-cancel telemetry event during DMP placement transitions
+
 ## [0.1.2] - 2026-03-07
 
 ### Added
