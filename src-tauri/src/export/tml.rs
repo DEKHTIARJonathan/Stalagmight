@@ -20,7 +20,9 @@ use anyhow::{Context, Result};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 
-use crate::models::{Project, Section, SectionId, StationRef};
+use sha2::{Digest, Sha256};
+
+use crate::models::{geo_key, Project, Section, SectionId, ShotBaselineEntry, StationRef};
 
 // ============================================================================
 // Element‐name map (long vs. short)
@@ -59,6 +61,7 @@ struct Names {
     locked: &'static str,
     name: &'static str,
     profiletype: &'static str,
+    uuid: &'static str,
 }
 
 /// Long names (used by `.tml` ZIP files).
@@ -94,6 +97,7 @@ const LONG: Names = Names {
     locked: "Locked",
     name: "Name",
     profiletype: "Profiletype",
+    uuid: "UUID",
 };
 
 /// Short names (used by `.tmlu` plain-XML files).
@@ -129,6 +133,7 @@ const SHORT: Names = Names {
     locked: "LCK",
     name: "NM",
     profiletype: "PT",
+    uuid: "UU",
 };
 
 // ============================================================================
@@ -166,30 +171,65 @@ struct ExportShot {
 
 /// Export a project to Ariane TML (`.tml` = ZIP) or TMLU (`.tmlu` = plain XML).
 pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
+    let names = names_for_path(path);
+    let (xml, _baseline) = build_xml(project, names)?;
+    write_output(path, &xml)
+}
+
+/// Export for collaboration mode: writes the file AND returns the per-shot
+/// baseline (for diffing a returned file) plus the sha256 of the inner XML
+/// content (for detecting external edits on open — independent of zip framing).
+pub fn export_tml_with_baseline(
+    project: &Project,
+    path: &Path,
+) -> Result<(Vec<ShotBaselineEntry>, String)> {
+    let names = names_for_path(path);
+    let (xml, baseline) = build_xml(project, names)?;
+    write_output(path, &xml)?;
+    let sha = sha256_hex(&xml);
+    Ok((baseline, sha))
+}
+
+fn names_for_path(path: &Path) -> &'static Names {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
+    if ext == "tml" { &LONG } else { &SHORT }
+}
 
-    let use_long = ext == "tml";
-    let names = if use_long { &LONG } else { &SHORT };
-
-    let xml = build_xml(project, names)?;
-
+fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
     match ext.as_str() {
-        "tml" => write_zip(path, &xml),
-        "tmlu" => std::fs::write(path, &xml).context("Failed to write TMLU file"),
-        _ => std::fs::write(path, &xml).context("Failed to write TML export file"),
+        "tml" => write_zip(path, xml),
+        "tmlu" => std::fs::write(path, xml).context("Failed to write TMLU file"),
+        _ => std::fs::write(path, xml).context("Failed to write TML export file"),
     }
+}
+
+/// Hex-encoded sha256 of the given bytes.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 // ============================================================================
 // XML generation
 // ============================================================================
 
-fn build_xml(project: &Project, n: &Names) -> Result<Vec<u8>> {
-    let shots = build_export_shots(project);
+fn build_xml(project: &Project, n: &Names) -> Result<(Vec<u8>, Vec<ShotBaselineEntry>)> {
+    let (shots, baseline) = build_export_shots(project);
+    // Map Ariane shot ID -> UUID so write_shot can emit <UUID> only for real
+    // (baseline-tracked) forward shots; synthesized START/CLOSURE/reverse legs
+    // have no entry and emit no UUID.
+    let uuid_by_ariane: HashMap<i64, &str> =
+        baseline.iter().map(|e| (e.ariane_id, e.uuid.as_str())).collect();
 
     let mut buf = Vec::new();
     let mut writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4);
@@ -222,7 +262,8 @@ fn build_xml(project: &Project, n: &Names) -> Result<Vec<u8>> {
     writer.write_event(Event::Start(BytesStart::new(n.data)))?;
 
     for shot in &shots {
-        write_shot(&mut writer, n, shot)?;
+        let uuid = uuid_by_ariane.get(&shot.id).copied().unwrap_or("");
+        write_shot(&mut writer, n, shot, uuid)?;
     }
 
     // </Data>
@@ -236,7 +277,7 @@ fn build_xml(project: &Project, n: &Names) -> Result<Vec<u8>> {
     writer.write_event(Event::End(BytesEnd::new(n.cave_file)))?;
 
     drop(writer);
-    Ok(buf)
+    Ok((buf, baseline))
 }
 
 fn write_text_element<W: std::io::Write>(
@@ -254,6 +295,7 @@ fn write_shot<W: std::io::Write>(
     writer: &mut Writer<W>,
     n: &Names,
     shot: &ExportShot,
+    uuid: &str,
 ) -> Result<()> {
     writer.write_event(Event::Start(BytesStart::new(n.survey_data)))?;
 
@@ -298,6 +340,12 @@ fn write_shot<W: std::io::Write>(
     write_text_element(writer, n.section, &shot.section)?;
     write_text_element(writer, n.shot_type, shot.shot_type)?;
     write_text_element(writer, n.up, &format_f64(shot.up))?;
+
+    // Stable per-shot UUID (collaboration identity). Only emitted for real
+    // forward shots; Ariane 26+ preserves it across edits, ≤25 ignores it.
+    if !uuid.is_empty() {
+        write_text_element(writer, n.uuid, uuid)?;
+    }
 
     writer.write_event(Event::End(BytesEnd::new(n.survey_data)))?;
     Ok(())
@@ -344,10 +392,35 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
 // Build flat shot list from project model
 // ============================================================================
 
-fn build_export_shots(project: &Project) -> Vec<ExportShot> {
+/// Reuse the existing baseline UUID for a shot if present, else mint a new one,
+/// so UUIDs stay stable across repeated exports of the same project.
+fn pick_uuid(existing: &HashMap<(SectionId, u32), String>, section_id: SectionId, idx: u32) -> String {
+    existing
+        .get(&(section_id, idx))
+        .filter(|u| !u.is_empty())
+        .cloned()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
+fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEntry>) {
     if project.sections.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
+
+    // Per-shot baseline accumulated only for forward REAL/VIRTUAL shots that map
+    // 1:1 to a Stalagmight shot (START/CLOSURE/reverse legs are excluded).
+    let mut baseline: Vec<ShotBaselineEntry> = Vec::new();
+    // Existing UUIDs from the last export (so they stay stable across exports).
+    let existing_uuids: HashMap<(SectionId, u32), String> = project
+        .collab
+        .as_ref()
+        .map(|c| {
+            c.shot_baseline
+                .iter()
+                .map(|e| ((e.section_id, e.shot_index), e.uuid.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Ariane supports one START; when a primary zero datum exists, root the
     // topology from that section so GPS can be placed on START without remapping.
@@ -486,6 +559,14 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                 });
 
                 station_to_ariane.insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
+                baseline.push(ShotBaselineEntry {
+                    section_id: section.id,
+                    shot_index: shot_idx as u32,
+                    ariane_id: shot_ariane_id,
+                    uuid: pick_uuid(&existing_uuids, section.id, shot_idx as u32),
+                    geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
+                    section_name: section_name.clone(),
+                });
             }
 
             blocks.push(SectionBlock {
@@ -624,6 +705,14 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
                         station_to_ariane
                             .insert((section.id, (shot_idx + 1) as u32), shot_ariane_id);
+                        baseline.push(ShotBaselineEntry {
+                            section_id: section.id,
+                            shot_index: shot_idx as u32,
+                            ariane_id: shot_ariane_id,
+                            uuid: pick_uuid(&existing_uuids, section.id, shot_idx as u32),
+                            geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
+                            section_name: section_name.clone(),
+                        });
                     }
 
                     blocks.push(SectionBlock {
@@ -870,6 +959,14 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
             // Station (i+1) is after this shot
             station_to_ariane.insert((section.id, (i + 1) as u32), shot_ariane_id);
+            baseline.push(ShotBaselineEntry {
+                section_id: section.id,
+                shot_index: i as u32,
+                ariane_id: shot_ariane_id,
+                uuid: pick_uuid(&existing_uuids, section.id, i as u32),
+                geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
+                section_name: section_name.clone(),
+            });
         }
 
         blocks.push(SectionBlock {
@@ -1030,7 +1127,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
         }
     }
 
-    all_shots
+    (all_shots, baseline)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1229,6 +1326,68 @@ mod tests {
     }
 
     #[test]
+    fn test_export_emits_uuid_and_baseline() {
+        let project = simple_project();
+        let total_shots: usize = project.sections.iter().map(|s| s.shots.len()).sum();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("out.tmlu");
+
+        let (baseline, sha) = export_tml_with_baseline(&project, &path).unwrap();
+        assert!(!sha.is_empty(), "sha256 should be returned");
+        assert_eq!(baseline.len(), total_shots, "one baseline entry per real shot");
+        for e in &baseline {
+            assert!(!e.uuid.is_empty(), "baseline entry must carry a UUID");
+            assert!(!e.geo_key.is_empty(), "baseline entry must carry a geo_key");
+            assert_eq!(e.section_name, "Main");
+        }
+
+        // The .tmlu uses short tag names, so each real shot emits a <UU> element.
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content.matches("<UU>").count(), total_shots);
+        // START shot carries no UUID.
+        assert!(content.contains("START"));
+    }
+
+    #[test]
+    fn test_uuid_roundtrips_through_parse() {
+        let project = simple_project();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("rt.tmlu");
+        let (baseline, _) = export_tml_with_baseline(&project, &path).unwrap();
+
+        let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
+        let parsed_uuids: HashSet<String> = parsed
+            .sections
+            .iter()
+            .flat_map(|s| s.shots.iter())
+            .filter_map(|sh| sh.uuid.clone())
+            .collect();
+
+        assert_eq!(parsed_uuids.len(), baseline.len(), "all UUIDs survive export->parse");
+        for e in &baseline {
+            assert!(parsed_uuids.contains(&e.uuid), "uuid {} lost in round-trip", e.uuid);
+        }
+    }
+
+    #[test]
+    fn test_export_reuses_existing_uuids() {
+        let mut project = simple_project();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("out.tmlu");
+
+        let (b1, _) = export_tml_with_baseline(&project, &path).unwrap();
+        // Feed the baseline back as collab state and re-export.
+        let mut collab = crate::models::CollabState::new("out.tmlu".to_string());
+        collab.shot_baseline = b1.clone();
+        project.collab = Some(collab);
+        let (b2, _) = export_tml_with_baseline(&project, &path).unwrap();
+
+        let u1: Vec<&String> = b1.iter().map(|e| &e.uuid).collect();
+        let u2: Vec<&String> = b2.iter().map(|e| &e.uuid).collect();
+        assert_eq!(u1, u2, "UUIDs must stay stable across exports");
+    }
+
+    #[test]
     fn test_export_tmlu_creates_valid_xml() {
         let project = simple_project();
         let file = NamedTempFile::with_suffix(".tmlu").unwrap();
@@ -1310,7 +1469,7 @@ mod tests {
     #[test]
     fn test_single_start_shot_at_root() {
         let project = simple_project();
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         // Only one START shot should exist
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
@@ -1329,7 +1488,7 @@ mod tests {
     #[test]
     fn test_sequential_ids() {
         let project = simple_project();
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         for (i, shot) in shots.iter().enumerate() {
             assert_eq!(shot.id, i as i64, "shot {i} should have id {i}");
@@ -1339,7 +1498,7 @@ mod tests {
     #[test]
     fn test_from_id_chain() {
         let project = simple_project();
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         // START has from_id = -1
         assert_eq!(shots[0].from_id, -1);
@@ -1370,7 +1529,7 @@ mod tests {
             ..Default::default()
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
         // shots[0] = START, shots[1] = VIRTUAL, shots[2] = REAL
         assert_eq!(shots[1].shot_type, "VIRTUAL");
         assert_eq!(shots[2].shot_type, "REAL");
@@ -1425,7 +1584,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         // Only ONE start shot should exist (for root section A)
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
@@ -1504,7 +1663,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         // With non-zero merge at station 1, child is split:
         // Forward block (shots 1,2): id=4 from_id=2 (parent), id=5 from_id=4
@@ -1589,7 +1748,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert_eq!(
             closure.from_id, 1,
@@ -1636,7 +1795,7 @@ mod tests {
             is_aligned: false,
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
         let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
         assert!(
             closure.depth_in.abs() < f64::EPSILON,
@@ -1682,7 +1841,7 @@ mod tests {
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         let start = shots.iter().find(|s| s.id == 0).unwrap();
         assert!((start.latitude - 20.25).abs() < f64::EPSILON);
@@ -1735,7 +1894,7 @@ mod tests {
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
         let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
 
         // Split produces two first shots from START: forward segment and reversed prefix.
@@ -1810,7 +1969,7 @@ mod tests {
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
         let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
         assert_eq!(start.section, "B");
 
@@ -1930,7 +2089,7 @@ mod tests {
             ..Default::default()
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
         // shots[0] = START, shots[1..3] = REAL
         assert!(
             (shots[1].depth_in - (-1.0)).abs() < 1e-9,
@@ -2041,7 +2200,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         // Root: START(0), shot0(1), shot1(2). parent station 1 → ariane id 1.
         // Forward block (child shots 2,3): id=3 from_id=1, id=4 from_id=3
@@ -2141,7 +2300,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         // Root: START(0), shot0(1), shot1(2).
         // Reversed child: shots 2,1,0 reversed → id=3 from_id=2, id=4 from_id=3, id=5 from_id=4
@@ -2254,7 +2413,7 @@ mod tests {
             merged_at: chrono::Utc::now(),
         });
 
-        let shots = build_export_shots(&project);
+        let (shots, _baseline) = build_export_shots(&project);
 
         // A: START(0), shot0(1), shot1(2)
         // B forward (shots 1,2): id=3 from_id→1, id=4 from_id=3

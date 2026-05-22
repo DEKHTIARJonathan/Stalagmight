@@ -62,6 +62,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Quantized geometry fingerprint used to match a shot across a TML round-trip
+/// when stable IDs are unavailable (Ariane ≤25). Tolerances: azimuth 0.1°,
+/// length 5 mm, depth-delta 1 cm. Computed identically on export (from the
+/// Stalagmight shot) and on reconcile (from the normalized returned TML shot),
+/// so a clean round-trip yields an identical key.
+pub fn geo_key(azimuth_in: f64, length: f64, depth_in: f64, depth_out: f64) -> String {
+    let q = |v: f64, step: f64| (v / step).round() as i64;
+    format!(
+        "{}|{}|{}",
+        q(azimuth_in.rem_euclid(360.0), 0.1),
+        q(length, 0.005),
+        q(depth_out - depth_in, 0.01),
+    )
+}
+
 impl CollabState {
     /// Create freshly-enabled collaboration state for the given sibling `.tml`
     /// (relative to the `.stalx` dir). No baseline yet — seeded on first save.

@@ -99,6 +99,9 @@ pub struct TmlShot {
     pub longitude: f64,
     pub closure_to_id: i64,
     pub section: String,
+    /// Ariane 26+ per-shot UUID (`<UUID>`/`<UU>`); `None` for older files.
+    #[serde(default)]
+    pub uuid: Option<String>,
 }
 
 /// Shot type in Ariane.
@@ -148,6 +151,7 @@ struct RawShot {
     excluded: bool,
     latitude: f64,
     longitude: f64,
+    uuid: Option<String>,
 }
 
 // ============================================================================
@@ -179,6 +183,7 @@ fn normalize_key(name: &str) -> Option<&'static str> {
         "Latitude" | "LT" => Some("latitude"),
         "Longitude" | "LGT" => Some("longitude"),
         "Name" | "NM" => Some("name"),
+        "UUID" | "UU" => Some("uuid"),
         _ => None,
     }
 }
@@ -436,6 +441,7 @@ fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
         excluded: fields.get("excluded").map(String::as_str) == Some("true"),
         latitude: parse_f64(fields, "latitude"),
         longitude: parse_f64(fields, "longitude"),
+        uuid: fields.get("uuid").filter(|u| !u.is_empty()).cloned(),
     })
 }
 
@@ -892,6 +898,7 @@ fn linearize_section(
                 longitude: s.longitude,
                 closure_to_id: s.closure_to_id,
                 section: s.section.clone(),
+                uuid: s.uuid.clone(),
             })
             .collect();
 
@@ -2035,6 +2042,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             }],
             surveyor: None,
@@ -2082,6 +2090,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             }],
             surveyor: None,
@@ -2476,6 +2485,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "Test".to_string(),
         }];
 
@@ -2506,6 +2516,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "Test".to_string(),
         }];
 
@@ -2541,6 +2552,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "Test".to_string(),
         };
 
@@ -2593,6 +2605,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             },
             TmlShot {
@@ -2616,6 +2629,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             },
             TmlShot {
@@ -2639,6 +2653,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             },
         ];
@@ -2681,6 +2696,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "S".to_string(),
         };
 
@@ -2752,6 +2768,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "S".to_string(),
         };
 
@@ -2833,6 +2850,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "S".to_string(),
         };
 
