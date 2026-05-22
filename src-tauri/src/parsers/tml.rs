@@ -1402,6 +1402,51 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 /// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
 /// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
 /// Depths are stored as absolute values — no rebasing is applied.
+/// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
+/// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
+/// shot in a section), `start_depth` the parent station's cumulative depth.
+pub(crate) fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f64) -> f64 {
+    if shot.depth_in != -1.0 {
+        shot.depth_in
+    } else {
+        prev_depth.unwrap_or(start_depth)
+    }
+}
+
+/// Canonical mapping of a single Ariane TML shot to Stalagmight's `ShotData`.
+///
+/// This is the SINGLE source of truth for the TML→Stalagmight field mapping
+/// (azimuth `rem_euclid(360)`, depth in/out, inclination→pitch_in, LRUD 0→None,
+/// VIRTUAL→is_reference). Both DMP/TML import and the collaboration reconcile
+/// engine call it, so a clean round-trip never appears as a phantom edit.
+/// `depth_in` must already be resolved via [`resolve_tml_depth_in`].
+pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
+    // LRUD: pass through, using None for zero values
+    let lrud_opt = |v: f64| if v.abs() < f64::EPSILON { None } else { Some(v) };
+
+    // Ariane stores azimuths as arbitrary angles (can be negative or >360).
+    // Normalize to 0..360 range for Stalagmight's data model.
+    let az = shot.azimuth.rem_euclid(360.0);
+
+    ShotData {
+        azimuth_in: az,
+        azimuth_out: az, // No backsight in Ariane
+        length: shot.length,
+        depth_in,
+        depth_out: shot.depth,
+        pitch_in: Some(shot.inclination),
+        pitch_out: None, // No backsight inclination
+        left: lrud_opt(shot.left),
+        right: lrud_opt(shot.right),
+        up: lrud_opt(shot.up),
+        down: lrud_opt(shot.down),
+        comment: shot.comment.clone(),
+        is_reference: shot.shot_type == TmlShotType::Virtual,
+        marker_index: None,
+        temperature: None,
+    }
+}
+
 fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_excluded: bool) -> Vec<ShotData> {
     if shots.is_empty() {
         return Vec::new();
@@ -1423,42 +1468,9 @@ fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_exclu
     let mut result = Vec::with_capacity(real_shots.len());
 
     for (i, shot) in real_shots.iter().enumerate() {
-        // depth_in: use DPI if available, otherwise depth_out of previous shot,
-        // or start_depth (parent shot's cumulative depth) for the first shot.
-        let depth_in = if shot.depth_in != -1.0 {
-            shot.depth_in
-        } else if i > 0 {
-            real_shots[i - 1].depth
-        } else {
-            start_depth
-        };
-
-        let depth_out = shot.depth;
-
-        // LRUD: pass through, using None for zero values
-        let lrud_opt = |v: f64| if v.abs() < f64::EPSILON { None } else { Some(v) };
-
-        // Ariane stores azimuths as arbitrary angles (can be negative or >360).
-        // Normalize to 0..360 range for Stalagmight's data model.
-        let az = shot.azimuth.rem_euclid(360.0);
-
-        result.push(ShotData {
-            azimuth_in: az,
-            azimuth_out: az, // No backsight in Ariane
-            length: shot.length,
-            depth_in,
-            depth_out,
-            pitch_in: Some(shot.inclination),
-            pitch_out: None, // No backsight inclination
-            left: lrud_opt(shot.left),
-            right: lrud_opt(shot.right),
-            up: lrud_opt(shot.up),
-            down: lrud_opt(shot.down),
-            comment: shot.comment.clone(),
-            is_reference: shot.shot_type == TmlShotType::Virtual,
-            marker_index: None,
-            temperature: None,
-        });
+        let prev_depth = if i > 0 { Some(real_shots[i - 1].depth) } else { None };
+        let depth_in = resolve_tml_depth_in(shot, prev_depth, start_depth);
+        result.push(normalize_tml_shot(shot, depth_in));
     }
 
     result
