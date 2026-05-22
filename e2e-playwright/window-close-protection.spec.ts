@@ -41,23 +41,50 @@ test.describe('Window Close Protection', () => {
     await expect(cancelConfirmDialog).toBeHidden({ timeout: 3000 });
   }
 
+  /**
+   * Wait until the DMP import workflow settles into a state the driver loop can
+   * act on — an actionable wizard sub-step or the map placement overlay — or
+   * until it finishes (the wizard closes). Returning on completion is what keeps
+   * finishSingleSectionImport from hanging when the last section lands while the
+   * loop is between point-in-time checks: the previous implementation waited only
+   * for the wizard/placement overlay, which never reappear once import is done.
+   */
+  async function settleImportStep(page: Page): Promise<void> {
+    await expect
+      .poll(
+        async () => {
+          if (await page.getByTestId('placement-mode-indicator').isVisible()) return 'ready';
+          if (await page.getByTestId('wizard-suggestion').isVisible()) return 'ready';
+          if (await page.getByTestId('wizard-manual-placing').isVisible()) return 'ready';
+          // No placement overlay and no actionable wizard step: finished if the
+          // wizard has closed, otherwise still transitioning between steps.
+          if (!(await page.getByTestId('dmp-new-import-dialog').isVisible())) return 'done';
+          return 'pending';
+        },
+        { timeout: 15000 }
+      )
+      .not.toBe('pending');
+  }
+
   async function finishSingleSectionImport(page: Page): Promise<void> {
     const wizard = page.getByTestId('dmp-new-import-dialog');
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const placementIndicator = page.getByTestId('placement-mode-indicator');
-      if (await placementIndicator.isVisible()) {
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      // Wait for an actionable state (or completion) before inspecting the UI,
+      // so the point-in-time checks below act on a settled workflow.
+      await settleImportStep(page);
+
+      // In map placement mode: drop the section near the map centre.
+      if (await page.getByTestId('placement-mode-indicator').isVisible()) {
         const mapCanvas = page.getByTestId('map-canvas');
         const bounds = await mapCanvas.boundingBox();
         if (bounds) {
           await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
         }
-        await page.waitForTimeout(150);
+        continue;
       }
 
+      // No placement overlay and the wizard is gone => import finished.
       if (!(await wizard.isVisible())) {
-        if (await placementIndicator.isVisible()) {
-          continue;
-        }
         return;
       }
 
@@ -79,8 +106,6 @@ test.describe('Window Close Protection', () => {
           continue;
         }
       }
-
-      await ensureDmpNewImportDialogVisible(page);
     }
 
     await expect(wizard).toBeHidden({ timeout: 10000 });
