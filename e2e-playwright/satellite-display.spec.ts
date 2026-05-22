@@ -42,6 +42,18 @@ async function waitForNoMapLayer(page: Page, layerId: string): Promise<boolean> 
   }, { timeout: 5000 }).toBe(false).then(() => true).catch(() => false);
 }
 
+/**
+ * Set the mocked backend network status. Browser `context.setOffline()` alone is
+ * not enough: useNetworkStatus polls `get_network_status` whenever it goes
+ * offline, and the mock answers "online" by default, flipping state back. Tests
+ * that assert the offline indicator must drive the mocked backend too.
+ */
+async function setMockNetwork(page: Page, online: boolean): Promise<void> {
+  await page.evaluate((o) => {
+    (window as unknown as { __MOCK_SET_NETWORK_STATUS__?: (b: boolean) => void }).__MOCK_SET_NETWORK_STATUS__?.(o);
+  }, online);
+}
+
 test.describe('Satellite Display', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -360,6 +372,7 @@ test.describe('Satellite Display', () => {
     test('should show offline indicator when browser is offline', async ({ page, context }) => {
       // Use Playwright's network emulation for proper offline simulation
       await context.setOffline(true);
+      await setMockNetwork(page, false);
 
       // Trigger a network status check by simulating offline event
       await page.evaluate(() => {
@@ -375,6 +388,7 @@ test.describe('Satellite Display', () => {
     test('should hide offline indicator when back online', async ({ page, context }) => {
       // First go offline
       await context.setOffline(true);
+      await setMockNetwork(page, false);
       await page.evaluate(() => {
         window.dispatchEvent(new Event('offline'));
       });
@@ -385,6 +399,7 @@ test.describe('Satellite Display', () => {
 
       // Go back online
       await context.setOffline(false);
+      await setMockNetwork(page, true);
       await page.evaluate(() => {
         window.dispatchEvent(new Event('online'));
       });
@@ -430,6 +445,7 @@ test.describe('Satellite Display', () => {
 
       // Go offline using proper network emulation
       await context.setOffline(true);
+      await setMockNetwork(page, false);
       await page.evaluate(() => {
         window.dispatchEvent(new Event('offline'));
       });
@@ -445,6 +461,7 @@ test.describe('Satellite Display', () => {
     test('should toggle satellite while offline without crash', async ({ page, context }) => {
       // Go offline first using proper network emulation
       await context.setOffline(true);
+      await setMockNetwork(page, false);
       await page.evaluate(() => {
         window.dispatchEvent(new Event('offline'));
       });
