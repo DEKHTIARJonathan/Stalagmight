@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
@@ -9,6 +9,16 @@ import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler, createToggleHandler, createSelectHandler, parseIntRadix10 } from './types';
 import { getThemedDisplayDefaults, getThemedSectionColorDefaults } from '../../../types/config';
 import { useUIStore } from '../../../store/uiStore';
+import {
+  getUiScale,
+  setUiScale,
+  clampUiScale,
+  UI_SCALE_MIN,
+  UI_SCALE_MAX,
+  UI_SCALE_STEP,
+  UI_SCALE_DEFAULT,
+  UI_SCALE_EVENT,
+} from '../../../utils/uiScale';
 
 /**
  * Display settings category content.
@@ -26,6 +36,24 @@ export function DisplaySettings({
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const displayDefaults = getThemedDisplayDefaults(resolvedTheme);
   const sectionColorDefaults = getThemedSectionColorDefaults(resolvedTheme);
+
+  // UI scale (whole-interface zoom). Lives in localStorage / webview zoom rather
+  // than config; applies immediately like the Ctrl+= shortcut. Sync to external
+  // changes (keyboard shortcut) while the dialog is open.
+  const [uiScale, setUiScaleState] = useState<number>(() => getUiScale());
+  useEffect(() => {
+    const onScaleChange = (e: Event) => {
+      const detail = (e as CustomEvent<number>).detail;
+      if (typeof detail === 'number') setUiScaleState(detail);
+    };
+    window.addEventListener(UI_SCALE_EVENT, onScaleChange as EventListener);
+    return () => window.removeEventListener(UI_SCALE_EVENT, onScaleChange as EventListener);
+  }, []);
+  const handleUiScaleChange = (value: number) => {
+    setUiScaleState(clampUiScale(value));
+    setUiScale(value);
+  };
+
   // Validation state
   const hasErrorRef = useRef(false);
 
@@ -94,6 +122,37 @@ export function DisplaySettings({
       data-testid="settings-panel-display"
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.display.title')}</h2>
+
+      <SettingsSection title={t('settings.display.sections.interface')} data-testid="section-interface">
+        <SettingRow
+          label={t('settings.display.uiScale.label')}
+          helpText={t('settings.display.uiScale.help')}
+          isChanged={uiScale !== UI_SCALE_DEFAULT}
+          data-testid="setting-ui-scale"
+          onReset={() => handleUiScaleChange(UI_SCALE_DEFAULT)}
+          isDefault={uiScale === UI_SCALE_DEFAULT}
+        >
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={UI_SCALE_MIN}
+              max={UI_SCALE_MAX}
+              step={UI_SCALE_STEP}
+              value={uiScale}
+              onChange={(e) => handleUiScaleChange(Number(e.target.value))}
+              className="w-40 cursor-pointer"
+              aria-label={t('settings.display.uiScale.aria')}
+              data-testid="input-ui-scale"
+            />
+            <span
+              className="w-12 text-sm text-right tabular-nums text-text-secondary"
+              data-testid="ui-scale-value"
+            >
+              {Math.round(uiScale * 100)}%
+            </span>
+          </div>
+        </SettingRow>
+      </SettingsSection>
 
       <SettingsSection title={t('settings.display.sections.background')} data-testid="section-background">
         <SettingRow

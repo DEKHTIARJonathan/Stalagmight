@@ -316,11 +316,17 @@
     "display": {
       "title": "Display",
       "sections": {
+        "interface": "Interface",
         "background": "Background",
         "grid": "Grid",
         "font": "Font",
         "depthGradient": "Depth Gradient",
         "sectionColors": "Section Colors"
+      },
+      "uiScale": {
+        "label": "UI scale",
+        "help": "Scale the entire interface. Also adjustable with Ctrl + = and Ctrl + - (Ctrl + 0 resets).",
+        "aria": "Interface scale"
       },
       "background": {
         "label": "Background color",
@@ -740,7 +746,8 @@
         "uiNavigation": "UI Navigation",
         "selectAll": "Select all",
         "openSettings": "Open Settings",
-        "keyboardShortcuts": "Keyboard shortcuts"
+        "keyboardShortcuts": "Keyboard shortcuts",
+        "uiZoom": "Zoom interface in / out / reset"
       },
       "search": {
         "placeholder": "Search shortcuts...",

@@ -456,6 +456,16 @@ const MAC_SYMBOLS: Record<string, string> = {
 };
 
 /**
+ * Symbol keys shown as glyphs on all platforms (e.g. "Ctrl+Equal" -> "Ctrl+=").
+ * Applied after normalization so the canonical form stays "Equal"/"Minus"/"Plus".
+ */
+const DISPLAY_SYMBOLS: Record<string, string> = {
+  Equal: '=',
+  Plus: '+',
+  Minus: '-',
+};
+
+/**
  * Format a shortcut for display using platform-appropriate symbols.
  * - Mac: Uses symbols (e.g., "Cmd+Shift+S")
  * - Windows/Linux: Uses text (e.g., "Ctrl+Shift+S")
@@ -473,14 +483,17 @@ export function formatShortcut(shortcut: string, forceMac?: boolean): string {
   const useMacSymbols = forceMac ?? isMac();
 
   if (!useMacSymbols) {
-    // Windows/Linux: just return the normalized form
-    return normalized;
+    // Windows/Linux: normalized form, with symbol keys shown as glyphs (=, -, +)
+    return normalized
+      .split('+')
+      .map((part) => DISPLAY_SYMBOLS[part] ?? part)
+      .join('+');
   }
 
   // Mac: replace modifiers and special keys with symbols
   const parts = normalized.split('+');
   const formatted = parts.map((part) => {
-    return MAC_SYMBOLS[part] ?? part;
+    return MAC_SYMBOLS[part] ?? DISPLAY_SYMBOLS[part] ?? part;
   });
 
   // Mac style: symbols without separators for modifiers, then key
