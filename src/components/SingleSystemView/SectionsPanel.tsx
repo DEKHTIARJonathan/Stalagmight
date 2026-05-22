@@ -213,7 +213,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       </div>
 
       {/* Section list */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto" data-testid="sections-list">
         {sections.length === 0 ? (
           <div className="p-4 text-center text-text-secondary text-sm">
             {t('sections.empty.message')}
