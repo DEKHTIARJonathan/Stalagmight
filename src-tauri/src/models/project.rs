@@ -9,9 +9,10 @@ use ts_rs::TS;
 use crate::config::ClosureAdjustmentConfig;
 
 use super::{
-    gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, Coordinates, FrozenShotRef,
-    GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot,
-    ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum, FEATURE_ID_STRIDE,
+    gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, CollabState, Coordinates,
+    FrozenShotRef, GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData, SectionId,
+    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef,
+    ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
@@ -176,6 +177,9 @@ pub struct Project {
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
     pub next_closure_id: u64,
+    /// Collaboration mode state (sibling .tml linkage + baseline). None when off.
+    #[serde(default)]
+    pub collab: Option<CollabState>,
 }
 
 /// Project metadata for listing
@@ -267,6 +271,7 @@ impl Project {
             imported_file_hashes: Vec::new(),
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
+            collab: None,
         }
     }
 

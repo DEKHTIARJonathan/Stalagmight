@@ -15,7 +15,7 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 fn compress_json(json: &str) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -366,6 +366,16 @@ impl Database {
                 comment TEXT NOT NULL,
                 PRIMARY KEY (section_id, station_index),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Ensure collab_state table exists (schema v5: collaboration mode).
+        // Single-row JSON blob holding the project's CollabState.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS collab_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                state_json TEXT NOT NULL
             )",
             [],
         )?;
@@ -1041,6 +1051,12 @@ impl Database {
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
 
+            -- Collaboration mode state (single-row JSON blob; schema v5)
+            CREATE TABLE IF NOT EXISTS collab_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                state_json TEXT NOT NULL
+            );
+
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)
             CREATE TABLE IF NOT EXISTS undo_stack (
                 id INTEGER PRIMARY KEY,
@@ -1144,6 +1160,7 @@ impl Database {
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
+            DELETE FROM collab_state;
             DELETE FROM project;
             ",
         )?;
@@ -1263,6 +1280,16 @@ impl Database {
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
                 params![station_ref.section_id, station_ref.station_index, comment],
+            )?;
+        }
+
+        // Save collaboration state (single-row JSON blob)
+        if let Some(collab) = &project.collab {
+            let json = serde_json::to_string(collab)
+                .context("Failed to serialize collab state")?;
+            tx.execute(
+                "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)",
+                params![json],
             )?;
         }
 
@@ -1639,6 +1666,9 @@ impl Database {
         // Load station comments
         let station_comments = self.load_station_comments()?;
 
+        // Load collaboration state (None for pre-v5 projects or when off)
+        let collab = self.load_collab_state()?;
+
         Ok(Project {
             name,
             location,
@@ -1656,6 +1686,7 @@ impl Database {
             imported_file_hashes,
             imported_section_hashes,
             next_closure_id,
+            collab,
         })
     }
 
@@ -1987,6 +2018,61 @@ impl Database {
         }
 
         Ok(comments)
+    }
+
+    /// Load collaboration state from the single-row `collab_state` table.
+    /// Returns `None` for pre-v5 projects (table absent) or when no row is present.
+    fn load_collab_state(&self) -> Result<Option<crate::models::CollabState>> {
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='collab_state'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(None);
+        }
+
+        let json: Option<String> = self.conn.query_row(
+            "SELECT state_json FROM collab_state WHERE id = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        ).ok();
+
+        match json {
+            Some(j) => Ok(Some(
+                serde_json::from_str(&j).context("Failed to deserialize collab state")?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    /// Upsert the collaboration state without rewriting the whole project.
+    /// Used by the save-both hook to persist a refreshed baseline after exporting
+    /// the sibling `.tml`. `None` clears the row (collaboration disabled).
+    pub fn save_collab_state(&self, collab: Option<&crate::models::CollabState>) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS collab_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                state_json TEXT NOT NULL
+            )",
+            [],
+        )?;
+        match collab {
+            Some(state) => {
+                let json = serde_json::to_string(state)
+                    .context("Failed to serialize collab state")?;
+                self.conn.execute(
+                    "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json",
+                    params![json],
+                )?;
+            }
+            None => {
+                self.conn.execute("DELETE FROM collab_state", [])?;
+            }
+        }
+        Ok(())
     }
 
     /// Load imported file hashes from database
