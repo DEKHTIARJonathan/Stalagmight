@@ -11227,3 +11227,48 @@ fn test_triangle_topology_with_loop_closure() {
         (lc.station_b.station_index as usize) <= s.shots.len()
     ), "closure station_b should be valid");
 }
+
+// === Collaboration mode: save-both hook ===
+#[test]
+fn test_collab_save_writes_sibling_tml_and_baseline() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Collab Cave".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![
+            ShotData { azimuth_in: 10.0, azimuth_out: 10.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() },
+            ShotData { azimuth_in: 20.0, azimuth_out: 20.0, length: 6.0, depth_in: 1.0, depth_out: 2.0, ..Default::default() },
+        ],
+    });
+    project.collab = Some(crate::models::CollabState::new("collab-cave.tml".to_string()));
+    state.set_project_for_tests(project);
+
+    let stalx = temp_dir.path().join("collab-cave.stalx");
+    let r = state.execute(Command::SaveProject { path: Some(stalx.clone()) });
+    assert!(r.success, "save failed: {:?}", r.error);
+
+    // Sibling .tml written next to the .stalx.
+    let tml = temp_dir.path().join("collab-cave.tml");
+    assert!(tml.exists(), "sibling .tml should be written");
+
+    // Baseline + hash persisted in the .stalx.
+    let loaded = Database::open(&stalx).unwrap().load_project().unwrap();
+    let collab = loaded.collab.expect("collab persisted");
+    assert!(collab.enabled);
+    let sha1 = collab.last_export_tml_sha256.clone().expect("hash stored");
+    assert_eq!(collab.shot_baseline.len(), 2, "baseline has both shots");
+
+    // A second save with no edits is idempotent (UUIDs reused -> same hash).
+    let r2 = state.execute(Command::SaveProject { path: None });
+    assert!(r2.success);
+    let loaded2 = Database::open(&stalx).unwrap().load_project().unwrap();
+    let sha2 = loaded2.collab.unwrap().last_export_tml_sha256.unwrap();
+    assert_eq!(sha1, sha2, "no-edit re-save should produce identical .tml");
+}

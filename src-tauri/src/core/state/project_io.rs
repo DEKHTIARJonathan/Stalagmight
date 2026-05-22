@@ -464,6 +464,18 @@ impl AppState {
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
 
+        // Collaboration mode: also write the sibling .tml and refresh the
+        // baseline. Best-effort — never fail the .stalx save if this fails.
+        if project.collab.as_ref().is_some_and(|c| c.enabled) {
+            if let Err(e) = Self::write_collab_sibling(project, &save_path, &db) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "write collaborator .tml on save",
+                    "Saved .stalx but failed to write sibling .tml"
+                );
+            }
+        }
+
         // Update database handle
         drop(proj_guard);
         if let Ok(mut database) = self.database.lock() {
@@ -497,6 +509,45 @@ impl AppState {
             "Project saved successfully"
         );
         CommandResult::success().with_path(save_path_str)
+    }
+
+    /// Write the sibling `.tml` for collaboration mode and refresh the stored
+    /// baseline + content hash on the (already-open) project database.
+    fn write_collab_sibling(
+        project: &mut Project,
+        save_path: &std::path::Path,
+        db: &Database,
+    ) -> Result<()> {
+        let sibling = {
+            let collab = project
+                .collab
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("collaboration state missing"))?;
+            match save_path.parent() {
+                Some(dir) => dir.join(&collab.sibling_tml_relative),
+                None => PathBuf::from(&collab.sibling_tml_relative),
+            }
+        };
+
+        let (baseline, sha) = crate::export::tml::export_tml_with_baseline(project, &sibling)?;
+
+        // One (section_name -> id) entry per section, from the exported baseline.
+        let mut section_name_map = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for e in &baseline {
+            if seen.insert(e.section_id) {
+                section_name_map.push((e.section_name.clone(), e.section_id));
+            }
+        }
+
+        if let Some(c) = project.collab.as_mut() {
+            c.last_export_tml_sha256 = Some(sha);
+            c.shot_baseline = baseline;
+            c.section_name_map = section_name_map;
+        }
+
+        db.save_collab_state(project.collab.as_ref())?;
+        Ok(())
     }
 
     pub(super) fn close_project(&self) -> CommandResult {
