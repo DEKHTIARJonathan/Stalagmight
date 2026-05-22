@@ -132,6 +132,7 @@ impl AppState {
                 output_name.clone(),
                 *archive_originals,
             ),
+            Command::ApplyCollabChanges => self.apply_collab_changes(),
         };
 
         // Push to undo stack if successful and undoable.

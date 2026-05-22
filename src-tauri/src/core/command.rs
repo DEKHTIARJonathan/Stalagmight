@@ -162,6 +162,9 @@ pub enum Command {
         /// Whether to archive (rename) the original files
         archive_originals: bool,
     },
+    /// Apply a collaborator's reconciled `.tml` changes into the project
+    /// (single undoable operation via snapshot pair).
+    ApplyCollabChanges,
 }
 
 /// Result of command execution
@@ -380,6 +383,7 @@ impl Command {
                     output_name
                 )
             }
+            Command::ApplyCollabChanges => "Apply collaborator changes".to_string(),
         }
     }
 }

@@ -11272,3 +11272,59 @@ fn test_collab_save_writes_sibling_tml_and_baseline() {
     let sha2 = loaded2.collab.unwrap().last_export_tml_sha256.unwrap();
     assert_eq!(sha1, sha2, "no-edit re-save should produce identical .tml");
 }
+
+// === Collaboration mode: apply changes (preserve native data + undo) ===
+#[test]
+fn test_apply_collab_changes_preserves_native_data_and_is_undoable() {
+    let dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mk = |len1: f64, az_out1: f64| SectionData {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![
+            ShotData { azimuth_in: 10.0, azimuth_out: 10.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() },
+            ShotData { azimuth_in: 20.0, azimuth_out: az_out1, length: len1, depth_in: 1.0, depth_out: 2.0, ..Default::default() },
+            ShotData { azimuth_in: 30.0, azimuth_out: 30.0, length: 7.0, depth_in: 2.0, depth_out: 3.0, ..Default::default() },
+        ],
+    };
+
+    let mut project = Project::new("Collab".to_string(), None);
+    project.add_section(mk(6.0, 200.0)); // shot[1] has a distinct backsight (no TML equivalent)
+    project.collab = Some(crate::models::CollabState::new("c.tml".to_string()));
+    state.set_project_for_tests(project);
+
+    let stalx = dir.path().join("c.stalx");
+    assert!(state.execute(Command::SaveProject { path: Some(stalx) }).success);
+    let sibling = dir.path().join("c.tml");
+    assert!(sibling.exists());
+
+    // Simulate Ariane editing the .tml: re-export an edited project (shot[1].length = 99).
+    let mut edited = Project::new("Collab".to_string(), None);
+    edited.add_section(mk(99.0, 20.0));
+    crate::export::tml::export_tml(&edited, &sibling).unwrap();
+
+    let cs = state.detect_collab_changes().unwrap().expect("changes detected");
+    assert_eq!(cs.shots_edited.len(), 1, "exactly one edit");
+    assert!(state.execute(Command::ApplyCollabChanges).success);
+
+    {
+        let g = state.project.lock().unwrap();
+        let shot = &g.as_ref().unwrap().sections[0].shots[1];
+        assert_eq!(shot.length, 99.0, "length applied from .tml");
+        assert_eq!(shot.azimuth_out, 200.0, "distinct backsight preserved (no TML field)");
+    }
+
+    // Undo restores the original geometry; preserved field stays intact.
+    assert!(state.undo().success);
+    {
+        let g = state.project.lock().unwrap();
+        let shot = &g.as_ref().unwrap().sections[0].shots[1];
+        assert_eq!(shot.length, 6.0, "undo restored length");
+        assert_eq!(shot.azimuth_out, 200.0);
+    }
+}

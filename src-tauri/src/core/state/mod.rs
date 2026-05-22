@@ -1,4 +1,5 @@
 mod app_state;
+mod collab;
 mod commands;
 mod config;
 mod display_settings;

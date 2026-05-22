@@ -531,6 +531,8 @@ impl AppState {
                 | Command::CloseProject
                 | Command::CreateProject { .. }
                 | Command::MergeProjects { .. }
+                // Pushes its own snapshot-pair undo inside apply_collab_changes.
+                | Command::ApplyCollabChanges
         )
     }
 

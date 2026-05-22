@@ -192,6 +192,16 @@ fn normalize_key(name: &str) -> Option<&'static str> {
 // XML loading
 // ============================================================================
 
+/// Hex sha256 of a TML/TMLU file's inner XML content (independent of zip
+/// framing), for detecting external edits to a collaboration sibling file.
+pub fn tml_content_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let xml = load_xml(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(xml.as_bytes());
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 /// Load XML content from a `.tml` (ZIP) or `.tmlu` (plain XML) file.
 fn load_xml(path: &Path) -> Result<String> {
     let ext = path
