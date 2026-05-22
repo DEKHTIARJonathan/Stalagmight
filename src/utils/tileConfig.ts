@@ -46,8 +46,10 @@ const DEFAULT_PROVIDER_METADATA: Record<string, Omit<TileConfig, 'tiles'>> = {
  * @throws Error if provider is unknown and no metadata provided
  */
 export function getTileConfig(provider: string = 'esri', metadata?: TileProviderInfo): TileConfig {
-  // Always use stalagmight-tiles:// protocol for frontend tile URLs
-  // This routes through Rust backend for caching and offline support
+  // Route tile requests through Rust backend for caching and offline support.
+  // On desktop: uses Tauri's native protocol handler (register_asynchronous_uri_scheme_protocol)
+  // On Android: uses MapLibre's addProtocol with IPC-based fetching (see tileProtocol.ts)
+  // Both use the same stalagmight-tiles:// URL scheme.
   const tiles = [`stalagmight-tiles://${provider}/{z}/{y}/{x}`];
 
   // If metadata provided from backend, use it (except url_template)

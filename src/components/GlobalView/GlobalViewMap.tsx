@@ -1008,6 +1008,51 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
         onContextMenuRef.current?.(project.file_path, e.clientX, e.clientY);
       });
 
+      // Touch long-press → context menu
+      let markerLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+      let markerTouchStart: { x: number; y: number } | null = null;
+      el.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        const touch = e.touches[0]!;
+        markerTouchStart = { x: touch.clientX, y: touch.clientY };
+        markerLongPressTimer = setTimeout(() => {
+          markerLongPressTimer = null;
+          if (!markerTouchStart) return;
+          contextMenuOpenRef.current = true;
+          if (markerTooltipRef.current) {
+            markerTooltipRef.current.style.display = 'none';
+          }
+          onContextMenuRef.current?.(project.file_path, markerTouchStart.x, markerTouchStart.y);
+          markerTouchStart = null;
+        }, 500);
+      }, { passive: false });
+      el.addEventListener('touchmove', (e) => {
+        if (!markerTouchStart || !markerLongPressTimer) return;
+        const touch = e.touches[0];
+        if (!touch) return;
+        const dx = touch.clientX - markerTouchStart.x;
+        const dy = touch.clientY - markerTouchStart.y;
+        if (dx * dx + dy * dy > 100) {
+          clearTimeout(markerLongPressTimer);
+          markerLongPressTimer = null;
+          markerTouchStart = null;
+        }
+      }, { passive: false });
+      el.addEventListener('touchend', () => {
+        if (markerLongPressTimer) {
+          clearTimeout(markerLongPressTimer);
+          markerLongPressTimer = null;
+        }
+        markerTouchStart = null;
+      });
+      el.addEventListener('touchcancel', () => {
+        if (markerLongPressTimer) {
+          clearTimeout(markerLongPressTimer);
+          markerLongPressTimer = null;
+        }
+        markerTouchStart = null;
+      });
+
       // Set initial visibility based on current view mode (via ref, not dep)
       // In survey mode, hide markers for systems whose geometry has loaded successfully
       if (viewModeRef.current === 'survey' && loadingState === 'loaded') {

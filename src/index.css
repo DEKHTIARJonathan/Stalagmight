@@ -835,6 +835,105 @@
   --cc-success-30: rgba(166, 227, 161, 0.3);
 }
 
+[data-theme="kaleido_eink"] {
+  color-scheme: light;
+
+  /* --- UI Chrome --- pure white bg, pure black text, maximum e-ink contrast */
+  --cc-background: #ffffff;
+  --cc-panel: #ffffff;
+  --cc-border: #555555;
+  --cc-text-primary: #000000;
+  --cc-text-secondary: #333333;
+  --cc-accent: #0050a0;
+  --cc-accent-on: #ffffff;
+  --cc-warning: #cc7700;
+  --cc-error: #cc0000;
+  --cc-success: #007a2f;
+  --cc-hover: #e8e8e8;
+  --cc-focus-ring: #0050a0;
+  --cc-focus-glow: #99bbdd;
+  --cc-scrollbar-track: #ffffff;
+  --cc-scrollbar-thumb: #999999;
+  --cc-scrollbar-hover: #0050a0;
+  --cc-input-bg: #ffffff;
+  --cc-input-border: #555555;
+  --cc-outside-month: #999999;
+  --cc-selection-gradient: #ccdcec;
+  --cc-overlay: #666666;
+
+  /* --- MapLibre Controls --- */
+  --cc-map-ctrl-bg: #ffffff;
+  --cc-map-ctrl-border: #555555;
+  --cc-map-ctrl-hover: #e8e8e8;
+  --cc-map-ctrl-active: #cccccc;
+  --cc-map-ctrl-icon-filter: none;
+  --cc-map-ctrl-shadow: #aaaaaa;
+  --cc-map-scale-bg: transparent;
+  --cc-map-scale-border: #555555;
+  --cc-map-scale-text: #000000;
+
+  /* --- Map Visualization --- white background, black outlines */
+  --cc-map-background: #ffffff;
+  --cc-snap-color: #cc0000;
+  --cc-hover-highlight: #cc7700;
+  --cc-select-highlight: #0050a0;
+  --cc-stroke-color: #000000;
+  --cc-stroke-light: #888888;
+  --cc-text-halo: #ffffff;
+  --cc-text-halo-alt: #ffffff;
+  --cc-station-default: #000000;
+  --cc-gray-line: #888888;
+  --cc-gray-text: #555555;
+  --cc-grid-default: #cccccc;
+  --cc-zero-datum: #cc7700;
+  --cc-compass-color: #000000;
+  --cc-depth-shallow: #0050a0;
+  --cc-depth-deep: #cc0000;
+  --cc-depth-text: #000000;
+
+  /* --- Canvas Preview --- */
+  --cc-preview-bg: #ffffff;
+  --cc-preview-text: #000000;
+
+  /* --- Opacity Variants: accent (pre-composited against white) --- */
+  --cc-accent-5: #f2f6fa;
+  --cc-accent-10: #e6edf5;
+  --cc-accent-20: #ccdcec;
+  --cc-accent-30: #b3cae2;
+  --cc-accent-50: #80a8d0;
+  --cc-accent-70: #4d85bd;
+  --cc-accent-80: #3374b3;
+  --cc-accent-90: #1a62aa;
+
+  /* --- Opacity Variants: background (white on white) --- */
+  --cc-background-30: #ffffff;
+  --cc-background-50: #ffffff;
+  --cc-background-80: #ffffff;
+
+  /* --- Opacity Variants: panel (white on white) --- */
+  --cc-panel-20: #ffffff;
+  --cc-panel-50: #ffffff;
+  --cc-panel-90: #ffffff;
+
+  /* --- Opacity Variants: error (pre-composited against white) --- */
+  --cc-error-10: #fce6e6;
+  --cc-error-20: #f5cccc;
+  --cc-error-30: #ebadad;
+  --cc-error-80: #d63333;
+  --cc-error-90: #d11a1a;
+
+  /* --- Opacity Variants: warning (pre-composited against white) --- */
+  --cc-warning-5: #fef8f0;
+  --cc-warning-10: #fdf2e0;
+  --cc-warning-20: #fae4c2;
+  --cc-warning-30: #f8d7a3;
+
+  /* --- Opacity Variants: success (pre-composited against white) --- */
+  --cc-success-5: #f0faf3;
+  --cc-success-10: #e0f5e7;
+  --cc-success-30: #b3e2c3;
+}
+
 /* Base styles */
 html, body, #root {
   height: 100%;
@@ -1174,6 +1273,18 @@ tr[data-selected="true"]:hover {
 /* GlobalView marker spinner animation */
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Disable animations/transitions on e-ink displays to prevent ghosting */
+[data-theme="kaleido_eink"] * {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* Widen resize handles on touch devices */
+@media (pointer: coarse) {
+  .resize-handle-h { padding-left: 12px !important; padding-right: 12px !important; }
+  .resize-handle-v { padding-top: 12px !important; padding-bottom: 12px !important; }
 }
 
 /* Splash screen loading dots */

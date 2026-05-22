@@ -203,6 +203,13 @@ export default class SurveyLayer {
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundMapLeave: (() => void) | null = null;
 
+  // Touch long-press state for context menu
+  private touchLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+  private touchStartPos: { x: number; y: number } | null = null;
+  private boundTouchStart: ((e: TouchEvent) => void) | null = null;
+  private boundTouchMove: ((e: TouchEvent) => void) | null = null;
+  private boundTouchEnd: ((e: TouchEvent) => void) | null = null;
+
   // Hover update batching - only process latest mouse position per frame
   private pendingHoverEvent: maplibregl.MapMouseEvent | null = null;
   private hoverRafId: number | null = null;
@@ -1079,6 +1086,58 @@ export default class SurveyLayer {
 
     // UNIFIED context menu handler - queries both hitbox layers with station priority
     this.map.on('contextmenu', this.handleContextMenu);
+
+    // Touch long-press → context menu (raw touch listeners on canvas)
+    const canvas = this.map.getCanvas();
+    this.boundTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0]!;
+      this.touchStartPos = { x: touch.clientX, y: touch.clientY };
+      this.touchLongPressTimer = setTimeout(() => {
+        this.touchLongPressTimer = null;
+        if (!this.touchStartPos) return;
+        // Hit-test at touch position
+        const rect = canvas.getBoundingClientRect();
+        const point: [number, number] = [
+          this.touchStartPos.x - rect.left,
+          this.touchStartPos.y - rect.top,
+        ];
+        const fakeEvent = {
+          point: { x: point[0], y: point[1] },
+          lngLat: this.map.unproject(point),
+          originalEvent: new MouseEvent('contextmenu', {
+            clientX: this.touchStartPos.x,
+            clientY: this.touchStartPos.y,
+          }),
+        } as maplibregl.MapMouseEvent;
+        this.handleContextMenu(fakeEvent);
+        // Prevent subsequent click
+        this.touchStartPos = null;
+      }, 500);
+    };
+    this.boundTouchMove = (e: TouchEvent) => {
+      if (!this.touchStartPos || !this.touchLongPressTimer) return;
+      const touch = e.touches[0];
+      if (!touch) return;
+      const dx = touch.clientX - this.touchStartPos.x;
+      const dy = touch.clientY - this.touchStartPos.y;
+      if (dx * dx + dy * dy > 100) { // 10px threshold
+        clearTimeout(this.touchLongPressTimer);
+        this.touchLongPressTimer = null;
+        this.touchStartPos = null;
+      }
+    };
+    this.boundTouchEnd = () => {
+      if (this.touchLongPressTimer) {
+        clearTimeout(this.touchLongPressTimer);
+        this.touchLongPressTimer = null;
+      }
+      this.touchStartPos = null;
+    };
+    canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
+    canvas.addEventListener('touchend', this.boundTouchEnd);
+    canvas.addEventListener('touchcancel', this.boundTouchEnd);
 
     // Track user-initiated map navigation (zoom & pan) for telemetry
     this.map.on('zoomend', this.handleZoomEndTelemetry);
@@ -3452,11 +3511,20 @@ export default class SurveyLayer {
     }
     this.pendingHoverEvent = null;
 
+    // Clean up touch long-press timer
+    if (this.touchLongPressTimer) {
+      clearTimeout(this.touchLongPressTimer);
+      this.touchLongPressTimer = null;
+    }
+
     // Guard against map being destroyed (race condition on unmount)
     if (!hasLiveStyle(this.map)) {
       // Clear bound handler references even if map is destroyed
       this.boundMouseMove = null;
       this.boundMapLeave = null;
+      this.boundTouchStart = null;
+      this.boundTouchMove = null;
+      this.boundTouchEnd = null;
       return;
     }
 
@@ -3470,6 +3538,18 @@ export default class SurveyLayer {
       }
       if (this.boundMapLeave) {
         this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
+      }
+      // Remove touch long-press listeners
+      const canvas = this.map.getCanvas();
+      if (this.boundTouchStart) {
+        canvas.removeEventListener('touchstart', this.boundTouchStart);
+      }
+      if (this.boundTouchMove) {
+        canvas.removeEventListener('touchmove', this.boundTouchMove);
+      }
+      if (this.boundTouchEnd) {
+        canvas.removeEventListener('touchend', this.boundTouchEnd);
+        canvas.removeEventListener('touchcancel', this.boundTouchEnd);
       }
       this.map.off('zoomend', this.handleZoomEndTelemetry);
       this.map.off('moveend', this.handleMoveEndTelemetry);

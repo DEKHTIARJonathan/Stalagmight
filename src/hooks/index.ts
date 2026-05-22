@@ -8,3 +8,4 @@ export { useFocusTrap } from './useFocusTrap';
 export { useTheme } from './useTheme';
 export { useAutoSave } from './useAutoSave';
 export type { AutoSaveStatus, AutoSaveState } from './useAutoSave';
+export { useLongPress } from './useLongPress';

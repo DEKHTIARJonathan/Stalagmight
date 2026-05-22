@@ -112,6 +112,7 @@ export * from './ipc/LoggingConfig';
 export * from './ipc/ShortcutsConfig';
 export * from './ipc/PanelsConfig';
 export * from './ipc/CacheConfig';
+export * from './ipc/ProviderCacheConfig';
 export * from './ipc/GlobalViewConfig';
 export * from './ipc/AppearanceConfig';
 export * from './ipc/ImportConfig';

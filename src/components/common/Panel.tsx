@@ -1,4 +1,4 @@
-import { type ReactNode, useState, useRef, useCallback, useEffect } from 'react';
+import { type ReactNode, useState, useRef, useCallback } from 'react';
 import { ChevronDownIcon, ChevronRightIcon } from './icons';
 
 interface PanelProps {
@@ -80,13 +80,15 @@ export function ResizablePanel({
   const panelRef = useRef<HTMLDivElement>(null);
   const sizeRef = useRef(size);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
+    // Capture pointer so all subsequent events arrive on this element
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
     setIsResizing(true);
   }, []);
 
-  const handleMouseMove = useCallback(
-    (e: MouseEvent) => {
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
       if (!isResizing || !panelRef.current) return;
 
       const rect = panelRef.current.getBoundingClientRect();
@@ -94,14 +96,11 @@ export function ResizablePanel({
 
       if (direction === 'horizontal') {
         if (handlePosition === 'end') {
-          // Handle on right edge: size = mouse.x - panel.left
           newSize = e.clientX - rect.left;
         } else {
-          // Handle on left edge: size = panel.right - mouse.x
           newSize = rect.right - e.clientX;
         }
       } else {
-        // Vertical: handle at top, size grows upward
         newSize = rect.bottom - e.clientY;
       }
 
@@ -113,37 +112,28 @@ export function ResizablePanel({
     [isResizing, direction, handlePosition, minSize, maxSize, onResize]
   );
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback(() => {
     if (isResizing) {
       onResizeEnd?.(sizeRef.current);
     }
     setIsResizing(false);
   }, [isResizing, onResizeEnd]);
 
-  useEffect(() => {
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-      };
-    }
-    return undefined;
-  }, [isResizing, handleMouseMove, handleMouseUp]);
-
   const style = direction === 'horizontal' ? { width: size } : { height: size };
 
   // Handle styling based on direction and position
   // Using w-1 but with padding to make it easier to grab (total 8px hit area)
   let handleStyle: string;
+  let handleClass: string;
   if (direction === 'horizontal') {
+    handleClass = 'resize-handle-h';
     if (handlePosition === 'end') {
       handleStyle = 'right-0 top-0 w-1 h-full cursor-ew-resize -mr-1 px-1';
     } else {
       handleStyle = 'left-0 top-0 w-1 h-full cursor-ew-resize -ml-1 px-1';
     }
   } else {
+    handleClass = 'resize-handle-v';
     handleStyle = 'top-0 left-0 h-1 w-full cursor-ns-resize -mt-1 py-1';
   }
 
@@ -155,8 +145,12 @@ export function ResizablePanel({
     >
       {children}
       <div
-        className={`absolute bg-transparent hover:bg-accent-50 transition-colors ${handleStyle} ${isResizing ? 'bg-accent-50' : ''}`}
-        onMouseDown={handleMouseDown}
+        className={`absolute bg-transparent hover:bg-accent-50 transition-colors ${handleClass} ${handleStyle} ${isResizing ? 'bg-accent-50' : ''}`}
+        style={{ touchAction: 'none' }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
       >
         <div className={direction === 'horizontal' ? 'w-full h-full' : 'w-full h-full'} />
       </div>

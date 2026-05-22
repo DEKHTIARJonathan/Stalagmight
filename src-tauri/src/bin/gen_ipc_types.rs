@@ -13,7 +13,7 @@ use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
 use stalagmight_lib::persistence::{BackupInfo, RepairResult, SalvagedData};
 use stalagmight_lib::config::{
-    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
+    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config, ProviderCacheConfig,
     DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
@@ -202,6 +202,7 @@ fn main() {
     export::<ShortcutsConfig>(&out_dir);
     export::<PanelsConfig>(&out_dir);
     export::<CacheConfig>(&out_dir);
+    export::<ProviderCacheConfig>(&out_dir);
     export::<GlobalViewConfig>(&out_dir);
     export::<AppearanceConfig>(&out_dir);
     export::<ImportConfig>(&out_dir);
@@ -327,6 +328,7 @@ fn main() {
         "ShortcutsConfig",
         "PanelsConfig",
         "CacheConfig",
+        "ProviderCacheConfig",
         "GlobalViewConfig",
         "AppearanceConfig",
         "ImportConfig",

@@ -12,6 +12,7 @@ const COLOR_THEME_NAME_KEYS: Record<ColorTheme, string> = {
   catppuccin_latte: 'settings.appearance.theme.catppuccinLatteCard.title',
   nord: 'settings.appearance.theme.nordCard.title',
   catppuccin_mocha: 'settings.appearance.theme.catppuccinMochaCard.title',
+  kaleido_eink: 'settings.appearance.theme.kaleidoEinkCard.title',
 };
 
 interface ThemePreviewCardProps {

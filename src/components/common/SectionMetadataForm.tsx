@@ -89,7 +89,7 @@ export function SectionMetadataForm({
             </span>
           </label>
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={0.1}
             step={0.1}
             value={quality}

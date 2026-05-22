@@ -113,6 +113,7 @@ export function HelpTooltip({
         data-testid={iconTestId}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
+        onClick={() => setIsHovered((v) => !v)}
       >
         {icon}
       </span>

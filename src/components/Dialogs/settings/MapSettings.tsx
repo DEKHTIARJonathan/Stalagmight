@@ -261,7 +261,7 @@ export function MapSettings({
           isDefault={config.map.satellite_gps_origin.latitude === defaultConfig.map.satellite_gps_origin.latitude}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.01}
             min={-90}
             max={90}
@@ -282,7 +282,7 @@ export function MapSettings({
           isDefault={config.map.satellite_gps_origin.longitude === defaultConfig.map.satellite_gps_origin.longitude}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.01}
             min={-180}
             max={180}
@@ -305,7 +305,7 @@ export function MapSettings({
           isDefault={config.map.zoom_default === defaultConfig.map.zoom_default}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={config.map.zoom_min}
             max={config.map.zoom_max}
             value={config.map.zoom_default}
@@ -325,7 +325,7 @@ export function MapSettings({
           isDefault={config.map.zoom_min === defaultConfig.map.zoom_min}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={0}
             max={config.map.zoom_max - 1}
             value={config.map.zoom_min}
@@ -345,7 +345,7 @@ export function MapSettings({
           isDefault={config.map.zoom_max === defaultConfig.map.zoom_max}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={config.map.zoom_min + 1}
             max={24}
             value={config.map.zoom_max}
@@ -365,7 +365,7 @@ export function MapSettings({
           isDefault={config.map.zoom_step === defaultConfig.map.zoom_step}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             min={0.1}
             max={5.0}
@@ -388,7 +388,7 @@ export function MapSettings({
           isDefault={config.map.controls.pan_speed === defaultConfig.map.controls.pan_speed}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             min={0.1}
             max={5.0}
@@ -409,7 +409,7 @@ export function MapSettings({
           isDefault={config.map.controls.zoom_speed === defaultConfig.map.controls.zoom_speed}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             min={0.1}
             max={5.0}
@@ -448,7 +448,7 @@ export function MapSettings({
           isDefault={config.map.station.radius === defaultConfig.map.station.radius}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={1}
             max={50}
@@ -469,7 +469,7 @@ export function MapSettings({
           isDefault={config.map.station.hit_area === defaultConfig.map.station.hit_area}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={config.map.station.radius}
             max={50}
@@ -490,7 +490,7 @@ export function MapSettings({
           isDefault={config.map.station.hover_radius === defaultConfig.map.station.hover_radius}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={1}
             max={50}
@@ -511,7 +511,7 @@ export function MapSettings({
           isDefault={config.map.station.selection_radius === defaultConfig.map.station.selection_radius}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={1}
             max={50}
@@ -534,7 +534,7 @@ export function MapSettings({
           isDefault={config.map.shot.width === defaultConfig.map.shot.width}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={0.5}
             max={20}
@@ -555,7 +555,7 @@ export function MapSettings({
           isDefault={config.map.shot.hit_area === defaultConfig.map.shot.hit_area}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={config.map.shot.width}
             max={20}
@@ -576,7 +576,7 @@ export function MapSettings({
           isDefault={config.map.shot.hover_width === defaultConfig.map.shot.hover_width}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={0.5}
             max={20}
@@ -597,7 +597,7 @@ export function MapSettings({
           isDefault={config.map.shot.selection_width === defaultConfig.map.shot.selection_width}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.5}
             min={0.5}
             max={20}
@@ -620,7 +620,7 @@ export function MapSettings({
           isDefault={config.map.snap.threshold === defaultConfig.map.snap.threshold}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={1}
             min={1}
             max={50}
@@ -707,7 +707,7 @@ export function MapSettings({
           isDefault={config.map.animation.duration === defaultConfig.map.animation.duration}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={50}
             min={0}
             max={2000}
@@ -728,7 +728,7 @@ export function MapSettings({
           isDefault={config.map.animation.point_zoom === defaultConfig.map.animation.point_zoom}
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={config.map.zoom_min}
             max={config.map.zoom_max}
             value={config.map.animation.point_zoom}

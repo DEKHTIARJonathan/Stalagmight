@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { save } from '@tauri-apps/plugin-dialog';
+import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc } from '../../utils/ipc';
@@ -132,7 +132,7 @@ export default function CorruptionRecoveryDialog() {
       });
 
       // Prompt user for save location
-      const destPath = await save({
+      const destPath = await saveDialog({
         title: 'Save Salvaged Data',
         defaultPath: 'salvaged-data.json',
         filters: [{ name: 'JSON', extensions: ['json'] }],

@@ -16,6 +16,8 @@ interface PlacementOverlayProps {
   pixelsPerMeter: number;
   /** Additional sections to render alongside primary (for segment placement) */
   additionalSections?: AdditionalPlacementSection[] | undefined;
+  /** Callback to cancel placement (shown as button on touch devices) */
+  onCancel?: () => void;
 }
 
 /**
@@ -57,6 +59,7 @@ export default function PlacementOverlay({
   isSnapped,
   pixelsPerMeter,
   additionalSections,
+  onCancel,
 }: PlacementOverlayProps) {
   // Calculate station positions relative to first station
   const stationPositions = useMemo(
@@ -104,6 +107,7 @@ export default function PlacementOverlay({
   const fillColor = isSnapped ? snapColor : sectionData.color;
 
   return (
+    <>
     <svg
       className="absolute inset-0 pointer-events-none"
       style={{ width: '100%', height: '100%', overflow: 'visible' }}
@@ -222,5 +226,15 @@ export default function PlacementOverlay({
         />
       </g>
     </svg>
+    {onCancel && navigator.maxTouchPoints > 0 && (
+      <button
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-auto bg-error text-accent-on px-4 py-2 rounded shadow-lg text-sm font-medium"
+        onClick={onCancel}
+        data-testid="placement-cancel-touch"
+      >
+        Cancel
+      </button>
+    )}
+    </>
   );
 }

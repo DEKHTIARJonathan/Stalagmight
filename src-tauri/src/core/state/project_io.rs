@@ -46,10 +46,16 @@ impl AppState {
             d.clone()
         } else {
             // Default to user's documents/stalagmight directory, with fallbacks.
-            let documents_dir = directories::UserDirs::new()
-                .and_then(|ud| ud.document_dir().map(std::path::Path::to_path_buf))
+            // 1. app_dirs (Tauri path resolver — works on Android)
+            // 2. directories crate (desktop pre-setup fallback)
+            // 3. $HOME/Documents
+            let documents_dir = crate::app_dirs::document_dir()
+                .map(std::path::Path::to_path_buf)
                 .or_else(|| {
-                    // Fallback to $HOME/Documents
+                    directories::UserDirs::new()
+                        .and_then(|ud| ud.document_dir().map(std::path::Path::to_path_buf))
+                })
+                .or_else(|| {
                     std::env::var("HOME")
                         .ok()
                         .map(|h| PathBuf::from(h).join("Documents"))
@@ -82,6 +88,11 @@ impl AppState {
     /// - `Cave_1.stalx` -> `Cave_2.stalx` (if both previous files exist)
     fn next_available_project_path(path: &PathBuf) -> PathBuf {
         if !path.exists() {
+            return path.clone();
+        }
+        // Treat 0-byte files as non-existent: Android's SAF (ACTION_CREATE_DOCUMENT)
+        // creates an empty placeholder at the chosen path before returning.
+        if path.metadata().is_ok_and(|m| m.len() == 0) {
             return path.clone();
         }
 

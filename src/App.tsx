@@ -366,7 +366,7 @@ function App() {
   }, []);
 
   return (
-    <div className="h-full bg-background text-text-primary flex flex-col relative">
+    <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       {/* Splash screen overlay */}
       {splashMounted && (
         <SplashScreen
