@@ -216,7 +216,7 @@ export default function SingleSystemView() {
                   <ChevronLeftIcon size={10} />
                 </span>
               </button>
-              <div className={placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}>
+              <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
                 <ErrorBoundary panelName="Sections">
                   <SectionsPanel sections={project.sections} />
                 </ErrorBoundary>
@@ -273,7 +273,7 @@ export default function SingleSystemView() {
                     <ChevronDownIcon size={10} />
                   </span>
                 </button>
-                <div className={placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}>
+                <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
                   <ErrorBoundary panelName="Data Table">
                     <DataTable sections={project.sections} />
                   </ErrorBoundary>
