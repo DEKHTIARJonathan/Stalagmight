@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
@@ -291,6 +291,14 @@ pub struct PanelsConfig {
     pub data_table_height: u32,
 }
 
+/// Per-provider cache override
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ProviderCacheConfig {
+    /// Whether offline caching is enabled for this provider
+    #[serde(default = "default_true")]
+    pub offline_caching: bool,
+}
+
 /// Tile cache configuration for offline satellite imagery
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CacheConfig {
@@ -303,6 +311,23 @@ pub struct CacheConfig {
     /// Time-to-live for cached tiles in days
     #[serde(default = "default_tile_ttl_days")]
     pub tile_ttl_days: u32,
+    /// Per-provider cache overrides (providers not listed default to enabled)
+    #[serde(default)]
+    pub providers: HashMap<String, ProviderCacheConfig>,
+}
+
+impl CacheConfig {
+    /// Check whether caching is enabled for a specific provider.
+    /// Returns false if the global toggle is off, or if the provider
+    /// has explicitly disabled offline caching.
+    pub fn is_provider_cache_enabled(&self, provider: &str) -> bool {
+        if !self.tile_cache_enabled {
+            return false;
+        }
+        self.providers
+            .get(provider)
+            .map_or(true, |p| p.offline_caching)
+    }
 }
 
 fn default_tile_cache_enabled() -> bool {
@@ -391,6 +416,7 @@ pub enum ColorTheme {
     CatppuccinLatte,
     Nord,
     CatppuccinMocha,
+    KaleidoEink,
 }
 
 /// Appearance configuration
@@ -1408,6 +1434,10 @@ impl Config {
 
     /// Get the config file path
     pub fn config_path() -> Result<PathBuf> {
+        if let Some(dir) = crate::app_dirs::config_dir() {
+            return Ok(dir.join("config.toml"));
+        }
+        // Fallback for pre-setup calls on desktop
         let dirs =
             directories::ProjectDirs::from("com", "stalagmight", "Stalagmight").context("No home directory")?;
         Ok(dirs.config_dir().join("config.toml"))

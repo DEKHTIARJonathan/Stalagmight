@@ -170,7 +170,7 @@ export default function SectionAdjustDialog() {
               dx (meters)
             </label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={dx}
               onChange={(e) => handleDxChange(parseFloat(e.target.value) || 0)}
               className="w-full"
@@ -185,7 +185,7 @@ export default function SectionAdjustDialog() {
               dy (meters)
             </label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={dy}
               onChange={(e) => handleDyChange(parseFloat(e.target.value) || 0)}
               className="w-full"

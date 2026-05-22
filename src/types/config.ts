@@ -201,6 +201,7 @@ export const defaultConfig: Config = {
     tile_cache_enabled: true,
     tile_cache_max_mb: 500,
     tile_ttl_days: 30,
+    providers: { esri: { offline_caching: false } },
   },
   debug: {
     map: {
@@ -282,7 +283,7 @@ export const lightSectionColorDefaults: SectionColorsConfig = {
 };
 
 /** Themes that use light-mode display defaults (light backgrounds). */
-const LIGHT_THEMES = new Set(['light', 'solarized_light', 'catppuccin_latte']);
+const LIGHT_THEMES = new Set(['light', 'solarized_light', 'catppuccin_latte', 'kaleido_eink']);
 
 /**
  * Get theme-appropriate display defaults.

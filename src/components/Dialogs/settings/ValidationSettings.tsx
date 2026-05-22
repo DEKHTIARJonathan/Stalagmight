@@ -85,7 +85,7 @@ export function ValidationSettings({
           data-testid="setting-shot-length-min"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             min={0}
             value={config.validation.warn_shot_length_min}
@@ -105,7 +105,7 @@ export function ValidationSettings({
           data-testid="setting-shot-length-max"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             min={config.validation.warn_shot_length_min + 0.1}
             value={config.validation.warn_shot_length_max}
@@ -127,7 +127,7 @@ export function ValidationSettings({
           data-testid="setting-depth-change-max"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={0.1}
             min={0.1}
             value={config.validation.warn_depth_change_per_shot_max}
@@ -149,7 +149,7 @@ export function ValidationSettings({
           data-testid="setting-azimuth-diff"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={1}
             min={0}
             max={180}
@@ -170,7 +170,7 @@ export function ValidationSettings({
           data-testid="setting-pitch-diff"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             step={1}
             min={0}
             max={90}

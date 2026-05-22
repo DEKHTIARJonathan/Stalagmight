@@ -51,12 +51,16 @@ const cssSolarizedLightTokens = extractTokens(extractBlock(cssSource, '[data-the
 const cssCatppuccinLatteTokens = extractTokens(extractBlock(cssSource, '[data-theme="catppuccin_latte"]'));
 const cssNordTokens = extractTokens(extractBlock(cssSource, '[data-theme="nord"]'));
 const cssCatppuccinMochaTokens = extractTokens(extractBlock(cssSource, '[data-theme="catppuccin_mocha"]'));
+const cssKaleidoEinkTokens = extractTokens(extractBlock(cssSource, '[data-theme="kaleido_eink"]'));
 
 /** Dark themes must include all dark token keys (including map visualization). */
 const FULL_DARK_THEMES = ['cave', 'dracula', 'one_dark', 'nord', 'catppuccin_mocha'] as const;
 
 /** Light themes only override UI chrome + controls (no map viz tokens). */
 const LIGHT_THEMES = ['light', 'solarized_light', 'catppuccin_latte'] as const;
+
+/** Light themes with full token sets (including map visualization overrides). */
+const FULL_LIGHT_THEMES = ['kaleido_eink'] as const;
 
 const cssTokensByTheme: Record<string, Record<string, string>> = {
   dark: cssDarkTokens,
@@ -68,6 +72,7 @@ const cssTokensByTheme: Record<string, Record<string, string>> = {
   catppuccin_latte: cssCatppuccinLatteTokens,
   nord: cssNordTokens,
   catppuccin_mocha: cssCatppuccinMochaTokens,
+  kaleido_eink: cssKaleidoEinkTokens,
 };
 
 describe('theme tokens', () => {
@@ -118,6 +123,18 @@ describe('theme tokens', () => {
   });
 
   it.each(LIGHT_THEMES)('%s tokens match CSS block', (theme) => {
+    const cssTokens = cssTokensByTheme[theme]!;
+    expect(sortedKeys(cssTokens)).toEqual(sortedKeys(themeTokens[theme]));
+    for (const [key, value] of Object.entries(themeTokens[theme])) {
+      expect(cssTokens[key]).toBe(value);
+    }
+  });
+
+  it.each(FULL_LIGHT_THEMES)('%s tokens include all dark token keys (full light theme)', (theme) => {
+    expect(sortedKeys(themeTokens[theme])).toEqual(sortedKeys(themeTokens.dark));
+  });
+
+  it.each(FULL_LIGHT_THEMES)('%s tokens match CSS block', (theme) => {
     const cssTokens = cssTokensByTheme[theme]!;
     expect(sortedKeys(cssTokens)).toEqual(sortedKeys(themeTokens[theme]));
     for (const [key, value] of Object.entries(themeTokens[theme])) {

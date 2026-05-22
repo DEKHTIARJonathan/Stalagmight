@@ -8,6 +8,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
 import { applyAzimuthEdit, getAzimuthAverage } from '../../utils/shotTable';
 import { HelpTooltip } from './HelpTooltip';
+import { useLongPress } from '../../hooks';
 
 /**
  * Editable shot type - extends Shot with editing state flags.
@@ -304,6 +305,29 @@ export function ShotTableEditor({
   );
 
   /**
+   * Long-press handler for touch context menu on tbody.
+   */
+  const handleLongPress = useCallback(
+    (pos: { x: number; y: number }, target: HTMLElement) => {
+      if (readOnly) return;
+      const row = target.closest('tr');
+      const rowIndexStr = row?.dataset.rowIndex;
+      if (rowIndexStr === undefined) return;
+      const rowIndex = parseInt(rowIndexStr, 10);
+      if (Number.isNaN(rowIndex)) return;
+      setContextMenu({
+        visible: true,
+        x: pos.x,
+        y: pos.y,
+        rowIndex,
+      });
+    },
+    [readOnly],
+  );
+
+  const longPressHandlers = useLongPress(handleLongPress, { enabled: !readOnly });
+
+  /**
    * Close context menu.
    */
   const closeContextMenu = useCallback(() => {
@@ -429,7 +453,7 @@ export function ShotTableEditor({
               <th style={{ width: '30px' }}></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody {...longPressHandlers}>
             {visibleShots.map((shot, visibleIdx) => {
               const actualIndex = getActualIndex(visibleIdx);
               const warnings = getShotWarnings(shot, validationConfig, t);
@@ -451,6 +475,7 @@ export function ShotTableEditor({
                   onClick={() => handleRowClick(visibleIdx)}
                   onContextMenu={(e) => handleContextMenu(e, visibleIdx)}
                   onKeyDown={(e) => handleKeyDown(e, visibleIdx)}
+                  data-row-index={visibleIdx}
                   data-testid={`shot-row-${visibleIdx}`}
                 >
                   {/* Row number */}
@@ -468,7 +493,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -509,7 +534,7 @@ export function ShotTableEditor({
                         (!Number.isFinite(parsed) || (parsed !== null && (parsed < 0 || parsed >= 360)));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) => updateDraft(draftKey, e.target.value)}
@@ -548,7 +573,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -583,7 +608,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -618,7 +643,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -654,7 +679,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -690,7 +715,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>
@@ -726,7 +751,7 @@ export function ShotTableEditor({
                       const isInvalid = draftValue !== undefined && draftValue.trim() !== '' && !Number.isFinite(parseFloat(draftValue));
                       return (
                     <input
-                      type="number"
+                      type="number" inputMode="decimal"
                       value={displayValue}
                       onFocus={() => startDraft(draftKey, rawValue)}
                       onChange={(e) =>

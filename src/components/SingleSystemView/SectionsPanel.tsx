@@ -8,6 +8,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
 import { CloseIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
+import { useLongPress } from '../../hooks';
 
 interface SectionsPanelProps {
   sections: Section[];
@@ -181,15 +182,19 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     });
   }, [openDialog]);
 
-  const handleSectionContextMenu = useCallback((e: React.MouseEvent, sectionId: number) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const openSectionContextMenu = useCallback((sectionId: number, x: number, y: number) => {
     setSource('sections-panel');
     openDialog('context-menu', {
       target: { type: 'section', sectionId },
-      position: { x: e.clientX, y: e.clientY },
+      position: { x, y },
     });
   }, [openDialog]);
+
+  const handleSectionContextMenu = useCallback((e: React.MouseEvent, sectionId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openSectionContextMenu(sectionId, e.clientX, e.clientY);
+  }, [openSectionContextMenu]);
 
   return (
     <div className="h-full flex flex-col bg-panel" data-testid="sections-panel">
@@ -248,6 +253,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 onDelete={handleDeleteSection}
                 onDeleteMouseDown={handleDeleteMouseDown}
                 onDeleteDoubleClick={handleDeleteDoubleClick}
+                onLongPress={openSectionContextMenu}
                 optionRefs={optionRefs}
               />
             ))}
@@ -294,6 +300,7 @@ interface SectionRowProps {
   onDelete: (sectionId: number, e: React.MouseEvent) => void;
   onDeleteMouseDown: (e: React.MouseEvent) => void;
   onDeleteDoubleClick: (e: React.MouseEvent) => void;
+  onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
 }
 
@@ -315,10 +322,20 @@ const SectionRow = memo(function SectionRow({
   onDelete,
   onDeleteMouseDown,
   onDeleteDoubleClick,
+  onLongPress,
   optionRefs,
 }: SectionRowProps) {
   const { t } = useTranslation();
   const stats = calculateSectionStats(section);
+
+  const handleLongPress = useCallback(
+    (pos: { x: number; y: number }) => {
+      onLongPress(section.id, pos.x, pos.y);
+    },
+    [onLongPress, section.id],
+  );
+
+  const longPressHandlers = useLongPress(handleLongPress);
 
   const refCallback = useCallback((el: HTMLLIElement | null) => {
     optionRefs.current[index] = el;
@@ -340,6 +357,7 @@ const SectionRow = memo(function SectionRow({
       onMouseDown={(e) => onMouseDown(section, e)}
       onDoubleClick={(e) => onDoubleClick(section, e)}
       onContextMenu={(e) => onContextMenu(e, section.id)}
+      {...longPressHandlers}
       onMouseEnter={() => onMouseEnter(section.id)}
       onMouseLeave={onMouseLeave}
       onFocus={() => onFocus(section.id, index)}

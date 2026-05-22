@@ -160,6 +160,13 @@ export default class GlobalSurveyLayer {
   private boundDoubleClick: ((e: maplibregl.MapMouseEvent) => void) | null = null;
   private boundContextMenu: ((e: MouseEvent) => void) | null = null;
 
+  // Touch long-press state for context menu
+  private touchLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+  private touchStartPos: { x: number; y: number } | null = null;
+  private boundTouchStart: ((e: TouchEvent) => void) | null = null;
+  private boundTouchMove: ((e: TouchEvent) => void) | null = null;
+  private boundTouchEnd: ((e: TouchEvent) => void) | null = null;
+
   constructor(map: MaplibreMap, callbacks: GlobalSurveyLayerCallbacks = {}) {
     this.map = map;
     this.callbacks = callbacks;
@@ -461,6 +468,80 @@ export default class GlobalSurveyLayer {
       }
     };
     this.map.getCanvas().addEventListener('contextmenu', this.boundContextMenu);
+
+    // Touch long-press → context menu
+    const canvas = this.map.getCanvas();
+    this.boundTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0]!;
+      this.touchStartPos = { x: touch.clientX, y: touch.clientY };
+      this.touchLongPressTimer = setTimeout(() => {
+        this.touchLongPressTimer = null;
+        if (!this.touchStartPos || !this.callbacks.onSystemContextMenu) return;
+        const rect = canvas.getBoundingClientRect();
+        const point: [number, number] = [
+          this.touchStartPos.x - rect.left,
+          this.touchStartPos.y - rect.top,
+        ];
+        // Query hitbox layers at touch position
+        const stationFeatures = this.map.queryRenderedFeatures(point, {
+          layers: [this.stationsHitboxLayerId],
+        });
+        if (stationFeatures.length > 0) {
+          const systemId = stationFeatures[0]?.properties?.systemId as string | undefined;
+          if (systemId) {
+            this.contextMenuOpen = true;
+            this.hideTooltip();
+            const fakeEvent = new MouseEvent('contextmenu', {
+              clientX: this.touchStartPos.x,
+              clientY: this.touchStartPos.y,
+            });
+            this.callbacks.onSystemContextMenu(systemId, fakeEvent);
+            this.touchStartPos = null;
+            return;
+          }
+        }
+        const shotFeatures = this.map.queryRenderedFeatures(point, {
+          layers: [this.shotsHitboxLayerId],
+        });
+        if (shotFeatures.length > 0) {
+          const systemId = shotFeatures[0]?.properties?.systemId as string | undefined;
+          if (systemId) {
+            this.contextMenuOpen = true;
+            this.hideTooltip();
+            const fakeEvent = new MouseEvent('contextmenu', {
+              clientX: this.touchStartPos.x,
+              clientY: this.touchStartPos.y,
+            });
+            this.callbacks.onSystemContextMenu(systemId, fakeEvent);
+          }
+        }
+        this.touchStartPos = null;
+      }, 500);
+    };
+    this.boundTouchMove = (e: TouchEvent) => {
+      if (!this.touchStartPos || !this.touchLongPressTimer) return;
+      const touch = e.touches[0];
+      if (!touch) return;
+      const dx = touch.clientX - this.touchStartPos.x;
+      const dy = touch.clientY - this.touchStartPos.y;
+      if (dx * dx + dy * dy > 100) {
+        clearTimeout(this.touchLongPressTimer);
+        this.touchLongPressTimer = null;
+        this.touchStartPos = null;
+      }
+    };
+    this.boundTouchEnd = () => {
+      if (this.touchLongPressTimer) {
+        clearTimeout(this.touchLongPressTimer);
+        this.touchLongPressTimer = null;
+      }
+      this.touchStartPos = null;
+    };
+    canvas.addEventListener('touchstart', this.boundTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', this.boundTouchMove, { passive: false });
+    canvas.addEventListener('touchend', this.boundTouchEnd);
+    canvas.addEventListener('touchcancel', this.boundTouchEnd);
   }
 
   /**
@@ -1014,6 +1095,12 @@ export default class GlobalSurveyLayer {
    * Destroy the layer, removing all sources and event handlers.
    */
   destroy(): void {
+    // Clean up touch long-press timer
+    if (this.touchLongPressTimer) {
+      clearTimeout(this.touchLongPressTimer);
+      this.touchLongPressTimer = null;
+    }
+
     // Remove event handlers
     if (this.boundClick) {
       this.map.off('click', this.boundClick);
@@ -1029,6 +1116,18 @@ export default class GlobalSurveyLayer {
     }
     if (this.boundContextMenu) {
       this.map.getCanvas().removeEventListener('contextmenu', this.boundContextMenu);
+    }
+    // Remove touch listeners
+    const canvas = this.map.getCanvas();
+    if (this.boundTouchStart) {
+      canvas.removeEventListener('touchstart', this.boundTouchStart);
+    }
+    if (this.boundTouchMove) {
+      canvas.removeEventListener('touchmove', this.boundTouchMove);
+    }
+    if (this.boundTouchEnd) {
+      canvas.removeEventListener('touchend', this.boundTouchEnd);
+      canvas.removeEventListener('touchcancel', this.boundTouchEnd);
     }
 
     // Remove tooltip
@@ -1066,5 +1165,8 @@ export default class GlobalSurveyLayer {
     this.boundMouseMove = null;
     this.boundMapLeave = null;
     this.boundContextMenu = null;
+    this.boundTouchStart = null;
+    this.boundTouchMove = null;
+    this.boundTouchEnd = null;
   }
 }

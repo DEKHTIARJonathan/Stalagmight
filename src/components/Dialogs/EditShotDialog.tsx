@@ -169,7 +169,7 @@ export default function EditShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Azimuth In (°)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={azimuthIn}
               onChange={(e) => setAzimuthIn(e.target.value)}
               className="w-full"
@@ -180,7 +180,7 @@ export default function EditShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Azimuth Out (°)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={azimuthOut}
               onChange={(e) => setAzimuthOut(e.target.value)}
               className="w-full"
@@ -193,7 +193,7 @@ export default function EditShotDialog() {
         <div>
           <label className="block text-sm text-text-secondary mb-1">Length (m)</label>
           <input
-            type="number"
+            type="number" inputMode="decimal"
             value={length}
             onChange={(e) => setLength(e.target.value)}
             className="w-full"
@@ -207,7 +207,7 @@ export default function EditShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Depth In (m)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={depthIn}
               onChange={(e) => setDepthIn(e.target.value)}
               className="w-full"
@@ -218,7 +218,7 @@ export default function EditShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Depth Out (m)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={depthOut}
               onChange={(e) => setDepthOut(e.target.value)}
               className="w-full"
@@ -232,7 +232,7 @@ export default function EditShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Pitch In (°)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={pitchIn}
               onChange={(e) => setPitchIn(e.target.value)}
               className="w-full"
@@ -244,7 +244,7 @@ export default function EditShotDialog() {
           <div>
             <label className="block text-sm text-text-secondary mb-1">Pitch Out (°)</label>
             <input
-              type="number"
+              type="number" inputMode="decimal"
               value={pitchOut}
               onChange={(e) => setPitchOut(e.target.value)}
               className="w-full"
@@ -260,7 +260,7 @@ export default function EditShotDialog() {
           <div className="grid grid-cols-4 gap-2">
             <div>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 value={left}
                 onChange={(e) => setLeft(e.target.value)}
                 className="w-full"
@@ -270,7 +270,7 @@ export default function EditShotDialog() {
             </div>
             <div>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 value={right}
                 onChange={(e) => setRight(e.target.value)}
                 className="w-full"
@@ -280,7 +280,7 @@ export default function EditShotDialog() {
             </div>
             <div>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 value={up}
                 onChange={(e) => setUp(e.target.value)}
                 className="w-full"
@@ -290,7 +290,7 @@ export default function EditShotDialog() {
             </div>
             <div>
               <input
-                type="number"
+                type="number" inputMode="decimal"
                 value={down}
                 onChange={(e) => setDown(e.target.value)}
                 className="w-full"

@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
@@ -13,6 +13,7 @@ import {
   tmlOpenFilters,
   gpxOpenFilters,
   exportSaveFilters,
+  saveDialog,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
 
@@ -52,7 +53,7 @@ export function useProject() {
   }, [store]);
 
   const handleSaveProjectAs = useCallback(async () => {
-    const selected = await save({
+    const selected = await saveDialog({
       filters: projectSaveFilters(),
     });
 
@@ -287,7 +288,7 @@ export function useProject() {
   }, [store, openDialog]);
 
   const handleExportCsv = useCallback(async () => {
-    const selected = await save({
+    const selected = await saveDialog({
       filters: exportSaveFilters('CSV', 'csv'),
     });
 
@@ -301,7 +302,7 @@ export function useProject() {
   }, [store]);
 
   const handleExportJson = useCallback(async () => {
-    const selected = await save({
+    const selected = await saveDialog({
       filters: exportSaveFilters('JSON', 'json'),
     });
 

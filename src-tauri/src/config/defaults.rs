@@ -1,5 +1,5 @@
 use super::{
-    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig,
+    AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, Config, DebugConfig, ProviderCacheConfig,
     DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
@@ -265,6 +265,10 @@ impl Default for CacheConfig {
             tile_cache_enabled: true,
             tile_cache_max_mb: 500, // per SPEC.md
             tile_ttl_days: 30,
+            providers: std::collections::HashMap::from([(
+                "esri".to_string(),
+                ProviderCacheConfig { offline_caching: false },
+            )]),
         }
     }
 }

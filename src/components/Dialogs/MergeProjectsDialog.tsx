@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
-import { save } from '@tauri-apps/plugin-dialog';
+import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -83,7 +83,7 @@ export default function MergeProjectsDialog() {
       const defaultFileName = `${outputName.trim()}.stalx`;
 
       // Show save dialog to let user choose output location
-      const outputPath = await save({
+      const outputPath = await saveDialog({
         title: 'Save Merged Project',
         defaultPath: `${defaultDir}/${defaultFileName}`,
         filters: projectSaveFilters(),

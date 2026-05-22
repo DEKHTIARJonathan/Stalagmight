@@ -39,7 +39,7 @@ function PsRow({ field, i18nKey, step, min, max, config, changedFields, onChange
       data-testid={`setting-ps-${field}`}
     >
       <input
-        type="number"
+        type="number" inputMode="decimal"
         min={min}
         max={max}
         step={step}
@@ -406,7 +406,7 @@ export function AdvancedSettings({
         >
           <div className="flex items-center gap-2">
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min={1}
               max={10000}
               value={config.logging.max_directory_size_mb}
@@ -430,7 +430,7 @@ export function AdvancedSettings({
           data-testid="setting-closure-sigma-length"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={0.001}
             step={0.01}
             value={config.closure_adjustment.base_sigma_length_m}
@@ -450,7 +450,7 @@ export function AdvancedSettings({
           data-testid="setting-closure-sigma-azimuth"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={0.01}
             step={0.1}
             value={config.closure_adjustment.base_sigma_azimuth_deg}
@@ -470,7 +470,7 @@ export function AdvancedSettings({
           data-testid="setting-closure-sigma-depth"
         >
           <input
-            type="number"
+            type="number" inputMode="decimal"
             min={0.001}
             step={0.01}
             value={config.closure_adjustment.base_sigma_depth_m}
@@ -549,7 +549,7 @@ export function AdvancedSettings({
         >
           <div className="flex items-center gap-2">
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min={100}
               max={800}
               value={config.panels.sections_panel_width}
@@ -572,7 +572,7 @@ export function AdvancedSettings({
         >
           <div className="flex items-center gap-2">
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min={150}
               max={800}
               value={config.panels.detail_panel_width}
@@ -595,7 +595,7 @@ export function AdvancedSettings({
         >
           <div className="flex items-center gap-2">
             <input
-              type="number"
+              type="number" inputMode="decimal"
               min={100}
               max={600}
               value={config.panels.data_table_height}

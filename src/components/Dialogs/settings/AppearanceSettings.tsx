@@ -16,7 +16,7 @@ const THEME_MODE_OPTIONS: SelectOption[] = [
   { value: 'auto', label: '' },
 ];
 
-const COLOR_THEMES: ColorTheme[] = ['dark', 'cave', 'dracula', 'one_dark', 'nord', 'catppuccin_mocha', 'light', 'solarized_light', 'catppuccin_latte'];
+const COLOR_THEMES: ColorTheme[] = ['dark', 'cave', 'dracula', 'one_dark', 'nord', 'catppuccin_mocha', 'light', 'solarized_light', 'catppuccin_latte', 'kaleido_eink'];
 
 /**
  * Appearance settings category content.
