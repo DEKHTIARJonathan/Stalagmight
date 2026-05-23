@@ -146,3 +146,5 @@ review dialog surfaces a `DeleteShotImpact` warning before you apply.
   under mocked IPC.
 - Manual end-to-end test data lives at `~/src/cave/data/collab_test_data`
   (7 `.tml` versions of one project + source `.dmp` files in `./dmps`).
+- [collab-stress-testing.md](collab-stress-testing.md) — invariants, a scenario
+  matrix, adversarial inputs, and a fuzz/soak harness sketch.
