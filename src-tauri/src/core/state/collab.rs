@@ -46,6 +46,55 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// Enable or disable collaboration for a project on disk by path, without
+    /// requiring it to be the open project. Used by the recent-projects panel,
+    /// where the selected project usually isn't loaded into memory.
+    ///
+    /// Mutates the `collab_state` row in the `.stalx` directly (preserving any
+    /// existing baseline) and, if the same project happens to be open, keeps the
+    /// in-memory copy in sync so a later save won't clobber the change.
+    pub fn set_collab_enabled_for_path(&self, path: PathBuf, enabled: bool) -> CommandResult {
+        let db = match crate::persistence::Database::open_existing(&path) {
+            Ok(db) => db,
+            Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
+        };
+        let mut project = match db.load_project() {
+            Ok(p) => p,
+            Err(e) => return CommandResult::failure(format!("Failed to load project: {e}")),
+        };
+        project.file_path = Some(path.clone());
+
+        if enabled {
+            let sibling = default_sibling_name(&project);
+            match project.collab.as_mut() {
+                Some(c) => {
+                    c.enabled = true;
+                    c.sibling_tml_relative = sibling;
+                }
+                None => project.collab = Some(CollabState::new(sibling)),
+            }
+        } else if let Some(c) = project.collab.as_mut() {
+            c.enabled = false;
+        }
+
+        if let Err(e) = db.save_collab_state(project.collab.as_ref()) {
+            return CommandResult::failure(format!("Failed to save collaboration state: {e}"));
+        }
+
+        // Keep the open project's in-memory state consistent if it's the same file.
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(open) = guard.as_mut() {
+            if open.file_path.as_deref() == Some(path.as_path()) {
+                open.collab = project.collab.clone();
+            }
+        }
+
+        CommandResult::success()
+    }
+
     /// Clone of the open project's collaboration state, if any.
     pub fn get_collab_state(&self) -> Option<CollabState> {
         let guard = self.project.lock().ok()?;

@@ -1194,6 +1194,7 @@ pub fn run() {
             commands::export::get_depth_preset_colors,
             // Collaboration mode
             commands::collab::set_collab_enabled,
+            commands::collab::set_collab_enabled_for_path,
             commands::collab::get_collab_state,
             commands::collab::detect_collab_changes,
             commands::collab::apply_collab_changes,

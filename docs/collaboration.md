@@ -24,10 +24,19 @@ markers, temperature). Reconciliation never destroys that data on surviving shot
   stale if Ariane edited the `.tml` after Stalagmight last saved.
 - **Reconcile is one-directional** (`.tml` → `.stalx`), triggered on open, with a
   preview the user confirms. There is no conflict-resolution UI.
-- **Per-project toggle**, off by default, in the **Project details** panel (it is
-  per-project state stored in the `.stalx`, not a global app setting). Opening a
-  project that has a companion `.tml` while collaboration is off shows a warning
-  toast that the `.tml` won't be kept in sync.
+- **Per-project toggle**, off by default, in two places (it is per-project state
+  stored in the `.stalx`, not a global app setting):
+  - the open project's **Project details** panel (`DetailPanel`), which acts on the
+    in-memory open project via `set_collab_enabled`; and
+  - the **recent-projects metadata panel** in the global view (`MetadataPanel`),
+    which acts on a recent project that may not be open via
+    `set_collab_enabled_for_path` — it mutates the `.stalx` `collab_state` row on
+    disk directly (and keeps the open project's in-memory copy in sync if it's the
+    same file). `ProjectMetadata.collab_enabled` carries the current state into the
+    list/map without opening the project.
+
+  Opening a project that has a companion `.tml` while collaboration is off shows a
+  warning toast that the `.tml` won't be kept in sync.
 
 ## Data flow
 
@@ -99,6 +108,8 @@ review dialog surfaces a `DeleteShotImpact` warning before you apply.
 - `src/components/Dialogs/CollabReviewDialog.tsx` — the review/apply preview
 - `src/components/SingleSystemView/DetailPanel.tsx` — the per-project toggle
   (`CollaborationSection`, in the Details tab) and the open-time off warning
+- `src/components/GlobalView/MetadataPanel.tsx` — the same per-project toggle for a
+  recent project in the global list/map (acts by path, not on the open project)
 
 ## Testing
 
@@ -106,6 +117,9 @@ review dialog surfaces a `DeleteShotImpact` warning before you apply.
   `core::reconcile`), including the v1→v2 ID-renumber stress case and the
   Stalagmight-only-data preservation + undo test.
 - Playwright: `e2e-playwright/collab-review-dialog.spec.ts` (review dialog render,
-  Apply/Cancel wiring, the Collaboration settings tab) under mocked IPC.
+  Apply/Cancel wiring, the Project-details toggle) and
+  `e2e-playwright/globalview-metadata-panel.spec.ts` (recent-projects toggle:
+  reflects state, shows the companion name, invokes `set_collab_enabled_for_path`)
+  under mocked IPC.
 - Manual end-to-end test data lives at `~/src/cave/data/collab_test_data`
   (7 `.tml` versions of one project + source `.dmp` files in `./dmps`).

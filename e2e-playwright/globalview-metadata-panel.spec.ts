@@ -238,4 +238,67 @@ test.describe('GlobalView Metadata Panel', () => {
       await expect(lengthField).toContainText('km');
     });
   });
+
+  test.describe('Collaboration Toggle', () => {
+    test('reflects enabled state and shows the companion .tml name', async ({ page }) => {
+      // cave-alpha is mocked with collab_enabled: true
+      const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
+      await card.click();
+      await expect(page.locator('[data-testid="metadata-name"]')).toBeVisible();
+
+      const toggle = page.locator('[data-testid="metadata-toggle-collaboration"]');
+      await expect(toggle).toBeVisible();
+      await expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+      const sibling = page.locator('[data-testid="metadata-collaboration-sibling"]');
+      await expect(sibling).toBeVisible();
+      await expect(sibling).toContainText('cave-alpha.tml');
+    });
+
+    test('reflects disabled state with no companion line', async ({ page }) => {
+      // cave-beta is mocked with collab_enabled: false
+      const card = page.locator('[data-testid="system-card-/projects/cave-beta.stalx"]');
+      await card.click();
+      await expect(page.locator('[data-testid="metadata-name"]')).toContainText('Underwater Cave Beta');
+
+      const toggle = page.locator('[data-testid="metadata-toggle-collaboration"]');
+      await expect(toggle).toBeVisible();
+      await expect(toggle).toHaveAttribute('aria-checked', 'false');
+      await expect(page.locator('[data-testid="metadata-collaboration-sibling"]')).toHaveCount(0);
+    });
+
+    test('clicking the toggle invokes set_collab_enabled_for_path with the file path', async ({ page }) => {
+      const card = page.locator('[data-testid="system-card-/projects/cave-beta.stalx"]');
+      await card.click();
+      await expect(page.locator('[data-testid="metadata-name"]')).toContainText('Underwater Cave Beta');
+
+      const calls: Array<{ path: string; enabled: boolean }> = [];
+      await page.exposeFunction('__recordSetCollabPath', (path: string, enabled: boolean) =>
+        calls.push({ path, enabled })
+      );
+      await page.evaluate(() => {
+        const store = (window as unknown as {
+          __E2E_TEST__: {
+            projectStore: {
+              getState: () => { setCollabEnabledForPath: (p: string, e: boolean) => Promise<unknown> };
+              setState: (p: unknown) => void;
+            };
+          };
+        }).__E2E_TEST__.projectStore;
+        const orig = store.getState().setCollabEnabledForPath;
+        store.setState({
+          setCollabEnabledForPath: async (path: string, enabled: boolean) => {
+            (window as unknown as {
+              __recordSetCollabPath: (p: string, e: boolean) => void;
+            }).__recordSetCollabPath(path, enabled);
+            return orig(path, enabled);
+          },
+        });
+      });
+
+      await page.locator('[data-testid="metadata-toggle-collaboration"]').click();
+      await expect.poll(() => calls.length).toBeGreaterThan(0);
+      expect(calls[0]).toEqual({ path: '/projects/cave-beta.stalx', enabled: true });
+    });
+  });
 });

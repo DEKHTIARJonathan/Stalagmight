@@ -199,6 +199,9 @@ pub struct ProjectMetadata {
     pub gps_center: Option<(f64, f64)>,
     /// GPS bounds including all zero datums
     pub gps_bounds: Option<GpsBounds>,
+    /// Whether Ariane collaboration mode is enabled for this project. Lets the
+    /// recent-projects panel show/toggle the state without opening the project.
+    pub collab_enabled: bool,
 }
 
 /// Overall project statistics
@@ -5112,6 +5115,7 @@ impl Project {
             station_count: stats.station_count,
             gps_center,
             gps_bounds,
+            collab_enabled: self.collab.as_ref().is_some_and(|c| c.enabled),
         })
     }
 

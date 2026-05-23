@@ -17,6 +17,17 @@ pub fn set_collab_enabled(
     state.set_collab_enabled(enabled, sibling_tml_relative)
 }
 
+/// Enable or disable collaboration for a project by path, without requiring it
+/// to be open. Used by the recent-projects panel in the global view.
+#[tauri::command]
+pub fn set_collab_enabled_for_path(
+    state: State<AppState>,
+    path: std::path::PathBuf,
+    enabled: bool,
+) -> CommandResult {
+    state.set_collab_enabled_for_path(path, enabled)
+}
+
 /// Current collaboration state for the open project (None if off / no project).
 #[tauri::command]
 pub fn get_collab_state(state: State<AppState>) -> Option<CollabState> {
