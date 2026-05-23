@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::models::{
-    geo_key, DeleteShotImpact, Project, SectionId, ShotData,
+    geo_key, DeleteShotImpact, Project, SectionId, ShotData, ShotId,
 };
 use crate::parsers::tml::{normalize_tml_shot, resolve_tml_depth_in, TmlFile, TmlSection, TmlShotType};
 
@@ -56,8 +56,14 @@ pub struct AddedShot {
     /// Target section if it already exists; `None` if part of a new section.
     pub section_id: Option<SectionId>,
     pub section_name: String,
-    /// Position (shot index) within the section where it should be inserted.
+    /// Index of this shot within the returned (Ariane) section — its document
+    /// order, used to apply inserts in sequence. Not a live project index.
     pub position: u32,
+    /// Id of the existing shot to insert after (the nearest preceding *matched*
+    /// shot in returned order). `None` means insert at the front of the section.
+    /// Anchoring on a stable shot id keeps the insert correct regardless of the
+    /// edit/remove phases that run first at apply time.
+    pub after_shot_id: Option<ShotId>,
     pub data: ShotData,
 }
 
@@ -127,7 +133,7 @@ pub struct CollabChangeSet {
 }
 
 impl CollabChangeSet {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             shots_added: Vec::new(),
             shots_edited: Vec::new(),
@@ -362,6 +368,8 @@ fn align_section(
     let mut r_used = vec![false; returned.len()];
     // (baseline_idx, returned_idx)
     let mut pairs: Vec<(usize, usize)> = Vec::new();
+    // Returned-shot indices with no baseline match (inserts), in document order.
+    let mut added_returned: Vec<usize> = Vec::new();
 
     // Tier 1: UUID.
     let mut uuid_to_b: HashMap<&str, usize> = HashMap::new();
@@ -441,13 +449,7 @@ fn align_section(
             );
         }
         for o in k..seg_r {
-            let r = &returned[rem_r[ri + o]];
-            cs.shots_added.push(AddedShot {
-                section_id: Some(sid),
-                section_name: section_name.to_string(),
-                position: proj_section.shots.len() as u32, // appended at apply
-                data: r.data.clone(),
-            });
+            added_returned.push(rem_r[ri + o]);
         }
         if ai < anchors.len() {
             // The anchor itself is an exact geo-key match.
@@ -459,6 +461,36 @@ fn align_section(
         } else {
             break;
         }
+    }
+
+    // Resolve insert anchors. For each added shot, find the proj shot id of the
+    // nearest preceding *matched* shot in returned order (None = section front).
+    // Built from every matched pair (all tiers), so it is correct even when most
+    // shots matched by UUID and nothing remains in the positional remainder.
+    let mut matched_by_returned: Vec<(usize, ShotId)> = pairs
+        .iter()
+        .filter_map(|&(b_idx, r_idx)| {
+            let shot_index = baseline[b_idx].shot_index as usize;
+            proj_section.shots.get(shot_index).map(|s| (r_idx, s.id))
+        })
+        .collect();
+    matched_by_returned.sort_by_key(|&(r_idx, _)| r_idx);
+
+    // `added_returned` is already in ascending document order, so the resulting
+    // `shots_added` for this section are too — apply relies on that ordering.
+    for &r_idx in &added_returned {
+        let after_shot_id = matched_by_returned
+            .iter()
+            .rev()
+            .find(|&&(mr, _)| mr < r_idx)
+            .map(|&(_, id)| id);
+        cs.shots_added.push(AddedShot {
+            section_id: Some(sid),
+            section_name: section_name.to_string(),
+            position: r_idx as u32,
+            after_shot_id,
+            data: returned[r_idx].data.clone(),
+        });
     }
 
     // Classify all pairs into edits (representable field changed) or unchanged.
@@ -777,6 +809,39 @@ mod tests {
         assert!(cs.shots_added.is_empty(), "no mass adds: {}", cs.shots_added.len());
         assert_eq!(cs.shots_edited.len(), 1, "exactly the one real edit");
         assert_ne!(cs.match_quality, MatchQuality::Uuid);
+    }
+
+    #[test]
+    fn test_mid_section_insert_anchored_to_preceding_shot() {
+        // A shot inserted between B and C must be reported once, anchored after
+        // B (not appended to the section end). Forces the geometry tier (cleared
+        // UUIDs + shifted IDs) so the anchor is resolved from cross-tier pairs.
+        let dir = tempfile::TempDir::new().unwrap();
+        let base = baseline_project(three(), dir.path()); // [A, B, C]
+
+        let mut edited = three();
+        edited.insert(2, shot(25.0, 6.5, 2.5, 2.5)); // X between B and C → [A, B, X, C]
+        let mut ret = returned(&project_with(edited), dir.path());
+        for section in &mut ret.sections {
+            for s in &mut section.shots {
+                s.uuid = None;
+                s.id += 1000;
+            }
+        }
+
+        let cs = diff(&base, &ret);
+        assert_eq!(cs.shots_added.len(), 1, "exactly one inserted shot");
+        assert_eq!(cs.shots_edited.len(), 0, "no edits: {:?}", cs.shots_edited);
+        assert_eq!(cs.shots_removed.len(), 0, "no removals: {:?}", cs.shots_removed);
+
+        let added = &cs.shots_added[0];
+        assert_eq!(added.position, 2, "document index within the returned section");
+        let b_id = base.sections[0].shots[1].id;
+        assert_eq!(
+            added.after_shot_id,
+            Some(b_id),
+            "insert must be anchored after B, not appended at the end"
+        );
     }
 
     #[test]

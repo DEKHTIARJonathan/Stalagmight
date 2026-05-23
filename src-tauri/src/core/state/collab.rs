@@ -7,7 +7,7 @@ use chrono::Utc;
 
 use crate::core::reconcile::{diff, CollabChangeSet};
 use crate::core::CommandResult;
-use crate::models::{CollabState, Project, SectionData, SectionId};
+use crate::models::{CollabState, Project, SectionData, SectionId, ShotId};
 
 use super::AppState;
 
@@ -287,10 +287,34 @@ fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
         }
     }
 
-    // Appended shots into existing sections.
+    // Inserted shots into existing sections. Honor each shot's anchor (the id of
+    // the matched shot it follows in document order) so mid-section inserts land
+    // in the right place instead of being appended. Anchors are matched shots,
+    // which are never removed in this same change set, so they survive the
+    // edit/remove phases above. Consecutive adds that share an anchor (several
+    // inserts in one gap) are chained after the previously inserted shot to keep
+    // their order. `after_shot_id == None` inserts at the section front (or
+    // appends when the section is empty).
+    let mut last_add: Option<(SectionId, Option<ShotId>, ShotId)> = None;
     for a in &cs.shots_added {
-        if let Some(sid) = a.section_id {
-            project.add_shot(sid, a.data.clone());
+        let Some(sid) = a.section_id else { continue };
+        let chained = match last_add {
+            Some((lsid, lafter, lnew)) if lsid == sid && lafter == a.after_shot_id => Some(lnew),
+            _ => None,
+        };
+        let new_id = if let Some(anchor) = chained.or(a.after_shot_id) {
+            project.insert_shot_after(sid, anchor, a.data.clone()).map(|s| s.id)
+        } else {
+            let first = project
+                .get_section(sid)
+                .and_then(|s| s.shots.first().map(|sh| sh.id));
+            match first {
+                Some(fid) => project.insert_shot_before(sid, fid, a.data.clone()).map(|s| s.id),
+                None => project.add_shot(sid, a.data.clone()).map(|s| s.id),
+            }
+        };
+        if let Some(nid) = new_id {
+            last_add = Some((sid, a.after_shot_id, nid));
         }
     }
 
@@ -324,5 +348,97 @@ fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::core::reconcile::{AddedShot, CollabChangeSet};
+    use crate::models::ShotData;
+
+    fn shot(az: f64, len: f64) -> ShotData {
+        ShotData {
+            azimuth_in: az,
+            azimuth_out: az,
+            length: len,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        }
+    }
+
+    /// A section [A, B, C, D] with azimuths 10/20/30/40.
+    fn proj_abcd() -> Project {
+        let mut p = Project::new("Cave".into(), None);
+        p.add_section(SectionData {
+            name: Some("Main".into()),
+            surveyor: None,
+            date: None,
+            color: "#000000".into(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(10.0, 5.0), shot(20.0, 6.0), shot(30.0, 7.0), shot(40.0, 8.0)],
+        });
+        p
+    }
+
+    fn azimuths(p: &Project) -> Vec<f64> {
+        p.sections[0].shots.iter().map(|s| s.azimuth_in).collect()
+    }
+
+    fn added(sid: SectionId, position: u32, after: Option<ShotId>, az: f64) -> AddedShot {
+        AddedShot {
+            section_id: Some(sid),
+            section_name: "Main".into(),
+            position,
+            after_shot_id: after,
+            data: shot(az, 6.5),
+        }
+    }
+
+    #[test]
+    fn apply_insert_honors_after_shot_id() {
+        let mut p = proj_abcd();
+        let sid = p.sections[0].id;
+        let b_id = p.sections[0].shots[1].id; // B
+
+        let mut cs = CollabChangeSet::empty();
+        cs.shots_added.push(added(sid, 2, Some(b_id), 25.0)); // X between B and C
+        apply_changeset(&mut p, &cs);
+
+        assert_eq!(
+            azimuths(&p),
+            vec![10.0, 20.0, 25.0, 30.0, 40.0],
+            "X must land between B and C, not be appended"
+        );
+    }
+
+    #[test]
+    fn apply_chained_inserts_keep_document_order() {
+        // Two inserts in the same gap (both after B) must keep order X then Y.
+        let mut p = proj_abcd();
+        let sid = p.sections[0].id;
+        let b_id = p.sections[0].shots[1].id;
+
+        let mut cs = CollabChangeSet::empty();
+        cs.shots_added.push(added(sid, 2, Some(b_id), 25.0)); // X
+        cs.shots_added.push(added(sid, 3, Some(b_id), 26.0)); // Y
+        apply_changeset(&mut p, &cs);
+
+        assert_eq!(azimuths(&p), vec![10.0, 20.0, 25.0, 26.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn apply_front_insert_goes_to_section_start() {
+        let mut p = proj_abcd();
+        let sid = p.sections[0].id;
+
+        let mut cs = CollabChangeSet::empty();
+        cs.shots_added.push(added(sid, 0, None, 5.0)); // before A
+        apply_changeset(&mut p, &cs);
+
+        assert_eq!(azimuths(&p), vec![5.0, 10.0, 20.0, 30.0, 40.0]);
     }
 }

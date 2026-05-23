@@ -56,7 +56,7 @@ function emptyImpact(sectionId: number) {
 function sampleChangeSet(sectionId: number) {
   return {
     shots_added: [
-      { section_id: sectionId, section_name: 'Main Line', position: 4, data: shotData({ length: 12 }) },
+      { section_id: sectionId, section_name: 'Main Line', position: 4, after_shot_id: null, data: shotData({ length: 12 }) },
     ],
     shots_edited: [
       {
