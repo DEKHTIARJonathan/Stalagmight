@@ -172,7 +172,7 @@ struct ExportShot {
 /// Export a project to Ariane TML (`.tml` = ZIP) or TMLU (`.tmlu` = plain XML).
 pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
     let names = names_for_path(path);
-    let (xml, _baseline) = build_xml(project, names)?;
+    let (xml, _baseline, _synthetic) = build_xml(project, names)?;
     write_output(path, &xml)
 }
 
@@ -182,12 +182,12 @@ pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
 pub fn export_tml_with_baseline(
     project: &Project,
     path: &Path,
-) -> Result<(Vec<ShotBaselineEntry>, String)> {
+) -> Result<(Vec<ShotBaselineEntry>, String, Vec<String>)> {
     let names = names_for_path(path);
-    let (xml, baseline) = build_xml(project, names)?;
+    let (xml, baseline, synthetic_section_names) = build_xml(project, names)?;
     write_output(path, &xml)?;
     let sha = sha256_hex(&xml);
-    Ok((baseline, sha))
+    Ok((baseline, sha, synthetic_section_names))
 }
 
 fn names_for_path(path: &Path) -> &'static Names {
@@ -223,8 +223,31 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 // XML generation
 // ============================================================================
 
-fn build_xml(project: &Project, n: &Names) -> Result<(Vec<u8>, Vec<ShotBaselineEntry>)> {
+fn build_xml(
+    project: &Project,
+    n: &Names,
+) -> Result<(Vec<u8>, Vec<ShotBaselineEntry>, Vec<String>)> {
     let (shots, baseline) = build_export_shots(project);
+
+    // Synthetic export legs (`<name> (reversed)`, `<name> (pre-zero-datum)`) are
+    // reversed duplicates of forward geometry, written under a derived name that
+    // is never a real section. Detect them as the shot section names that (a) are
+    // not real exported sections and (b) carry a synthetic suffix. The "not a real
+    // section" guard means a section legitimately named "X (reversed)" is never
+    // misflagged — its own forward shots put that name in `real_names`.
+    let real_names: HashSet<&str> =
+        baseline.iter().map(|e| e.section_name.as_str()).collect();
+    let synthetic_section_names: Vec<String> = shots
+        .iter()
+        .map(|s| s.section.as_str())
+        .filter(|name| {
+            !real_names.contains(name)
+                && (name.ends_with(" (reversed)") || name.ends_with(" (pre-zero-datum)"))
+        })
+        .map(str::to_string)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
     // Map Ariane shot ID -> UUID so write_shot can emit <UUID> only for real
     // (baseline-tracked) forward shots; synthesized START/CLOSURE/reverse legs
     // have no entry and emit no UUID.
@@ -277,7 +300,7 @@ fn build_xml(project: &Project, n: &Names) -> Result<(Vec<u8>, Vec<ShotBaselineE
     writer.write_event(Event::End(BytesEnd::new(n.cave_file)))?;
 
     drop(writer);
-    Ok((buf, baseline))
+    Ok((buf, baseline, synthetic_section_names))
 }
 
 fn write_text_element<W: std::io::Write>(
@@ -1332,7 +1355,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("out.tmlu");
 
-        let (baseline, sha) = export_tml_with_baseline(&project, &path).unwrap();
+        let (baseline, sha, _) = export_tml_with_baseline(&project, &path).unwrap();
         assert!(!sha.is_empty(), "sha256 should be returned");
         assert_eq!(baseline.len(), total_shots, "one baseline entry per real shot");
         for e in &baseline {
@@ -1353,7 +1376,7 @@ mod tests {
         let project = simple_project();
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("rt.tmlu");
-        let (baseline, _) = export_tml_with_baseline(&project, &path).unwrap();
+        let (baseline, _, _) = export_tml_with_baseline(&project, &path).unwrap();
 
         let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
         let parsed_uuids: HashSet<String> = parsed
@@ -1375,12 +1398,12 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("out.tmlu");
 
-        let (b1, _) = export_tml_with_baseline(&project, &path).unwrap();
+        let (b1, _, _) = export_tml_with_baseline(&project, &path).unwrap();
         // Feed the baseline back as collab state and re-export.
         let mut collab = crate::models::CollabState::new("out.tmlu".to_string());
         collab.shot_baseline = b1.clone();
         project.collab = Some(collab);
-        let (b2, _) = export_tml_with_baseline(&project, &path).unwrap();
+        let (b2, _, _) = export_tml_with_baseline(&project, &path).unwrap();
 
         let u1: Vec<&String> = b1.iter().map(|e| &e.uuid).collect();
         let u2: Vec<&String> = b2.iter().map(|e| &e.uuid).collect();

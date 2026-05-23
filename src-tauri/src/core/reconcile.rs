@@ -235,6 +235,16 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         .map(|(n, id)| (n.as_str(), *id))
         .collect();
 
+    // Synthetic export legs (`<name> (reversed)`, `<name> (pre-zero-datum)`) are
+    // reversed duplicates of forward geometry we wrote ourselves — never edits.
+    // Skipping them keeps a clean round-trip (zero datum off the root station, or
+    // a merged child section) from surfacing phantom new sections.
+    let synthetic: HashSet<&str> = collab
+        .synthetic_section_names
+        .iter()
+        .map(String::as_str)
+        .collect();
+
     // Project sections by id.
     let sections_by_id: HashMap<SectionId, &_> =
         project.sections.iter().map(|s| (s.id, s)).collect();
@@ -268,6 +278,9 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     let mut matched_section_ids: HashSet<SectionId> = HashSet::new();
 
     for section in &tml.sections {
+        if synthetic.contains(section.name.as_str()) {
+            continue;
+        }
         let returned = returned_section_shots(section);
 
         let Some(&sid) = name_to_id.get(section.name.as_str()) else {
@@ -675,9 +688,24 @@ fn lcs_pairs(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
     use crate::export::tml::export_tml_with_baseline;
-    use crate::models::{CollabState, SectionData, ShotBaselineEntry};
+    use crate::models::{
+        CollabState, GpsCoordinates, SectionData, ShotBaselineEntry, StationMerge, StationRef,
+        ZeroDatum,
+    };
     use crate::parsers::tml::parse_tml;
     use std::collections::HashMap as Map;
+
+    fn section_with(name: &str, shots: Vec<ShotData>) -> SectionData {
+        SectionData {
+            name: Some(name.into()),
+            surveyor: None,
+            date: None,
+            color: "#112233".into(),
+            direction: None,
+            quality: 1.0,
+            shots,
+        }
+    }
 
     fn shot(az: f64, len: f64, d_in: f64, d_out: f64) -> ShotData {
         ShotData {
@@ -712,7 +740,11 @@ mod tests {
         ]
     }
 
-    fn set_baseline(project: &mut Project, baseline: Vec<ShotBaselineEntry>) {
+    fn set_baseline(
+        project: &mut Project,
+        baseline: Vec<ShotBaselineEntry>,
+        synthetic: Vec<String>,
+    ) {
         let mut c = CollabState::new("x.tml".into());
         let map: Map<String, SectionId> = baseline
             .iter()
@@ -720,15 +752,21 @@ mod tests {
             .collect();
         c.section_name_map = map.into_iter().collect();
         c.shot_baseline = baseline;
+        c.synthetic_section_names = synthetic;
         project.collab = Some(c);
+    }
+
+    /// Seed a pre-built project's collab baseline from its own export.
+    fn baseline_for(mut p: Project, dir: &std::path::Path) -> Project {
+        let (baseline, _, synthetic) =
+            export_tml_with_baseline(&p, &dir.join("base.tml")).unwrap();
+        set_baseline(&mut p, baseline, synthetic);
+        p
     }
 
     /// Build the baseline project (with collab baseline seeded from its own export).
     fn baseline_project(shots: Vec<ShotData>, dir: &std::path::Path) -> Project {
-        let mut p = project_with(shots);
-        let (baseline, _) = export_tml_with_baseline(&p, &dir.join("base.tml")).unwrap();
-        set_baseline(&mut p, baseline);
-        p
+        baseline_for(project_with(shots), dir)
     }
 
     /// Export an "edited" project and parse it back as the returned collaborator file.
@@ -851,5 +889,74 @@ mod tests {
         let ret = returned(&project_with(three()), dir.path());
         let cs = diff(&base, &ret);
         assert!(cs.is_empty(), "identical re-export should be a no-op: {cs:?}");
+    }
+
+    #[test]
+    fn test_clean_roundtrip_with_mid_station_datum_is_empty() {
+        // A zero datum off the root station makes the exporter split a synthetic
+        // "(pre-zero-datum)" reversed leg. A clean round-trip must NOT report that
+        // leg as a new section (bug_001).
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut p = project_with(three());
+        p.zero_datums.push(ZeroDatum {
+            station_ref: StationRef::new(p.sections[0].id, 2),
+            gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
+        });
+        let base = baseline_for(p, dir.path());
+        assert!(
+            base.collab
+                .as_ref()
+                .unwrap()
+                .synthetic_section_names
+                .iter()
+                .any(|n| n.ends_with("(pre-zero-datum)")),
+            "fixture should produce a pre-zero-datum synthetic leg"
+        );
+
+        let ret = returned(&base, dir.path());
+        let cs = diff(&base, &ret);
+        assert!(cs.is_empty(), "clean round-trip must be a no-op: {cs:?}");
+    }
+
+    #[test]
+    fn test_clean_roundtrip_with_merged_child_is_empty() {
+        // A child section merged mid-station makes the exporter split a synthetic
+        // "(reversed)" leg. A clean round-trip must NOT report it as a new
+        // section (bug_001).
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut p = Project::new("Cave".into(), None);
+        p.add_section(section_with("Main", three()));
+        // Branch's merge station (child station 2) sits at depth 1.0 — the same
+        // depth as root station 1 it merges onto (merged points are physically
+        // coincident), so the forward leg round-trips without a phantom depth edit.
+        p.add_section(section_with(
+            "Branch",
+            vec![
+                shot(40.0, 4.0, 0.0, 0.5),
+                shot(50.0, 5.0, 0.5, 1.0),
+                shot(60.0, 6.0, 1.0, 1.5),
+            ],
+        ));
+        let root_id = p.sections[0].id;
+        let child_id = p.sections[1].id;
+        p.station_merges.push(StationMerge {
+            station_a: StationRef::new(root_id, 1),
+            station_b: StationRef::new(child_id, 2),
+            merged_at: chrono::Utc::now(),
+        });
+        let base = baseline_for(p, dir.path());
+        assert!(
+            base.collab
+                .as_ref()
+                .unwrap()
+                .synthetic_section_names
+                .iter()
+                .any(|n| n.ends_with("(reversed)")),
+            "fixture should produce a reversed synthetic leg"
+        );
+
+        let ret = returned(&base, dir.path());
+        let cs = diff(&base, &ret);
+        assert!(cs.is_empty(), "clean round-trip must be a no-op: {cs:?}");
     }
 }

@@ -48,6 +48,12 @@ pub struct CollabState {
     /// Exported section name -> SectionId, captured at last export (rename detection).
     #[serde(default)]
     pub section_name_map: Vec<(String, SectionId)>,
+    /// Names of synthetic export legs (`<name> (reversed)`, `<name> (pre-zero-datum)`)
+    /// written at the last export. These are reversed duplicates of forward
+    /// geometry, not real sections, so reconcile must ignore returned sections
+    /// with these names rather than treat them as new sections.
+    #[serde(default)]
+    pub synthetic_section_names: Vec<String>,
     /// Timestamp of the last successful reconcile apply.
     #[serde(default)]
     #[ts(type = "string | null")]
@@ -87,6 +93,7 @@ impl CollabState {
             last_export_tml_sha256: None,
             shot_baseline: Vec::new(),
             section_name_map: Vec::new(),
+            synthetic_section_names: Vec::new(),
             last_reconcile_at: None,
             write_tml_on_autosave: true,
         }

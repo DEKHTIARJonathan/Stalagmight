@@ -530,7 +530,8 @@ impl AppState {
             None => PathBuf::from(&sibling_name),
         };
 
-        let (baseline, sha) = crate::export::tml::export_tml_with_baseline(project, &sibling)?;
+        let (baseline, sha, synthetic_section_names) =
+            crate::export::tml::export_tml_with_baseline(project, &sibling)?;
 
         // One (section_name -> id) entry per section, from the exported baseline.
         let mut section_name_map = Vec::new();
@@ -546,6 +547,7 @@ impl AppState {
             c.last_export_tml_sha256 = Some(sha);
             c.shot_baseline = baseline;
             c.section_name_map = section_name_map;
+            c.synthetic_section_names = synthetic_section_names;
         }
 
         db.save_collab_state(project.collab.as_ref())?;
