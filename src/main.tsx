@@ -1,3 +1,6 @@
+// TEMP: must be the first import so its Tauri IPC patch is in place before
+// any other module can call invoke. Remove with src/utils/debugLockup.ts.
+import './utils/debugLockup';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';

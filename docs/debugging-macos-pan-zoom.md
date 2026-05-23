@@ -1,94 +1,127 @@
-# Debugging Protocol: macOS Pan/Zoom Lockup
+# Debugging Protocol: macOS UI Lockup (Pan/Zoom + Tools)
 
 ## Symptom
 
 On macOS only (Linux works fine):
 
-1. Open a project — pan and zoom both work.
-2. Trigger any zoom (on-screen +/- buttons, trackpad pinch, wheel, keyboard, double-click, zoom tool).
-3. After that first zoom: **pan stops responding**, **only one zoom step ever succeeds**, no further zoom-in or zoom-out works.
-4. Recovery requires closing and reopening the project. Full app restart is **not** needed.
+1. Open a project. The first interactive action works:
+   - First pan works.
+   - First zoom works.
+   - First tool-button click in the top-right toolbar (select/pan/zoom/edit/delete/merge/…) works.
+2. **No subsequent interactive action works.** Pan, zoom, and every other tool become unresponsive.
+3. Recovery requires closing and reopening the project. Full app restart is **not** needed.
 
-Because project close/reopen alone resolves it, the broken state lives in **`MapCanvas`** — its React refs, its local closure state, or MapLibre's per-instance handler enable-flags. All three are torn down when `SingleSystemView` unmounts.
+Originally diagnosed as pan/zoom only; the toolbar exhibits the same one-shot lockup, so the bug is broader than `MapCanvas`.
 
-## Primary hypotheses, in priority order
+## Hypotheses, in priority order
 
-1. **A MapLibre handler subsystem (`dragPan`, `scrollZoom`, …) gets `.disable()`'d on macOS and never re-enabled.** The instrumentation logs every enable/disable call, so this shows up directly.
-2. **A React ref gets stuck.** `customPanActiveRef` or `ctrlPanActiveRef` (`MapCanvas.tsx:184-190`) staying `true` would make `handleClickCapture` and `handlePointerUpCapture` (`MapCanvas.tsx:1968-1991`) silently `stopPropagation()` on every subsequent map interaction. A macOS-specific trigger would be a pointerdown without a matching pointerup (e.g. a synthetic event during trackpad pinch).
-3. **MapLibre's internal gesture state is stuck.** `map.isMoving()`, `isZooming()`, or `isRotating()` returning `true` while idle means MapLibre thinks a gesture is in progress and ignores further input. Usually caused by a missing `*end` event from WebKit.
-4. **CSS or DOM gating.** Cursor stuck on `grabbing`, or `touch-action: none` on the wrong tool.
+1. **Tauri IPC bridge saturating or hanging on macOS.** `installConsoleCapture` (`src/utils/consoleCapture.ts`, called from `src/main.tsx`) sends a fire-and-forget `invoke('push_frontend_log', …)` on every `console.*` call. If `push_frontend_log` (or any IPC command) hangs on macOS, every console-emitting code path piles up unresolved promises; once Tauri's bridge queue saturates, every subsequent invoke — including tool actions — silently fails. The lockup-snapshot helper exposes this directly: `__lockupSnapshot()` returns the in-flight IPC count.
+2. **A `MapLibre` handler subsystem (`dragPan`, `scrollZoom`, …) gets `.disable()`'d and never re-enabled.** Covered by the panZoomDebug log lines and `__debugSnapshot().handlerEnabled`.
+3. **A React ref or local closure variable in `MapCanvas` gets stuck.** `customPanActiveRef` / `ctrlPanActiveRef` staying `true` causes `handleClickCapture` (`MapCanvas.tsx:1968-1973`) to silently `stopPropagation()` every map click thereafter. macOS-specific trigger would be a `pointerdown` without a matching `pointerup`. Visible via `__debugSnapshot().refs`.
+4. **An uncaught exception in an event handler** taking down React's event delegation for that tree. Visible via the `window.onerror` / `unhandledrejection` capture in the lockup logger.
 
-`window.__debugSnapshot()` tests all four in one call.
+`__lockupSnapshot()` and `__debugSnapshot()` together test all four in two calls.
 
-## How to run it
+## What the build now logs
 
-The instrumentation is already wired into the dev build. No DevTools setup beyond opening the Web Inspector.
+Two instrumentation modules are wired up:
 
-### Step 1: Build and launch
+- **`src/utils/debugLockup.ts`** — imported first in `main.tsx`. Patches `window.__TAURI_INTERNALS__.invoke` at the lowest level, so every Tauri IPC (whether routed through `invokeIpc`, telemetry, tile-protocol, console-capture, or anything else) is logged with an id, duration, and an in-flight count. Logs a `IPC HANG` warning if any single call is still pending after 3 s. Also captures global errors, unhandled promise rejections, all document-level clicks (capture phase, non-intrusive), and `activeTool` store transitions.
+- **`src/components/Map/panZoomDebug.ts`** — wraps every MapLibre handler's `enable`/`disable`, logs map lifecycle and raw canvas events, exposes `window.__map` and `window.__panRefs`.
+
+DevTools helpers exposed on `window`:
+
+| Function | Returns |
+|---|---|
+| `__lockupSnapshot()` | `{ tauriPatched, inFlightCount, inFlightByCommand, oldest[…10], activeTool }` |
+| `__debugSnapshot()` | MapLibre handler enable-state, isMoving/isZooming/isRotating, custom-pan ref values |
+| `__map` | the MapLibre Map instance |
+| `__panRefs` | the four `useRef`s from `MapCanvas` |
+| `__getActiveTool()` | current `useUIStore.activeTool` |
+
+## How to run it on the Mac
+
+### Step 1 — build and launch
 
 ```bash
-./scripts/dev.sh   # or however you launch the macOS dev build
+pnpm install
+pnpm tauri dev
 ```
 
-Open Web Inspector (right-click → Inspect Element). Switch to the **Console** tab.
+Open Web Inspector (right-click → Inspect Element) → Console.
 
-### Step 2: Open a project and confirm baseline
+### Step 2 — confirm instrumentation loaded
 
-You should see in console:
+Within a second or two of launch, you should see:
 
 ```
-[pan-zoom-debug] install: map created, instrumentation active
-[pan-zoom-debug] dragRotate.disable()  was=true  …
-[pan-zoom-debug] touchPitch.disable()  was=true  …
-[pan-zoom-debug] boxZoom.disable()     was=true  …
-[pan-zoom-debug] install: call window.__debugSnapshot() when reproducing the bug
+[debug-lockup] instrumentation loaded
+[debug-lockup] Tauri IPC bridge patched
+[debug-lockup] uiStore.activeTool subscription installed
 ```
 
-Those three initial `.disable()` lines come from `MapCanvas.tsx:1361-1365` and confirm the monkey-patching is in place.
+If `Tauri IPC bridge patched` never appears, the patch couldn't find `window.__TAURI_INTERNALS__` — note that and stop; we'd need to fix the patch before continuing.
 
-### Step 3: Take a healthy baseline snapshot
+### Step 3 — baseline
 
-In the console:
+Open a project. Run in console:
 
 ```js
+__lockupSnapshot()
 __debugSnapshot()
 ```
 
-Save the output. This is the "everything fine" reference.
+Save the output as "BASELINE".
 
-### Step 4: Reproduce, then snapshot
+### Step 4 — reproduce
 
-1. Pan once (works).
-2. Click the on-screen **+** button once. Map zooms.
-3. Pan again — confirm it's broken.
-4. Run `__debugSnapshot()` again.
+The clearest single repro is the toolbar one, since it isolates the bug from MapLibre internals:
 
-### Step 5: Also capture the log
+1. Click any tool button in the top-right toolbar (e.g. **draw**). Verify it activates (visual highlight, log shows `activeTool: select -> draw`).
+2. Click a different tool button (e.g. **select**).
+   - Does the visual highlight change?
+   - Does the log show `activeTool: draw -> select`?
+   - Does the log show `[debug-lockup] click <button> testid=… text="…"`?
 
-Between Step 3 and Step 4, the console will have logged every:
+Then run again:
 
-- `mapName.enable()` / `.disable()` call (with short stack trace),
-- map lifecycle event (`zoomstart`, `zoomend`, `movestart`, `moveend`, etc., with the originating DOM event type),
-- raw canvas event (`pointerdown`, `pointerup`, `wheel`, `gesturestart`, `gestureend`, …).
+```js
+__lockupSnapshot()
+__debugSnapshot()
+```
 
-Right-click in the Console → **Save As…** (or select all and copy). Trim to the window starting just before you clicked **+**.
+Save the output as "BROKEN".
+
+### Step 5 — save the log
+
+In the Console, right-click → **Save As…** to dump all the log between baseline and broken. Trim to just the window around the first tool click → second tool click.
 
 ## What to look for
 
-| In the log/snapshot | Means |
+### IPC layer (hypothesis #1)
+
+| Signal | Means |
 |---|---|
-| Any `handlerName.disable()` between the **+** click and the broken state, with no matching `.enable()` | Hypothesis #1 confirmed. The stack trace in the log points at the caller. |
-| `handlerEnabled.dragPan === false` (or `scrollZoom === false`) in the broken snapshot | Same — hypothesis #1. |
-| `refs.customPanActive === true` or `refs.ctrlPanActive === true` in the broken snapshot, while no mouse button is down | Hypothesis #2. Look for a `pointerdown` in the log without a matching `pointerup`. |
-| `isMoving`, `isZooming`, or `isRotating` `=== true` in the broken snapshot | Hypothesis #3. Look for a `zoomstart`/`movestart` in the log without its matching `*end`. |
-| `gesturestart` logged with no `gestureend` | macOS WebKit pinch gesture left open. Strong macOS-specific signal. |
-| Canvas events logged with `defaultPrevented: true` on `pointerdown`/`wheel` after the lockup | A capture-phase handler in `MapCanvas.tsx:1880-2041` is swallowing them. Cross-check refs in the snapshot. |
-| Canvas events not logged at all when you try to pan after lockup | Input isn't reaching the canvas — some overlay or `pointer-events: none` issue. |
-| `cursor === 'grabbing'` in the broken snapshot while idle | Custom pan state stuck — confirms #2. |
+| `__lockupSnapshot().inFlightCount` is high (>10) and growing | IPC bridge is saturated — confirms #1. |
+| `inFlightByCommand` shows many `push_frontend_log` | Console-capture spam is what saturates. Workaround: temporarily disable `installConsoleCapture()` in `main.tsx` and retest. |
+| `inFlightByCommand` shows a specific command stuck | That command is the hung one. Find its Rust handler. |
+| `[debug-lockup] IPC HANG <cmd> > 3s` in the log | That command never resolved. |
+| `tauriPatched: false` in the snapshot | Patch never installed (timing issue) — IPC numbers below are unreliable. |
 
-## Try the in-console fix
+### Click / state layer (hypothesis #2/3/4)
 
-Once you have the snapshot+log, paste this:
+| Signal | Means |
+|---|---|
+| No `[debug-lockup] click …` log when you click the second tool | The click isn't reaching the document — overlay or `pointer-events:none` issue. |
+| `click` logged with `defaultPrevented=true` | A capture-phase handler ate it. |
+| Click logged but no `activeTool: X -> Y` log | The click reached the document but the React handler didn't fire OR didn't call `setActiveTool`. React tree may be in an error state. Look for `window.onerror` or `unhandledrejection` in the log. |
+| `activeTool: X -> Y` logged but visual doesn't update | React re-render is broken (likely an exception during render). Check error logs. |
+| `__debugSnapshot().handlerEnabled.dragPan === false` (or any other handler false) | MapLibre handler stuck disabled — hypothesis #2. |
+| `__debugSnapshot().refs.customPanActive === true` (no mouse down) | Custom pan ref stuck — hypothesis #3. |
+
+## Try the in-console recovery
+
+If state inspection points at the MapLibre layer:
 
 ```js
 ['dragPan','scrollZoom','boxZoom','dragRotate','touchZoomRotate','keyboard','doubleClickZoom','touchPitch']
@@ -96,37 +129,43 @@ Once you have the snapshot+log, paste this:
 __panRefs.customPanActive.current = false;
 __panRefs.ctrlPanActive.current = false;
 __panRefs.placementJustConfirmed.current = false;
-__debugSnapshot();
 ```
 
-If pan/zoom now work, the bug is hypothesis #1 or #2 (and the fix is to find what disabled the handler / set the ref, and not do that). If still broken, it's #3 (MapLibre gesture state) or something else — note that in the report.
+If state inspection points at IPC saturation, the only in-console recovery is to drain in-flight by reopening the project. That itself is diagnostic — it confirms the bridge state resets on project unmount.
 
 ## Report template
 
-Copy this back into the chat or a fix commit:
-
 ```
-macOS pan/zoom lockup — protocol run
+macOS UI lockup — protocol run
 
-Baseline snapshot:
-<paste output of __debugSnapshot() after open, before zoom>
+Repro: <which action triggered it — toolbar click / on-screen zoom / wheel / pinch>
 
-Broken snapshot:
-<paste output of __debugSnapshot() after the zoom click>
+BASELINE __lockupSnapshot:
+<paste>
+BASELINE __debugSnapshot:
+<paste>
 
-Log between baseline and broken (trimmed):
-<paste console lines>
+BROKEN __lockupSnapshot:
+<paste>
+BROKEN __debugSnapshot:
+<paste>
 
-In-console fix attempt result:
-<pan/zoom works again | still broken | partially>
+Log between baseline and broken (trimmed to ~50 lines around the trigger):
+<paste>
 
-My read: <hypothesis 1/2/3/4 + which log line was the smoking gun>
+Click test result:
+  - second toolbar click logged at document level: <yes/no>
+  - activeTool transition logged: <yes/no>
+  - window.onerror or unhandledrejection logged: <yes/no, paste if yes>
+
+My read: <hypothesis 1/2/3/4 + smoking-gun log line>
 ```
 
 ## Cleanup
 
 When the bug is fixed:
 
-1. Delete `src/components/Map/panZoomDebug.ts`.
-2. Revert the two diffs in `src/components/Map/MapCanvas.tsx`: the `installPanZoomDebug` import and call.
-3. Delete this doc.
+1. Delete `src/utils/debugLockup.ts`.
+2. Delete `src/components/Map/panZoomDebug.ts`.
+3. Revert the diffs in `src/main.tsx` (the debug import) and `src/components/Map/MapCanvas.tsx` (the panZoomDebug import + install call).
+4. Delete this doc.
