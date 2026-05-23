@@ -83,14 +83,14 @@ export function CollaborationSettings({ panelIdBase }: SettingsCategoryProps) {
           helpText={
             hasFile
               ? t('settings.collaboration.enable.help', 'Every save also writes the companion Ariane file shown below.')
-              : t('settings.collaboration.enable.helpNoFile', 'Save the project to a file first to enable collaboration mode.')
+              : t('settings.collaboration.enable.helpNoFile', 'The companion file is created next to the project the first time you save it.')
           }
           data-testid="setting-collaboration-enable"
         >
           <Toggle
             checked={enabled}
             onChange={handleToggle}
-            disabled={busy || !hasFile}
+            disabled={busy}
             aria-label={t('settings.collaboration.enable.aria', 'Toggle collaboration mode')}
             data-testid="toggle-collaboration"
           />

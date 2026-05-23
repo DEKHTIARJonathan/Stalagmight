@@ -518,15 +518,16 @@ impl AppState {
         save_path: &std::path::Path,
         db: &Database,
     ) -> Result<()> {
-        let sibling = {
-            let collab = project
-                .collab
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("collaboration state missing"))?;
-            match save_path.parent() {
-                Some(dir) => dir.join(&collab.sibling_tml_relative),
-                None => PathBuf::from(&collab.sibling_tml_relative),
-            }
+        // Always derive the sibling name from the current .stalx stem so the
+        // companion .tml tracks the project file even if collaboration was
+        // enabled before the project had a path (or the file was renamed).
+        let sibling_name = save_path
+            .file_stem()
+            .map(|s| format!("{}.tml", s.to_string_lossy()))
+            .unwrap_or_else(|| "collaboration.tml".to_string());
+        let sibling = match save_path.parent() {
+            Some(dir) => dir.join(&sibling_name),
+            None => PathBuf::from(&sibling_name),
         };
 
         let (baseline, sha) = crate::export::tml::export_tml_with_baseline(project, &sibling)?;
@@ -541,6 +542,7 @@ impl AppState {
         }
 
         if let Some(c) = project.collab.as_mut() {
+            c.sibling_tml_relative = sibling_name;
             c.last_export_tml_sha256 = Some(sha);
             c.shot_baseline = baseline;
             c.section_name_map = section_name_map;

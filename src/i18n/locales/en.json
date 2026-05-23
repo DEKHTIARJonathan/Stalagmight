@@ -530,6 +530,24 @@
         "ttl": "Cache TTL must be between 1 and 365 days"
       }
     },
+    "collaboration": {
+      "title": "Collaboration",
+      "intro": "Collaboration mode keeps an Ariane file (.tml) next to this project so collaborators who use Ariane can edit the survey. Stalagmight saves both files; when the Ariane file is changed externally, you are prompted on open to review and merge those changes back in.",
+      "toggleFailed": "Failed to change collaboration mode",
+      "sections": {
+        "ariane": "Ariane companion file"
+      },
+      "enable": {
+        "label": "Enable collaboration mode",
+        "help": "Every save also writes the companion Ariane file shown below.",
+        "helpNoFile": "The companion file is created next to the project the first time you save it.",
+        "aria": "Toggle collaboration mode"
+      },
+      "siblingFile": {
+        "label": "Companion file",
+        "help": "Saved in the same folder as the project. Every save writes this file."
+      }
+    },
     "advanced": {
       "title": "Advanced",
       "sections": {
