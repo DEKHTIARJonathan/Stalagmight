@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
@@ -16,14 +17,16 @@ function fmtShot(d: ShotData): string {
   return `Az ${d.azimuth_in.toFixed(1)}° · ${d.length.toFixed(2)} m · ${d.depth_in.toFixed(1)}→${d.depth_out.toFixed(1)} m`;
 }
 
-const MATCH_QUALITY_NOTE: Record<MatchQuality, string | null> = {
+/** i18n key for the advisory note shown per match-quality tier (none for exact tiers). */
+const MATCH_QUALITY_NOTE_KEY: Record<MatchQuality, string | null> = {
   Uuid: null,
   ArianeId: null,
-  Fingerprint: 'Shots were matched by geometry (the returned file has no shared IDs). Review the changes carefully before applying.',
-  Positional: 'Shots could only be matched by position. Matching is approximate — review the changes carefully before applying.',
+  Fingerprint: 'dialogs.collabReview.matchFingerprint',
+  Positional: 'dialogs.collabReview.matchPositional',
 };
 
 export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProps) {
+  const { t } = useTranslation();
   const { applyCollabChanges } = useProjectStore();
   const { closeDialog, openDialog, triggerFitToBounds } = useUIStore();
   const [isApplying, setIsApplying] = useState(false);
@@ -44,7 +47,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
   }, [changeSet]);
 
   const total = counts.added + counts.edited + counts.removed + counts.sectionsAdded + counts.sectionMeta;
-  const matchNote = MATCH_QUALITY_NOTE[changeSet.match_quality];
+  const matchNoteKey = MATCH_QUALITY_NOTE_KEY[changeSet.match_quality];
 
   const handleApply = useCallback(async () => {
     setIsApplying(true);
@@ -53,8 +56,8 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
       if (!result.success) {
         setIsApplying(false);
         openDialog('error', {
-          title: 'Reconcile Failed',
-          message: result.error ?? 'Unknown error while applying changes',
+          title: t('dialogs.collabReview.errorTitle'),
+          message: result.error ?? t('dialogs.collabReview.errorUnknown'),
         });
         return;
       }
@@ -64,51 +67,49 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
     } catch (e) {
       setIsApplying(false);
       openDialog('error', {
-        title: 'Reconcile Failed',
-        message: getErrorMessage(e, 'Failed to apply collaborator changes'),
+        title: t('dialogs.collabReview.errorTitle'),
+        message: getErrorMessage(e, t('dialogs.collabReview.errorApply')),
       });
     }
-  }, [applyCollabChanges, closeDialog, openDialog, triggerFitToBounds]);
+  }, [applyCollabChanges, closeDialog, openDialog, triggerFitToBounds, t]);
 
   return (
-    <DialogWrapper title="Review Collaborator Changes" onClose={closeDialog} size="lg" data-testid="collab-review-dialog">
+    <DialogWrapper title={t('dialogs.collabReview.title')} onClose={closeDialog} size="lg" data-testid="collab-review-dialog">
       <div className="space-y-4">
         <div className="text-sm text-text-secondary">
-          The companion Ariane file (<code>.tml</code>) was edited outside Stalagmight. The following
-          changes will be merged into this project. Stalagmight-only data (loop closures, merges,
-          offsets, comments) is preserved.
+          {t('dialogs.collabReview.intro')}
         </div>
 
         {/* Match-quality banner */}
-        {matchNote && (
+        {matchNoteKey && (
           <div
             className="p-3 bg-warning-10 border border-warning-20 rounded text-sm"
             data-testid="collab-match-quality"
           >
-            {matchNote}
+            {t(matchNoteKey)}
           </div>
         )}
 
         {/* Summary stats */}
         <div className="grid grid-cols-5 gap-3 p-3 bg-surface-alt rounded">
           <div>
-            <div className="text-xs text-text-tertiary">Added</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.collabReview.countAdded')}</div>
             <div className="text-sm font-medium" data-testid="collab-count-added">{counts.added}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Edited</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.collabReview.countEdited')}</div>
             <div className="text-sm font-medium" data-testid="collab-count-edited">{counts.edited}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Removed</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.collabReview.countRemoved')}</div>
             <div className="text-sm font-medium" data-testid="collab-count-removed">{counts.removed}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">New sections</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.collabReview.countSections')}</div>
             <div className="text-sm font-medium" data-testid="collab-count-sections">{counts.sectionsAdded}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Section edits</div>
+            <div className="text-xs text-text-tertiary">{t('dialogs.collabReview.countSectionMeta')}</div>
             <div className="text-sm font-medium" data-testid="collab-count-section-meta">{counts.sectionMeta}</div>
           </div>
         </div>
@@ -117,7 +118,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
           {/* Edited shots */}
           {changeSet.shots_edited.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">Edited shots</div>
+              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">{t('dialogs.collabReview.editedShots')}</div>
               <ul className="space-y-1" data-testid="collab-edited-list">
                 {changeSet.shots_edited.map((s, i) => (
                   <li key={i} className="text-sm border-l-2 border-warning-20 pl-2">
@@ -135,7 +136,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
           {/* Added shots */}
           {changeSet.shots_added.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">Added shots</div>
+              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">{t('dialogs.collabReview.addedShots')}</div>
               <ul className="space-y-1" data-testid="collab-added-list">
                 {changeSet.shots_added.map((s, i) => (
                   <li key={i} className="text-sm border-l-2 border-success-30 pl-2">
@@ -150,7 +151,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
           {/* Removed shots */}
           {changeSet.shots_removed.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">Removed shots</div>
+              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">{t('dialogs.collabReview.removedShots')}</div>
               <ul className="space-y-1" data-testid="collab-removed-list">
                 {changeSet.shots_removed.map((s, i) => {
                   const dependents = s.impact.removed_closures.length + s.impact.removed_merges.length;
@@ -160,7 +161,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
                       <span className="text-text-tertiary">#{s.shot_index + 1}</span>
                       {dependents > 0 && (
                         <span className="ml-1 text-xs text-warning">
-                          (also removes {dependents} closure/merge)
+                          {t('dialogs.collabReview.alsoRemoves', { count: dependents })}
                         </span>
                       )}
                     </li>
@@ -173,12 +174,12 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
           {/* New sections */}
           {changeSet.sections_added.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">New sections</div>
+              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">{t('dialogs.collabReview.newSections')}</div>
               <ul className="space-y-1" data-testid="collab-sections-list">
                 {changeSet.sections_added.map((s, i) => (
                   <li key={i} className="text-sm border-l-2 border-success-30 pl-2">
                     <span className="text-text-secondary">{s.name}</span>
-                    <span className="ml-1 text-xs text-text-tertiary">{s.shots.length} shots</span>
+                    <span className="ml-1 text-xs text-text-tertiary">{t('dialogs.collabReview.sectionShots', { count: s.shots.length })}</span>
                   </li>
                 ))}
               </ul>
@@ -188,7 +189,7 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
           {/* Section metadata changes */}
           {changeSet.section_meta_changed.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">Section changes</div>
+              <div className="text-xs font-medium text-text-tertiary uppercase tracking-wide mb-1">{t('dialogs.collabReview.sectionChanges')}</div>
               <ul className="space-y-1" data-testid="collab-section-meta-list">
                 {changeSet.section_meta_changed.map((s, i) => (
                   <li key={i} className="text-sm border-l-2 border-warning-20 pl-2">
@@ -214,14 +215,14 @@ export default function CollabReviewDialog({ changeSet }: CollabReviewDialogProp
 
         {/* Footer */}
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} data-testid="collab-review-cancel">Cancel</Button>
+          <Button onClick={closeDialog} data-testid="collab-review-cancel">{t('dialogs.collabReview.cancel')}</Button>
           <Button
             data-primary-action=""
             data-testid="collab-review-apply"
             onClick={handleApply}
             disabled={isApplying || total === 0}
           >
-            {isApplying ? 'Applying...' : 'Apply Changes'}
+            {isApplying ? t('dialogs.collabReview.applying') : t('dialogs.collabReview.apply')}
           </Button>
         </div>
       </div>

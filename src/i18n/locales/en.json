@@ -991,6 +991,31 @@
     "settings": {
       "title": "Settings"
     },
+    "collabReview": {
+      "title": "Review Collaborator Changes",
+      "intro": "The companion Ariane file (.tml) was edited outside Stalagmight. The following changes will be merged into this project. Stalagmight-only data (loop closures, merges, offsets, comments) is preserved.",
+      "matchFingerprint": "Shots were matched by geometry (the returned file has no shared IDs). Review the changes carefully before applying.",
+      "matchPositional": "Shots could only be matched by position. Matching is approximate — review the changes carefully before applying.",
+      "countAdded": "Added",
+      "countEdited": "Edited",
+      "countRemoved": "Removed",
+      "countSections": "New sections",
+      "countSectionMeta": "Section edits",
+      "editedShots": "Edited shots",
+      "addedShots": "Added shots",
+      "removedShots": "Removed shots",
+      "newSections": "New sections",
+      "sectionChanges": "Section changes",
+      "alsoRemoves": "(also removes {{count}} closure/merge)",
+      "sectionShots": "{{count}} shots",
+      "cancel": "Cancel",
+      "apply": "Apply Changes",
+      "applying": "Applying...",
+      "errorTitle": "Reconcile Failed",
+      "errorUnknown": "Unknown error while applying changes",
+      "errorApply": "Failed to apply collaborator changes",
+      "siblingWarning": "This project has an Ariane companion file ({{siblingName}}) but collaboration is off — it will not be updated when you save. Enable Ariane collaboration in Project details to keep them in sync."
+    },
     "unsaved": {
       "title": "Unsaved Changes",
       "message": "You have unsaved changes. What would you like to do?",

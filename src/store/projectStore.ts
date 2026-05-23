@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
 import { useUIStore } from './uiStore';
@@ -502,7 +503,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
               useUIStore
                 .getState()
                 .showToast(
-                  `This project has an Ariane companion file (${siblingName}) but collaboration is off — it will not be updated when you save. Enable Ariane collaboration in Project details to keep them in sync.`,
+                  i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
                   'collab-sibling-warning'
                 );
             }
