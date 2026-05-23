@@ -6,15 +6,11 @@ use crate::core::reconcile::CollabChangeSet;
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::CollabState;
 
-/// Enable or disable collaboration mode for the open project. When enabling,
-/// `sibling_tml_relative` overrides the default (`<stalx-stem>.tml`).
+/// Enable or disable collaboration mode for the open project. The companion file
+/// is always `<stalx-stem>.tml`.
 #[tauri::command]
-pub fn set_collab_enabled(
-    state: State<AppState>,
-    enabled: bool,
-    sibling_tml_relative: Option<String>,
-) -> CommandResult {
-    state.set_collab_enabled(enabled, sibling_tml_relative)
+pub fn set_collab_enabled(state: State<AppState>, enabled: bool) -> CommandResult {
+    state.set_collab_enabled(enabled)
 }
 
 /// Enable or disable collaboration for a project by path, without requiring it

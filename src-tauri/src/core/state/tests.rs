@@ -43,6 +43,34 @@ fn poison_mutex<T>(mutex: &Mutex<T>) {
 // === Project Operations Tests ===
 
 #[test]
+fn test_collab_sibling_warning_requires_prior_collaboration() {
+    let temp = TempDir::new().unwrap();
+    let stalx = temp.path().join("cave.stalx");
+    // An unrelated .tml sharing the basename (e.g. the source of a TML import).
+    std::fs::write(temp.path().join("cave.tml"), b"<x/>").unwrap();
+
+    let state = AppState::new().unwrap();
+
+    // Never had collaboration (collab = None) → no warning despite cave.tml.
+    let mut project = Project::new("Cave".to_string(), None);
+    project.file_path = Some(stalx.clone());
+    *state.project.lock().unwrap() = Some(project);
+    assert_eq!(state.collab_sibling_when_disabled(), None);
+
+    // Had collaboration, now off → warn about the stale companion file.
+    let mut project = Project::new("Cave".to_string(), None);
+    project.file_path = Some(stalx.clone());
+    let mut collab = crate::models::CollabState::new("cave.tml".to_string());
+    collab.enabled = false;
+    project.collab = Some(collab);
+    *state.project.lock().unwrap() = Some(project);
+    assert_eq!(
+        state.collab_sibling_when_disabled(),
+        Some("cave.tml".to_string())
+    );
+}
+
+#[test]
 fn test_create_project() {
     let state = AppState::new().unwrap();
 

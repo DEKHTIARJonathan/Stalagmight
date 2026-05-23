@@ -12,14 +12,9 @@ use crate::models::{CollabState, Project, SectionData, SectionId, ShotId};
 use super::AppState;
 
 impl AppState {
-    /// Enable or disable collaboration mode on the open project. When enabling,
-    /// sets the sibling `.tml` path (default `<stalx-stem>.tml`). Persisted on
-    /// the next save.
-    pub fn set_collab_enabled(
-        &self,
-        enabled: bool,
-        sibling_tml_relative: Option<String>,
-    ) -> CommandResult {
+    /// Enable or disable collaboration mode on the open project. The companion
+    /// `.tml` is always `<stalx-stem>.tml`. Persisted on the next save.
+    pub fn set_collab_enabled(&self, enabled: bool) -> CommandResult {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -29,9 +24,7 @@ impl AppState {
         };
 
         if enabled {
-            let sibling = sibling_tml_relative
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| default_sibling_name(project));
+            let sibling = default_sibling_name(project);
             match project.collab.as_mut() {
                 Some(c) => {
                     c.enabled = true;
@@ -112,18 +105,22 @@ impl AppState {
         Ok(self.compute_collab()?.map(|(cs, _)| cs))
     }
 
-    /// When collaboration is OFF, return the name of an existing sibling `.tml`
-    /// (if any) so the UI can warn that it will not be kept in sync. Returns
-    /// `None` when collaboration is on, no project/file is open, or no sibling
-    /// `.tml` is present next to the `.stalx`.
+    /// When collaboration was turned OFF on a project that previously had it on,
+    /// return the name of the companion `.tml` if it still exists, so the UI can
+    /// warn it will no longer be kept in sync. Gated on provenance — a project
+    /// that never had collaboration (`project.collab` is `None`) returns `None`,
+    /// so an unrelated `.tml` sharing the basename (e.g. an import source) does
+    /// not trigger a false warning. Also `None` when collaboration is on, no
+    /// project/file is open, or the companion no longer exists.
     pub fn collab_sibling_when_disabled(&self) -> Option<String> {
         let guard = self.project.lock().ok()?;
         let project = guard.as_ref()?;
-        if project.collab.as_ref().is_some_and(|c| c.enabled) {
+        let collab = project.collab.as_ref()?;
+        if collab.enabled {
             return None;
         }
         let file_path = project.file_path.as_ref()?;
-        let sibling_name = format!("{}.tml", file_path.file_stem()?.to_string_lossy());
+        let sibling_name = collab.sibling_tml_relative.clone();
         let sibling = match file_path.parent() {
             Some(dir) => dir.join(&sibling_name),
             None => PathBuf::from(&sibling_name),

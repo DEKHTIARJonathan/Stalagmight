@@ -242,7 +242,7 @@ interface ProjectStore {
   parseTml: (path: string) => Promise<TmlFile>;
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   // Collaboration mode
-  setCollabEnabled: (enabled: boolean, siblingTmlRelative?: string | null) => Promise<CommandResult>;
+  setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
   setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
   getCollabState: () => Promise<CollabState | null>;
   detectCollabChanges: () => Promise<CollabChangeSet | null>;
@@ -1131,10 +1131,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Collaboration mode
-  setCollabEnabled: async (enabled: boolean, siblingTmlRelative?: string | null) => {
+  setCollabEnabled: async (enabled: boolean) => {
     return executeCommand(
       'set_collab_enabled',
-      { enabled, siblingTmlRelative: siblingTmlRelative ?? null },
+      { enabled },
       { purpose: 'toggle collaboration mode' }
     );
   },
