@@ -13,7 +13,6 @@ export type SettingsCategory =
   | 'export'
   | 'shortcuts'
   | 'cache'
-  | 'collaboration'
   | 'advanced'
   | 'appearance';
 
@@ -35,7 +34,6 @@ const CATEGORIES: CategoryConfig[] = [
   { id: 'export', labelKey: 'settings.sidebar.export' },
   { id: 'shortcuts', labelKey: 'settings.sidebar.shortcuts' },
   { id: 'cache', labelKey: 'settings.sidebar.cache' },
-  { id: 'collaboration', labelKey: 'settings.sidebar.collaboration' },
   { id: 'advanced', labelKey: 'settings.sidebar.advanced' },
 ];
 

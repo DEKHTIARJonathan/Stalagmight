@@ -246,6 +246,7 @@ interface ProjectStore {
   getCollabState: () => Promise<CollabState | null>;
   detectCollabChanges: () => Promise<CollabChangeSet | null>;
   applyCollabChanges: () => Promise<CommandResult>;
+  checkCollabSibling: () => Promise<string | null>;
   parseGpx: (path: string) => Promise<GpxFile>;
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -468,26 +469,47 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       get().resetLoading();
       await get().refreshUndoState();
 
-      // Collaboration mode: if the sibling .tml was edited externally (Ariane),
-      // detect the changes and offer to reconcile them. Non-blocking.
-      void get()
-        .detectCollabChanges()
-        .then((cs) => {
-          if (
-            cs &&
-            cs.shots_added.length +
-              cs.shots_edited.length +
-              cs.shots_removed.length +
-              cs.sections_added.length +
-              cs.section_meta_changed.length >
-              0
-          ) {
-            useUIStore.getState().openDialog('collab-review', { changeSet: cs });
-          }
-        })
-        .catch(() => {
-          /* detection is best-effort; ignore errors */
-        });
+      // Collaboration mode (non-blocking, best-effort):
+      if (result.project.collab?.enabled) {
+        // If the sibling .tml was edited externally (Ariane), detect the
+        // changes and offer to reconcile them.
+        void get()
+          .detectCollabChanges()
+          .then((cs) => {
+            if (
+              cs &&
+              cs.shots_added.length +
+                cs.shots_edited.length +
+                cs.shots_removed.length +
+                cs.sections_added.length +
+                cs.section_meta_changed.length >
+                0
+            ) {
+              useUIStore.getState().openDialog('collab-review', { changeSet: cs });
+            }
+          })
+          .catch(() => {
+            /* detection is best-effort; ignore errors */
+          });
+      } else {
+        // Collaboration is off but a companion .tml exists next to the project:
+        // warn that Ariane edits won't flow in and saves won't update it.
+        void get()
+          .checkCollabSibling()
+          .then((siblingName) => {
+            if (siblingName) {
+              useUIStore
+                .getState()
+                .showToast(
+                  `This project has an Ariane companion file (${siblingName}) but collaboration is off — it will not be updated when you save. Enable Ariane collaboration in Project details to keep them in sync.`,
+                  'collab-sibling-warning'
+                );
+            }
+          })
+          .catch(() => {
+            /* best-effort; ignore errors */
+          });
+      }
 
       return { success: true };
     } catch (e) {
@@ -1131,6 +1153,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   applyCollabChanges: async () => {
     return executeCommand('apply_collab_changes', {}, {
       purpose: 'apply collaborator changes',
+    });
+  },
+
+  checkCollabSibling: async () => {
+    return await invokeIpc<string | null>('collab_sibling_when_disabled', undefined, {
+      purpose: 'warn about an unsynced Ariane sibling file',
     });
   },
 

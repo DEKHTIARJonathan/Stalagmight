@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
+import { Toggle } from '../common/Toggle';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
@@ -1157,10 +1158,92 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
               <StatCard label={t('detailPanel.projectStats.zeroDatums')} value={formatNumber(project.zero_datums.length)} />
             </div>
           </div>
+
+          {/* Collaboration mode (per-project Ariane .tml round-trip) */}
+          <CollaborationSection project={project} />
         </div>
       </Panel>
     </div>
   );
+}
+
+interface CollaborationSectionProps {
+  project: Project;
+}
+
+/**
+ * Per-project collaboration toggle: keeps a sibling Ariane `.tml` next to the
+ * `.stalx` and reconciles external Ariane edits on open. Lives here (Project
+ * details) rather than Settings because it is project-scoped, not global.
+ */
+function CollaborationSection({ project }: CollaborationSectionProps) {
+  const { t } = useTranslation();
+  const setCollabEnabled = useProjectStore((s) => s.setCollabEnabled);
+  const showToast = useUIStore((s) => s.showToast);
+  const [busy, setBusy] = useState(false);
+
+  const enabled = project.collab?.enabled ?? false;
+  const siblingName =
+    project.collab?.sibling_tml_relative ?? deriveSiblingName(project.file_path);
+
+  const handleToggle = async (next: boolean) => {
+    setBusy(true);
+    try {
+      const result = await setCollabEnabled(next);
+      if (!result.success) {
+        showToast(
+          result.error ?? t('detailPanel.collaboration.toggleFailed', 'Failed to change collaboration mode'),
+          'collab-toggle'
+        );
+      }
+    } catch (e) {
+      showToast(String(e), 'collab-toggle');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 pt-2 border-t border-border" data-testid="collaboration-section">
+      <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+        {t('detailPanel.collaboration.title', 'Collaboration')}
+      </h4>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm text-text-primary">
+            {t('detailPanel.collaboration.enable', 'Ariane collaboration')}
+          </div>
+          <div className="text-xs text-text-secondary mt-0.5">
+            {t(
+              'detailPanel.collaboration.help',
+              'Saves a companion Ariane file (.tml) on every save and merges external Ariane edits when you reopen the project.'
+            )}
+          </div>
+        </div>
+        <Toggle
+          checked={enabled}
+          onChange={handleToggle}
+          disabled={busy}
+          aria-label={t('detailPanel.collaboration.aria', 'Toggle Ariane collaboration mode')}
+          data-testid="toggle-collaboration"
+        />
+      </div>
+      {enabled && siblingName && (
+        <div className="text-xs text-text-tertiary" data-testid="collaboration-sibling-path">
+          {t('detailPanel.collaboration.companion', 'Companion file')}: <code className="break-all">{siblingName}</code>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Derive `<stem>.tml` from a project's `.stalx` path for display. */
+function deriveSiblingName(filePath: string | null | undefined): string | null {
+  if (!filePath) return null;
+  const base = filePath.replace(/^.*[\\/]/, '');
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return `${stem}.tml`;
 }
 
 interface ClosuresSectionProps {

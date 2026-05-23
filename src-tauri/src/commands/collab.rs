@@ -37,3 +37,10 @@ pub fn detect_collab_changes(
 pub fn apply_collab_changes(state: State<AppState>) -> CommandResult {
     state.execute(Command::ApplyCollabChanges)
 }
+
+/// When collaboration is OFF, the name of an existing sibling `.tml` (if any),
+/// so the UI can warn the user it will not be kept in sync. `None` otherwise.
+#[tauri::command]
+pub fn collab_sibling_when_disabled(state: State<AppState>) -> Option<String> {
+    state.collab_sibling_when_disabled()
+}

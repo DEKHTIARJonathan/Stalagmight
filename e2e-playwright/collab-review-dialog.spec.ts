@@ -180,19 +180,33 @@ test.describe('Collaboration Review Dialog', () => {
   });
 });
 
-test.describe('Collaboration Settings', () => {
-  test('Collaboration category shows the project-scoped toggle', async ({ page }) => {
+test.describe('Collaboration toggle (Project details)', () => {
+  test('the per-project toggle renders in the Details tab and invokes set_collab_enabled', async ({ page }) => {
     await openProject(page);
 
-    await page.evaluate(() => {
-      (window as unknown as {
-        __E2E_TEST__: { uiStore: { getState: () => { openDialog: (n: string, d: Record<string, unknown>) => void } } };
-      }).__E2E_TEST__.uiStore.getState().openDialog('settings', {});
-    });
-    await expect(page.getByTestId('settings-dialog')).toBeVisible();
+    // Details tab shows ProjectStats (with the Collaboration section) when nothing is selected.
+    await page.getByTestId('detail-tab-details').click();
+    await expect(page.getByTestId('collaboration-section')).toBeVisible();
 
-    await page.getByTestId('settings-tab-collaboration').click();
-    await expect(page.getByTestId('settings-panel-collaboration')).toBeVisible();
-    await expect(page.getByTestId('toggle-collaboration')).toBeVisible();
+    const toggle = page.getByTestId('toggle-collaboration');
+    await expect(toggle).toBeVisible();
+
+    const calls: string[] = [];
+    await page.exposeFunction('__recordSetCollab', () => calls.push('set'));
+    await page.evaluate(() => {
+      const store = (window as unknown as {
+        __E2E_TEST__: { projectStore: { getState: () => { setCollabEnabled: (e: boolean) => Promise<unknown> }, setState: (p: unknown) => void } };
+      }).__E2E_TEST__.projectStore;
+      const orig = store.getState().setCollabEnabled;
+      store.setState({
+        setCollabEnabled: async (enabled: boolean) => {
+          (window as unknown as { __recordSetCollab: () => void }).__recordSetCollab();
+          return orig(enabled);
+        },
+      });
+    });
+
+    await toggle.click();
+    await expect.poll(() => calls.length).toBeGreaterThan(0);
   });
 });

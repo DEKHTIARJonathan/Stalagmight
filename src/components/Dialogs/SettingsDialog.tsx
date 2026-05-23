@@ -21,7 +21,6 @@ import { ShortcutsSettings } from './settings/ShortcutsSettings';
 import { CacheSettings } from './settings/CacheSettings';
 import { AdvancedSettings } from './settings/AdvancedSettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
-import { CollaborationSettings } from './settings/CollaborationSettings';
 import type { Config } from '../../types/config';
 import {
   defaultConfig,
@@ -551,8 +550,6 @@ export default function SettingsDialog() {
         return <CacheSettings {...commonProps} />;
       case 'appearance':
         return <AppearanceSettings {...commonProps} />;
-      case 'collaboration':
-        return <CollaborationSettings {...commonProps} />;
       case 'advanced':
         return <AdvancedSettings {...commonProps} />;
       default:

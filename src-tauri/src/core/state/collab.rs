@@ -63,6 +63,25 @@ impl AppState {
         Ok(self.compute_collab()?.map(|(cs, _)| cs))
     }
 
+    /// When collaboration is OFF, return the name of an existing sibling `.tml`
+    /// (if any) so the UI can warn that it will not be kept in sync. Returns
+    /// `None` when collaboration is on, no project/file is open, or no sibling
+    /// `.tml` is present next to the `.stalx`.
+    pub fn collab_sibling_when_disabled(&self) -> Option<String> {
+        let guard = self.project.lock().ok()?;
+        let project = guard.as_ref()?;
+        if project.collab.as_ref().is_some_and(|c| c.enabled) {
+            return None;
+        }
+        let file_path = project.file_path.as_ref()?;
+        let sibling_name = format!("{}.tml", file_path.file_stem()?.to_string_lossy());
+        let sibling = match file_path.parent() {
+            Some(dir) => dir.join(&sibling_name),
+            None => PathBuf::from(&sibling_name),
+        };
+        sibling.exists().then_some(sibling_name)
+    }
+
     /// Apply the collaborator's changes as a single undoable operation.
     pub(super) fn apply_collab_changes(&self) -> CommandResult {
         let (changeset, sha) = match self.compute_collab() {

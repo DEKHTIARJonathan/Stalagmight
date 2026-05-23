@@ -2718,6 +2718,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return null;
           case 'detect_collab_changes':
             return null;
+          case 'collab_sibling_when_disabled':
+            return null;
           case 'apply_collab_changes':
             console.log('[Mock IPC] apply_collab_changes called with:', args);
             return { success: true };

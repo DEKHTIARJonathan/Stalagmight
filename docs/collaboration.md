@@ -24,7 +24,10 @@ markers, temperature). Reconciliation never destroys that data on surviving shot
   stale if Ariane edited the `.tml` after Stalagmight last saved.
 - **Reconcile is one-directional** (`.tml` → `.stalx`), triggered on open, with a
   preview the user confirms. There is no conflict-resolution UI.
-- **Per-project toggle**, off by default: **Settings → Collaboration**.
+- **Per-project toggle**, off by default, in the **Project details** panel (it is
+  per-project state stored in the `.stalx`, not a global app setting). Opening a
+  project that has a companion `.tml` while collaboration is off shows a warning
+  toast that the `.tml` won't be kept in sync.
 
 ## Data flow
 
@@ -94,7 +97,8 @@ review dialog surfaces a `DeleteShotImpact` warning before you apply.
 - `src-tauri/src/core/state/collab.rs` — enable/detect/apply on `AppState`
 - `src-tauri/src/commands/collab.rs` — IPC commands
 - `src/components/Dialogs/CollabReviewDialog.tsx` — the review/apply preview
-- `src/components/Dialogs/settings/CollaborationSettings.tsx` — the toggle
+- `src/components/SingleSystemView/DetailPanel.tsx` — the per-project toggle
+  (`CollaborationSection`, in the Details tab) and the open-time off warning
 
 ## Testing
 

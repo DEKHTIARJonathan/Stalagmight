@@ -1197,6 +1197,7 @@ pub fn run() {
             commands::collab::get_collab_state,
             commands::collab::detect_collab_changes,
             commands::collab::apply_collab_changes,
+            commands::collab::collab_sibling_when_disabled,
             // Config
             commands::config::get_config,
             commands::config::update_config,
