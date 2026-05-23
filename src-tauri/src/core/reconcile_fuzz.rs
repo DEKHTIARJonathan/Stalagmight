@@ -383,3 +383,83 @@ fn fuzz_edit_converges() {
         prop_edit_converges(seed);
     }
 }
+
+// --------------------------------------------------------------------------
+// Layer 2 — real-Ariane corpus replay (opt-in; skips if the data is absent).
+// --------------------------------------------------------------------------
+
+fn corpus_dir() -> std::path::PathBuf {
+    if let Ok(d) = std::env::var("COLLAB_CORPUS_DIR") {
+        return std::path::PathBuf::from(d);
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::PathBuf::from(home).join("src/cave/data/collab_test_data")
+}
+
+fn files_with_ext(dir: &Path, ext: &str) -> Vec<std::path::PathBuf> {
+    let mut v: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|x| x.to_str()) == Some(ext))
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+/// Replays the real Naharon Ariane edit history against the live engine: load the
+/// `.stalx`, then for each successive real `.tml` version diff → apply → assert
+/// convergence (re-diff empty). Exercises real Ariane UUID/ID/branch/datum output.
+/// Skips silently when the corpus is absent (data lives outside the repo).
+#[test]
+fn corpus_replay_real_ariane_history() {
+    let dir = corpus_dir();
+    if !dir.is_dir() {
+        eprintln!("corpus_replay: skipped (no dir {})", dir.display());
+        return;
+    }
+    let Some(stalx) = files_with_ext(&dir, "stalx").into_iter().next() else {
+        eprintln!("corpus_replay: skipped (no .stalx in {})", dir.display());
+        return;
+    };
+    let versions = files_with_ext(&dir, "tml");
+    if versions.is_empty() {
+        eprintln!("corpus_replay: skipped (no .tml versions in {})", dir.display());
+        return;
+    }
+
+    let db = crate::persistence::Database::open_existing(&stalx).unwrap();
+    let mut p = db.load_project().unwrap();
+    p.file_path = Some(stalx.clone());
+
+    let tdir = TempDir::new().unwrap();
+    seed_baseline(&mut p, tdir.path());
+
+    for vn in &versions {
+        // Parse + diff + apply must not panic on real Ariane output.
+        let ret = parse_tml(vn).unwrap();
+        let cs = diff(&p, &ret);
+        apply_changeset(&mut p, &cs);
+
+        // Convergence: re-seed from the applied state (fresh UUIDs) and re-diff
+        // against the same version with identity stripped (geometry-only, robust
+        // to index shifts and real-survey geo-key duplicates). Must be empty.
+        p.collab = None;
+        seed_baseline(&mut p, tdir.path());
+        let mut deg = parse_tml(vn).unwrap();
+        degrade(&mut deg);
+        let cs2 = diff(&p, &deg);
+        assert!(
+            cs2.is_empty(),
+            "corpus_replay: no convergence after applying {}:\n added={} edited={} removed={} sections={} meta={}",
+            vn.display(),
+            cs2.shots_added.len(),
+            cs2.shots_edited.len(),
+            cs2.shots_removed.len(),
+            cs2.sections_added.len(),
+            cs2.section_meta_changed.len(),
+        );
+    }
+    eprintln!("corpus_replay: replayed {} versions from {}", versions.len(), dir.display());
+}
