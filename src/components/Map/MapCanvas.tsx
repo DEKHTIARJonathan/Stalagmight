@@ -24,6 +24,7 @@ import { DepthLegend } from './DepthLegend';
 import { MapDevStats } from './MapDevStats';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
+import { installPanZoomDebug } from './panZoomDebug';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -1350,6 +1351,14 @@ export default function MapCanvas() {
           failIfMajorPerformanceCaveat: false, // Don't fail on software renderer
         },
       } as Record<string, unknown>),
+    });
+
+    // TEMP: macOS pan/zoom lockup debugging. Remove with panZoomDebug.ts.
+    installPanZoomDebug(map.current, {
+      customPanActive: customPanActiveRef,
+      ctrlPanActive: ctrlPanActiveRef,
+      placementJustConfirmed: placementJustConfirmedRef,
+      ctrlPanMouseEventTime: ctrlPanMouseEventTimeRef,
     });
 
     // Disable rotation (Ctrl+drag rotates by default, we want Ctrl+drag to pan)
