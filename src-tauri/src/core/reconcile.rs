@@ -214,6 +214,20 @@ fn null_date_sentinel() -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid sentinel date")
 }
 
+/// Strip a trailing parser-added ` (branch N)` suffix to recover the original
+/// section name. The parser appends it when one exported section returns as
+/// several branched sub-chains (see `parsers::tml`). Leaves other names intact.
+fn strip_branch_suffix(name: &str) -> &str {
+    let Some(idx) = name.rfind(" (branch ") else {
+        return name;
+    };
+    let rest = &name[idx + " (branch ".len()..];
+    match rest.strip_suffix(')') {
+        Some(num) if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) => &name[..idx],
+        _ => name,
+    }
+}
+
 /// Compute the changes a returned TML file makes relative to the project's
 /// stored collaboration baseline. Returns an empty set if collaboration is not
 /// configured or there is no baseline yet.
@@ -258,69 +272,149 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         v.sort_by_key(|e| e.shot_index);
     }
 
+    // SectionId -> last exported name (for rename detection). Built from the
+    // name map directly (not the reverse of name_to_id) so two sections sharing a
+    // name each keep their own entry instead of collapsing.
+    let id_to_name: HashMap<SectionId, &str> = collab
+        .section_name_map
+        .iter()
+        .map(|(n, id)| (*id, n.as_str()))
+        .collect();
+
+    // Real returned shots per (non-synthetic) section, normalized once.
+    let returned_sections: Vec<(&TmlSection, Vec<ReturnedShot>)> = tml
+        .sections
+        .iter()
+        .filter(|s| !synthetic.contains(s.name.as_str()))
+        .map(|s| (s, returned_section_shots(s)))
+        .collect();
+
     // Decide whether Ariane integer IDs are reliable (not wholesale renumbered).
     let baseline_ids: HashSet<i64> = collab.shot_baseline.iter().map(|e| e.ariane_id).collect();
-    let mut returned_id_count = 0usize;
-    let mut returned_id_overlap = 0usize;
-    for section in &tml.sections {
-        for r in returned_section_shots(section) {
-            returned_id_count += 1;
-            if baseline_ids.contains(&r.ariane_id) {
-                returned_id_overlap += 1;
+    let returned_id_overlap = returned_sections
+        .iter()
+        .flat_map(|(_, shots)| shots.iter())
+        .filter(|r| baseline_ids.contains(&r.ariane_id))
+        .count();
+    let ids_reliable =
+        !baseline_ids.is_empty() && returned_id_overlap * 2 >= baseline_ids.len();
+
+    // Stable per-shot identity → owning baseline section. Sections are matched by
+    // their shots' identity (UUID, then Ariane id when reliable), NOT by name — so
+    // a section renamed in Ariane is still recognized (its rename is reconciled,
+    // not turned into delete+add) and two sections sharing a name (which collapse
+    // into one returned TmlSection on parse) are split back apart.
+    let uuid_to_section: HashMap<&str, SectionId> = collab
+        .shot_baseline
+        .iter()
+        .filter(|e| !e.uuid.is_empty())
+        .map(|e| (e.uuid.as_str(), e.section_id))
+        .collect();
+    let arianeid_to_section: HashMap<i64, SectionId> = if ids_reliable {
+        collab.shot_baseline.iter().map(|e| (e.ariane_id, e.section_id)).collect()
+    } else {
+        HashMap::new()
+    };
+    let shot_owner = |r: &ReturnedShot| -> Option<SectionId> {
+        r.uuid
+            .as_deref()
+            .and_then(|u| uuid_to_section.get(u).copied())
+            .or_else(|| arianeid_to_section.get(&r.ariane_id).copied())
+    };
+
+    // Pass 1: which baseline section does each returned section *name* belong to,
+    // by majority vote of its identity-matched shots? Lets unidentified shots
+    // (brand-new inserts carry no baseline UUID/id) fall back to the owner of the
+    // section they came back in — even when that section was renamed.
+    let mut votes: HashMap<&str, HashMap<SectionId, usize>> = HashMap::new();
+    for (section, shots) in &returned_sections {
+        for r in shots {
+            if let Some(sid) = shot_owner(r) {
+                *votes.entry(section.name.as_str()).or_default().entry(sid).or_default() += 1;
             }
         }
     }
-    let ids_reliable =
-        !baseline_ids.is_empty() && returned_id_overlap * 2 >= baseline_ids.len();
-    let _ = returned_id_count;
+    let name_owner: HashMap<&str, SectionId> = votes
+        .into_iter()
+        .filter_map(|(name, m)| m.into_iter().max_by_key(|&(_, c)| c).map(|(s, _)| (name, s)))
+        .collect();
 
-    // Track which sections of the baseline got a matching returned section.
-    let mut matched_section_ids: HashSet<SectionId> = HashSet::new();
-
-    for section in &tml.sections {
-        if synthetic.contains(section.name.as_str()) {
-            continue;
+    // Pass 2: assign every returned shot to an owner section (identity → section
+    // name vote → exported-name map), preserving document order. Shots with no
+    // owner form brand-new sections, grouped by their returned name.
+    let mut owned: HashMap<SectionId, Vec<ReturnedShot>> = HashMap::new();
+    let mut owner_source: HashMap<SectionId, &TmlSection> = HashMap::new();
+    let mut new_order: Vec<String> = Vec::new();
+    let mut new_sections: HashMap<String, AddedSection> = HashMap::new();
+    for (section, shots) in returned_sections {
+        for r in shots {
+            let owner = shot_owner(&r)
+                .or_else(|| name_owner.get(section.name.as_str()).copied())
+                .or_else(|| name_to_id.get(section.name.as_str()).copied());
+            match owner {
+                Some(sid) => {
+                    owner_source.entry(sid).or_insert(section);
+                    owned.entry(sid).or_default().push(r);
+                }
+                None => {
+                    let entry = new_sections.entry(section.name.clone()).or_insert_with(|| {
+                        new_order.push(section.name.clone());
+                        AddedSection {
+                            name: section.name.clone(),
+                            color: section.color.clone(),
+                            surveyor: section.surveyor.clone(),
+                            date: section.date,
+                            shots: Vec::new(),
+                        }
+                    });
+                    entry.shots.push(r.data);
+                }
+            }
         }
-        let returned = returned_section_shots(section);
+    }
 
-        let Some(&sid) = name_to_id.get(section.name.as_str()) else {
-            // New section — every shot is added.
-            cs.sections_added.push(AddedSection {
-                name: section.name.clone(),
-                color: section.color.clone(),
-                surveyor: section.surveyor.clone(),
-                date: section.date,
-                shots: returned.into_iter().map(|r| r.data).collect(),
-            });
-            continue;
-        };
-        matched_section_ids.insert(sid);
+    // Reconcile each owned baseline section: metadata (incl. rename) + shots.
+    let empty_b: Vec<&crate::models::ShotBaselineEntry> = Vec::new();
+    let mut owned_ids: Vec<SectionId> = owned.keys().copied().collect();
+    owned_ids.sort_unstable();
+    for sid in &owned_ids {
+        let Some(proj_section) = sections_by_id.get(sid) else { continue };
+        let source = owner_source[sid];
 
-        let empty_b: Vec<&crate::models::ShotBaselineEntry> = Vec::new();
-        let baseline = baseline_by_section.get(&sid).unwrap_or(&empty_b);
-        let Some(proj_section) = sections_by_id.get(&sid) else {
-            continue;
-        };
-
-        // Section metadata diff.
         let mut meta = Vec::new();
-        if proj_section.color != section.color {
+        let old_name = id_to_name.get(sid).copied().unwrap_or("");
+        // The parser appends " (branch N)" when one exported section comes back as
+        // several branched sub-chains; that suffix is a parser artifact, not a
+        // user rename, so strip it before comparing.
+        let new_name = if source.is_branch_split {
+            strip_branch_suffix(&source.name)
+        } else {
+            source.name.as_str()
+        };
+        if old_name != new_name {
+            meta.push(CollabFieldChange {
+                field: "name".into(),
+                old: old_name.to_string(),
+                new: new_name.to_string(),
+            });
+        }
+        if proj_section.color != source.color {
             meta.push(CollabFieldChange {
                 field: "color".into(),
                 old: proj_section.color.clone(),
-                new: section.color.clone(),
+                new: source.color.clone(),
             });
         }
-        if opt_str(&proj_section.surveyor) != opt_str(&section.surveyor) {
+        if opt_str(&proj_section.surveyor) != opt_str(&source.surveyor) {
             meta.push(CollabFieldChange {
                 field: "surveyor".into(),
                 old: opt_str(&proj_section.surveyor),
-                new: opt_str(&section.surveyor),
+                new: opt_str(&source.surveyor),
             });
         }
         // Export writes 2000-01-01 for a null date; treat that re-imported
         // sentinel as "unset" so a clean round-trip isn't a phantom change.
-        let returned_date = section.date.filter(|d| *d != null_date_sentinel());
+        let returned_date = source.date.filter(|d| *d != null_date_sentinel());
         if proj_section.date != returned_date {
             meta.push(CollabFieldChange {
                 field: "date".into(),
@@ -330,19 +424,18 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         }
         if !meta.is_empty() {
             cs.section_meta_changed.push(SectionMetaChange {
-                section_id: sid,
-                section_name: section.name.clone(),
+                section_id: *sid,
+                section_name: source.name.clone(),
                 changes: meta,
             });
         }
 
-        // Per-section shot alignment.
         align_section(
             project,
-            sid,
-            &section.name,
-            baseline,
-            &returned,
+            *sid,
+            &source.name,
+            baseline_by_section.get(sid).unwrap_or(&empty_b),
+            &owned[sid],
             proj_section,
             ids_reliable,
             &mut cs,
@@ -350,9 +443,16 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         );
     }
 
-    // Baseline sections with no returned section of that name → all shots removed.
+    // Brand-new sections (no shot owned by any baseline section), first-seen order.
+    for name in new_order {
+        if let Some(section) = new_sections.remove(&name) {
+            cs.sections_added.push(section);
+        }
+    }
+
+    // Baseline sections with no surviving (owned) shots → all shots removed.
     for (sid, entries) in &baseline_by_section {
-        if matched_section_ids.contains(sid) {
+        if owned.contains_key(sid) {
             continue;
         }
         let Some(proj_section) = sections_by_id.get(sid) else { continue };
@@ -693,7 +793,6 @@ mod tests {
         ZeroDatum,
     };
     use crate::parsers::tml::parse_tml;
-    use std::collections::HashMap as Map;
 
     fn section_with(name: &str, shots: Vec<ShotData>) -> SectionData {
         SectionData {
@@ -746,11 +845,16 @@ mod tests {
         synthetic: Vec<String>,
     ) {
         let mut c = CollabState::new("x.tml".into());
-        let map: Map<String, SectionId> = baseline
-            .iter()
-            .map(|e| (e.section_name.clone(), e.section_id))
-            .collect();
-        c.section_name_map = map.into_iter().collect();
+        // One (name, id) entry per section, keyed by id (matches write_collab_sibling)
+        // so two sections sharing a name both keep an entry.
+        let mut seen = HashSet::new();
+        let mut section_name_map = Vec::new();
+        for e in &baseline {
+            if seen.insert(e.section_id) {
+                section_name_map.push((e.section_name.clone(), e.section_id));
+            }
+        }
+        c.section_name_map = section_name_map;
         c.shot_baseline = baseline;
         c.synthetic_section_names = synthetic;
         project.collab = Some(c);
@@ -958,5 +1062,61 @@ mod tests {
         let ret = returned(&base, dir.path());
         let cs = diff(&base, &ret);
         assert!(cs.is_empty(), "clean round-trip must be a no-op: {cs:?}");
+    }
+
+    #[test]
+    fn test_section_rename_is_reconciled_not_destroyed() {
+        // Renaming a section in Ariane (geometry unchanged) must be one name
+        // change — not a section delete + re-add that drops Stalagmight-only data
+        // (bug_003 rename half).
+        let dir = tempfile::TempDir::new().unwrap();
+        let base = baseline_project(three(), dir.path());
+        // Re-export base (reuses baseline UUIDs, as Ariane 26+ would) then rename.
+        let mut ret = returned(&base, dir.path());
+        for s in &mut ret.sections {
+            s.name = "Hallway".into();
+        }
+
+        let cs = diff(&base, &ret);
+        assert!(cs.shots_removed.is_empty(), "rename must not remove: {:?}", cs.shots_removed);
+        assert!(cs.shots_added.is_empty(), "rename must not add: {:?}", cs.shots_added);
+        assert!(cs.sections_added.is_empty(), "rename must not create a section");
+        assert_eq!(cs.section_meta_changed.len(), 1, "one section-meta change");
+        assert!(
+            cs.section_meta_changed[0]
+                .changes
+                .iter()
+                .any(|c| c.field == "name" && c.old == "Main" && c.new == "Hallway"),
+            "expected a Main→Hallway name change: {:?}",
+            cs.section_meta_changed[0].changes
+        );
+    }
+
+    #[test]
+    fn test_duplicate_section_names_clean_roundtrip_is_empty() {
+        // Two sections sharing a name collapse into one TmlSection on parse. They
+        // must be split back apart by shot identity, so a clean round-trip is a
+        // no-op rather than mass remove/add (bug_003 duplicate-name half).
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut p = Project::new("Cave".into(), None);
+        p.add_section(section_with("Main", three()));
+        // Second "Main", attached at its start to root station 1 (depth 1.0) so it
+        // exports as a clean forward leg with no synthetic reversal.
+        p.add_section(section_with(
+            "Main",
+            vec![shot(40.0, 4.0, 1.0, 1.5), shot(50.0, 5.0, 1.5, 2.0)],
+        ));
+        let root_id = p.sections[0].id;
+        let child_id = p.sections[1].id;
+        p.station_merges.push(StationMerge {
+            station_a: StationRef::new(root_id, 1),
+            station_b: StationRef::new(child_id, 0),
+            merged_at: chrono::Utc::now(),
+        });
+        let base = baseline_for(p, dir.path());
+
+        let ret = returned(&base, dir.path());
+        let cs = diff(&base, &ret);
+        assert!(cs.is_empty(), "duplicate-named clean round-trip must be empty: {cs:?}");
     }
 }

@@ -336,6 +336,9 @@ fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
         if let Some(section) = project.get_section_mut(m.section_id) {
             for ch in &m.changes {
                 match ch.field.as_str() {
+                    "name" => {
+                        section.name = (!ch.new.is_empty()).then(|| ch.new.clone());
+                    }
                     "color" => section.color = ch.new.clone(),
                     "surveyor" => {
                         section.surveyor = (!ch.new.is_empty()).then(|| ch.new.clone());
@@ -355,7 +358,7 @@ fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::core::reconcile::{AddedShot, CollabChangeSet};
+    use crate::core::reconcile::{AddedShot, CollabChangeSet, CollabFieldChange, SectionMetaChange};
     use crate::models::ShotData;
 
     fn shot(az: f64, len: f64) -> ShotData {
@@ -440,5 +443,25 @@ mod tests {
         apply_changeset(&mut p, &cs);
 
         assert_eq!(azimuths(&p), vec![5.0, 10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn apply_section_name_change_renames_section() {
+        let mut p = proj_abcd();
+        let sid = p.sections[0].id;
+
+        let mut cs = CollabChangeSet::empty();
+        cs.section_meta_changed.push(SectionMetaChange {
+            section_id: sid,
+            section_name: "Hallway".into(),
+            changes: vec![CollabFieldChange {
+                field: "name".into(),
+                old: "Main".into(),
+                new: "Hallway".into(),
+            }],
+        });
+        apply_changeset(&mut p, &cs);
+
+        assert_eq!(p.sections[0].name.as_deref(), Some("Hallway"));
     }
 }

@@ -87,6 +87,29 @@ tiers, in order:
 Synthesized shots (START, CLOSURE, pre-zero-datum reversed legs, branch splits) have
 no 1:1 Stalagmight identity and are excluded from the baseline.
 
+## Section identity (matching)
+
+Returned sections are matched to baseline sections by their **shots' identity**, not
+by name: every returned shot is assigned to the baseline section that owns it (UUID,
+then Ariane id when reliable), and the per-section shot alignment runs on those
+groups. Consequences:
+
+- A section **renamed** in Ariane is still recognized; the rename is reconciled as a
+  `name` metadata change rather than a destructive delete + re-add.
+- Two sections that **share a name** (which collapse, or branch-split, into the same
+  returned section group on parse) are split back apart by shot identity.
+- Shots with no identity match fall back to the owner of the section name they came
+  back in (so brand-new inserts join the right section), then to the exported-name
+  map; only genuinely unowned shots form new sections.
+- **Synthetic export legs** (`<name> (pre-zero-datum)`, `<name> (reversed)`) are
+  recorded at export (`CollabState.synthetic_section_names`) and skipped on
+  reconcile, so a clean round-trip of a georeferenced or branched survey is a no-op
+  instead of surfacing phantom new sections. The parser's ` (branch N)` suffix is
+  likewise treated as an artifact, not a rename.
+
+Reliable rename / duplicate-name handling needs Ariane 26+ UUIDs; older files fall
+back to name-based matching (today's behavior).
+
 ## What is and isn't reconciled
 
 **Overwritten from the `.tml`** on edited shots: azimuth (→ azimuth_in), length,
