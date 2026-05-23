@@ -1,12 +1,11 @@
 // TEMPORARY: instrumentation for the macOS-only UI lockup investigation.
 // Symptom: after the first interactive action (any tool click, any zoom),
-// no further tool actions work until the project is reopened. See
-// docs/debugging-macos-pan-zoom.md. Import this at the very top of main.tsx
-// (before installConsoleCapture) and delete the file once fixed.
+// no further tool actions work until the project is reopened.
+// See docs/debugging-macos-pan-zoom.md. Import this at the top of main.tsx
+// and delete the file once fixed.
 
-// Cache the original console funcs BEFORE installConsoleCapture wraps them.
-// Without this, every [debug-lockup] log would itself fire push_frontend_log
-// IPC, which we are trying to measure.
+// Cache original console funcs BEFORE installConsoleCapture wraps them, so
+// our own logging does not loop back through push_frontend_log IPC.
 const log = console.log.bind(console);
 const warn = console.warn.bind(console);
 const error = console.error.bind(console);
@@ -29,72 +28,58 @@ interface InFlightEntry {
 
 const inFlight = new Map<number, InFlightEntry>();
 let nextId = 0;
-let tauriPatched = false;
 
-interface TauriInternals {
-  invoke?: (cmd: string, args?: unknown, opts?: unknown) => Promise<unknown>;
-  __debugPatched?: boolean;
-}
+/**
+ * Observe an existing IPC Promise for diagnostics. Pass-through: returns the
+ * same Promise reference the caller passed in, so it cannot change the
+ * behaviour of the caller's await/then chain. Side-branches via .then() to
+ * track in-flight count and warn on hangs > 3 s.
+ */
+export function trackInvoke<T>(command: string, p: Promise<T>): Promise<T> {
+  const id = ++nextId;
+  const start = performance.now();
+  const silent = NOISY_COMMANDS.has(command);
 
-function patchTauriInvoke(): void {
-  const w = window as unknown as { __TAURI_INTERNALS__?: TauriInternals };
-  const internals = w.__TAURI_INTERNALS__;
-  if (!internals || typeof internals.invoke !== 'function') {
-    window.setTimeout(patchTauriInvoke, 50);
-    return;
-  }
-  if (internals.__debugPatched) return;
-  internals.__debugPatched = true;
-  tauriPatched = true;
-
-  const orig = internals.invoke.bind(internals);
-  internals.invoke = (cmd: string, args?: unknown, opts?: unknown) => {
-    const id = ++nextId;
-    const start = performance.now();
-    const silent = NOISY_COMMANDS.has(cmd);
-
-    const warnTimer = window.setTimeout(() => {
-      warn(
-        `[debug-lockup] IPC HANG ${cmd} > 3s (id=${id}, inFlight=${inFlight.size})`,
-      );
-    }, 3000);
-
-    inFlight.set(id, { command: cmd, start, warnTimer });
-    if (!silent) {
-      log(`[debug-lockup] IPC -> ${cmd} (id=${id}, inFlight=${inFlight.size})`);
-    }
-
-    return orig(cmd, args, opts).then(
-      (res: unknown) => {
-        window.clearTimeout(warnTimer);
-        const ms = Math.round(performance.now() - start);
-        inFlight.delete(id);
-        if (!silent || ms > 500) {
-          log(
-            `[debug-lockup] IPC ok ${cmd} ${ms}ms (id=${id}, inFlight=${inFlight.size})`,
-          );
-        }
-        return res;
-      },
-      (err: unknown) => {
-        window.clearTimeout(warnTimer);
-        const ms = Math.round(performance.now() - start);
-        inFlight.delete(id);
-        error(
-          `[debug-lockup] IPC FAIL ${cmd} ${ms}ms (id=${id}, inFlight=${inFlight.size}) reason=${String(err)}`,
-        );
-        throw err;
-      },
+  const warnTimer = window.setTimeout(() => {
+    warn(
+      `[debug-lockup] IPC HANG ${command} > 3s (id=${id}, inFlight=${inFlight.size})`,
     );
-  };
+  }, 3000);
 
-  log('[debug-lockup] Tauri IPC bridge patched');
+  inFlight.set(id, { command, start, warnTimer });
+  if (!silent) {
+    log(`[debug-lockup] IPC -> ${command} (id=${id}, inFlight=${inFlight.size})`);
+  }
+
+  // Side-branch observation only. Both handlers swallow their result so this
+  // branch never produces an unhandled rejection regardless of how the
+  // caller handles the original promise.
+  p.then(
+    () => {
+      window.clearTimeout(warnTimer);
+      inFlight.delete(id);
+      const ms = Math.round(performance.now() - start);
+      if (!silent || ms > 500) {
+        log(
+          `[debug-lockup] IPC ok ${command} ${ms}ms (id=${id}, inFlight=${inFlight.size})`,
+        );
+      }
+    },
+    (err: unknown) => {
+      window.clearTimeout(warnTimer);
+      inFlight.delete(id);
+      const ms = Math.round(performance.now() - start);
+      error(
+        `[debug-lockup] IPC FAIL ${command} ${ms}ms (id=${id}, inFlight=${inFlight.size}) reason=${String(err)}`,
+      );
+    },
+  );
+
+  return p;
 }
 
-patchTauriInvoke();
-
-// Global error capture — surface anything React's render error boundary or
-// promise chains might be swallowing.
+// Global error capture — surface anything React error boundaries or
+// fire-and-forget promise chains would otherwise swallow.
 window.addEventListener('error', (e) => {
   error('[debug-lockup] window.onerror', {
     message: e.message,
@@ -107,8 +92,7 @@ window.addEventListener('unhandledrejection', (e) => {
   error('[debug-lockup] unhandledrejection', String(e.reason));
 });
 
-// Document-level click logger (capture phase, never preventDefault). Confirms
-// whether clicks even reach the document after the lockup.
+// Document-level click logger (capture phase, never preventDefault).
 document.addEventListener(
   'click',
   (e) => {
@@ -149,7 +133,6 @@ void import('../store/uiStore').then(({ useUIStore }) => {
     return acc;
   }, {});
   const snapshot = {
-    tauriPatched,
     inFlightCount: inFlight.size,
     inFlightByCommand: byCommand,
     oldest: stale.slice(0, 10),
@@ -160,4 +143,4 @@ void import('../store/uiStore').then(({ useUIStore }) => {
   return snapshot;
 };
 
-log('[debug-lockup] instrumentation loaded');
+log('[debug-lockup] instrumentation loaded (pass-through mode)');

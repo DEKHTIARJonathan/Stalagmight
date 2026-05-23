@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { trackCommand } from './telemetry';
+import { trackInvoke } from './debugLockup';
 
 const IPC_TRACE = import.meta.env.VITE_IPC_TRACE === 'true';
 
@@ -45,7 +46,7 @@ const invokeWithTrace: InvokeIpc = async <T>(command: string, args?: Record<stri
   logStart(`[IPC] invoking ${command} for ${purpose}`, { command, purpose, ...fields });
 
   try {
-    const result = await invoke<T>(command, args);
+    const result = await trackInvoke(command, invoke<T>(command, args));
     const durationMs = Math.round(nowMs() - start);
     console.debug(`[IPC] success ${command}`, { command, purpose, duration_ms: durationMs, ...fields });
     return result;
@@ -64,7 +65,7 @@ const invokeWithTrace: InvokeIpc = async <T>(command: string, args?: Record<stri
 
 const invokeNoTrace: InvokeIpc = <T>(command: string, args?: Record<string, unknown>, _meta?: IpcMeta) => {
   if (!UNTRACKED_COMMANDS.has(command)) trackCommand(command);
-  return invoke<T>(command, args);
+  return trackInvoke(command, invoke<T>(command, args));
 };
 
 /**
