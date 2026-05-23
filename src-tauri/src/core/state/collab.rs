@@ -244,7 +244,7 @@ fn default_sibling_name(project: &Project) -> String {
 /// Mutate the project in place to apply a reconciled change set. Order matters:
 /// edits (no length change) → removes (descending index) → appends → new
 /// sections → section metadata. Stalagmight-only shot fields are preserved.
-fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
+pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
     // Edits in place, preserving Stalagmight-only fields.
     for e in &cs.shots_edited {
         if let Some(section) = project.get_section_mut(e.section_id) {
@@ -355,7 +355,9 @@ fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::core::reconcile::{AddedShot, CollabChangeSet, CollabFieldChange, SectionMetaChange};
+    use crate::core::reconcile::{
+        AddedShot, CollabChangeSet, CollabFieldChange, EditedShot, SectionMetaChange,
+    };
     use crate::models::ShotData;
 
     fn shot(az: f64, len: f64) -> ShotData {
@@ -440,6 +442,63 @@ mod tests {
         apply_changeset(&mut p, &cs);
 
         assert_eq!(azimuths(&p), vec![5.0, 10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn apply_edit_preserves_stalagmight_only_fields() {
+        // An edit overwrites TML-expressible fields but must preserve fields Ariane
+        // can't represent (azimuth_out, pitch_out, marker_index, temperature).
+        let mut p = Project::new("Cave".into(), None);
+        p.add_section(SectionData {
+            name: Some("Main".into()),
+            surveyor: None,
+            date: None,
+            color: "#000000".into(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                azimuth_in: 10.0,
+                azimuth_out: 200.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                pitch_in: Some(1.0),
+                pitch_out: Some(5.0),
+                marker_index: Some(7),
+                temperature: Some(12.5),
+                ..Default::default()
+            }],
+        });
+        let sid = p.sections[0].id;
+
+        let mut cs = CollabChangeSet::empty();
+        cs.shots_edited.push(EditedShot {
+            section_id: sid,
+            shot_index: 0,
+            section_name: "Main".into(),
+            changes: vec![CollabFieldChange {
+                field: "length".into(),
+                old: "5.000".into(),
+                new: "99.000".into(),
+            }],
+            // What a returned Ariane shot carries — no azimuth_out/pitch_out/marker/temp.
+            new_data: ShotData {
+                azimuth_in: 10.0,
+                length: 99.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                pitch_in: Some(1.0),
+                ..Default::default()
+            },
+        });
+        apply_changeset(&mut p, &cs);
+
+        let shot = &p.sections[0].shots[0];
+        assert_eq!(shot.length, 99.0, "TML field applied");
+        assert_eq!(shot.azimuth_out, 200.0, "azimuth_out preserved");
+        assert_eq!(shot.pitch_out, Some(5.0), "pitch_out preserved");
+        assert_eq!(shot.marker_index, Some(7), "marker_index preserved");
+        assert_eq!(shot.temperature, Some(12.5), "temperature preserved");
     }
 
     #[test]
