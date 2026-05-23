@@ -115,38 +115,58 @@ sqlite3 /tmp/collab_stress/<stem>.stalx "SELECT state_json FROM collab_state;" |
   consistent, sha/baseline track.
 - **i18n**: switch locale → review dialog + sibling toast are translated, not English.
 
-## 6. Bulk / fuzz / soak
+## 6. Automated stress tests (implemented)
 
-Add a property-based round-trip fuzzer as a Rust test. The reconcile harness in
-`src-tauri/src/core/reconcile.rs::tests` already exposes `baseline_project` /
-`returned` / `diff`, and `apply_changeset` is reachable from
-`core::state::collab::tests`.
+Three layers run the above invariants automatically.
 
-```text
-for 10_000 random seeds:
-  1. generate a random project (1–8 sections, 0–50 shots each, random datums/merges/closures)
-  2. export → seed baseline
-  3. apply a random mutation to the parsed TmlFile
-     (edit / insert / delete / rename / reorder / add-section / clear-uuids / shift-ids)
-  4. cs = diff(base, mutated)
-  5. apply_changeset(&mut base, &cs)
-  6. ASSERT:
-     - re-export(base) diffed again == empty   (convergence / idempotence)
-     - Stalagmight-only fields unchanged on surviving shots
-     - shot count == mutated shot count
-     - no panics
+### Layer 1 — Rust property fuzzer (`src-tauri/src/core/reconcile_fuzz.rs`)
+
+Dependency-free, deterministic (SplitMix64). A generator bounded to clean-round-trip
+topologies (plain / mid-station datum / merged child / duplicate names) feeds three
+properties, each scaled by `COLLAB_FUZZ_ITERS` (default 64; runs in the normal
+`cargo test` CI gate):
+
+1. `fuzz_clean_roundtrip_is_empty` — UUID-preserving clean round-trip ⇒ empty diff.
+2. `fuzz_degraded_roundtrip_is_empty` — identity stripped (geometry/positional tiers)
+   ⇒ empty diff.
+3. `fuzz_edit_converges` — a depth-safe edit (length/azimuth/insert/delete/rename) is
+   detected, applied, and converges (re-diff empty) — the net for the insert-position
+   bug.
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml reconcile_fuzz
+COLLAB_FUZZ_ITERS=20000 cargo test --manifest-path src-tauri/Cargo.toml reconcile_fuzz   # soak
 ```
 
-Run under `cargo test`, and on nightly with `RUSTFLAGS=-Zsanitizer=address` for
-memory safety. Log seeds; promote each minimized failure into a permanent unit test.
+A failure prints its seed; pin it via `run_seed(seed)` as a permanent regression test.
+Stalagmight-only-field preservation is a targeted test next to `apply_changeset`
+(`apply_edit_preserves_stalagmight_only_fields`).
 
-Complementary layers:
+### Layer 2 — real-Ariane corpus replay (same file)
 
-- **Playwright soak**: extend `e2e-playwright/collab-review-dialog.spec.ts` to drive
-  the store (`__E2E_TEST__.projectStore`) through `detectCollabChanges()` /
-  `applyCollabChanges()` over a batch of synthetic change sets.
-- **CLI batch**: for each `.tml` in a corpus, copy it as the sibling, open headless
-  (`xvfb-run pnpm test:ui`), assert the change set.
+`corpus_replay_real_ariane_history` loads the Naharon `.stalx` and replays each real
+`.tml` version (diff → apply → assert convergence), exercising real Ariane
+UUID/ID/branch/datum output. Skips silently when the corpus is absent (so CI stays
+green).
+
+```bash
+COLLAB_CORPUS_DIR=~/src/cave/data/collab_test_data \
+  cargo test --manifest-path src-tauri/Cargo.toml reconcile_fuzz::corpus_replay -- --nocapture
+```
+
+### Layer 3 — WDIO fullstack round-trip (`e2e/specs/collab-roundtrip.spec.ts`)
+
+Against the real backend (real reconcile, real `.stalx`/`.tml`): clean round-trip
+(no dialog), external shot edit (detect → apply → undo/redo → converge), external
+section rename (meta change, no destroy), and a georeferenced project (no phantom
+section). Local-only (not CI).
+
+```bash
+./scripts/wdio.sh --spec e2e/specs/collab-roundtrip.spec.ts
+```
+
+For nightly soak, raise `COLLAB_FUZZ_ITERS` and optionally run Layer 1 under
+`RUSTFLAGS=-Zsanitizer=address` on nightly Rust.
 
 ## 7. Per-run verification checklist
 
