@@ -74,6 +74,40 @@ function forEachMethod(
   }
 }
 
+// Known "currently running" flag names across MapLibre / TaskQueue variants.
+// On catching a re-entry throw we reset any of these that exist on the owner,
+// since the throw means a previous run() leaked the flag.
+const RUNNING_FLAG_CANDIDATES = [
+  '_currentlyRunning',
+  '_running',
+  'running',
+  '_isRunning',
+  '_inRun',
+  '_renderInProgress',
+];
+
+// Snapshot primitive-typed own properties of an object so we can see which
+// flag is leaked.
+function snapshotPrimitives(owner: object): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(owner)) {
+    try {
+      const v = (owner as Record<string, unknown>)[k];
+      const t = typeof v;
+      if (t === 'boolean' || t === 'number' || t === 'string' || v == null) {
+        out[k] = v;
+      } else if (Array.isArray(v)) {
+        out[k] = `Array(${v.length})`;
+      } else if (t === 'object') {
+        out[k] = `<${(v as { constructor?: { name?: string } })?.constructor?.name ?? 'object'}>`;
+      }
+    } catch {
+      // Ignore getter throws.
+    }
+  }
+  return out;
+}
+
 function installSwallowForRunThrow(
   map: maplibregl.Map,
   log: (msg: string) => void,
@@ -97,11 +131,38 @@ function installSwallowForRunThrow(
         return orig(...args);
       } catch (e: unknown) {
         const msg = (e as { message?: string })?.message ?? String(e);
-        if (msg.includes(NEEDLE)) {
-          log(`[swallow] ${label}.${name} threw re-entry, swallowed`);
+        if (!msg.includes(NEEDLE)) throw e;
+
+        // The "already running" guard fired. The previous call leaked its
+        // running flag (TaskQueue.run has no try/finally, so any throwing
+        // callback in the queue leaks the flag permanently).
+        const before = snapshotPrimitives(owner);
+        const reset: string[] = [];
+        for (const k of RUNNING_FLAG_CANDIDATES) {
+          if (k in (owner as object)) {
+            try {
+              (owner as Record<string, unknown>)[k] = false;
+              reset.push(k);
+            } catch {
+              // Ignore non-writable.
+            }
+          }
+        }
+        log(
+          `[swallow] ${label}.${name} re-entry caught; owner state was ${JSON.stringify(before)}; reset ${reset.length ? reset.join(',') : 'NONE'}`,
+        );
+        if (reset.length === 0) {
+          log(`[swallow] no known running-flag found to reset; tell me which property on ${label} should be false`);
           return undefined;
         }
-        throw e;
+        try {
+          return orig(...args);
+        } catch (e2: unknown) {
+          log(
+            `[swallow] ${label}.${name} retry after reset failed: ${String((e2 as { message?: string })?.message ?? e2)}`,
+          );
+          return undefined;
+        }
       }
     };
     (wrapper as { __debugWrapped?: boolean }).__debugWrapped = true;
