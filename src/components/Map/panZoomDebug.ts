@@ -148,6 +148,35 @@ export function installPanZoomDebug(map: maplibregl.Map, refs: DebugRefs): void 
         return [n, h?.isEnabled?.()];
       }),
     );
+    // Dump primitive-typed own properties of HandlerManager so we can see
+    // its internal flags (e.g. _running, _started, _changes pending, etc.)
+    // without knowing their names in advance.
+    const hmObj = (map as unknown as { handlers?: Record<string, unknown> }).handlers ?? {};
+    const hmInternals: Record<string, unknown> = {};
+    for (const k of Object.keys(hmObj)) {
+      const v = (hmObj as Record<string, unknown>)[k];
+      const t = typeof v;
+      if (t === 'boolean' || t === 'number' || t === 'string' || v == null) {
+        hmInternals[k] = v;
+      } else if (Array.isArray(v)) {
+        hmInternals[k] = `Array(${v.length})`;
+      } else if (t === 'object') {
+        hmInternals[k] = `<${(v as { constructor?: { name?: string } })?.constructor?.name ?? 'object'}>`;
+      } else if (t === 'function') {
+        hmInternals[k] = '<fn>';
+      }
+    }
+    // Internal flag candidates on the Map itself that may indicate a wedged
+    // render loop.
+    const mapPrivate = map as unknown as Record<string, unknown>;
+    const mapInternals: Record<string, unknown> = {};
+    for (const k of ['_loaded', '_styleDirty', '_sourcesDirty', '_repaint', '_frame', '_rendering', '_idleTriggered', '_painter']) {
+      const v = mapPrivate[k];
+      const t = typeof v;
+      mapInternals[k] = (t === 'boolean' || t === 'number' || t === 'string' || v == null)
+        ? v
+        : `<${(v as { constructor?: { name?: string } })?.constructor?.name ?? t}>`;
+    }
     const snapshot = {
       handlerEnabled,
       isMoving: map.isMoving(),
@@ -157,6 +186,8 @@ export function installPanZoomDebug(map: maplibregl.Map, refs: DebugRefs): void 
       center: map.getCenter().toArray(),
       cursor: map.getCanvas().style.cursor,
       canvasTouchAction: getComputedStyle(map.getCanvas()).touchAction,
+      hmInternals,
+      mapInternals,
       refs: {
         customPanActive: refs.customPanActive.current,
         ctrlPanActive: refs.ctrlPanActive.current,
