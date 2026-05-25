@@ -1,5 +1,6 @@
-// TEMP: must be the first import so its Tauri IPC patch is in place before
-// any other module can call invoke. Remove with src/utils/debugLockup.ts.
+// Optional debug instrumentation. Inert unless VITE_DEBUG_MACOS_LOCKUP=true
+// at build time. Imported first so its side-effects can wire up before any
+// other module runs. See docs/debugging-macos-pan-zoom.md.
 import './utils/debugLockup';
 import React from 'react';
 import ReactDOM from 'react-dom/client';

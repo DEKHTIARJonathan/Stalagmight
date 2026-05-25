@@ -1353,7 +1353,8 @@ export default function MapCanvas() {
       } as Record<string, unknown>),
     });
 
-    // TEMP: macOS pan/zoom lockup debugging. Remove with panZoomDebug.ts.
+    // Optional MapLibre instrumentation; inert unless VITE_DEBUG_MACOS_LOCKUP
+    // is set at build time. See docs/debugging-macos-pan-zoom.md.
     installPanZoomDebug(map.current, {
       customPanActive: customPanActiveRef,
       ctrlPanActive: ctrlPanActiveRef,

@@ -1,171 +1,124 @@
-# Debugging Protocol: macOS UI Lockup (Pan/Zoom + Tools)
+# macOS UI Lockup — Postmortem and Re-enabling the Debug Toolkit
 
-## Symptom
+## What happened
 
-On macOS only (Linux works fine):
+On macOS only, after the first interactive action in a project (any tool
+click, any zoom, any pan), every subsequent action stopped working until the
+project was closed and reopened. Linux was unaffected.
 
-1. Open a project. The first interactive action works:
-   - First pan works.
-   - First zoom works.
-   - First tool-button click in the top-right toolbar (select/pan/zoom/edit/delete/merge/…) works.
-2. **No subsequent interactive action works.** Pan, zoom, and every other tool become unresponsive.
-3. Recovery requires closing and reopening the project. Full app restart is **not** needed.
+**Root cause:** `SurveyLayer.handleZoomEndTelemetry` /
+`handleMoveEndTelemetry` (in `src/components/Map/SurveyLayer.tsx`) used
+`orig instanceof TouchEvent`. On macOS desktop Safari/WKWebView, `TouchEvent`
+is not exposed as a global by default (it's iOS-only unless touch events are
+explicitly enabled at the engine level), so the *reference* threw
+`ReferenceError: Can't find variable: TouchEvent` before `instanceof` could
+evaluate.
 
-Originally diagnosed as pan/zoom only; the toolbar exhibits the same one-shot lockup, so the bug is broader than `MapCanvas`.
+These callbacks are wired to MapLibre's `zoomend` / `moveend` events, so the
+throw fired on every user-initiated zoom or pan. It propagated up through
+MapLibre's dispatch path:
+`fire → _afterEase → _stop → TaskQueue.run`. MapLibre's `TaskQueue.run()` has
+no `try/finally` around its `_currentlyRunning` flag, so the leaked flag
+wedged the queue permanently. From that point on, every subsequent
+`TaskQueue.run()` hit the re-entry guard and threw
+`"Attempting to run(), but is already running."`, the rAF render loop died,
+and even programmatic calls like `__map.panBy()` produced no movement.
 
-## Hypotheses, in priority order
+**Fix:** guard the references with `typeof TouchEvent !== 'undefined' && ...`.
+Two-line change, see commit `0ddc51d5`.
 
-1. **Tauri IPC bridge saturating or hanging on macOS.** `installConsoleCapture` (`src/utils/consoleCapture.ts`, called from `src/main.tsx`) sends a fire-and-forget `invoke('push_frontend_log', …)` on every `console.*` call. If `push_frontend_log` (or any IPC command) hangs on macOS, every console-emitting code path piles up unresolved promises; once Tauri's bridge queue saturates, every subsequent invoke — including tool actions — silently fails. The lockup-snapshot helper exposes this directly: `__lockupSnapshot()` returns the in-flight IPC count.
-2. **A `MapLibre` handler subsystem (`dragPan`, `scrollZoom`, …) gets `.disable()`'d and never re-enabled.** Covered by the panZoomDebug log lines and `__debugSnapshot().handlerEnabled`.
-3. **A React ref or local closure variable in `MapCanvas` gets stuck.** `customPanActiveRef` / `ctrlPanActiveRef` staying `true` causes `handleClickCapture` (`MapCanvas.tsx:1968-1973`) to silently `stopPropagation()` every map click thereafter. macOS-specific trigger would be a `pointerdown` without a matching `pointerup`. Visible via `__debugSnapshot().refs`.
-4. **An uncaught exception in an event handler** taking down React's event delegation for that tree. Visible via the `window.onerror` / `unhandledrejection` capture in the lockup logger.
+## When to re-enable the debug toolkit
 
-`__lockupSnapshot()` and `__debugSnapshot()` together test all four in two calls.
+If a similar lockup, render-loop wedge, or "everything stops working after one
+action" symptom appears on macOS (or any other platform), this instrumentation
+will likely identify it faster than reading code. The same scaffolding works
+for IPC saturation, stuck React refs, and uncaught errors thrown inside
+MapLibre's event dispatch chain.
 
-## What the build now logs
-
-Two instrumentation modules are wired up:
-
-- **`src/utils/debugLockup.ts`** — imported first in `main.tsx`. Patches `window.__TAURI_INTERNALS__.invoke` at the lowest level, so every Tauri IPC (whether routed through `invokeIpc`, telemetry, tile-protocol, console-capture, or anything else) is logged with an id, duration, and an in-flight count. Logs a `IPC HANG` warning if any single call is still pending after 3 s. Also captures global errors, unhandled promise rejections, all document-level clicks (capture phase, non-intrusive), and `activeTool` store transitions.
-- **`src/components/Map/panZoomDebug.ts`** — wraps every MapLibre handler's `enable`/`disable`, logs map lifecycle and raw canvas events, exposes `window.__map` and `window.__panRefs`.
-
-DevTools helpers exposed on `window`:
-
-| Function | Returns |
-|---|---|
-| `__lockupSnapshot()` | `{ tauriPatched, inFlightCount, inFlightByCommand, oldest[…10], activeTool }` |
-| `__debugSnapshot()` | MapLibre handler enable-state, isMoving/isZooming/isRotating, custom-pan ref values |
-| `__map` | the MapLibre Map instance |
-| `__panRefs` | the four `useRef`s from `MapCanvas` |
-| `__getActiveTool()` | current `useUIStore.activeTool` |
-
-## How to run it on the Mac
-
-### Step 1 — build and launch
+The toolkit is inert at runtime by default. To enable it:
 
 ```bash
-pnpm install
-pnpm tauri dev
+VITE_DEBUG_MACOS_LOCKUP=true pnpm tauri dev
 ```
 
-Open Web Inspector (right-click → Inspect Element) → Console.
+(Or set the same env var in `.env.local`.) Vite tree-shakes the gated bodies
+out of bundles built without the flag, so there is no production cost.
 
-### Step 2 — confirm instrumentation loaded
+## What gets enabled
 
-Within a second or two of launch, you should see:
+### `src/utils/debugLockup.ts`
 
-```
-[debug-lockup] instrumentation loaded
-[debug-lockup] Tauri IPC bridge patched
-[debug-lockup] uiStore.activeTool subscription installed
-```
+- Wraps Tauri IPC calls (via `trackInvoke`, threaded through `invokeIpc` and
+  the direct `push_frontend_log` caller in `consoleCapture.ts`). Logs every
+  call with id, duration, and a running in-flight count. Logs a `HANG`
+  warning for any call still pending after 3 s.
+- Captures `window.onerror` and `unhandledrejection` with full stack traces.
+- Logs every document-level click in capture phase (target, testid, text,
+  `defaultPrevented`).
+- Subscribes to `useUIStore.activeTool` and logs each transition with a stack.
+- Exposes `window.__lockupSnapshot()` and `window.__getActiveTool()`.
 
-If `Tauri IPC bridge patched` never appears, the patch couldn't find `window.__TAURI_INTERNALS__` — note that and stop; we'd need to fix the patch before continuing.
+### `src/components/Map/panZoomDebug.ts`
 
-### Step 3 — baseline
+- Exposes `window.__map`, `window.__panRefs`.
+- Wraps every MapLibre handler subsystem's `enable()`/`disable()` with short
+  stack traces.
+- Logs MapLibre lifecycle events (`movestart`, `zoomend`, …) and raw canvas
+  pointer/wheel/gesture events.
+- **Auto-discovers and wraps** any method on the map instance whose source
+  contains the string `"already running"` — that's how it found
+  `_renderTaskQueue.run` during this investigation, without knowing the
+  property name in advance. On catch, the wrap dumps the owner's primitive
+  state and force-resets known "currently running" flag names
+  (`_currentlyRunning`, `_running`, etc.), then retries. This keeps the
+  render loop alive across the kind of leak that bit us here, so the *next*
+  throw in the chain becomes visible instead of being masked by the cascade.
+- Exposes `window.__debugSnapshot()` for handler-enabled state, internal map
+  flags, MapLibre HandlerManager internals, and the custom-pan ref values.
 
-Open a project. Run in console:
+## Diagnostic protocol
+
+With the flag set, reproduce the bug, then in the Web Inspector console:
 
 ```js
 __lockupSnapshot()
 __debugSnapshot()
 ```
 
-Save the output as "BASELINE".
+The two snapshots together cover:
 
-### Step 4 — reproduce
-
-The clearest single repro is the toolbar one, since it isolates the bug from MapLibre internals:
-
-1. Click any tool button in the top-right toolbar (e.g. **draw**). Verify it activates (visual highlight, log shows `activeTool: select -> draw`).
-2. Click a different tool button (e.g. **select**).
-   - Does the visual highlight change?
-   - Does the log show `activeTool: draw -> select`?
-   - Does the log show `[debug-lockup] click <button> testid=… text="…"`?
-
-Then run again:
-
-```js
-__lockupSnapshot()
-__debugSnapshot()
-```
-
-Save the output as "BROKEN".
-
-### Step 5 — save the log
-
-In the Console, right-click → **Save As…** to dump all the log between baseline and broken. Trim to just the window around the first tool click → second tool click.
-
-## What to look for
-
-### IPC layer (hypothesis #1)
-
-| Signal | Means |
+| Layer | Where to look |
 |---|---|
-| `__lockupSnapshot().inFlightCount` is high (>10) and growing | IPC bridge is saturated — confirms #1. |
-| `inFlightByCommand` shows many `push_frontend_log` | Console-capture spam is what saturates. Workaround: temporarily disable `installConsoleCapture()` in `main.tsx` and retest. |
-| `inFlightByCommand` shows a specific command stuck | That command is the hung one. Find its Rust handler. |
-| `[debug-lockup] IPC HANG <cmd> > 3s` in the log | That command never resolved. |
-| `tauriPatched: false` in the snapshot | Patch never installed (timing issue) — IPC numbers below are unreliable. |
+| IPC saturation | `__lockupSnapshot().inFlightCount` and `inFlightByCommand` |
+| MapLibre handler enable-state | `__debugSnapshot().handlerEnabled` |
+| MapLibre internal flags (`_running`, `_currentlyRunning`, …) | `__debugSnapshot().hmInternals` |
+| Custom-pan refs (`MapCanvas.tsx`) | `__debugSnapshot().refs` |
+| Uncaught throws | console — search for `[debug-lockup] window.onerror` |
+| Stuck render-loop callbacks | console — search for `[swallow] re-entry caught` |
+| Which click → state-change path fired | console — `[debug-lockup] click` then `[debug-lockup] activeTool` |
 
-### Click / state layer (hypothesis #2/3/4)
+When `[swallow] re-entry caught` appears, the line includes the owner's full
+primitive state at the moment of the throw, and the next throw in the chain
+(now no longer cascaded) becomes visible via `window.onerror` — that's how
+the `TouchEvent` ReferenceError surfaced once `_currentlyRunning` stopped
+leaking.
 
-| Signal | Means |
-|---|---|
-| No `[debug-lockup] click …` log when you click the second tool | The click isn't reaching the document — overlay or `pointer-events:none` issue. |
-| `click` logged with `defaultPrevented=true` | A capture-phase handler ate it. |
-| Click logged but no `activeTool: X -> Y` log | The click reached the document but the React handler didn't fire OR didn't call `setActiveTool`. React tree may be in an error state. Look for `window.onerror` or `unhandledrejection` in the log. |
-| `activeTool: X -> Y` logged but visual doesn't update | React re-render is broken (likely an exception during render). Check error logs. |
-| `__debugSnapshot().handlerEnabled.dragPan === false` (or any other handler false) | MapLibre handler stuck disabled — hypothesis #2. |
-| `__debugSnapshot().refs.customPanActive === true` (no mouse down) | Custom pan ref stuck — hypothesis #3. |
+## Notes for future investigators
 
-## Try the in-console recovery
-
-If state inspection points at the MapLibre layer:
-
-```js
-['dragPan','scrollZoom','boxZoom','dragRotate','touchZoomRotate','keyboard','doubleClickZoom','touchPitch']
-  .forEach(n => __map[n]?.enable?.());
-__panRefs.customPanActive.current = false;
-__panRefs.ctrlPanActive.current = false;
-__panRefs.placementJustConfirmed.current = false;
-```
-
-If state inspection points at IPC saturation, the only in-console recovery is to drain in-flight by reopening the project. That itself is diagnostic — it confirms the bridge state resets on project unmount.
-
-## Report template
-
-```
-macOS UI lockup — protocol run
-
-Repro: <which action triggered it — toolbar click / on-screen zoom / wheel / pinch>
-
-BASELINE __lockupSnapshot:
-<paste>
-BASELINE __debugSnapshot:
-<paste>
-
-BROKEN __lockupSnapshot:
-<paste>
-BROKEN __debugSnapshot:
-<paste>
-
-Log between baseline and broken (trimmed to ~50 lines around the trigger):
-<paste>
-
-Click test result:
-  - second toolbar click logged at document level: <yes/no>
-  - activeTool transition logged: <yes/no>
-  - window.onerror or unhandledrejection logged: <yes/no, paste if yes>
-
-My read: <hypothesis 1/2/3/4 + smoking-gun log line>
-```
-
-## Cleanup
-
-When the bug is fixed:
-
-1. Delete `src/utils/debugLockup.ts`.
-2. Delete `src/components/Map/panZoomDebug.ts`.
-3. Revert the diffs in `src/main.tsx` (the debug import) and `src/components/Map/MapCanvas.tsx` (the panZoomDebug import + install call).
-4. Delete this doc.
+- Don't monkey-patch `window.__TAURI_INTERNALS__.invoke` directly. Its
+  internals invoke is callback-shaped in Tauri v2; the public `invoke()` in
+  `@tauri-apps/api/core` is the Promise-shaped one. Patching at the internals
+  level breaks app startup. Use the `trackInvoke(command, promise)`
+  pass-through helper from `debugLockup.ts` instead and wire it in at known
+  call sites (`src/utils/ipc.ts`, `src/utils/consoleCapture.ts`).
+- `installConsoleCapture` (in `main.tsx`) pipes every `console.*` call to an
+  IPC `push_frontend_log` invoke. If you add new debug logs from within
+  debugLockup itself, cache `console.log.bind(console)` *before*
+  `installConsoleCapture` runs (which the current code does) — otherwise your
+  logs recurse back through the IPC layer you're measuring.
+- The lockup symptom can present in three layers: events not reaching the
+  canvas (DOM/CSS), state stuck in a React ref or Zustand store, or a leaked
+  MapLibre internal flag. Run all three snapshots before forming a
+  hypothesis — the lockup we just fixed looked like #2 in the early
+  snapshots and only revealed itself as #3 once we dumped MapLibre's
+  internals.

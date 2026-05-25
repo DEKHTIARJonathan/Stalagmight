@@ -1,8 +1,11 @@
-// TEMPORARY: instrumentation for the macOS pan/zoom lockup investigation.
-// See docs/debugging-macos-pan-zoom.md. Delete this file and revert the
-// install call in MapCanvas.tsx once the bug is fixed.
+// Optional MapLibre / handler instrumentation for the macOS lockup
+// investigation. Off by default — installPanZoomDebug() early-returns unless
+// the build is run with VITE_DEBUG_MACOS_LOCKUP=true. See
+// docs/debugging-macos-pan-zoom.md for the protocol this enables.
 
 import type maplibregl from 'maplibre-gl';
+
+const ENABLED = import.meta.env.VITE_DEBUG_MACOS_LOCKUP === 'true';
 
 type RefLike<T> = { current: T };
 
@@ -210,6 +213,8 @@ function installSwallowForRunThrow(
 }
 
 export function installPanZoomDebug(map: maplibregl.Map, refs: DebugRefs): void {
+  if (!ENABLED) return;
+
   const w = window as unknown as Record<string, unknown>;
   w.__map = map;
   w.__panRefs = refs;
