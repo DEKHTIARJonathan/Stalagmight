@@ -50,6 +50,10 @@ export function installConsoleCapture(): void {
       // Fire-and-forget push to backend — never await, never throw
       try {
         const message = formatArgs(args);
+        // Call invoke directly (not via trackInvoke): the debug tracker logs
+        // failures through console.error, which is monkey-patched here to call
+        // push_frontend_log again — wrapping this call would create a recursive
+        // logging loop on IPC errors. Fire-and-forget.
         void invoke('push_frontend_log', { level, message });
       } catch {
         // IPC not ready yet or unavailable — silently ignore
