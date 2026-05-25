@@ -74,6 +74,43 @@ export function installPanZoomDebug(map: maplibregl.Map, refs: DebugRefs): void 
     };
   }
 
+  // Wrap HandlerManager.run to (a) log every entry with stack so we can see
+  // who initiated the still-in-flight run that the re-entry throw collides
+  // with, and (b) swallow the "Attempting to run(), but is already running."
+  // throw so a single timing race does not wedge the entire rAF render loop
+  // and break all subsequent input. The first call's work continues; the
+  // re-entrant attempt becomes a no-op for that frame.
+  const hm = (map as unknown as { handlers?: { run?: (...args: unknown[]) => unknown; __debugPatched?: boolean } }).handlers;
+  if (hm && typeof hm.run === 'function' && !hm.__debugPatched) {
+    hm.__debugPatched = true;
+    const origRun = hm.run.bind(hm);
+    let callId = 0;
+    let depth = 0;
+    hm.run = (...args: unknown[]) => {
+      const id = ++callId;
+      depth++;
+      const reentry = depth > 1;
+      if (reentry) {
+        log(`HandlerManager.run #${id} RE-ENTRY (depth=${depth}) ${shortStack()}`);
+      }
+      try {
+        return origRun(...args);
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        if (msg.includes('already running')) {
+          log(`HandlerManager.run #${id} swallowed re-entry throw (depth=${depth}) — see RE-ENTRY log above for the colliding call's stack`);
+          return undefined;
+        }
+        throw e;
+      } finally {
+        depth--;
+      }
+    };
+    log('HandlerManager.run wrapped (logs re-entries, swallows the throw)');
+  } else {
+    log(`HandlerManager.run NOT wrapped (handlers=${!!hm}, run=${typeof hm?.run})`);
+  }
+
   for (const ev of LIFECYCLE_EVENTS) {
     map.on(ev as never, (e: unknown) => {
       const ee = e as { originalEvent?: { type?: string; button?: number } } | undefined;
