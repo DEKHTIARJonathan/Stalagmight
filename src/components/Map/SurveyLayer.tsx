@@ -1150,7 +1150,7 @@ export default class SurveyLayer {
     if (!orig) return; // programmatic — already tracked by trigger functions
     if (orig instanceof WheelEvent) {
       trackNav('zoom', 'mouse');
-    } else if (orig instanceof TouchEvent) {
+    } else if (typeof TouchEvent !== 'undefined' && orig instanceof TouchEvent) {
       trackNav('zoom', 'touch');
     } else if (orig instanceof MouseEvent) {
       trackNav('zoom', 'dblclick');
@@ -1164,7 +1164,7 @@ export default class SurveyLayer {
     if (orig instanceof WheelEvent) return; // zoom gesture — tracked by zoomend
     if (orig instanceof MouseEvent) {
       trackNav('pan', 'mouse');
-    } else if (orig instanceof TouchEvent) {
+    } else if (typeof TouchEvent !== 'undefined' && orig instanceof TouchEvent) {
       trackNav('pan', 'touch');
     }
   };

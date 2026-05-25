@@ -1,3 +1,7 @@
+// Optional debug instrumentation. Inert unless VITE_DEBUG_MACOS_LOCKUP=true
+// at build time. Imported first so its side-effects can wire up before any
+// other module runs. See docs/debugging-macos-pan-zoom.md.
+import './utils/debugLockup';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
