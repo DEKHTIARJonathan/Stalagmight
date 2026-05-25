@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { trackInvoke } from './debugLockup';
 
 const LEVEL_MAP: Record<string, string> = {
   log: 'INFO',
@@ -50,7 +51,7 @@ export function installConsoleCapture(): void {
       // Fire-and-forget push to backend — never await, never throw
       try {
         const message = formatArgs(args);
-        void invoke('push_frontend_log', { level, message });
+        void trackInvoke('push_frontend_log', invoke('push_frontend_log', { level, message }));
       } catch {
         // IPC not ready yet or unavailable — silently ignore
       }
