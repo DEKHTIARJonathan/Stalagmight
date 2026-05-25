@@ -48,6 +48,100 @@ const RAW_EVENTS = [
   'gestureend',
 ] as const;
 
+// Walk an instance + its prototype chain, calling cb for every (owner, name, fn)
+// where fn is a function. Stops at Object.prototype.
+function forEachMethod(
+  obj: unknown,
+  cb: (owner: object, name: string, fn: (...args: unknown[]) => unknown) => void,
+): void {
+  if (!obj || typeof obj !== 'object') return;
+  const visited = new Set<string>();
+  let cur: object | null = obj as object;
+  while (cur && cur !== Object.prototype) {
+    for (const name of Object.getOwnPropertyNames(cur)) {
+      if (visited.has(name) || name === 'constructor') continue;
+      visited.add(name);
+      try {
+        const v = (obj as Record<string, unknown>)[name];
+        if (typeof v === 'function') {
+          cb(obj as object, name, v as (...args: unknown[]) => unknown);
+        }
+      } catch {
+        // Some getters throw when accessed off-instance — ignore.
+      }
+    }
+    cur = Object.getPrototypeOf(cur);
+  }
+}
+
+function installSwallowForRunThrow(
+  map: maplibregl.Map,
+  log: (msg: string) => void,
+): void {
+  const NEEDLE = 'already running';
+  const wrapped: string[] = [];
+
+  const wrapOne = (owner: object, name: string, label: string): boolean => {
+    const fn = (owner as Record<string, unknown>)[name] as
+      | ((...args: unknown[]) => unknown)
+      | undefined;
+    if (typeof fn !== 'function') return false;
+    if ((fn as { __debugWrapped?: boolean }).__debugWrapped) return false;
+    let src = '';
+    try { src = fn.toString(); } catch { return false; }
+    if (!src.includes(NEEDLE)) return false;
+
+    const orig = fn.bind(owner);
+    const wrapper = function (this: unknown, ...args: unknown[]): unknown {
+      try {
+        return orig(...args);
+      } catch (e: unknown) {
+        const msg = (e as { message?: string })?.message ?? String(e);
+        if (msg.includes(NEEDLE)) {
+          log(`[swallow] ${label}.${name} threw re-entry, swallowed`);
+          return undefined;
+        }
+        throw e;
+      }
+    };
+    (wrapper as { __debugWrapped?: boolean }).__debugWrapped = true;
+    // Define on the instance, shadowing the prototype method if needed.
+    try {
+      (owner as Record<string, unknown>)[name] = wrapper;
+      wrapped.push(`${label}.${name}`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Roots to search: map itself, common HandlerManager property names, and
+  // every named handler subsystem.
+  const roots: Array<[unknown, string]> = [[map, '__map']];
+  for (const k of ['handlers', '_handlerManager', '_handlers', 'handlerManager']) {
+    const v = (map as unknown as Record<string, unknown>)[k];
+    if (v && typeof v === 'object') roots.push([v, `__map.${k}`]);
+  }
+  for (const h of HANDLER_NAMES) {
+    const v = (map as unknown as Record<string, unknown>)[h];
+    if (v && typeof v === 'object') roots.push([v, `__map.${h}`]);
+  }
+
+  for (const [root, label] of roots) {
+    forEachMethod(root, (owner, name) => {
+      wrapOne(owner, name, label);
+    });
+  }
+
+  if (wrapped.length === 0) {
+    log(
+      '[swallow] NO method containing "already running" found on map/handlers/subsystems — re-entry throws WILL still escape and kill rAF',
+    );
+  } else {
+    log(`[swallow] wrapped ${wrapped.length} re-entry-throwing method(s): ${wrapped.join(', ')}`);
+  }
+}
+
 export function installPanZoomDebug(map: maplibregl.Map, refs: DebugRefs): void {
   const w = window as unknown as Record<string, unknown>;
   w.__map = map;
@@ -74,42 +168,12 @@ export function installPanZoomDebug(map: maplibregl.Map, refs: DebugRefs): void 
     };
   }
 
-  // Wrap HandlerManager.run to (a) log every entry with stack so we can see
-  // who initiated the still-in-flight run that the re-entry throw collides
-  // with, and (b) swallow the "Attempting to run(), but is already running."
-  // throw so a single timing race does not wedge the entire rAF render loop
-  // and break all subsequent input. The first call's work continues; the
-  // re-entrant attempt becomes a no-op for that frame.
-  const hm = (map as unknown as { handlers?: { run?: (...args: unknown[]) => unknown; __debugPatched?: boolean } }).handlers;
-  if (hm && typeof hm.run === 'function' && !hm.__debugPatched) {
-    hm.__debugPatched = true;
-    const origRun = hm.run.bind(hm);
-    let callId = 0;
-    let depth = 0;
-    hm.run = (...args: unknown[]) => {
-      const id = ++callId;
-      depth++;
-      const reentry = depth > 1;
-      if (reentry) {
-        log(`HandlerManager.run #${id} RE-ENTRY (depth=${depth}) ${shortStack()}`);
-      }
-      try {
-        return origRun(...args);
-      } catch (e) {
-        const msg = (e as Error)?.message ?? String(e);
-        if (msg.includes('already running')) {
-          log(`HandlerManager.run #${id} swallowed re-entry throw (depth=${depth}) — see RE-ENTRY log above for the colliding call's stack`);
-          return undefined;
-        }
-        throw e;
-      } finally {
-        depth--;
-      }
-    };
-    log('HandlerManager.run wrapped (logs re-entries, swallows the throw)');
-  } else {
-    log(`HandlerManager.run NOT wrapped (handlers=${!!hm}, run=${typeof hm?.run})`);
-  }
+  // Catch the MapLibre "Attempting to run(), but is already running." re-entry
+  // throw so it does not escape up the rAF callback and kill the render loop.
+  // The exact owner/method varies by MapLibre version, so we discover it: walk
+  // own properties and prototype methods of map and its handler subsystems,
+  // and wrap any function whose source contains the literal error message.
+  installSwallowForRunThrow(map, log);
 
   for (const ev of LIFECYCLE_EVENTS) {
     map.on(ev as never, (e: unknown) => {
