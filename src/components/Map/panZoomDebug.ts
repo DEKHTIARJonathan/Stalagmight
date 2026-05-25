@@ -115,16 +115,22 @@ function installSwallowForRunThrow(
     }
   };
 
-  // Roots to search: map itself, common HandlerManager property names, and
-  // every named handler subsystem.
+  // Roots to search: map itself, plus every object-valued own property of the
+  // map instance one level deep. This auto-discovers internals like
+  // _renderTaskQueue, _handlerManager, handlers, painter, etc. without
+  // needing to hard-code names per MapLibre version.
   const roots: Array<[unknown, string]> = [[map, '__map']];
-  for (const k of ['handlers', '_handlerManager', '_handlers', 'handlerManager']) {
-    const v = (map as unknown as Record<string, unknown>)[k];
-    if (v && typeof v === 'object') roots.push([v, `__map.${k}`]);
-  }
-  for (const h of HANDLER_NAMES) {
-    const v = (map as unknown as Record<string, unknown>)[h];
-    if (v && typeof v === 'object') roots.push([v, `__map.${h}`]);
+  const seenRoot = new WeakSet<object>([map as object]);
+  for (const k of Object.getOwnPropertyNames(map)) {
+    try {
+      const v = (map as unknown as Record<string, unknown>)[k];
+      if (v && typeof v === 'object' && !seenRoot.has(v as object)) {
+        roots.push([v, `__map.${k}`]);
+        seenRoot.add(v as object);
+      }
+    } catch {
+      // Skip getters that throw on access.
+    }
   }
 
   for (const [root, label] of roots) {
