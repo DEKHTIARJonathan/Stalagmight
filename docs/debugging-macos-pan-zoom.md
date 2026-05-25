@@ -25,7 +25,7 @@ wedged the queue permanently. From that point on, every subsequent
 and even programmatic calls like `__map.panBy()` produced no movement.
 
 **Fix:** guard the references with `typeof TouchEvent !== 'undefined' && ...`.
-Two-line change, see commit `0ddc51d5`.
+Two-line change, see commit `de575073`.
 
 ## When to re-enable the debug toolkit
 
