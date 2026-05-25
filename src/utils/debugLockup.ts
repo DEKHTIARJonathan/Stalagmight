@@ -79,17 +79,19 @@ export function trackInvoke<T>(command: string, p: Promise<T>): Promise<T> {
 }
 
 // Global error capture — surface anything React error boundaries or
-// fire-and-forget promise chains would otherwise swallow.
+// fire-and-forget promise chains would otherwise swallow. Log the full
+// stack so we can see the call chain that led to MapLibre's re-entry guard
+// (or whatever else is throwing).
 window.addEventListener('error', (e) => {
-  error('[debug-lockup] window.onerror', {
-    message: e.message,
-    filename: e.filename,
-    lineno: e.lineno,
-    err: String(e.error),
-  });
+  const stack = e.error?.stack ?? '(no stack available)';
+  error(
+    `[debug-lockup] window.onerror: ${e.message}\n  at ${e.filename}:${e.lineno}\nFULL STACK:\n${stack}`,
+  );
 });
 window.addEventListener('unhandledrejection', (e) => {
-  error('[debug-lockup] unhandledrejection', String(e.reason));
+  const reason = e.reason as { stack?: string; message?: string } | string | undefined;
+  const stack = typeof reason === 'object' && reason?.stack ? reason.stack : String(reason);
+  error(`[debug-lockup] unhandledrejection:\n${stack}`);
 });
 
 // Document-level click logger (capture phase, never preventDefault).
@@ -108,12 +110,15 @@ document.addEventListener(
 );
 
 // Subscribe to activeTool changes once the store is loaded. Dynamic import so
-// this file has no static dependency on the rest of the app.
+// this file has no static dependency on the rest of the app. We log a short
+// stack at each transition so it is obvious which click handler called
+// setActiveTool, and what synchronous work follows.
 void import('../store/uiStore').then(({ useUIStore }) => {
   let prev = useUIStore.getState().activeTool;
   useUIStore.subscribe((state) => {
     if (state.activeTool !== prev) {
-      log(`[debug-lockup] activeTool: ${prev} -> ${state.activeTool}`);
+      const stack = new Error().stack?.split('\n').slice(2, 8).join('\n') ?? '';
+      log(`[debug-lockup] activeTool: ${prev} -> ${state.activeTool}\n${stack}`);
       prev = state.activeTool;
     }
   });
