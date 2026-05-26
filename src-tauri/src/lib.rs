@@ -1127,6 +1127,7 @@ pub fn run() {
             commands::project::remove_from_recent_projects,
             commands::project::merge_projects,
             commands::project::load_project_full,
+            commands::project::load_project_full_binary,
             commands::project::create_project_full,
             commands::project::cancel_loading,
             // Section commands

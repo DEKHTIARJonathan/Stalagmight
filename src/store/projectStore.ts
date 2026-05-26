@@ -23,7 +23,7 @@ import type {
 } from '../types/project';
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
-import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
+import type { CreateProjectFullResult } from '../types/loading';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -414,6 +414,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Load project using the consolidated load_project_full command
   loadProject: async (path: string) => {
+    // [perf-debug] Trace each post-IPC step distinctly so we know whether
+    // the visible "stuck progress bar" freeze is JSON.parse on the IPC
+    // resolution, the Zustand set, the view switch / MapCanvas mount, or
+    // something else. Each checkpoint is logged to the MemoryProbe panel.
+    const { recordPerfTiming } = await import('../utils/memoryProbe');
+    const tStart = performance.now();
+
     // Clear GlobalView geometry cache to cancel pending loads and free memory
     useGlobalViewStore.getState().clearGeometryCache();
 
@@ -426,11 +433,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const clientOpId = get().startLoading(initialName, path);
 
     try {
-      const result = await invokeIpc<LoadProjectFullResult>(
-        'load_project_full',
-        { path },
-        { purpose: 'load project for workspace', fields: { path } }
-      );
+      const tIpcStart = performance.now();
+      // Binary IPC: msgpack envelope + typed-array byte buffers for shots
+      // and stations. The decoder reconstructs the same shape as the legacy
+      // `load_project_full` JSON response so the rest of the load pipeline
+      // doesn't need to change. See utils/loadProjectBinary.ts.
+      const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
+      const result = await loadProjectFullBinary(path);
+      // The await above includes both the Rust handler runtime AND the
+      // JS-side msgpack decode + typed-array materialization.
+      const tIpcDone = performance.now();
+      recordPerfTiming('load_project_full IPC+parse', tIpcDone - tIpcStart);
 
       // Check clientOpId hasn't changed (cancelled/new load started)
       if (get().loading.clientOpId !== clientOpId) {
@@ -446,6 +459,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
 
       // Apply ALL state from single response
+      const tSetStart = performance.now();
       set({
         project: result.project,
         stations: result.stations,
@@ -453,17 +467,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         warnings: result.warnings,
         isDirty: false,
       });
+      const tSetDone = performance.now();
+      recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
 
       // Apply display settings to UI store (merge, don't overwrite)
       useUIStore.getState().applyDisplaySettings(result.displaySettings);
       useUIStore.getState().triggerFitToBounds();
+      const tViewStart = performance.now();
       useUIStore.getState().setView('single');
+      const tViewDone = performance.now();
+      recordPerfTiming('setView(single)', tViewDone - tViewStart);
 
       // Update recent projects list
       await get().loadRecentProjects();
 
       get().resetLoading();
       await get().refreshUndoState();
+      recordPerfTiming('loadProject total', performance.now() - tStart);
       return { success: true };
     } catch (e) {
       const error = parseLoadError(e);

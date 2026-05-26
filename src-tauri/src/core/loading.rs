@@ -492,12 +492,21 @@ impl ProgressEmitter {
 
     /// Update progress within a phase with throttling.
     /// Use 0-indexed current (0..total-1) or 1-indexed (1..total) - both work.
+    ///
+    /// Throttle: always emit at the start (current=0/1) and end (current=total)
+    /// of a phase, otherwise emit only when BOTH (a) at least `THROTTLE_ITEMS`
+    /// items have advanced since the last emit AND (b) at least `THROTTLE_MS`
+    /// have elapsed. The previous implementation OR'd the conditions, which
+    /// for fast inner loops (e.g. computing 5k+ stations in ~1 s) emitted
+    /// ~500 events because the items rule kept tripping every couple of ms.
+    /// Each event triggers a full Zustand + React re-render on the JS side,
+    /// so a fast Rust loop translated into a ~5 s freeze processing the
+    /// event backlog. AND-gating caps emission at ~20/s in practice.
     pub fn update_phase(&mut self, phase: LoadingPhase, current: u32, total: u32) {
-        let should_emit = current == 0
-            || current == 1
-            || current == total
-            || current >= self.last_item + THROTTLE_ITEMS
-            || self.last_emit.elapsed() >= Duration::from_millis(THROTTLE_MS);
+        let at_boundary = current == 0 || current == 1 || current == total;
+        let enough_items = current >= self.last_item + THROTTLE_ITEMS;
+        let enough_time = self.last_emit.elapsed() >= Duration::from_millis(THROTTLE_MS);
+        let should_emit = at_boundary || (enough_items && enough_time);
 
         if should_emit {
             self.last_item = current;
