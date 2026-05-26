@@ -1182,6 +1182,8 @@ pub fn run() {
             commands::import::import_sections,
             commands::import::parse_tml,
             commands::import::execute_tml_import,
+            commands::import::parse_compass,
+            commands::import::execute_compass_import,
             commands::import::parse_gpx,
             commands::import::execute_gpx_import,
             commands::import::suggest_import_placement,

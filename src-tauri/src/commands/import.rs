@@ -12,6 +12,7 @@ use crate::models::placement_suggest::{
 };
 use crate::models::ShotData;
 use crate::parsers::DmpFile;
+use crate::parsers::compass::{CompassFile, CompassImportOptions};
 use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
 use crate::parsers::tml::TmlFile;
 
@@ -199,6 +200,88 @@ pub fn execute_tml_import(
         closure_count = closures.len(),
         purpose = "import Ariane TML/TMLU",
         "Converted TML to import configs, executing import"
+    );
+
+    state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new())
+}
+
+/// Parse a Compass `.DAT`/`.MAK` file and return preview data for the import dialog.
+#[tauri::command]
+pub fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
+    tracing::info!(
+        path = ?path,
+        purpose = "prepare Compass import preview",
+        "Parsing Compass .DAT/.MAK file for import preview"
+    );
+    let parsed = crate::parsers::compass::parse_compass(&path).map_err(|e| {
+        tracing::error!(
+            path = ?path,
+            purpose = "prepare Compass import preview",
+            reason = %e,
+            "Failed to parse Compass file for import preview"
+        );
+        e.to_string()
+    })?;
+    Ok(crate::parsers::compass::build_preview(&parsed))
+}
+
+/// Parse a Compass file, convert to import configs, and execute the import.
+#[tauri::command]
+pub fn execute_compass_import(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    file_hash: Option<String>,
+    include_excluded: bool,
+    apply_corrections: bool,
+) -> CommandResult {
+    tracing::info!(
+        path = ?path,
+        purpose = "import Compass",
+        "Executing Compass import"
+    );
+
+    let parsed = match crate::parsers::compass::parse_compass(&path) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "import Compass",
+                reason = %e,
+                "Failed to parse Compass file for import"
+            );
+            return CommandResult::failure(format!("Failed to parse Compass file: {e}"));
+        }
+    };
+
+    let opts = CompassImportOptions {
+        include_excluded,
+        apply_corrections,
+    };
+    let (sections, closures, warnings) =
+        match crate::parsers::compass::convert_compass_to_import_configs(&parsed, &opts) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(
+                    path = ?path,
+                    purpose = "import Compass",
+                    reason = %e,
+                    "Failed to convert Compass data to import configs"
+                );
+                return CommandResult::failure(format!("Failed to convert Compass data: {e}"));
+            }
+        };
+
+    for warning in &warnings {
+        tracing::warn!(purpose = "import Compass", "{warning}");
+    }
+
+    tracing::info!(
+        path = ?path,
+        section_count = sections.len(),
+        closure_count = closures.len(),
+        warning_count = warnings.len(),
+        purpose = "import Compass",
+        "Converted Compass to import configs, executing import"
     );
 
     state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new())

@@ -48,6 +48,10 @@ flate2 = "1"
 rmp-serde = { version = "1", optional = true }
 serde_bytes = { version = "0.11", optional = true }
 tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
+compass_data = { path = "vendor/compass_data" }
+igrf = "0.2"
+proj4rs = "0.1"
+time = "0.3"
 
 [profile.release]
 lto = true
