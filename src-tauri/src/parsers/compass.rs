@@ -962,8 +962,9 @@ mod tests {
         let mut warnings = Vec::new();
         let (lon, lat) =
             utm_to_wgs84(471_750.0, 2_264_824.0, 16, Datum::WGS1984, &mut warnings).unwrap();
-        assert!(lat > 20.0 && lat < 21.0, "lat {lat}");
-        assert!(lon > -88.0 && lon < -87.0, "lon {lon}");
+        // Reference: pyproj EPSG:32616 -> EPSG:4326 gives lat 20.481817, lon -87.270896.
+        assert!((lat - 20.481817).abs() < 0.0005, "lat {lat}");
+        assert!((lon - (-87.270896)).abs() < 0.0005, "lon {lon}");
     }
 
     #[test]
