@@ -614,7 +614,7 @@ test.describe('Error Handling', () => {
      * Verifies that save errors (permission denied, disk full) are
      * clearly communicated to the user via error notification.
      */
-    test('should display error notification on save failure', async ({ page }) => {
+    test('should display error notification on save failure @smoke', async ({ page }) => {
       await setupMockedPage(page);
       await createProjectViaApp(page, 'Error Test Project');
 
@@ -830,7 +830,7 @@ test.describe('Error Handling', () => {
      * Verifies inline validation errors are displayed in forms
      * when users enter invalid data.
      */
-    test('should display validation errors in forms', async ({ page }) => {
+    test('should display validation errors in forms @smoke', async ({ page }) => {
       await setupTauriMocks(page);
       await page.goto('/');
       await page.waitForLoadState('networkidle');

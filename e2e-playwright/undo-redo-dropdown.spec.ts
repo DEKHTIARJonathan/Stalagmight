@@ -276,7 +276,7 @@ test.describe('Undo/Redo History Dropdown', () => {
   });
 
   test.describe('Hover Behavior', () => {
-    test('dropdown appears after ~300ms hover on Undo button', async ({ page }) => {
+    test('dropdown appears after ~300ms hover on Undo button @smoke', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       await expect(undoButton).toBeVisible();
 
@@ -323,7 +323,7 @@ test.describe('Undo/Redo History Dropdown', () => {
   });
 
   test.describe('Item Click Behavior', () => {
-    test('clicking item at index 2 executes undo_to and closes dropdown', async ({ page }) => {
+    test('clicking item at index 2 executes undo_to and closes dropdown @smoke', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 
@@ -346,7 +346,7 @@ test.describe('Undo/Redo History Dropdown', () => {
       await expect(dropdown).not.toBeVisible({ timeout: 1000 });
     });
 
-    test('clicking item in redo dropdown calls redo_to', async ({ page }) => {
+    test('clicking item in redo dropdown calls redo_to @smoke', async ({ page }) => {
       const redoButton = page.getByTestId('toolbar-redo-button');
 
       // Hover to open dropdown
@@ -366,7 +366,7 @@ test.describe('Undo/Redo History Dropdown', () => {
   });
 
   test.describe('Keyboard Navigation', () => {
-    test('Arrow Down opens dropdown from focused button', async ({ page }) => {
+    test('Arrow Down opens dropdown from focused button @smoke', async ({ page }) => {
       const undoButton = page.getByTestId('toolbar-undo-button');
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
 

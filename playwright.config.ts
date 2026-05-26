@@ -19,11 +19,12 @@ export default defineConfig({
   // Retry failed tests in CI
   retries: process.env.CI ? 2 : 0,
 
-  // Limit workers in CI to avoid resource contention
-  workers: process.env.CI ? 1 : undefined,
+  // Use PW_WORKERS env var to override, otherwise half CPU cores
+  workers: process.env.PW_WORKERS ? parseInt(process.env.PW_WORKERS, 10) : undefined,
 
-  // Test reporter configuration
-  reporter: process.env.CI ? 'github' : 'html',
+  // Test reporter: 'list' for live progress, 'github' for CI annotations
+  // Override with PW_REPORTER env var (e.g. PW_REPORTER=html)
+  reporter: process.env.PW_REPORTER || (process.env.CI ? 'github' : 'list'),
 
   // Shared settings for all projects
   use: {

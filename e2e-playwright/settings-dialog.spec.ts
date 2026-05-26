@@ -65,7 +65,7 @@ test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
     // Stay in project view - keyboard shortcuts only work in SingleSystemView
   });
 
-  test('Cmd/Ctrl+, opens Settings dialog from project view', async ({ page }) => {
+  test('Cmd/Ctrl+, opens Settings dialog from project view @smoke', async ({ page }) => {
     // We're in project view (SingleSystemView) where keyboard shortcuts are active
     // Ensure Settings is not open
     await expect(page.locator('[data-testid="settings-dialog"]')).not.toBeVisible();
@@ -119,7 +119,7 @@ test.describe('Settings Dialog - Sidebar Navigation', () => {
     // Don't create a project - test from GlobalView directly
   });
 
-  test('clicking sidebar category switches content panel', async ({ page }) => {
+  test('clicking sidebar category switches content panel @smoke', async ({ page }) => {
     // Open settings directly from GlobalView without creating a project
     const settingsButton = page.locator('[data-testid="settings-button"]');
     await expect(settingsButton).toBeVisible({ timeout: 5000 });
@@ -298,7 +298,7 @@ test.describe('Settings Dialog - Dirty State', () => {
     await expect(saveButton).toBeDisabled();
   });
 
-  test('Save button enabled after changing a setting', async ({ page }) => {
+  test('Save button enabled after changing a setting @smoke', async ({ page }) => {
     await openSettingsDialog(page);
 
     // Navigate to Validation settings which has known testids

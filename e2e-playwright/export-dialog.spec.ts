@@ -6,7 +6,7 @@ test.describe('Export Dialog', () => {
     await setupMockedPage(page);
   });
 
-  test('should open export dialog with Ctrl+E', async ({ page }) => {
+  test('should open export dialog with Ctrl+E @smoke', async ({ page }) => {
     // Create a project first (export requires open project)
     await createProject(page, 'Export Dialog Test Project');
 
@@ -140,7 +140,7 @@ test.describe('Export Dialog', () => {
     await expect(themeToggle).toBeVisible();
   });
 
-  test('should execute export and show success', async ({ page }) => {
+  test('should execute export and show success @smoke', async ({ page }) => {
     await createProject(page, 'Export Dialog Test Project');
 
     // Open export dialog

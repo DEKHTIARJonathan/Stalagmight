@@ -117,7 +117,7 @@ test.describe('Window Close Protection', () => {
    * Verifies that the import wizard remains open and requires
    * explicit user action to close, which is the core data protection mechanism.
    */
-  test('should require explicit action to close import dialog', async ({ page }) => {
+  test('should require explicit action to close import dialog @smoke', async ({ page }) => {
     await createProject(page, 'Dialog Protection Test');
     await openDmpSelectionDialog(page);
 
@@ -143,7 +143,7 @@ test.describe('Window Close Protection', () => {
    * Verifies that after successfully completing an import, the dialog
    * closes and the user can continue working.
    */
-  test('should allow workflow progression after import completes', async ({ page }) => {
+  test('should allow workflow progression after import completes @smoke', async ({ page }) => {
     await createProject(page, 'Import Complete Test');
     await openDmpSelectionDialog(page);
 

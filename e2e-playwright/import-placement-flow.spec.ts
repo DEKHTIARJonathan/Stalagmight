@@ -184,7 +184,7 @@ test.describe('Import Placement Flow', () => {
     });
   });
 
-  test('shows suggestion-phase controls and actions', async ({ page }) => {
+  test('shows suggestion-phase controls and actions @smoke', async ({ page }) => {
     await openDmpWizard(page);
 
     await expect(page.getByTestId('wizard-connection-description')).toBeVisible();
@@ -217,7 +217,7 @@ test.describe('Import Placement Flow', () => {
     await expect(page.getByTestId('alternative-0')).toBeVisible();
   });
 
-  test('confirming suggestion transitions to manual placing', async ({ page }) => {
+  test('confirming suggestion transitions to manual placing @smoke', async ({ page }) => {
     await openDmpWizard(page);
     await openManualPlacing(page);
 
@@ -233,7 +233,7 @@ test.describe('Import Placement Flow', () => {
     await expect(placeButton).toBeDisabled();
   });
 
-  test('discard mode enables place action and can finish the wizard', async ({ page }) => {
+  test('discard mode enables place action and can finish the wizard @smoke', async ({ page }) => {
     await openDmpWizard(page);
     await openManualPlacing(page);
 

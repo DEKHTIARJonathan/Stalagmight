@@ -54,7 +54,7 @@ test.describe('DMP Import Dialog', () => {
    * Verifies the DmpSelectionDialog (Step 1) correctly displays parsed DMP data
    * including section names, shot counts, and file metadata.
    */
-  test('should parse and display DMP file data in import dialog', async ({
+  test('should parse and display DMP file data in import dialog @smoke', async ({
     page,
   }) => {
     await createProjectAndOpenImportDialog(page);
@@ -101,7 +101,7 @@ test.describe('DMP Import Dialog', () => {
    * Verifies the import flow now proceeds from Step 1 (selection)
    * to zero-datum selection and then into the new import wizard.
    */
-  test('should proceed from Step 1 to zero datum selection and wizard', async ({
+  test('should proceed from Step 1 to zero datum selection and wizard @smoke', async ({
     page,
   }) => {
     await createProjectAndOpenImportDialog(page);
@@ -259,7 +259,7 @@ test.describe('DMP Import Dialog', () => {
   /**
    * Test 6.6: should show manual placing controls in the new wizard
    */
-  test('should show manual placing controls in wizard', async ({
+  test('should show manual placing controls in wizard @smoke', async ({
     page,
   }) => {
     await createProjectAndOpenImportDialog(page);

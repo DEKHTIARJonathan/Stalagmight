@@ -50,7 +50,7 @@ test.describe('Map Tools', () => {
     await setupMockedPage(page);
   });
 
-  test('should switch between tools with keyboard shortcuts', async ({ page }) => {
+  test('should switch between tools with keyboard shortcuts @smoke', async ({ page }) => {
     // Create a project to access the SingleSystemView with tools
     await createProjectWithSections(page);
 
@@ -88,7 +88,7 @@ test.describe('Map Tools', () => {
     }
   });
 
-  test('should select stations with select tool', async ({ page }) => {
+  test('should select stations with select tool @smoke', async ({ page }) => {
     // Create a project with sections
     await createProjectWithSections(page);
 
@@ -219,7 +219,7 @@ test.describe('Map Tools', () => {
     }
   });
 
-  test('should fit view to all data with Ctrl+0', async ({ page }) => {
+  test('should fit view to all data with Ctrl+0 @smoke', async ({ page }) => {
     // Create a project with sections
     await createProjectWithSections(page);
 

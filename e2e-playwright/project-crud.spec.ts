@@ -7,7 +7,7 @@ test.describe('Project CRUD Operations', () => {
   });
 
   test.describe('Start Page', () => {
-    test('should display Stalagmight title', async ({ page }) => {
+    test('should display Stalagmight title @smoke', async ({ page }) => {
       // Look for Stalagmight title in header
       const title = page.locator('h1:has-text("Stalagmight")');
       await expect(title).toBeVisible({ timeout: 10000 });
@@ -47,7 +47,7 @@ test.describe('Project CRUD Operations', () => {
       }
     });
 
-    test('should create project with valid name', async ({ page }) => {
+    test('should create project with valid name @smoke', async ({ page }) => {
       await createProject(page, 'My Test Project');
       await expect(page.getByTestId('map-canvas')).toBeVisible({ timeout: 10000 });
     });
@@ -126,7 +126,7 @@ test.describe('Project CRUD Operations', () => {
   });
 
   test.describe('Project Save', () => {
-    test('should respond to Ctrl+S', async ({ page }) => {
+    test('should respond to Ctrl+S @smoke', async ({ page }) => {
       await createProject(page, 'Save Test Project');
 
       // Press Ctrl+S
