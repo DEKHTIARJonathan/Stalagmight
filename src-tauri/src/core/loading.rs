@@ -224,6 +224,11 @@ pub enum LoadingPhase {
     ExportGenerating,
     ExportWriting,
     ExportComplete,
+    // Import phases (4 total) — used by TML and Compass survey-file imports
+    ImportParsing,
+    ImportConverting,
+    ImportApplyingChanges,
+    ImportFinalizing,
 }
 
 impl LoadingPhase {
@@ -245,6 +250,10 @@ impl LoadingPhase {
             Self::ExportGenerating => "Generating...",
             Self::ExportWriting => "Writing file...",
             Self::ExportComplete => "Export complete",
+            Self::ImportParsing => "Reading survey file...",
+            Self::ImportConverting => "Converting to project model...",
+            Self::ImportApplyingChanges => "Applying sections and merges...",
+            Self::ImportFinalizing => "Finalizing import...",
         }
     }
 
@@ -271,6 +280,12 @@ impl LoadingPhase {
             Self::ExportGenerating => 60.0,
             Self::ExportWriting => 20.0,
             Self::ExportComplete => 10.0,
+            // Import phases sum to 100. Applying dominates because section
+            // creation + station merges scale with N.
+            Self::ImportParsing => 15.0,
+            Self::ImportConverting => 20.0,
+            Self::ImportApplyingChanges => 55.0,
+            Self::ImportFinalizing => 10.0,
         }
     }
 }
@@ -394,6 +409,24 @@ impl ProgressEmitter {
             "Create phase weights must sum to 100"
         );
         Self::new(handle, weights, cancelled)
+    }
+
+    /// Create a new emitter for survey-file import operations (TML, Compass)
+    /// with 4 phases summing to 100%. Import doesn't support cancellation today,
+    /// so this uses a dummy token.
+    pub fn new_for_import(handle: AppHandle) -> Self {
+        let weights = vec![
+            (LoadingPhase::ImportParsing, 15.0),
+            (LoadingPhase::ImportConverting, 20.0),
+            (LoadingPhase::ImportApplyingChanges, 55.0),
+            (LoadingPhase::ImportFinalizing, 10.0),
+        ];
+        debug_assert!(
+            (weights.iter().map(|(_, w)| w).sum::<f32>() - 100.0).abs() < 0.01,
+            "Import phase weights must sum to 100"
+        );
+        let dummy_cancelled = Arc::new(AtomicBool::new(false));
+        Self::new(handle, weights, dummy_cancelled)
     }
 
     /// Create a new emitter for export operations (4 phases summing to 100%).

@@ -14,7 +14,7 @@ interface CompassImportDialogProps {
 }
 
 export default function CompassImportDialog({ compassFile, filePath }: CompassImportDialogProps) {
-  const { executeCompassImport, calculateFileHash, checkDuplicateImport } = useProjectStore();
+  const { executeCompassImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
   const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
 
   const [isImporting, setIsImporting] = useState(false);
@@ -45,8 +45,13 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);
+    // Show the loading overlay so the user sees Reading -> Converting ->
+    // Applying -> Finalizing phase ticks from the backend ProgressEmitter.
+    startLoading(compassFile.cave_name || fileName, filePath);
+    setLoadingProgress({ phase: 'import_parsing' });
     try {
       const result = await executeCompassImport(filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations);
+      resetLoading();
 
       if (!result.success) {
         trackDialogComplete('compass-import');
@@ -83,13 +88,14 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
       setView('single');
       triggerFitToBounds();
     } catch (e) {
+      resetLoading();
       setIsImporting(false);
       openDialog('error', {
         title: 'Import Failed',
         message: getErrorMessage(e, 'Failed to import Compass file'),
       });
     }
-  }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations, closeDialog, openDialog, setView, triggerFitToBounds]);
+  }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations, compassFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   return (
     <DialogWrapper title="Import Compass Survey" onClose={closeDialog} size="lg" data-testid="compass-import-dialog">
