@@ -653,30 +653,34 @@ pub fn convert_compass_to_import_configs(
         .unwrap_or(0.0);
     let depth_of = |station: &str| depth_ref - elevation.get(station).copied().unwrap_or(0.0);
 
-    // Pass 2: split into chains, build sections, resolve placement + closures.
-    let mut configs: Vec<ImportSectionConfig> = Vec::new();
-    let mut closures: Vec<ImportClosure> = Vec::new();
-    let mut global_map: HashMap<String, (u32, u32)> = HashMap::new();
-    let mut next_section: u32 = 0;
-
+    // Pass 2a: split every kept survey into head-to-tail chains and build the
+    // per-section data (names, shots, label). Placement is decided in pass 2b
+    // by a spanning-tree walk over chain connectivity, so it doesn't depend on
+    // survey/file order (the previous one-pass first-occurrence registration
+    // mis-placed every chain whose shared station was first defined in a
+    // later-processed survey, dumping ~280 shots at origin in Minotauro).
+    struct PendingChain {
+        section_index: u32,
+        names: Vec<String>,
+        shots: Vec<ShotData>,
+        label: String,
+        surveyor: Option<String>,
+        date: chrono::NaiveDate,
+    }
+    let mut chains: Vec<PendingChain> = Vec::new();
     for kept_survey in &kept {
-        let chains = split_into_chains(&kept_survey.shots);
-        let multi = chains.len() > 1;
-        for (chain_idx, chain) in chains.iter().enumerate() {
+        let split = split_into_chains(&kept_survey.shots);
+        let multi = split.len() > 1;
+        for (chain_idx, chain) in split.iter().enumerate() {
             if chain.is_empty() {
                 continue;
             }
-            let section_index = next_section;
-            next_section += 1;
-
-            // Station names: chain start, then each shot's `to`.
+            let section_index = chains.len() as u32;
             let mut names: Vec<String> = Vec::with_capacity(chain.len() + 1);
             names.push(kept_survey.shots[chain[0]].from.clone());
             for &idx in chain {
                 names.push(kept_survey.shots[idx].to.clone());
             }
-
-            // Shot data.
             let mut shots_data = Vec::with_capacity(chain.len());
             for &idx in chain {
                 let shot = kept_survey.shots[idx];
@@ -689,81 +693,200 @@ pub fn convert_compass_to_import_configs(
                     flags.exclude_all,
                 ));
             }
-
-            // Stations already placed in earlier sections.
-            let shared: Vec<(u32, u32, u32)> = names
-                .iter()
-                .enumerate()
-                .filter_map(|(k, name)| {
-                    global_map
-                        .get(name)
-                        .map(|&(sec, st)| (k as u32, sec, st))
-                })
-                .collect();
-
-            let anchor_idx = anchor_name
-                .as_deref()
-                .and_then(|a| names.iter().position(|n| n == a));
-
-            let mut placement_merge: Option<u32> = None;
-            let placement = match (anchor_idx, anchor_coordinates) {
-                (Some(idx), Some(coordinates)) => ImportPlacement::ZeroDatum {
-                    coordinates,
-                    station_index: idx as u32,
-                },
-                _ => {
-                    if let Some(&(k, sec, st)) = shared.first() {
-                        placement_merge = Some(k);
-                        ImportPlacement::FromImporting {
-                            import_station: k,
-                            target_section_index: sec,
-                            target_station_index: st,
-                        }
-                    } else {
-                        if !configs.is_empty() {
-                            warnings.push(format!(
-                                "Section '{}' is not connected to the rest of the survey; placed at origin",
-                                section_label(kept_survey.survey, multi, chain_idx)
-                            ));
-                        }
-                        ImportPlacement::Origin
-                    }
-                }
-            };
-
-            // Any other shared station becomes a loop closure to keep connectivity.
-            for &(k, sec, st) in &shared {
-                if Some(k) == placement_merge {
-                    continue;
-                }
-                closures.push(ImportClosure {
-                    from_section_index: section_index,
-                    from_station_index: k,
-                    to_section_index: sec,
-                    to_station_index: st,
-                });
-            }
-
-            // Register first occurrences of this section's stations.
-            for (k, name) in names.iter().enumerate() {
-                global_map
-                    .entry(name.clone())
-                    .or_insert((section_index, k as u32));
-            }
-
-            configs.push(ImportSectionConfig {
+            chains.push(PendingChain {
                 section_index,
-                name: Some(section_label(kept_survey.survey, multi, chain_idx)),
-                surveyor: non_empty(&kept_survey.survey.team),
-                date: Some(kept_survey.survey.date),
-                color: SECTION_COLORS[section_index as usize % SECTION_COLORS.len()].to_string(),
-                direction: None,
-                quality: 1.0,
+                names,
                 shots: shots_data,
-                placement,
-                station_comments: Vec::new(),
+                label: section_label(kept_survey.survey, multi, chain_idx),
+                surveyor: non_empty(&kept_survey.survey.team),
+                date: kept_survey.survey.date,
             });
         }
+    }
+
+    // Pass 2b: index all station-name occurrences across every chain, then
+    // build the chain adjacency (two chains are neighbors iff they share a
+    // station name) and BFS from the anchor chain to assign a spanning-tree
+    // placement: anchor -> ZeroDatum, each reached chain -> FromImporting to
+    // its discovering neighbor. Unreachable components are seeded at Origin
+    // exactly once each (their members chain into them via FromImporting too).
+    let mut occurrences: HashMap<String, Vec<(usize, u32)>> = HashMap::new();
+    for (ci, chain) in chains.iter().enumerate() {
+        for (k, name) in chain.names.iter().enumerate() {
+            occurrences
+                .entry(name.clone())
+                .or_default()
+                .push((ci, k as u32));
+        }
+    }
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); chains.len()];
+    for occs in occurrences.values() {
+        for a in 0..occs.len() {
+            for b in (a + 1)..occs.len() {
+                let (ia, _) = occs[a];
+                let (ib, _) = occs[b];
+                if ia != ib {
+                    adjacency[ia].push(ib);
+                    adjacency[ib].push(ia);
+                }
+            }
+        }
+    }
+    for nbrs in adjacency.iter_mut() {
+        nbrs.sort_unstable();
+        nbrs.dedup();
+    }
+
+    // Find a station shared between two chains, returning (child_idx, parent_idx).
+    let shared_station =
+        |child: &PendingChain, parent: &PendingChain| -> Option<(u32, u32)> {
+            for (ci, cname) in child.names.iter().enumerate() {
+                if let Some(pi) = parent.names.iter().position(|pn| pn == cname) {
+                    return Some((ci as u32, pi as u32));
+                }
+            }
+            None
+        };
+
+    let anchor_chain_idx = anchor_name.as_deref().and_then(|a| {
+        chains
+            .iter()
+            .position(|ch| ch.names.iter().any(|n| n == a))
+    });
+
+    let mut placement: Vec<Option<ImportPlacement>> = vec![None; chains.len()];
+    let mut placement_merge_station: Vec<Option<u32>> = vec![None; chains.len()];
+    let mut placement_parent: Vec<Option<usize>> = vec![None; chains.len()];
+    let mut visited = vec![false; chains.len()];
+    let mut creation_order: Vec<usize> = Vec::with_capacity(chains.len());
+    let mut queue: VecDeque<usize> = VecDeque::new();
+
+    if let (Some(ac), Some(coords)) = (anchor_chain_idx, anchor_coordinates) {
+        let aname = anchor_name.as_deref().unwrap_or("");
+        let aidx = chains[ac]
+            .names
+            .iter()
+            .position(|n| n == aname)
+            .unwrap_or(0) as u32;
+        placement[ac] = Some(ImportPlacement::ZeroDatum {
+            coordinates: coords,
+            station_index: aidx,
+        });
+        visited[ac] = true;
+        creation_order.push(ac);
+        queue.push_back(ac);
+    }
+
+    let mut next_root_warns = anchor_chain_idx.is_some();
+    loop {
+        while let Some(parent_idx) = queue.pop_front() {
+            // Borrow-checker dance: copy the neighbor list before iterating.
+            let neighbors = adjacency[parent_idx].clone();
+            for nb in neighbors {
+                if visited[nb] {
+                    continue;
+                }
+                if let Some((child_st, parent_st)) =
+                    shared_station(&chains[nb], &chains[parent_idx])
+                {
+                    placement[nb] = Some(ImportPlacement::FromImporting {
+                        import_station: child_st,
+                        target_section_index: chains[parent_idx].section_index,
+                        target_station_index: parent_st,
+                    });
+                    placement_merge_station[nb] = Some(child_st);
+                    placement_parent[nb] = Some(parent_idx);
+                }
+                visited[nb] = true;
+                creation_order.push(nb);
+                queue.push_back(nb);
+            }
+        }
+        // Seed the next disconnected component (if any) at Origin.
+        let next = (0..chains.len()).find(|&i| !visited[i]);
+        match next {
+            Some(seed) => {
+                placement[seed] = Some(ImportPlacement::Origin);
+                if next_root_warns {
+                    warnings.push(format!(
+                        "Section '{}' starts a separate component not connected to the georeferenced survey; placed at origin",
+                        chains[seed].label
+                    ));
+                }
+                next_root_warns = true;
+                visited[seed] = true;
+                creation_order.push(seed);
+                queue.push_back(seed);
+            }
+            None => break,
+        }
+    }
+
+    // Pass 2c: emit loop closures for shared stations that aren't the
+    // spanning-tree merge edge — pin each chain's other shared station to the
+    // canonical (earliest by section_index) occurrence.
+    let mut canonical: HashMap<&str, (u32, u32)> = HashMap::new();
+    for chain in &chains {
+        for (k, name) in chain.names.iter().enumerate() {
+            canonical
+                .entry(name.as_str())
+                .and_modify(|prev| {
+                    if chain.section_index < prev.0 {
+                        *prev = (chain.section_index, k as u32);
+                    }
+                })
+                .or_insert((chain.section_index, k as u32));
+        }
+    }
+    let mut closures: Vec<ImportClosure> = Vec::new();
+    let mut closure_keys: std::collections::HashSet<(u32, u32, u32, u32)> =
+        std::collections::HashSet::new();
+    for (ci, chain) in chains.iter().enumerate() {
+        let merge_st = placement_merge_station[ci];
+        let parent_section = placement_parent[ci]
+            .map(|p| chains[p].section_index);
+        for (k, name) in chain.names.iter().enumerate() {
+            if let Some(&(canon_sec, canon_st)) = canonical.get(name.as_str()) {
+                if canon_sec == chain.section_index {
+                    continue; // This chain owns the canonical occurrence.
+                }
+                // Skip the spanning-tree merge edge for THIS chain.
+                if Some(k as u32) == merge_st && parent_section == Some(canon_sec) {
+                    continue;
+                }
+                let key = (chain.section_index, k as u32, canon_sec, canon_st);
+                if closure_keys.insert(key) {
+                    closures.push(ImportClosure {
+                        from_section_index: chain.section_index,
+                        from_station_index: k as u32,
+                        to_section_index: canon_sec,
+                        to_station_index: canon_st,
+                    });
+                }
+            }
+        }
+    }
+
+    // Emit configs in BFS creation order so FromImporting targets always
+    // precede their dependents at create time.
+    let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
+    for ci in creation_order {
+        let chain = &chains[ci];
+        let p = placement[ci]
+            .clone()
+            .unwrap_or(ImportPlacement::Origin);
+        configs.push(ImportSectionConfig {
+            section_index: chain.section_index,
+            name: Some(chain.label.clone()),
+            surveyor: chain.surveyor.clone(),
+            date: Some(chain.date),
+            color: SECTION_COLORS[chain.section_index as usize % SECTION_COLORS.len()].to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: chain.shots.clone(),
+            placement: p,
+            station_comments: Vec::new(),
+        });
     }
 
     topological_sort_configs(&mut configs);
@@ -965,6 +1088,35 @@ mod tests {
         // Reference: pyproj EPSG:32616 -> EPSG:4326 gives lat 20.481817, lon -87.270896.
         assert!((lat - 20.481817).abs() < 0.0005, "lat {lat}");
         assert!((lon - (-87.270896)).abs() < 0.0005, "lon {lon}");
+    }
+
+    #[test]
+    fn minotauro_every_section_connects_to_the_zero_datum() {
+        // Regression guard for the spanning-tree placement: every Compass section
+        // in the Minotauro corpus must attach to the network through a
+        // station-name path back to the zero datum (1 ZeroDatum + the rest
+        // FromImporting), with no chains stranded at origin. A one-pass
+        // first-occurrence placement previously left ~20 sections (~280 shots)
+        // detached because their connection station was first defined in a
+        // later-processed survey.
+        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        let (configs, _closures, warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let mut zero = 0;
+        let mut origin = 0;
+        for c in &configs {
+            match c.placement {
+                ImportPlacement::ZeroDatum { .. } => zero += 1,
+                ImportPlacement::Origin => origin += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(zero, 1, "exactly one zero datum expected");
+        assert_eq!(origin, 0, "no section should be stranded at origin");
+        assert!(
+            warnings.iter().all(|w| !w.contains("origin")),
+            "no 'placed at origin' warnings expected, got: {warnings:?}"
+        );
     }
 
     #[test]
