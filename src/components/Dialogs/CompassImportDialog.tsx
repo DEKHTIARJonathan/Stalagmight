@@ -23,6 +23,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
   const [hashChecked, setHashChecked] = useState(false);
   const [includeExcluded, setIncludeExcluded] = useState(false);
   const [applyCorrections, setApplyCorrections] = useState(true);
+  const [commentsOnStations, setCommentsOnStations] = useState(true);
 
   // Check for duplicate import on mount
   useEffect(() => {
@@ -45,7 +46,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
   const handleImport = useCallback(async () => {
     setIsImporting(true);
     try {
-      const result = await executeCompassImport(filePath, fileHash, includeExcluded, applyCorrections);
+      const result = await executeCompassImport(filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations);
 
       if (!result.success) {
         trackDialogComplete('compass-import');
@@ -88,7 +89,7 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
         message: getErrorMessage(e, 'Failed to import Compass file'),
       });
     }
-  }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, closeDialog, openDialog, setView, triggerFitToBounds]);
+  }, [executeCompassImport, filePath, fileHash, includeExcluded, applyCorrections, commentsOnStations, closeDialog, openDialog, setView, triggerFitToBounds]);
 
   return (
     <DialogWrapper title="Import Compass Survey" onClose={closeDialog} size="lg" data-testid="compass-import-dialog">
@@ -183,6 +184,15 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             data-testid="compass-apply-corrections"
           />
           Apply declination &amp; instrument corrections
+        </label>
+        <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!commentsOnStations}
+            onChange={(e) => setCommentsOnStations(!e.target.checked)}
+            data-testid="compass-comments-on-shots"
+          />
+          Keep comments on shots (default: promote to FROM station)
         </label>
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input

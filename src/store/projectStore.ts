@@ -242,7 +242,7 @@ interface ProjectStore {
   parseTml: (path: string) => Promise<TmlFile>;
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
-  executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean) => Promise<CommandResult>;
+  executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseGpx: (path: string) => Promise<GpxFile>;
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -1089,7 +1089,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  executeCompassImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean) => {
+  executeCompassImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => {
     return executeCommand(
       'execute_compass_import',
       {
@@ -1097,6 +1097,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         fileHash: fileHash ?? null,
         includeExcluded: includeExcluded ?? false,
         applyCorrections: applyCorrections ?? true,
+        commentsOnStations: commentsOnStations ?? true,
       },
       { purpose: 'import Compass', fields: { path } }
     );

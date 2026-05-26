@@ -233,6 +233,7 @@ pub fn execute_compass_import(
     file_hash: Option<String>,
     include_excluded: bool,
     apply_corrections: bool,
+    comments_on_stations: bool,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -256,6 +257,7 @@ pub fn execute_compass_import(
     let opts = CompassImportOptions {
         include_excluded,
         apply_corrections,
+        comments_on_stations,
     };
     let (sections, closures, warnings) =
         match crate::parsers::compass::convert_compass_to_import_configs(&parsed, &opts) {

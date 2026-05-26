@@ -80,6 +80,10 @@ pub struct CompassImportOptions {
     pub include_excluded: bool,
     /// Apply the per-survey CORRECTIONS / CORRECTIONS2 factors to readings.
     pub apply_corrections: bool,
+    /// Promote each non-empty shot comment to its FROM station (Compass
+    /// convention: surveyors annotate the station they were standing at).
+    /// When false, comments stay on the shot.
+    pub comments_on_stations: bool,
 }
 
 impl Default for CompassImportOptions {
@@ -87,6 +91,7 @@ impl Default for CompassImportOptions {
         Self {
             include_excluded: false,
             apply_corrections: true,
+            comments_on_stations: true,
         }
     }
 }
@@ -663,6 +668,7 @@ pub fn convert_compass_to_import_configs(
         section_index: u32,
         names: Vec<String>,
         shots: Vec<ShotData>,
+        station_comments: Vec<(u32, String)>,
         label: String,
         surveyor: Option<String>,
         date: chrono::NaiveDate,
@@ -693,10 +699,25 @@ pub fn convert_compass_to_import_configs(
                     flags.exclude_all,
                 ));
             }
+            // Compass convention: comments describe the FROM station (where the
+            // surveyor was standing). When the option is on, promote each
+            // non-empty shot comment to its FROM station (station_index = shot
+            // index in the chain) and clear it from the shot.
+            let mut station_comments: Vec<(u32, String)> = Vec::new();
+            if opts.comments_on_stations {
+                for (shot_idx, shot) in shots_data.iter_mut().enumerate() {
+                    if let Some(comment) = shot.comment.take() {
+                        if !comment.is_empty() {
+                            station_comments.push((shot_idx as u32, comment));
+                        }
+                    }
+                }
+            }
             chains.push(PendingChain {
                 section_index,
                 names,
                 shots: shots_data,
+                station_comments,
                 label: section_label(kept_survey.survey, multi, chain_idx),
                 surveyor: non_empty(&kept_survey.survey.team),
                 date: kept_survey.survey.date,
@@ -885,7 +906,7 @@ pub fn convert_compass_to_import_configs(
             quality: 1.0,
             shots: chain.shots.clone(),
             placement: p,
-            station_comments: Vec::new(),
+            station_comments: chain.station_comments.clone(),
         });
     }
 
@@ -1051,12 +1072,20 @@ mod tests {
         let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
         let (default_configs, _, _) = convert_compass_to_import_configs(
             &parsed,
-            &CompassImportOptions { include_excluded: false, apply_corrections: true },
+            &CompassImportOptions {
+                include_excluded: false,
+                apply_corrections: true,
+                comments_on_stations: true,
+            },
         )
         .unwrap();
         let (included_configs, _, _) = convert_compass_to_import_configs(
             &parsed,
-            &CompassImportOptions { include_excluded: true, apply_corrections: true },
+            &CompassImportOptions {
+                include_excluded: true,
+                apply_corrections: true,
+                comments_on_stations: true,
+            },
         )
         .unwrap();
         // The MNEstrella survey is entirely #|X# flagged, so including excluded
@@ -1088,6 +1117,60 @@ mod tests {
         // Reference: pyproj EPSG:32616 -> EPSG:4326 gives lat 20.481817, lon -87.270896.
         assert!((lat - 20.481817).abs() < 0.0005, "lat {lat}");
         assert!((lon - (-87.270896)).abs() < 0.0005, "lon {lon}");
+    }
+
+    #[test]
+    fn comments_promoted_to_from_station_by_default() {
+        // Compass convention: a shot comment describes the FROM station (the
+        // point the surveyor was standing at). With comments_on_stations on
+        // (the default), each non-empty shot comment should become a
+        // station_comment at station_index = shot index, and the shot's own
+        // comment should be cleared. Minotauro's first shot 00->MNUS1 carries
+        // the cenote entrance note, which must land on station 0 ("00").
+        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        let (promoted, _, _) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let anchor = promoted
+            .iter()
+            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .expect("zero datum section");
+        assert!(
+            anchor.shots[0].comment.is_none(),
+            "first shot's comment should be promoted off the shot, got {:?}",
+            anchor.shots[0].comment
+        );
+        let station_zero_comment = anchor
+            .station_comments
+            .iter()
+            .find_map(|(idx, text)| (*idx == 0).then_some(text.as_str()));
+        assert!(
+            station_zero_comment.is_some_and(|s| s.contains("Cenote Minotauro")),
+            "station 0 should carry the cenote entrance note, got {:?}",
+            station_zero_comment
+        );
+
+        // With the option off, comments stay on the shot and station_comments
+        // is empty for the section.
+        let (kept_on_shots, _, _) = convert_compass_to_import_configs(
+            &parsed,
+            &CompassImportOptions {
+                include_excluded: false,
+                apply_corrections: true,
+                comments_on_stations: false,
+            },
+        )
+        .unwrap();
+        let anchor_raw = kept_on_shots
+            .iter()
+            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .expect("zero datum section");
+        assert!(anchor_raw.station_comments.is_empty());
+        assert!(
+            anchor_raw.shots[0]
+                .comment
+                .as_deref()
+                .is_some_and(|c| c.contains("Cenote Minotauro"))
+        );
     }
 
     #[test]
