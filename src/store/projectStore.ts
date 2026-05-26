@@ -22,7 +22,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
 import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -241,6 +241,8 @@ interface ProjectStore {
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  parseCompass: (path: string) => Promise<CompassFile>;
+  executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean) => Promise<CommandResult>;
   parseGpx: (path: string) => Promise<GpxFile>;
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -1077,6 +1079,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         commentsOnStations: commentsOnStations ?? true,
       },
       { purpose: 'import Ariane TML/TMLU', fields: { path } }
+    );
+  },
+
+  parseCompass: async (path: string) => {
+    return await invokeIpc<CompassFile>('parse_compass', { path }, {
+      purpose: 'parse Compass for import preview',
+      fields: { path },
+    });
+  },
+
+  executeCompassImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean) => {
+    return executeCommand(
+      'execute_compass_import',
+      {
+        path,
+        fileHash: fileHash ?? null,
+        includeExcluded: includeExcluded ?? false,
+        applyCorrections: applyCorrections ?? true,
+      },
+      { purpose: 'import Compass', fields: { path } }
     );
   },
 

@@ -11,6 +11,7 @@ import {
   projectSaveFilters,
   dmpOpenFilters,
   tmlOpenFilters,
+  compassOpenFilters,
   gpxOpenFilters,
   exportSaveFilters,
   saveDialog,
@@ -186,12 +187,18 @@ export function useProject() {
   }, [store, openDialog, setImportContext]);
 
   /**
-   * Handle TML/TMLU file import with context-aware dialog flow.
-   * - From existing project: Opens file picker, parses TML, then shows TmlImportDialog.
-   * - From home screen (no project): Opens file picker, parses TML, then shows NewProjectDialog,
-   *   which on completion opens TmlImportDialog.
+   * Handle TML/TMLU file import. A full survey import always creates a new
+   * project, so it is only allowed from the home screen (no project open).
    */
   const handleImportTml = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    if (store.project) {
+      openDialog('error', {
+        title: 'Import survey',
+        message: 'Close the current project before importing a new survey.',
+      });
+      return;
+    }
+
     let selectedPath = filePath;
 
     if (!skipFilePicker) {
@@ -208,30 +215,69 @@ export function useProject() {
 
     if (!selectedPath) return;
 
-    const hasProject = !!store.project;
-
     try {
       const tmlFile = await store.parseTml(selectedPath);
       if (!tmlFile) return;
 
-      if (hasProject) {
-        openDialog('tml-import', {
-          tmlFile,
-          filePath: selectedPath,
-        });
-      } else {
-        const fileName = extractFilename(selectedPath, /\.tmlu?$/i) || 'Imported';
-        openDialog('new-project-for-import', {
-          tmlFile,
-          filePath: selectedPath,
-          defaultName: fileName,
-          importType: 'tml',
-        });
-      }
+      const fileName = extractFilename(selectedPath, /\.tmlu?$/i) || 'Imported';
+      openDialog('new-project-for-import', {
+        tmlFile,
+        filePath: selectedPath,
+        defaultName: fileName,
+        importType: 'tml',
+      });
     } catch (e) {
       openDialog('error', {
         title: 'Import Failed',
         message: getErrorMessage(e, 'Failed to parse TML file'),
+      });
+    }
+  }, [store, openDialog]);
+
+  /**
+   * Handle Compass .DAT/.MAK import. Like TML, a Compass survey import always
+   * creates a new project, so it is only allowed when no project is open.
+   */
+  const handleImportCompass = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    if (store.project) {
+      openDialog('error', {
+        title: 'Import survey',
+        message: 'Close the current project before importing a new survey.',
+      });
+      return;
+    }
+
+    let selectedPath = filePath;
+
+    if (!skipFilePicker) {
+      const selected = await open({
+        multiple: false,
+        filters: compassOpenFilters(),
+      });
+
+      if (!selected || typeof selected !== 'string') {
+        return;
+      }
+      selectedPath = selected;
+    }
+
+    if (!selectedPath) return;
+
+    try {
+      const compassFile = await store.parseCompass(selectedPath);
+      if (!compassFile) return;
+
+      const fileName = extractFilename(selectedPath, /\.(mak|dat)$/i) || 'Imported';
+      openDialog('new-project-for-import', {
+        compassFile,
+        filePath: selectedPath,
+        defaultName: fileName,
+        importType: 'compass',
+      });
+    } catch (e) {
+      openDialog('error', {
+        title: 'Import Failed',
+        message: getErrorMessage(e, 'Failed to parse Compass file'),
       });
     }
   }, [store, openDialog]);
@@ -333,6 +379,7 @@ export function useProject() {
     handleCloseProject,
     handleImportDmp,
     handleImportTml,
+    handleImportCompass,
     handleImportGpx,
     handleExportCsv,
     handleExportJson,

@@ -100,7 +100,7 @@ export function useGlobalViewShortcuts({
 }: UseGlobalViewShortcutsOptions): void {
   const { clearSelection, selectSystem, setSelectedSystems } = useGlobalViewStore();
   const { openDialog, setImportContext } = useUIStore();
-  const { importDmp, parseTml, parseGpx, config } = useProjectStore();
+  const { importDmp, parseTml, parseCompass, parseGpx, config } = useProjectStore();
 
   // File shortcut map - config-aware, updated when config changes
   const fileShortcutMapRef = useRef(buildFileShortcutMap(defaultConfig.shortcuts));
@@ -402,21 +402,41 @@ export function useGlobalViewShortcuts({
                   });
                 }
               } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
+                // TML/TMLU import (always creates a new project)
+                if (useProjectStore.getState().project) {
+                  openDialog('error', {
+                    title: 'Import survey',
+                    message: 'Close the current project before importing a new survey.',
+                  });
+                  return;
+                }
                 const tmlFile = await parseTml(selected);
                 if (!tmlFile) return;
-
-                const currentProject = useProjectStore.getState().project;
-                if (currentProject) {
-                  openDialog('tml-import', { tmlFile, filePath: selected });
-                } else {
-                  const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
-                  openDialog('new-project-for-import', {
-                    tmlFile,
-                    filePath: selected,
-                    defaultName: fileName,
-                    importType: 'tml',
+                const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
+                openDialog('new-project-for-import', {
+                  tmlFile,
+                  filePath: selected,
+                  defaultName: fileName,
+                  importType: 'tml',
+                });
+              } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
+                // Compass import (always creates a new project)
+                if (useProjectStore.getState().project) {
+                  openDialog('error', {
+                    title: 'Import survey',
+                    message: 'Close the current project before importing a new survey.',
                   });
+                  return;
                 }
+                const compassFile = await parseCompass(selected);
+                if (!compassFile) return;
+                const fileName = extractFilename(selected, /\.(mak|dat)$/i) || 'Imported';
+                openDialog('new-project-for-import', {
+                  compassFile,
+                  filePath: selected,
+                  defaultName: fileName,
+                  importType: 'compass',
+                });
               } else {
                 const dmpFile = await importDmp(selected);
                 if (!dmpFile) return;
@@ -450,7 +470,7 @@ export function useGlobalViewShortcuts({
       }
     },
     [clearSelection, selectSystem, setContextMenu, setMultiSelectedIds, setSelectedProjectId, mapRef,
-     openDialog, setImportContext, importDmp, parseTml, parseGpx]
+     openDialog, setImportContext, importDmp, parseTml, parseCompass, parseGpx]
   );
 
   // Register single keyboard event listener

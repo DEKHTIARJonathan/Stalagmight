@@ -67,6 +67,8 @@ export default function GlobalView() {
     handleNewProject,
     handleOpenProject,
     handleImportDmp,
+    handleImportTml,
+    handleImportCompass,
   } = useProject();
 
   const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects } = useProjectStore();
@@ -338,6 +340,12 @@ export default function GlobalView() {
         <div className="flex items-center gap-3">
           <Button onClick={() => handleImportDmp()} data-testid="global-import-dmp-button">
             {t('globalView.actions.importDmp')}
+          </Button>
+          <Button onClick={() => handleImportTml()} data-testid="global-import-tml-button">
+            {t('globalView.actions.importTml')}
+          </Button>
+          <Button onClick={() => handleImportCompass()} data-testid="global-import-compass-button">
+            {t('globalView.actions.importCompass')}
           </Button>
           <Button data-testid="new-project-button" onClick={() => handleNewProject()}>
             {t('globalView.actions.newProject')}
