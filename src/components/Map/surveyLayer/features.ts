@@ -103,6 +103,22 @@ export function buildGhostFeatures(
   return { shotFeatures, stationFeatures, mergeStationFeatures };
 }
 
+/**
+ * Options for `buildSurveyFeatures`. Splitting these out keeps the
+ * signature flat as new toggles are added.
+ */
+export interface BuildSurveyFeaturesOptions {
+  /** Whether to materialize shot-label and station-label features.
+   *  Both layers have `minzoom: 14` (so do their comment-overlay layers
+   *  that share the same source), and at fit-to-bounds on a large cave
+   *  the camera starts well below that. Skipping the ~160 k label
+   *  features when they wouldn't render anyway saves ~100 MB main+worker
+   *  on a 75 k-shot project. SurveyLayer rebuilds when the camera
+   *  crosses the threshold. Defaults to `true` for callers that don't
+   *  care (tests, etc.). */
+  buildLabels?: boolean;
+}
+
 export function buildSurveyFeatures(
   sections: Section[],
   stations: Station[],
@@ -111,8 +127,10 @@ export function buildSurveyFeatures(
   showDepthGradient: boolean,
   depthRange: DepthRange,
   themeColors: MapThemeColors,
-  precision?: DecimalPrecision
+  precision?: DecimalPrecision,
+  options: BuildSurveyFeaturesOptions = {}
 ): SurveyFeatureSets {
+  const buildLabels = options.buildLabels ?? true;
   // Theme colors (resolved from CSS variables by the caller)
   const depthShallow = themeColors.depthShallow;
   const depthDeep = themeColors.depthDeep;
@@ -233,38 +251,45 @@ export function buildSurveyFeatures(
           }
         }
 
-        const midX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
-        const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
-        const labelDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
+        // Shot-label feature: only built when buildLabels is true.
+        // Both the shot-labels and shot-comments layers (which share the
+        // same source) have minzoom 14, so at lower zooms these
+        // features wouldn't paint anyway. SurveyLayer rebuilds when the
+        // camera crosses the threshold.
+        if (buildLabels) {
+          const midX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
+          const midY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
+          const labelDepth = (fromStation.coordinates.z + toStation.coordinates.z) / 2;
 
-        const label = `${formatFixed(shot.azimuth_in, undefined, precision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, precision?.length ?? 1)}m ${formatFixed(labelDepth, undefined, precision?.depth ?? 1)}m`;
+          const label = `${formatFixed(shot.azimuth_in, undefined, precision?.azimuth ?? 0)}° ${formatFixed(shot.length, undefined, precision?.length ?? 1)}m ${formatFixed(labelDepth, undefined, precision?.depth ?? 1)}m`;
 
-        const shotLabelDepthColor = showDepthGradient
-          ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
-          : null;
-        const shotLabelColor = shotLabelDepthColor ?? labelColor;
+          const shotLabelDepthColor = showDepthGradient
+            ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
+            : null;
+          const shotLabelColor = shotLabelDepthColor ?? labelColor;
 
-        // Only include `comment` when there actually is one. The comment
-        // layer's filter is `['!=', ['get', 'comment'], null]` and treats
-        // missing-key the same as null. JSC uses a smaller hidden class
-        // for objects without the slot, which matters at 75k+ features.
-        const shotLabelProps: Record<string, unknown> = {
-          label,
-          index: globalShotIndex,
-          sectionId: section.id,
-          shotId: shot.id,
-          color: shotLabelColor,
-          isReference: shot.is_reference,
-        };
-        if (shot.comment) shotLabelProps.comment = shot.comment;
-        shotLabelFeatures.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: metersToMapCoords(midX, midY, gpsOrigin),
-          },
-          properties: shotLabelProps,
-        });
+          // Only include `comment` when there actually is one. The comment
+          // layer's filter is `['!=', ['get', 'comment'], null]` and treats
+          // missing-key the same as null. JSC uses a smaller hidden class
+          // for objects without the slot, which matters at 75k+ features.
+          const shotLabelProps: Record<string, unknown> = {
+            label,
+            index: globalShotIndex,
+            sectionId: section.id,
+            shotId: shot.id,
+            color: shotLabelColor,
+            isReference: shot.is_reference,
+          };
+          if (shot.comment) shotLabelProps.comment = shot.comment;
+          shotLabelFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: metersToMapCoords(midX, midY, gpsOrigin),
+            },
+            properties: shotLabelProps,
+          });
+        }
 
         globalShotIndex++;
       }
@@ -360,16 +385,20 @@ export function buildSurveyFeatures(
     }
   }
 
-  const sectionMinIndices = new Map<number, number>();
-  for (const station of stations) {
-    const sectionId = station.station_ref.section_id;
-    const currentMin = sectionMinIndices.get(sectionId);
-    if (currentMin === undefined || station.station_ref.station_index < currentMin) {
-      sectionMinIndices.set(sectionId, station.station_ref.station_index);
+  // Station-label features. Same minzoom-14 gate as shot labels;
+  // skip the entire block when buildLabels is false to save the
+  // sectionMinIndices walk + ~89k feature allocations.
+  if (buildLabels) {
+    const sectionMinIndices = new Map<number, number>();
+    for (const station of stations) {
+      const sectionId = station.station_ref.section_id;
+      const currentMin = sectionMinIndices.get(sectionId);
+      if (currentMin === undefined || station.station_ref.station_index < currentMin) {
+        sectionMinIndices.set(sectionId, station.station_ref.station_index);
+      }
     }
-  }
 
-  for (const [globalOrdinal, station] of stations.entries()) {
+    for (const [globalOrdinal, station] of stations.entries()) {
     const isFirstInSection =
       station.station_ref.station_index ===
       sectionMinIndices.get(station.station_ref.section_id);
@@ -412,6 +441,7 @@ export function buildSurveyFeatures(
       },
       properties: stationLabelProps,
     });
+    }
   }
 
   if (loopClosures && loopClosures.length > 0) {

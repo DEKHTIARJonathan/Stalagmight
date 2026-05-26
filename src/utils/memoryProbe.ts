@@ -155,19 +155,30 @@ export function startLongTaskObserver(): void {
     }
   }
 
-  // Always start the frame-gap detector — works everywhere, catches the
-  // freezes longtask might miss anyway (e.g. very long paint phases that
-  // run between the rAF callback and the next frame).
+  // Frame-gap detector: only records the *worst* freeze seen in each
+  // ~1 s window so the panel doesn't fill with `freeze #N` entries from
+  // every minor stall. Threshold raised to 200 ms — short stalls are
+  // noise; we only care about user-perceptible ones.
   if (!frameGapDetectorRunning) {
     frameGapDetectorRunning = true;
     let last = performance.now();
+    let worstInWindow = 0;
+    let windowStart = last;
+    const FREEZE_THRESHOLD_MS = 200;
+    const WINDOW_MS = 1000;
     const tick = () => {
       const now = performance.now();
       const gap = now - last;
-      // A "frame" should be ~16ms; anything >50ms is a real freeze.
-      if (gap > 50) {
-        longTaskCounter += 1;
-        recordPerfTiming(`freeze #${longTaskCounter}`, gap);
+      if (gap > FREEZE_THRESHOLD_MS && gap > worstInWindow) {
+        worstInWindow = gap;
+      }
+      if (now - windowStart >= WINDOW_MS) {
+        if (worstInWindow > 0) {
+          longTaskCounter += 1;
+          recordPerfTiming(`freeze #${longTaskCounter}`, worstInWindow);
+        }
+        windowStart = now;
+        worstInWindow = 0;
       }
       last = now;
       requestAnimationFrame(tick);

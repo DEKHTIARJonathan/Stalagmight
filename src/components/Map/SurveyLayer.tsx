@@ -30,7 +30,8 @@ import {
   resolveNearestShot,
   resolveNearestStation,
 } from './surveyLayer/hitTest';
-import { recordFeatureCount, clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
+import { recordFeatureCount, clearFeatureCountsForPrefix, recordPerfTiming } from '../../utils/memoryProbe';
+import { buildSurveyFeaturesAsync } from './surveyLayer/featuresWorkerClient';
 // Note: buildPriorityExpression, compositeIdEquals, inSection no longer needed
 // after switching to setFeatureState for hover/selection highlighting
 
@@ -162,6 +163,10 @@ export default class SurveyLayer {
   private updateScheduled = false;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
   private coalescedUpdateCallsSinceLastFlush = 0;
+  /** Monotonic id incremented on every update() flush start. Async worker
+   *  builds compare against this on resolve to bail if a newer update
+   *  invalidated them mid-flight. */
+  private lastUpdateToken = 0;
   // Layers that participate in drag preview (main layer → temp layer config)
   private static readonly DRAG_LAYER_DEFS: Array<{
     mainLayerId: string;
@@ -224,6 +229,18 @@ export default class SurveyLayer {
   private cachedStations: Station[] = [];
   private cachedLoopClosures: LoopClosure[] | undefined;
   private cachedPrecision: DecimalPrecision | undefined;
+
+  // Lazy label sources. shot-labels and station-labels both have minzoom 14
+  // (so do the comment-overlay layers that share those sources). Building
+  // ~75k+89k label features at lower zooms wastes ~100 MB main+worker on
+  // the load path. We track the last built state with hysteresis to avoid
+  // thrashing if the user zooms across the threshold rapidly.
+  private static readonly LABEL_BUILD_ZOOM = 13.5;
+  private static readonly LABEL_DROP_ZOOM = 13;
+  /** Whether label features are currently materialized in the sources. */
+  private labelsCurrentlyBuilt = true;
+  /** Bound handler for map.on('zoomend') — kept for proper off() in destroy. */
+  private boundZoomEndForLabels: (() => void) | null = null;
 
   // Bound event handlers stored for proper cleanup in destroy()
   private boundMouseMove: ((e: maplibregl.MapMouseEvent) => void) | null = null;
@@ -1168,6 +1185,31 @@ export default class SurveyLayer {
     // Track user-initiated map navigation (zoom & pan) for telemetry
     this.map.on('zoomend', this.handleZoomEndTelemetry);
     this.map.on('moveend', this.handleMoveEndTelemetry);
+
+    // When the camera crosses the lazy-labels threshold, re-fire update()
+    // so the labels source picks up (or sheds) its features. Cheap: the
+    // public update() coalesces into the next microtask and only runs the
+    // build once even if zoom changes again before flush.
+    this.boundZoomEndForLabels = () => {
+      if (!hasLiveStyle(this.map)) return;
+      const zoom = this.map.getZoom();
+      const shouldBuild = this.labelsCurrentlyBuilt
+        ? zoom >= SurveyLayer.LABEL_DROP_ZOOM
+        : zoom >= SurveyLayer.LABEL_BUILD_ZOOM;
+      if (shouldBuild !== this.labelsCurrentlyBuilt
+          && (this.cachedSections.length > 0 || this.cachedStations.length > 0)) {
+        this.update(
+          this.cachedSections,
+          this.cachedStations,
+          this.cachedLoopClosures,
+          this.gpsOrigin,
+          this.showDepthGradient,
+          this.depthRange,
+          this.cachedPrecision,
+        );
+      }
+    };
+    this.map.on('zoomend', this.boundZoomEndForLabels);
   }
 
   /** Track user-initiated zoom (scroll wheel, pinch, double-click). Skip programmatic zooms. */
@@ -3343,7 +3385,10 @@ export default class SurveyLayer {
       const args = this.pendingUpdateArgs;
       this.pendingUpdateArgs = null;
       if (!args) return;
-      this.flushUpdate(
+      // Off-thread build for the normal (non-drag-commit) path. Falls
+      // back to in-line build inside the worker client if Worker can't
+      // be constructed (test envs).
+      void this.flushUpdateViaWorker(
         args.sections,
         args.stations,
         args.loopClosures,
@@ -3353,6 +3398,78 @@ export default class SurveyLayer {
         args.precision,
       );
     });
+  }
+
+  /**
+   * Async path: feed inputs to the features worker, await the result,
+   * then apply via the shared `applyFeaturesToSources` helper. The
+   * synchronous `flushUpdate` is kept for drag-commit / sync callers.
+   */
+  private async flushUpdateViaWorker(
+    sections: Section[],
+    stations: Station[],
+    loopClosures: LoopClosure[] | undefined,
+    gpsOrigin: GpsOrigin | null,
+    showDepthGradient: boolean,
+    depthRange: DepthRange,
+    precision: DecimalPrecision | undefined,
+  ): Promise<void> {
+    if (!hasLiveStyle(this.map)) return;
+    this.coalescedUpdateCallsSinceLastFlush = 0;
+    this.gpsOrigin = gpsOrigin;
+    this.showDepthGradient = showDepthGradient;
+    this.depthRange = normalizeDepthRange(depthRange);
+    this.cachedSections = sections;
+    this.cachedStations = stations;
+    this.cachedLoopClosures = loopClosures;
+    if (precision !== undefined) this.cachedPrecision = precision;
+
+    const zoom = hasLiveStyle(this.map) ? this.map.getZoom() : 0;
+    const buildLabels = this.labelsCurrentlyBuilt
+      ? zoom >= SurveyLayer.LABEL_DROP_ZOOM
+      : zoom >= SurveyLayer.LABEL_BUILD_ZOOM;
+    this.labelsCurrentlyBuilt = buildLabels;
+
+    // Tag the call so a later flush invalidates an in-flight build —
+    // protects against a fast cascade where the user fires update() again
+    // while the worker is still building from the previous args.
+    const myToken = ++this.lastUpdateToken;
+
+    const tBuildStart = performance.now();
+    let features: ReturnType<typeof buildSurveyFeatures>;
+    try {
+      features = await buildSurveyFeaturesAsync({
+        sections,
+        stations,
+        loopClosures,
+        gpsOrigin: this.gpsOrigin,
+        showDepthGradient: this.showDepthGradient,
+        depthRange: this.depthRange,
+        themeColors: this.themeColors,
+        precision: this.cachedPrecision,
+        options: { buildLabels },
+      });
+    } catch (e) {
+      console.error('[SurveyLayer] feature worker failed, falling back to inline build:', e);
+      // Inline fallback so the survey still renders.
+      features = buildSurveyFeatures(
+        sections,
+        stations,
+        loopClosures,
+        this.gpsOrigin,
+        this.showDepthGradient,
+        this.depthRange,
+        this.themeColors,
+        this.cachedPrecision,
+        { buildLabels },
+      );
+    }
+    recordPerfTiming('buildFeatures (async)', performance.now() - tBuildStart);
+
+    // Bail if a newer update has already taken over.
+    if (myToken !== this.lastUpdateToken) return;
+    if (!hasLiveStyle(this.map)) return;
+    this.applyFeaturesToSources(features);
   }
 
   /**
@@ -3404,6 +3521,37 @@ export default class SurveyLayer {
     this.cachedLoopClosures = loopClosures;
     if (precision !== undefined) this.cachedPrecision = precision;
 
+    // Decide whether labels should be materialized based on current zoom.
+    // Hysteresis: build past LABEL_BUILD_ZOOM, drop only when zoomed out
+    // below LABEL_DROP_ZOOM — prevents thrashing at the threshold.
+    const zoom = hasLiveStyle(this.map) ? this.map.getZoom() : 0;
+    const buildLabels = this.labelsCurrentlyBuilt
+      ? zoom >= SurveyLayer.LABEL_DROP_ZOOM
+      : zoom >= SurveyLayer.LABEL_BUILD_ZOOM;
+    this.labelsCurrentlyBuilt = buildLabels;
+
+    const features = buildSurveyFeatures(
+      sections,
+      stations,
+      loopClosures,
+      this.gpsOrigin,
+      this.showDepthGradient,
+      this.depthRange,
+      this.themeColors,
+      this.cachedPrecision,
+      { buildLabels }
+    );
+    this.applyFeaturesToSources(features);
+  }
+
+  /**
+   * Push a built `SurveyFeatureSets` to MapLibre sources and refresh the
+   * derived state (hover/selection lookup maps, feature-state, etc.).
+   * Shared by the synchronous `flushUpdate` path and the async
+   * `flushUpdateViaWorker` path.
+   */
+  private applyFeaturesToSources(features: ReturnType<typeof buildSurveyFeatures>): void {
+    if (!hasLiveStyle(this.map)) return;
     const {
       shotFeatures,
       shotGradientFeatures,
@@ -3412,16 +3560,7 @@ export default class SurveyLayer {
       sectionLabelFeatures,
       stationLabelFeatures,
       loopClosureFeatures,
-    } = buildSurveyFeatures(
-      sections,
-      stations,
-      loopClosures,
-      this.gpsOrigin,
-      this.showDepthGradient,
-      this.depthRange,
-      this.themeColors,
-      this.cachedPrecision
-    );
+    } = features;
 
     // Build section→featureId lookup maps for O(1) hover highlighting
     // (replaces per-hover querySourceFeatures which was the main perf bottleneck)
@@ -3674,6 +3813,10 @@ export default class SurveyLayer {
       }
       this.map.off('zoomend', this.handleZoomEndTelemetry);
       this.map.off('moveend', this.handleMoveEndTelemetry);
+      if (this.boundZoomEndForLabels) {
+        this.map.off('zoomend', this.boundZoomEndForLabels);
+        this.boundZoomEndForLabels = null;
+      }
 
       // Remove all layers first (must be done before removing their sources)
       if (this.map.getLayer(this.labelsLayerId)) {
