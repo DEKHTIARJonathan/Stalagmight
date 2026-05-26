@@ -165,27 +165,15 @@ export function buildSurveyFeatures(
           ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
           : null;
         const shotColor = depthColor ?? section.color;
-        const fromDepthColor = showDepthGradient
-          ? getDepthColor(
-              shot.depth_in,
-              depthShallow,
-              depthDeep,
-              depthRange.min,
-              depthRange.max
-            )
-          : null;
-        const toDepthColor = showDepthGradient
-          ? getDepthColor(
-              shot.depth_out,
-              depthShallow,
-              depthDeep,
-              depthRange.min,
-              depthRange.max
-            )
-          : null;
 
         const shotFeatureId = section.id * FEATURE_ID_STRIDE + shot.id;
 
+        // Slim shot feature: only properties actually read by paint/feature-state
+        // expressions or by setFeatureState lookups elsewhere in this file.
+        // Dropped: `fromColor`/`toColor` (gradient layer uses its own per-segment
+        // colors), `length`, `azimuth` (hover tooltip looks these up from the
+        // projectStore tree instead of off the feature). For 75k shots that
+        // saves ~4 properties × ~16B = 4.8 MB main + 4.8 MB worker copy.
         shotFeatures.push({
           type: 'Feature',
           geometry: {
@@ -200,11 +188,7 @@ export function buildSurveyFeatures(
             sectionId: section.id,
             shotId: shot.id,
             color: shotColor,
-            fromColor: fromDepthColor ?? shotColor,
-            toColor: toDepthColor ?? shotColor,
             isReference: shot.is_reference,
-            length: shot.length,
-            azimuth: shot.azimuth_in,
           },
         });
 
@@ -260,21 +244,26 @@ export function buildSurveyFeatures(
           : null;
         const shotLabelColor = shotLabelDepthColor ?? labelColor;
 
+        // Only include `comment` when there actually is one. The comment
+        // layer's filter is `['!=', ['get', 'comment'], null]` and treats
+        // missing-key the same as null. JSC uses a smaller hidden class
+        // for objects without the slot, which matters at 75k+ features.
+        const shotLabelProps: Record<string, unknown> = {
+          label,
+          index: globalShotIndex,
+          sectionId: section.id,
+          shotId: shot.id,
+          color: shotLabelColor,
+          isReference: shot.is_reference,
+        };
+        if (shot.comment) shotLabelProps.comment = shot.comment;
         shotLabelFeatures.push({
           type: 'Feature',
           geometry: {
             type: 'Point',
             coordinates: metersToMapCoords(midX, midY, gpsOrigin),
           },
-          properties: {
-            label,
-            index: globalShotIndex,
-            sectionId: section.id,
-            shotId: shot.id,
-            color: shotLabelColor,
-            isReference: shot.is_reference,
-            comment: shot.comment ?? null,
-          },
+          properties: shotLabelProps,
         });
 
         globalShotIndex++;
@@ -312,13 +301,14 @@ export function buildSurveyFeatures(
           gpsOrigin
         ),
       },
+      // `isMerged` and `depth` were set but no paint expression / feature-state
+      // / filter / overlay reads them. Drop them. For 89k station features at
+      // ~16B per dropped property, ~3 MB main + ~3 MB worker.
       properties: {
         featureId,
         sectionId: station.station_ref.section_id,
         stationIndex: station.station_ref.station_index,
         isZeroDatum: station.is_zero_datum,
-        isMerged: station.merged_with.length > 0,
-        depth: station.coordinates.z,
         color,
         strokeColor: featureStrokeColor,
         allShotsReference: !stationsWithNonReferenceShot.has(
@@ -395,6 +385,21 @@ export function buildSurveyFeatures(
       : null;
     const stationLabelColor = stationLabelDepthColor ?? labelColor;
 
+    // Same null-omission trick as shot labels. For 89k stations where the
+    // overwhelming majority have no comment, the smaller hidden class
+    // shape pays off in JSC's per-class slab allocator.
+    const stationLabelProps: Record<string, unknown> = {
+      label: String(station.station_ref.station_index),
+      stationIndex: station.station_ref.station_index,
+      sectionId: station.station_ref.section_id,
+      globalOrdinal,
+      isFirstInSection,
+      color: stationLabelColor,
+      allShotsReference: !stationsWithNonReferenceShot.has(
+        `${station.station_ref.section_id}:${station.station_ref.station_index}`
+      ),
+    };
+    if (station.comment) stationLabelProps.comment = station.comment;
     stationLabelFeatures.push({
       type: 'Feature',
       geometry: {
@@ -405,18 +410,7 @@ export function buildSurveyFeatures(
           gpsOrigin
         ),
       },
-      properties: {
-        label: String(station.station_ref.station_index),
-        stationIndex: station.station_ref.station_index,
-        sectionId: station.station_ref.section_id,
-        globalOrdinal,
-        isFirstInSection,
-        color: stationLabelColor,
-        comment: station.comment ?? null,
-        allShotsReference: !stationsWithNonReferenceShot.has(
-          `${station.station_ref.section_id}:${station.station_ref.station_index}`
-        ),
-      },
+      properties: stationLabelProps,
     });
   }
 

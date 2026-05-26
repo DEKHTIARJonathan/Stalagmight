@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
+use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
@@ -178,6 +179,10 @@ fn main() {
     export::<SurveyGeometry>(&out_dir);
     export::<SurveyGeometryError>(&out_dir);
 
+    // Memory probe (debug)
+    export::<ProcessMemory>(&out_dir);
+    export::<MemoryStats>(&out_dir);
+
     // Recovery (SPEC 14.4)
     export::<BackupInfo>(&out_dir);
     export::<RepairResult>(&out_dir);
@@ -309,6 +314,8 @@ fn main() {
         "GeometryShot",
         "SurveyGeometry",
         "SurveyGeometryError",
+        "ProcessMemory",
+        "MemoryStats",
         "BackupInfo",
         "RepairResult",
         "SalvagedData",

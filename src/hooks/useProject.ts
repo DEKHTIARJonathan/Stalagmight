@@ -106,11 +106,41 @@ export function useProject() {
       return { success: false, error: 'Showing dialog' };
     }
 
+    // [perf] Instrument the back path so we can see where the back-button
+    // freeze lives. Surfaced in the MemoryProbe panel for visibility
+    // without devtools. We measure four checkpoints to pinpoint the freeze:
+    //   t0→t1  closeProject IPC roundtrip
+    //   t1→t2  setView store update (synchronous)
+    //   t2→t3  first rAF after setView (= React commit + layout queued)
+    //   t3→t4  next rAF = AFTER first paint (browser had time to repaint)
+    // If t3→t4 is huge, the freeze is in JSC GC / paint between commit and
+    // visible update — the classic "old screen frozen, then snaps" symptom.
+    const t0 = performance.now();
     // Concurrency guard is handled at store level (store.isClosing)
     const result = await store.closeProject();
+    const t1 = performance.now();
     if (result.success) {
       setView('global');
     }
+    const t2 = performance.now();
+    const { recordPerfTiming } = await import('../utils/memoryProbe');
+    requestAnimationFrame(() => {
+      const t3 = performance.now();
+      requestAnimationFrame(() => {
+        const t4 = performance.now();
+        const closeMs = t1 - t0;
+        const toRafMs = t3 - t2;
+        const rafToPaintMs = t4 - t3;
+        const totalMs = t4 - t0;
+        console.log(
+          `[perf:close] closeProject=${closeMs.toFixed(0)}ms  toRAF=${toRafMs.toFixed(0)}ms  rAF→paint=${rafToPaintMs.toFixed(0)}ms  total=${totalMs.toFixed(0)}ms`
+        );
+        recordPerfTiming('closeProject IPC', closeMs);
+        recordPerfTiming('setView→firstRAF', toRafMs);
+        recordPerfTiming('rAF→actual paint', rafToPaintMs);
+        recordPerfTiming('back total', totalMs);
+      });
+    });
     return result;
   }, [store, setView, openDialog]);
 

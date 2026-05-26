@@ -5159,7 +5159,7 @@ impl Project {
 
     /// Compute longitude bounds with dateline awareness
     /// Returns (west, east) where east < west indicates crossing the dateline
-    fn compute_longitude_bounds(longitudes: &[f64]) -> (f64, f64) {
+    pub(crate) fn compute_longitude_bounds(longitudes: &[f64]) -> (f64, f64) {
         if longitudes.is_empty() {
             return (0.0, 0.0);
         }

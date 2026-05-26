@@ -721,9 +721,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   loadRecentProjects: async () => {
     try {
+      // [perf] Hot path on every navigation to GlobalView. Surfaced in the
+      // memory probe panel to confirm the SQL-aggregate fast path stays fast.
+      const t0 = performance.now();
       const recent = await invokeIpc<ProjectMetadata[]>('list_recent_projects', undefined, {
         purpose: 'load recent projects list',
       });
+      const ms = performance.now() - t0;
+      const { recordPerfTiming } = await import('../utils/memoryProbe');
+      recordPerfTiming('list_recent_projects IPC', ms);
       set({ recentProjects: recent });
     } catch (e) {
       console.error('Failed to load recent projects:', e);

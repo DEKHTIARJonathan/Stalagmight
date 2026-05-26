@@ -88,6 +88,8 @@ export * from './ipc/SegmentSectionGeometry';
 export * from './ipc/GeometryShot';
 export * from './ipc/SurveyGeometry';
 export * from './ipc/SurveyGeometryError';
+export * from './ipc/ProcessMemory';
+export * from './ipc/MemoryStats';
 export * from './ipc/BackupInfo';
 export * from './ipc/RepairResult';
 export * from './ipc/SalvagedData';

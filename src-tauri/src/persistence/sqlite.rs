@@ -118,6 +118,29 @@ impl Database {
         Ok(db)
     }
 
+    /// Open a database for read-only metadata extraction only.
+    ///
+    /// Skips the per-file integrity check, foreign-key validation, schema
+    /// migration, and project-data presence check that `open_existing` /
+    /// `open_readonly` run. Those are appropriate when actually loading
+    /// project data; for the recent-projects listing they add hundreds of
+    /// milliseconds per file (PRAGMA quick_check walks every page). The
+    /// metadata reads below are pure SELECTs and will fail with a clear
+    /// error if the schema is missing — that's enough validation for the
+    /// purpose. If the user later opens this project, the full open path
+    /// runs its checks then.
+    pub fn open_for_metadata(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            anyhow::bail!("File does not exist: {}", path.display());
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .context("Failed to open database read-only for metadata")?;
+        Ok(Self { conn })
+    }
+
     /// Open an existing database in read-only mode.
     /// Does not create if missing, does not run migrations.
     /// Used for lazy loading survey geometry without modifying files.
@@ -1368,6 +1391,136 @@ impl Database {
     }
 
     /// Load a project from the database
+    /// Load only the metadata needed to populate `ProjectMetadata` — no
+    /// per-shot deserialization. Uses SQL COUNT/SUM aggregates and a
+    /// single small read of `zero_datums` for GPS info. This replaces the
+    /// "load entire project just to drop everything but metadata" path
+    /// used by `list_recent_projects`, which was responsible for the
+    /// multi-second freeze when returning to the global view with a
+    /// large project in the recent list.
+    pub fn load_metadata(&self, file_path: std::path::PathBuf) -> Result<crate::models::ProjectMetadata> {
+        use crate::models::{GpsBounds, GpsCoordinates, Project, ProjectMetadata};
+        use std::cmp::Ordering;
+        use std::time::Instant;
+        let start = Instant::now();
+
+        // Tiny project header read.
+        let (name, location, modified_at_raw): (String, Option<String>, String) =
+            self.conn.query_row(
+                "SELECT name, location, modified_at FROM project LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).context("Failed to read project metadata header")?;
+        let t_header = start.elapsed();
+
+        let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at_raw)
+            .context("Failed to parse modified_at")?
+            .with_timezone(&Utc);
+
+        // Aggregate-only queries.
+        let section_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM sections", [], |row| row.get(0))
+            .unwrap_or(0);
+        let t_sections = start.elapsed();
+        let shot_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))
+            .unwrap_or(0);
+        let t_shot_count = start.elapsed();
+        // COALESCE so an empty shots table returns 0.0 instead of NULL.
+        let total_length: f64 = self
+            .conn
+            .query_row("SELECT COALESCE(SUM(length), 0.0) FROM shots", [], |row| row.get(0))
+            .unwrap_or(0.0);
+        let t_sum_length = start.elapsed();
+
+        // GPS info: zero_datums is small (typically 1-10 rows) so we read
+        // it in full and reuse the existing dateline-aware bounds logic.
+        let mut zero_datums: Vec<GpsCoordinates> = Vec::new();
+        if let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT latitude, longitude, depth_reference FROM zero_datums")
+        {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            }) {
+                for r in rows.flatten() {
+                    // Skip rows that don't validate (matches load_project behavior).
+                    if let Ok(gps) = GpsCoordinates::new(r.0, r.1, r.2) {
+                        zero_datums.push(gps);
+                    }
+                }
+            }
+        }
+
+        let (gps_center, gps_bounds) = if zero_datums.is_empty() {
+            (None, None)
+        } else {
+            let first = &zero_datums[0];
+            let center = Some((first.longitude, first.latitude));
+
+            let mut south = f64::INFINITY;
+            let mut north = f64::NEG_INFINITY;
+            let mut longitudes = Vec::with_capacity(zero_datums.len());
+            for gps in &zero_datums {
+                south = south.min(gps.latitude);
+                north = north.max(gps.latitude);
+                longitudes.push(gps.longitude);
+            }
+            let (west, east) = Project::compute_longitude_bounds(&longitudes);
+            // Avoid f64 NaN propagation if there was only one (already handled by helper).
+            let south = if south.is_finite() { south } else { 0.0 };
+            let north = if north.is_finite() { north } else { 0.0 };
+            let _ = Ordering::Equal; // silence the import if compute_longitude_bounds is inlined
+            (
+                center,
+                Some(GpsBounds {
+                    north,
+                    south,
+                    east,
+                    west,
+                }),
+            )
+        };
+
+        let t_gps = start.elapsed();
+
+        // station_count = shot_count + section_count per Project::stats().
+        let station_count = (shot_count as usize) + (section_count as usize);
+
+        // Trace where the time went, in ms, so we can spot which query is
+        // the bottleneck. Logged at INFO so it shows in the running tauri-dev
+        // terminal without enabling debug logging.
+        tracing::info!(
+            path = ?file_path,
+            shots = shot_count,
+            header_ms = t_header.as_micros() as f64 / 1000.0,
+            sections_ms = (t_sections - t_header).as_micros() as f64 / 1000.0,
+            shotcount_ms = (t_shot_count - t_sections).as_micros() as f64 / 1000.0,
+            sumlength_ms = (t_sum_length - t_shot_count).as_micros() as f64 / 1000.0,
+            gps_ms = (t_gps - t_sum_length).as_micros() as f64 / 1000.0,
+            total_ms = t_gps.as_micros() as f64 / 1000.0,
+            "load_metadata timings"
+        );
+
+        Ok(ProjectMetadata {
+            name,
+            location,
+            file_path,
+            modified_at,
+            section_count: section_count as usize,
+            total_length,
+            station_count,
+            gps_center,
+            gps_bounds,
+        })
+    }
+
     pub fn load_project(&self) -> Result<Project> {
         tracing::info!("Loading project from database");
 

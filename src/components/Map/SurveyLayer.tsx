@@ -30,6 +30,7 @@ import {
   resolveNearestShot,
   resolveNearestStation,
 } from './surveyLayer/hitTest';
+import { recordFeatureCount, clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 // Note: buildPriorityExpression, compositeIdEquals, inSection no longer needed
 // after switching to setFeatureState for hover/selection highlighting
 
@@ -136,6 +137,31 @@ export default class SurveyLayer {
   // One-shot callback fired at end of update() — used to restore filters after
   // source data has been updated, in the same synchronous block (no paint gap).
   private onNextUpdateCallback: (() => void) | null = null;
+
+  /**
+   * setData coalescer: if multiple update() calls land in the same microtask
+   * (typical of React effect cascades — depthRange/gpsOrigin/precision refs
+   * changing in lockstep on project load), we batch them into a single
+   * buildSurveyFeatures + setData pass. This was measured at 6× call count
+   * per survey load before coalescing; collapsing it ~6× the GC churn.
+   *
+   * Microtask boundary matters: useLayoutEffect callers expect setData to
+   * have run before paint, and microtasks drain before paint. A later
+   * deadline (rAF / setTimeout) would break drag-commit's same-frame
+   * guarantee documented on the useLayoutEffect site in MapCanvas.
+   */
+  private pendingUpdateArgs: {
+    sections: Section[];
+    stations: Station[];
+    loopClosures: LoopClosure[] | undefined;
+    gpsOrigin: GpsOrigin | null;
+    showDepthGradient: boolean;
+    depthRange: DepthRange;
+    precision: DecimalPrecision | undefined;
+  } | null = null;
+  private updateScheduled = false;
+  /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
+  private coalescedUpdateCallsSinceLastFlush = 0;
   // Layers that participate in drag preview (main layer → temp layer config)
   private static readonly DRAG_LAYER_DEFS: Array<{
     mainLayerId: string;
@@ -3278,6 +3304,15 @@ export default class SurveyLayer {
     }
   }
 
+  /**
+   * Public update entry point. Captures the args and schedules a single
+   * synchronous flush at the next microtask boundary, collapsing any
+   * additional calls that arrive in the same tick.
+   *
+   * Callers that *need* the data on the source synchronously (e.g. drag
+   * commit using onNextUpdate) get it because microtasks drain before
+   * paint and before any rAF that the drag handler uses to finalize.
+   */
   update(
     sections: Section[],
     stations: Station[],
@@ -3287,8 +3322,78 @@ export default class SurveyLayer {
     depthRange: DepthRange = { min: 0, max: 50 },
     precision?: DecimalPrecision
   ) {
+    // Overwrite the pending args — last-call-wins is correct because the
+    // builder is deterministic in its inputs; coalescing equivalent calls
+    // is the whole point.
+    this.pendingUpdateArgs = {
+      sections,
+      stations,
+      loopClosures,
+      gpsOrigin: gpsOrigin ?? null,
+      showDepthGradient,
+      depthRange,
+      precision,
+    };
+    this.coalescedUpdateCallsSinceLastFlush += 1;
+
+    if (this.updateScheduled) return;
+    this.updateScheduled = true;
+    queueMicrotask(() => {
+      this.updateScheduled = false;
+      const args = this.pendingUpdateArgs;
+      this.pendingUpdateArgs = null;
+      if (!args) return;
+      this.flushUpdate(
+        args.sections,
+        args.stations,
+        args.loopClosures,
+        args.gpsOrigin,
+        args.showDepthGradient,
+        args.depthRange,
+        args.precision,
+      );
+    });
+  }
+
+  /**
+   * Synchronous body of update(). Use this when you genuinely need the
+   * setData calls to land in the current stack frame (drag-commit path);
+   * normal callers go through the coalescing public `update()` above.
+   */
+  flushUpdateSync(
+    sections: Section[],
+    stations: Station[],
+    loopClosures?: LoopClosure[],
+    gpsOrigin?: GpsOrigin | null,
+    showDepthGradient: boolean = false,
+    depthRange: DepthRange = { min: 0, max: 50 },
+    precision?: DecimalPrecision,
+  ): void {
+    // Cancel any pending coalesced flush so we don't re-run with stale args.
+    this.updateScheduled = false;
+    this.pendingUpdateArgs = null;
+    this.flushUpdate(sections, stations, loopClosures, gpsOrigin ?? null, showDepthGradient, depthRange, precision);
+  }
+
+  private flushUpdate(
+    sections: Section[],
+    stations: Station[],
+    loopClosures: LoopClosure[] | undefined,
+    gpsOrigin: GpsOrigin | null,
+    showDepthGradient: boolean,
+    depthRange: DepthRange,
+    precision: DecimalPrecision | undefined,
+  ): void {
+    // Early bail when the map is gone or its style has been torn down — the
+    // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove(),
+    // and setData on a removed source throws. We have to check this BEFORE
+    // hitting getSource/setData below.
+    if (!hasLiveStyle(this.map)) return;
+
+    // Reset the call counter so the probe can show calls/tick coherently.
+    this.coalescedUpdateCallsSinceLastFlush = 0;
     // Store gpsOrigin for coordinate transforms
-    this.gpsOrigin = gpsOrigin ?? null;
+    this.gpsOrigin = gpsOrigin;
     // Store depth mode parameters for use in feature color calculation
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
@@ -3348,6 +3453,7 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: shotFeatures,
       });
+      recordFeatureCount('survey-shots', shotFeatures.length);
     }
 
     const stationsSource = this.map.getSource(this.sourceId + '-stations');
@@ -3356,6 +3462,7 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: stationFeatures,
       });
+      recordFeatureCount('survey-stations', stationFeatures.length);
     }
 
     const shotGradientsSource = this.map.getSource(this.sourceId + '-shot-gradients');
@@ -3364,6 +3471,7 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: shotGradientFeatures,
       });
+      recordFeatureCount('survey-shot-gradients', shotGradientFeatures.length);
     }
 
     // Update shot labels source
@@ -3373,6 +3481,7 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: shotLabelFeatures,
       });
+      recordFeatureCount('survey-shot-labels', shotLabelFeatures.length);
     }
 
     // Update section labels source
@@ -3382,6 +3491,7 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: sectionLabelFeatures,
       });
+      recordFeatureCount('survey-section-labels', sectionLabelFeatures.length);
     }
 
     // Update station labels source
@@ -3391,6 +3501,7 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: stationLabelFeatures,
       });
+      recordFeatureCount('survey-station-labels', stationLabelFeatures.length);
     }
 
     const loopClosuresSource = this.map.getSource(this.sourceId + '-loop-closures');
@@ -3399,6 +3510,7 @@ export default class SurveyLayer {
         type: 'FeatureCollection',
         features: loopClosureFeatures,
       });
+      recordFeatureCount('survey-loop-closures', loopClosureFeatures.length);
     }
 
     // setData() clears all feature-state — reset tracking and re-apply
@@ -3504,6 +3616,15 @@ export default class SurveyLayer {
   }
 
   destroy() {
+    // Cancel any pending coalesced update so its microtask doesn't fire on a
+    // destroyed map (would throw in setData).
+    this.updateScheduled = false;
+    this.pendingUpdateArgs = null;
+
+    // Zero memory-probe feature counts for our sources so the debug panel
+    // stops showing stale counts from the last setData call.
+    clearFeatureCountsForPrefix('survey-');
+
     // Cancel any pending hover RAF
     if (this.hoverRafId !== null) {
       cancelAnimationFrame(this.hoverRafId);

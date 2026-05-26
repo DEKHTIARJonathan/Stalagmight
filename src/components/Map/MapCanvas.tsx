@@ -1413,12 +1413,31 @@ export default function MapCanvas() {
     });
 
     return () => {
+      // [perf] Time the MapCanvas teardown so we can isolate map.remove()
+      // cost vs React unmount cost on the back-button freeze. Surfaced in
+      // the MemoryProbe panel.
+      const t0 = performance.now();
       if (snapRafId.current !== null) {
         cancelAnimationFrame(snapRafId.current);
         snapRafId.current = null;
       }
+      // map.remove() tears down all layers, sources, the worker and the
+      // canvas element atomically — calling surveyLayer.destroy() first
+      // duplicates that work serially while the worker still holds a large
+      // FeatureCollection, which blocks the main thread for seconds on a
+      // 75k-shot survey (the "back-button is frozen" symptom). We rely on
+      // the pending-update microtask in SurveyLayer.flushUpdate guarding
+      // against `hasLiveStyle === false` so it bails harmlessly after
+      // map.remove() runs.
+      surveyLayerRef.current = null;
+      const tA = performance.now();
       map.current?.remove();
+      const tB = performance.now();
       map.current = null;
+      console.log(`[perf:mapcanvas-unmount] preRemove=${(tA - t0).toFixed(0)}ms  mapRemove=${(tB - tA).toFixed(0)}ms`);
+      void import('../../utils/memoryProbe').then(({ recordPerfTiming }) => {
+        recordPerfTiming('map.remove()', tB - tA);
+      });
     };
   }, []);
 

@@ -15,6 +15,11 @@ import { useGlobalViewStore } from './store/globalViewStore';
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
 
+// Start the frame-gap freeze detector at the earliest possible moment so
+// any blocking task — even during initial mount or before the memory probe
+// is opened — gets captured. The detector is cheap (one rAF per frame).
+import('./utils/memoryProbe').then(({ startLongTaskObserver }) => startLongTaskObserver());
+
 // Expose stores for E2E testing
 declare global {
   interface Window {

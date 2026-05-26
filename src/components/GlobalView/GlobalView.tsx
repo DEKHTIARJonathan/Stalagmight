@@ -62,6 +62,17 @@ interface ContextMenuState {
 }
 
 export default function GlobalView() {
+  // [perf] Mark GlobalView mount + first effect so we can see when the
+  // post-back UI is actually live (paired with [perf:close]).
+  const _mountTimeRef = useRef(performance.now());
+  useEffect(() => {
+    const ms = performance.now() - _mountTimeRef.current;
+    console.log(`[perf:globalview-mount] firstEffect=${ms.toFixed(0)}ms after construction`);
+    void import('../../utils/memoryProbe').then(({ recordPerfTiming }) => {
+      recordPerfTiming('GlobalView mount', ms);
+    });
+  }, []);
+
   const {
     recentProjects,
     handleNewProject,

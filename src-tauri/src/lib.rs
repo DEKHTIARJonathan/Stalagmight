@@ -1219,6 +1219,8 @@ pub fn run() {
             // Logging
             commands::logging::get_recent_logs,
             commands::logging::push_frontend_log,
+            // Memory probe (debug)
+            commands::memory::get_memory_stats,
             // Telemetry
             commands::telemetry::track_events,
             commands::telemetry::flush_telemetry,
