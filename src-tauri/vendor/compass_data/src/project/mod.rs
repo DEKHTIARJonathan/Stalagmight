@@ -169,7 +169,11 @@ impl DatFile<Unloaded> {
         if !full_path.exists() {
             return Err(Error::SurveyFileNotFound(full_path));
         }
-        let file_contents = std::fs::read_to_string(&full_path).map_err(Error::CouldntReadFile)?;
+        // Stalagmight fork: Compass files are Windows-1252, not UTF-8 (e.g. the
+        // degree sign 0xB0 in comments), so decode each byte as latin1 rather
+        // than failing on invalid UTF-8.
+        let bytes = std::fs::read(&full_path).map_err(Error::CouldntReadFile)?;
+        let file_contents: String = bytes.iter().map(|&b| b as char).collect();
         let surveys = Survey::parse_dat_file(&file_contents)?;
         Ok(DatFile {
             file_path: self.file_path,

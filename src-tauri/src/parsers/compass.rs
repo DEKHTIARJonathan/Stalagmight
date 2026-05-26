@@ -843,3 +843,139 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/compass")
+            .join(name)
+    }
+
+    fn total_shots(configs: &[ImportSectionConfig]) -> usize {
+        configs.iter().map(|c| c.shots.len()).sum()
+    }
+
+    #[test]
+    fn parse_minotauro_mak_reads_georeference() {
+        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        assert!(!parsed.surveys.is_empty());
+        assert_eq!(parsed.datum, Some(Datum::WGS1984));
+        assert_eq!(parsed.utm_zone, Some(16));
+        let anchor = parsed
+            .fixed_stations
+            .iter()
+            .find(|f| f.name == "00")
+            .expect("fixed station 00");
+        assert!((anchor.easting - 471_750.0).abs() < 1.0);
+        assert!((anchor.northing - 2_264_824.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn minotauro_first_shot_geometry_is_depth_based() {
+        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        assert!(!configs.is_empty());
+
+        // The chain containing the anchor "00" gets a ZeroDatum placement; its
+        // first shot is 00 -> MNUS1 (49.00 ft, 66.00 deg, -5.86 deg, decl 0).
+        let anchor_config = configs
+            .iter()
+            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .expect("a section anchored by zero datum");
+        if let ImportPlacement::ZeroDatum { station_index, .. } = anchor_config.placement {
+            assert_eq!(station_index, 0);
+        }
+        let shot = &anchor_config.shots[0];
+        assert!((shot.azimuth_in - 66.0).abs() < 0.01, "azimuth {}", shot.azimuth_in);
+        assert!((shot.length - 14.9352).abs() < 0.01, "length {}", shot.length);
+        assert!(shot.depth_in.abs() < 0.01, "depth_in {}", shot.depth_in);
+        // Descending 5.86 deg over 14.9352 m -> +1.525 m deeper.
+        assert!((shot.depth_out - 1.5252).abs() < 0.01, "depth_out {}", shot.depth_out);
+        assert!((shot.pitch_in.unwrap() - 5.86).abs() < 0.01, "pitch {:?}", shot.pitch_in);
+
+        // Exactly one zero datum for the whole project.
+        let zero_datums = configs
+            .iter()
+            .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .count();
+        assert_eq!(zero_datums, 1);
+    }
+
+    #[test]
+    fn minotauro_zero_datum_projects_to_tulum() {
+        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        let coords = configs
+            .iter()
+            .find_map(|c| match c.placement {
+                ImportPlacement::ZeroDatum { coordinates, .. } => Some(coordinates),
+                _ => None,
+            })
+            .expect("zero datum coordinates");
+        // Cenote Minotauro is near Tulum, Quintana Roo, Mexico.
+        assert!(coords.latitude > 20.0 && coords.latitude < 21.0, "lat {}", coords.latitude);
+        assert!(coords.longitude > -88.0 && coords.longitude < -87.0, "lng {}", coords.longitude);
+    }
+
+    #[test]
+    fn excluded_shots_are_filtered_by_default() {
+        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        let (default_configs, _, _) = convert_compass_to_import_configs(
+            &parsed,
+            &CompassImportOptions { include_excluded: false, apply_corrections: true },
+        )
+        .unwrap();
+        let (included_configs, _, _) = convert_compass_to_import_configs(
+            &parsed,
+            &CompassImportOptions { include_excluded: true, apply_corrections: true },
+        )
+        .unwrap();
+        // The MNEstrella survey is entirely #|X# flagged, so including excluded
+        // shots must add shots, imported as reference shots.
+        assert!(total_shots(&included_configs) > total_shots(&default_configs));
+        assert!(
+            included_configs
+                .iter()
+                .any(|c| c.shots.iter().any(|s| s.is_reference))
+        );
+    }
+
+    #[test]
+    fn parse_dat_captures_backsights_flags_and_comments() {
+        // simple.dat has a backsight format and flag/comment columns.
+        let parsed = parse_compass(&fixture("simple.dat")).unwrap();
+        let survey = &parsed.surveys[0];
+        assert!(survey.parameters.format_parameters.has_backsights());
+        assert!(survey.shots[0].back_azimuth.is_some());
+        assert!(survey.shots.iter().any(|s| s.flags.as_deref() == Some("PC")));
+        assert!(survey.shots.iter().any(|s| s.comment.is_some()));
+    }
+
+    #[test]
+    fn utm_to_wgs84_matches_expected_region() {
+        let mut warnings = Vec::new();
+        let (lon, lat) =
+            utm_to_wgs84(471_750.0, 2_264_824.0, 16, Datum::WGS1984, &mut warnings).unwrap();
+        assert!(lat > 20.0 && lat < 21.0, "lat {lat}");
+        assert!(lon > -88.0 && lon < -87.0, "lon {lon}");
+    }
+
+    #[test]
+    fn corpus_minotauro_converts_without_error() {
+        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        let preview = build_preview(&parsed);
+        assert!(preview.has_georeference);
+        assert!(preview.survey_count >= 3);
+        let (configs, _closures, _warnings) =
+            convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
+        assert!(!configs.is_empty());
+        // Every section is linear and non-empty.
+        assert!(configs.iter().all(|c| !c.shots.is_empty()));
+    }
+}

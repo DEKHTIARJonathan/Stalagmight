@@ -6,6 +6,7 @@ use nom::{
     bytes::complete::{tag, take_till1},
     character::complete::{multispace0, multispace1},
     error::Error,
+    combinator::opt,
     multi::many0,
 };
 
@@ -143,7 +144,7 @@ pub(crate) fn parse_survey(input: &str) -> IResult<&str, Survey> {
     let (input, _) = gobble_labels(input)?;
     let has_backsights = parameters.format_parameters.has_backsights();
     let (input, shots) = many0(move |i| parse_shot(i, has_backsights)).parse(input)?;
-    let (input, _) = ws(tag("")).parse(input)?;
+    let (input, _) = opt(ws(tag(""))).parse(input)?;
     Ok((
         input,
         Survey {

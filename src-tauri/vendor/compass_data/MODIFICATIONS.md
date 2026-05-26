@@ -19,5 +19,9 @@ Changes from upstream v0.0.7:
   `inclination_units()` so consumers can interpret units.
 - **`project::Station`**: `name` / `location` fields made public so consumers can
   resolve georeference anchors from the `.MAK` link stations.
+- **`DatFile::load`**: read `.DAT` files as Windows-1252/latin1 instead of UTF-8,
+  so real files (e.g. a `0xB0` degree sign in a comment) don't fail to load.
+- **`survey::parser`**: the trailing survey form-feed terminator is now optional,
+  so a hand-edited `.DAT` missing the final `0x0C` still parses.
 
 These should be contributed upstream where appropriate.

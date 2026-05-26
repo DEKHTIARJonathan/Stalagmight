@@ -4,9 +4,12 @@ import {
   projectOpenFilters,
   projectSaveFilters,
   dmpOpenFilters,
+  compassOpenFilters,
+  importOpenFilters,
   exportSaveFilters,
   PROJECT_EXTENSION,
   DMP_EXTENSION,
+  COMPASS_EXTENSIONS,
 } from '../fileDialogs';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +84,22 @@ describe('filter functions', () => {
     expect(filters[1]!.extensions).toContain('*');
   });
 
+  it('compassOpenFilters includes mak/dat and all files', () => {
+    const filters = compassOpenFilters();
+    expect(filters).toHaveLength(2);
+    expect(filters[0]!.extensions).toContain('mak');
+    expect(filters[0]!.extensions).toContain('dat');
+    expect(filters[1]!.extensions).toContain('*');
+  });
+
+  it('importOpenFilters includes compass extensions', () => {
+    const filters = importOpenFilters();
+    const allSurvey = filters[0]!.extensions;
+    expect(allSurvey).toContain('mak');
+    expect(allSurvey).toContain('dat');
+    expect(filters.some((f) => f.name === 'Compass Survey')).toBe(true);
+  });
+
   it('exportSaveFilters creates filter with label and normalized extension', () => {
     const filters = exportSaveFilters('PNG Image', '.png');
     expect(filters).toHaveLength(1);
@@ -96,5 +115,6 @@ describe('filter functions', () => {
   it('constants are correct', () => {
     expect(PROJECT_EXTENSION).toBe('stalx');
     expect(DMP_EXTENSION).toBe('dmp');
+    expect(COMPASS_EXTENSIONS).toEqual(['mak', 'dat']);
   });
 });
