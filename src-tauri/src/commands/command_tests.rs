@@ -1891,6 +1891,16 @@ fn test_clear_tile_cache_provider_only_clears() {
 #[test]
 fn test_fetch_tile_cache_hit_returns_data() {
     let app = app_with_state();
+
+    // Enable ESRI caching (disabled by default) so the cache is actually consulted
+    let mut cfg = config::get_config(state(&app));
+    cfg.cache.tile_cache_enabled = true;
+    cfg.cache.providers.insert(
+        "esri".to_string(),
+        crate::config::ProviderCacheConfig { offline_caching: true },
+    );
+    config::update_config(state(&app), cfg).expect("enable esri cache");
+
     let cache = state(&app).tile_cache();
     {
         let mut guard = cache.lock().unwrap();
