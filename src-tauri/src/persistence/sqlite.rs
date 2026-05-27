@@ -1792,6 +1792,12 @@ impl Database {
         // Load station comments
         let station_comments = self.load_station_comments()?;
 
+        // Pre-populate the section_id → index lookup so callers get
+        // O(1) get_section without needing rebuild_section_index().
+        let mut section_index_cache = HashMap::with_capacity(sections.len());
+        for (i, s) in sections.iter().enumerate() {
+            section_index_cache.insert(s.id, i);
+        }
         Ok(Project {
             name,
             location,
@@ -1810,6 +1816,11 @@ impl Database {
             imported_section_hashes,
             next_closure_id,
             cascade_deferred: false,
+            section_index_cache,
+            // Lazy: built on first read via the fallback path. The hot
+            // path (batch importer) explicitly rebuilds via
+            // `rebuild_merge_adjacency()` before the loop.
+            merge_adjacency_cache: HashMap::new(),
         })
     }
 

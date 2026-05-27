@@ -523,9 +523,15 @@ impl AppState {
         // We flip the flag here, run the loop, then run one final cascade
         // over all section ids after the loop — equivalent to the union
         // of the deferred per-call cascades.
+        // Also eagerly populate the section-id and merge-adjacency
+        // lookups so the per-call `get_section` / `get_merged_section_ids`
+        // stay O(1) / O(group) instead of degrading into O(N) linear
+        // scans inside merge_stations.
         if let Ok(mut proj_guard) = self.project.lock() {
             if let Some(project) = proj_guard.as_mut() {
                 project.cascade_deferred = true;
+                project.rebuild_section_index();
+                project.rebuild_merge_adjacency();
             }
         }
 

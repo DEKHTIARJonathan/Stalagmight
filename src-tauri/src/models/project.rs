@@ -187,6 +187,31 @@ pub struct Project {
     #[serde(skip, default)]
     #[ts(skip)]
     pub cascade_deferred: bool,
+
+    /// Section-id → `sections[i]` index cache (transient, NOT persisted).
+    /// Lookups via [`Self::get_section`] / [`Self::get_section_mut`]
+    /// consult this map first to avoid the O(N) linear scan that used to
+    /// dominate `merge_stations` and `compute_station_raw_coords` on
+    /// large imports (~4 lookups per merge × 14 k merges = ~400 M ops).
+    /// Maintained incrementally by `add_section` / `remove_section`.
+    /// After deserialization the map is empty and a linear fallback
+    /// kicks in — callers that hammer the lookup (e.g. the batch
+    /// importer) should call [`Self::rebuild_section_index`] first.
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub section_index_cache: HashMap<SectionId, usize>,
+
+    /// Merge-only section adjacency cache: section_id → [neighbor section
+    /// ids via station_merges]. Transient, NOT persisted. Maintained
+    /// incrementally by `add_station_merge` / `remove_station_merge`;
+    /// any structural mutation outside those entry points is expected
+    /// to call `rebuild_merge_adjacency`. The cache exists to turn the
+    /// per-BFS-step iteration over all `station_merges` (O(N) inner)
+    /// into a HashMap lookup (O(1) inner). For a tree-shape import that
+    /// converts `get_merged_section_ids` from O(N²) to O(N) per call.
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub merge_adjacency_cache: HashMap<SectionId, Vec<SectionId>>,
 }
 
 /// Project metadata for listing
@@ -279,6 +304,8 @@ impl Project {
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
             cascade_deferred: false,
+            section_index_cache: HashMap::new(),
+            merge_adjacency_cache: HashMap::new(),
         }
     }
 
@@ -313,19 +340,38 @@ impl Project {
     pub fn add_section(&mut self, data: SectionData) -> &Section {
         let section = Section::new(self.next_section_id, data);
         self.next_section_id += 1;
+        let new_idx = self.sections.len();
+        self.section_index_cache.insert(section.id, new_idx);
         self.sections.push(section);
         self.touch();
-        let idx = self.sections.len() - 1;
-        &self.sections[idx]
+        &self.sections[new_idx]
     }
 
-    /// Get a section by ID
+    /// Get a section by ID. First tries the O(1) `section_index_cache`;
+    /// if the cache is stale or empty (e.g. after deserialization), falls
+    /// back to an O(N) linear scan so we never return a wrong answer.
     pub fn get_section(&self, section_id: SectionId) -> Option<&Section> {
+        if let Some(&i) = self.section_index_cache.get(&section_id) {
+            if let Some(s) = self.sections.get(i) {
+                if s.id == section_id {
+                    return Some(s);
+                }
+            }
+        }
         self.sections.iter().find(|s| s.id == section_id)
     }
 
-    /// Get a mutable reference to a section by ID
+    /// Get a mutable reference to a section by ID. Same cache + fallback
+    /// strategy as [`Self::get_section`].
     pub fn get_section_mut(&mut self, section_id: SectionId) -> Option<&mut Section> {
+        let i = self.section_index_cache.get(&section_id).copied();
+        if let Some(i) = i {
+            if let Some(s) = self.sections.get(i) {
+                if s.id == section_id {
+                    return self.sections.get_mut(i);
+                }
+            }
+        }
         self.sections.iter_mut().find(|s| s.id == section_id)
     }
 
@@ -344,9 +390,65 @@ impl Project {
     /// Remove a section by ID
     pub fn remove_section(&mut self, section_id: SectionId) -> Option<Section> {
         let pos = self.sections.iter().position(|s| s.id == section_id)?;
+        // Removing shifts every later section's index down by one — rather
+        // than touching N cache entries, we drop the cache and let the
+        // linear fallback rebuild it on demand (removes are rare relative
+        // to lookups). Callers running a batch can call
+        // `rebuild_section_index()` to restore O(1) lookups afterwards.
+        self.section_index_cache.clear();
         self.touch();
         Some(self.sections.remove(pos))
     }
+
+    /// Rebuild the section-id → index cache from the current `sections`
+    /// vector. Cheap (O(N)) and safe to call any time; call this after a
+    /// bulk mutation (e.g. snapshot rollback) or before a hot lookup loop
+    /// when you can't guarantee the cache is current.
+    pub fn rebuild_section_index(&mut self) {
+        self.section_index_cache.clear();
+        self.section_index_cache.reserve(self.sections.len());
+        for (i, s) in self.sections.iter().enumerate() {
+            self.section_index_cache.insert(s.id, i);
+        }
+    }
+
+    /// Rebuild the merge-only section adjacency cache from
+    /// `station_merges`. O(N) where N is the merge count. Required
+    /// after any path that mutates `station_merges` outside the
+    /// `record_station_merge` / `remove_station_merges_matching`
+    /// helpers (e.g. a serde-deserialised project, or a snapshot
+    /// rollback).
+    pub fn rebuild_merge_adjacency(&mut self) {
+        self.merge_adjacency_cache.clear();
+        // Each merge contributes one entry in each direction.
+        self.merge_adjacency_cache.reserve(self.sections.len());
+        for m in &self.station_merges {
+            self.merge_adjacency_cache
+                .entry(m.station_a.section_id)
+                .or_default()
+                .push(m.station_b.section_id);
+            self.merge_adjacency_cache
+                .entry(m.station_b.section_id)
+                .or_default()
+                .push(m.station_a.section_id);
+        }
+    }
+
+    /// Push a new merge AND incrementally update the adjacency cache.
+    /// Always use this instead of writing to `station_merges` directly
+    /// so the cache stays in sync.
+    pub(crate) fn record_station_merge(&mut self, merge: StationMerge) {
+        self.merge_adjacency_cache
+            .entry(merge.station_a.section_id)
+            .or_default()
+            .push(merge.station_b.section_id);
+        self.merge_adjacency_cache
+            .entry(merge.station_b.section_id)
+            .or_default()
+            .push(merge.station_a.section_id);
+        self.station_merges.push(merge);
+    }
+
 
     /// Query relationships that reference the given section.
     /// Returns merges, closures, offset info, and zero datum count.
@@ -478,9 +580,10 @@ impl Project {
             }
         }
 
-        // Add replacement merges
+        // Add replacement merges (via the helper so the adjacency cache
+        // stays consistent for subsequent BFS calls in this transaction).
         for (a, b) in &replacement_merges {
-            self.station_merges.push(StationMerge {
+            self.record_station_merge(StationMerge {
                 station_a: *a,
                 station_b: *b,
                 merged_at: Utc::now(),
@@ -617,10 +720,13 @@ impl Project {
     /// Remove all merges, closures, section_offsets, station_offsets, and zero_datums
     /// that reference the given section. Call before `remove_section()` to avoid orphans.
     pub fn cleanup_section_references(&mut self, section_id: SectionId) {
-        // Remove merges referencing this section
+        // Remove merges referencing this section. Clearing the
+        // adjacency cache is mandatory — we just dropped entries that
+        // the cache still claims exist.
         self.station_merges.retain(|m| {
             m.station_a.section_id != section_id && m.station_b.section_id != section_id
         });
+        self.merge_adjacency_cache.clear();
 
         // Remove closures referencing this section
         self.loop_closures.retain(|lc| {
@@ -1369,6 +1475,7 @@ impl Project {
         self.station_merges.retain(|m| {
             m.station_a != removed_station && m.station_b != removed_station
         });
+        self.merge_adjacency_cache.clear();
 
         let mut closure_updates: HashMap<u64, StationRef> = HashMap::new();
         for update in &impact.replacement_closure_updates {
@@ -1394,7 +1501,7 @@ impl Project {
 
         for pair in &impact.replacement_merges {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
-                self.station_merges.push(StationMerge {
+                self.record_station_merge(StationMerge {
                     station_a: pair.station_a,
                     station_b: pair.station_b,
                     merged_at: Utc::now(),
@@ -1734,8 +1841,31 @@ impl Project {
     /// datum propagation, offset application, zero-datum validation.
     pub fn get_merged_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
         let mut connected = HashSet::new();
-        let mut queue = vec![section_id];
+        // Fast path: the adjacency cache is non-empty (or we have no
+        // merges at all). BFS visits each connected section once with
+        // O(neighbours) work per step → O(group size) total instead of
+        // the legacy O(group × N_merges).
+        if !self.merge_adjacency_cache.is_empty() || self.station_merges.is_empty() {
+            let mut queue = vec![section_id];
+            while let Some(current) = queue.pop() {
+                if connected.insert(current) {
+                    if let Some(neighbours) = self.merge_adjacency_cache.get(&current) {
+                        for &n in neighbours {
+                            if !connected.contains(&n) {
+                                queue.push(n);
+                            }
+                        }
+                    }
+                }
+            }
+            return connected;
+        }
 
+        // Cold path: cache was cleared (e.g. after deserialisation or a
+        // structural remove). Fall back to the legacy linear scan rather
+        // than mutating self here — callers that care about throughput
+        // call `rebuild_merge_adjacency` first.
+        let mut queue = vec![section_id];
         while let Some(current) = queue.pop() {
             if connected.insert(current) {
                 for merge in &self.station_merges {
@@ -4081,8 +4211,10 @@ impl Project {
         );
         self.adjust_rigid_group_offsets(moving_section_id, offset_x, offset_y);
 
-        // Record the merge
-        self.station_merges.push(StationMerge {
+        // Record the merge via the helper so the merge-adjacency cache
+        // stays in sync. (Direct push would silently skip the cache,
+        // forcing the next BFS into the O(N) fallback path.)
+        self.record_station_merge(StationMerge {
             station_a,
             station_b,
             merged_at: Utc::now(),
@@ -4268,6 +4400,9 @@ impl Project {
 
         if let Some(pos) = pos {
             self.station_merges.remove(pos);
+            // Drop the adjacency cache — recomputing the precise edge
+            // deletion would duplicate the work `retain` already did.
+            self.merge_adjacency_cache.clear();
 
             // Remove closures for the specific unmerged pair only
             let mut removed_closures = Vec::new();
