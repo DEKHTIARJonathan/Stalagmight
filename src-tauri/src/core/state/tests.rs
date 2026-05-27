@@ -11227,3 +11227,80 @@ fn test_triangle_topology_with_loop_closure() {
         (lc.station_b.station_index as usize) <= s.shots.len()
     ), "closure station_b should be valid");
 }
+
+// ============================================================================
+// Performance profiler (not a unit test — a measurement harness)
+// ============================================================================
+//
+// Run with:
+//   STALAGMIGHT_PROFILE_TML=/home/user/src/cave/data/koox_baal/synthetic/93.tml \
+//     cargo test --release --manifest-path src-tauri/Cargo.toml --lib \
+//     state::tests::profile_tml_import_full -- --nocapture --ignored
+//
+// The harness drives parse_tml → convert_tml_to_import_configs →
+// execute_import_sections end-to-end on an empty in-memory project,
+// installs a real tracing-subscriber so the timing markers added to
+// commands.rs land on stdout, and prints wall-clock for each phase.
+
+#[test]
+#[ignore = "profiling harness — run explicitly with STALAGMIGHT_PROFILE_TML=<path>"]
+fn profile_tml_import_full() {
+    use crate::models::Project;
+    use crate::parsers::tml as tml_parser;
+    use crate::persistence::Database;
+    use std::time::Instant;
+
+    let path = std::env::var("STALAGMIGHT_PROFILE_TML")
+        .expect("set STALAGMIGHT_PROFILE_TML to the .tml file path");
+
+    // Use the test framework's tracing-subscriber init guard so we
+    // don't double-init when the test runs alongside others.
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    let t0 = Instant::now();
+    let tml = tml_parser::parse_tml(std::path::Path::new(&path)).expect("parse_tml");
+    let t1 = Instant::now();
+    let (sections, closures) = tml_parser::convert_tml_to_import_configs(&tml, false, false)
+        .expect("convert");
+    let t2 = Instant::now();
+
+    let project = Project::new("profile".to_string(), None);
+    let temp = TempDir::new().unwrap();
+    let db_path = temp.path().join("profile.stalx");
+    let mut db = Database::open(&db_path).unwrap();
+    db.save_project(&project).unwrap();
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+    state.set_database_for_tests(db);
+    let t3 = Instant::now();
+
+    let total_shots: usize = sections.iter().map(|s| s.shots.len()).sum();
+
+    eprintln!("\n┌─ profile_tml_import_full ─────────────────────────────");
+    eprintln!("│ file:     {path}");
+    eprintln!("│ sections: {}", sections.len());
+    eprintln!("│ shots:    {}", total_shots);
+    eprintln!("│ closures: {}", closures.len());
+    eprintln!("├─ phase timings ───────────────────────────────────────");
+    eprintln!("│ parse_tml:                   {:>9.2} ms", (t1 - t0).as_secs_f64() * 1000.0);
+    eprintln!("│ convert_tml_to_import_configs:{:>9.2} ms", (t2 - t1).as_secs_f64() * 1000.0);
+    eprintln!("│ AppState setup (excluded):   {:>9.2} ms", (t3 - t2).as_secs_f64() * 1000.0);
+
+    let t_exec_start = Instant::now();
+    let result = state.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+    let exec_elapsed = t_exec_start.elapsed();
+    eprintln!("│ execute_import_sections:     {:>9.2} ms", exec_elapsed.as_secs_f64() * 1000.0);
+    eprintln!("├─ totals ──────────────────────────────────────────────");
+    eprintln!("│ end-to-end (parse+convert+execute): {:>9.2} ms",
+        ((t1 - t0) + (t2 - t1) + exec_elapsed).as_secs_f64() * 1000.0);
+    eprintln!("└───────────────────────────────────────────────────────");
+
+    assert!(result.success, "execute_import_sections failed: {:?}", result.error);
+}

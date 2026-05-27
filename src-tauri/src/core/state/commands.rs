@@ -513,7 +513,36 @@ impl AppState {
         // Collect commands for the undo entry description
         let mut batch_commands: Vec<Command> = Vec::new();
 
-        for config in &sections {
+        // Defer per-merge cascades during the placement loop. Each
+        // `merge_stations` / `set_zero_datum` call would otherwise run a
+        // full O(N) `cascade_connection_offsets`, turning a 1 200-section
+        // tree-shaped import into ~O(N²) work. The cascade is purely
+        // defensive against drift in pre-existing connections, and the
+        // batch under us is creating its connections in dependency order
+        // (topological sort happens during `convert_tml_to_import_configs`).
+        // We flip the flag here, run the loop, then run one final cascade
+        // over all section ids after the loop — equivalent to the union
+        // of the deferred per-call cascades.
+        if let Ok(mut proj_guard) = self.project.lock() {
+            if let Some(project) = proj_guard.as_mut() {
+                project.cascade_deferred = true;
+            }
+        }
+
+        // [perf-debug] Time the per-section apply loop. Used to confirm
+        // whether the dominant cost in execute_import_sections scales
+        // linearly with section count (good) or super-linearly (bad —
+        // a per-section graph traversal that re-walks already-imported
+        // sections would show up here as quadratic growth).
+        let loop_start = std::time::Instant::now();
+        let mut create_total = std::time::Duration::ZERO;
+        let mut placement_total = std::time::Duration::ZERO;
+        let report_every = 100usize;
+        let mut last_report_idx = 0usize;
+        let mut last_report_elapsed = std::time::Duration::ZERO;
+
+        for (idx, config) in sections.iter().enumerate() {
+            let t_section_start = std::time::Instant::now();
             // Build SectionData from ImportSectionConfig
             let section_data = SectionData {
                 name: config.name.clone(),
@@ -526,7 +555,9 @@ impl AppState {
             };
 
             // Step 1: Create the section
+            let t_create_start = std::time::Instant::now();
             let create_result = self.create_section(section_data.clone());
+            create_total += t_create_start.elapsed();
             if !create_result.success {
                 // Rollback to before-snapshot
                 self.rollback_project(&before_snapshot);
@@ -570,6 +601,7 @@ impl AppState {
             });
 
             // Step 2: Apply placement
+            let t_placement_start = std::time::Instant::now();
             match &config.placement {
                 ImportPlacement::Origin => {
                     // No-op — section starts at origin
@@ -676,7 +708,60 @@ impl AppState {
                     });
                 }
             }
+            placement_total += t_placement_start.elapsed();
+            let _ = t_section_start;
+
+            // [perf-debug] Periodic log: emit every `report_every` sections.
+            // The "recent" delta highlights super-linear growth — if each
+            // 100-section batch is taking longer than the last, a
+            // per-section graph traversal is to blame.
+            if (idx + 1) % report_every == 0 || idx + 1 == sections.len() {
+                let now_elapsed = loop_start.elapsed();
+                let batch = now_elapsed.saturating_sub(last_report_elapsed);
+                let batch_n = (idx + 1) - last_report_idx;
+                tracing::info!(
+                    sections_done = idx + 1,
+                    total = sections.len(),
+                    batch_n,
+                    batch_ms = batch.as_millis() as u64,
+                    total_elapsed_ms = now_elapsed.as_millis() as u64,
+                    create_ms = create_total.as_millis() as u64,
+                    placement_ms = placement_total.as_millis() as u64,
+                    purpose = "TML import loop timing",
+                    "section import progress"
+                );
+                last_report_idx = idx + 1;
+                last_report_elapsed = now_elapsed;
+            }
         }
+
+        tracing::info!(
+            sections = sections.len(),
+            total_ms = loop_start.elapsed().as_millis() as u64,
+            create_ms = create_total.as_millis() as u64,
+            placement_ms = placement_total.as_millis() as u64,
+            purpose = "TML import loop summary",
+            "execute_import_sections per-section loop done"
+        );
+
+        // Lift the deferral and run ONE cascade across every newly
+        // created section. This propagates any drift that would have
+        // been caught by the per-call cascades — for a tree-shaped
+        // import (no closures yet) this is a near-no-op single pass
+        // that early-exits on the first iteration.
+        let cascade_start = std::time::Instant::now();
+        if let Ok(mut proj_guard) = self.project.lock() {
+            if let Some(project) = proj_guard.as_mut() {
+                project.cascade_deferred = false;
+                project.cascade_connection_offsets(&all_section_ids);
+            }
+        }
+        tracing::info!(
+            sections = all_section_ids.len(),
+            cascade_ms = cascade_start.elapsed().as_millis() as u64,
+            purpose = "TML import batch cascade",
+            "final cascade after deferred placement loop"
+        );
 
         // Create loop closures from TML CLOSURE shots (non-fatal)
         for closure in &closures {

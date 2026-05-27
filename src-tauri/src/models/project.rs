@@ -176,6 +176,17 @@ pub struct Project {
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
     pub next_closure_id: u64,
+
+    /// Transient flag (NOT persisted) — when true,
+    /// [`Self::cascade_connection_offsets`] returns immediately. Used by
+    /// batch importers to skip the per-call O(N) cascade and run a
+    /// single cascade after all sections / merges are in place. Callers
+    /// must set the flag, run their batch, clear the flag, and then
+    /// invoke `cascade_connection_offsets` themselves to leave the
+    /// project in a consistent state.
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub cascade_deferred: bool,
 }
 
 /// Project metadata for listing
@@ -267,6 +278,7 @@ impl Project {
             imported_file_hashes: Vec::new(),
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
+            cascade_deferred: false,
         }
     }
 
@@ -693,44 +705,59 @@ impl Project {
     /// across many shots in real survey data). In test builds, panics for
     /// gaps > 1cm to catch regressions with synthetic data.
     pub(crate) fn debug_assert_merge_alignment(&self, context: &str) {
-        for merge in &self.station_merges {
-            // Skip same-section merges (physically meaningless, used only in tests)
-            if merge.station_a.section_id == merge.station_b.section_id {
-                continue;
-            }
-            let a = self.compute_station_raw_coords(merge.station_a);
-            let b = self.compute_station_raw_coords(merge.station_b);
-            if let (Some(a_pos), Some(b_pos)) = (a, b) {
-                let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
-                if dist >= 0.05 {
-                    error!(
-                        context,
-                        a_ref = ?merge.station_a,
-                        b_ref = ?merge.station_b,
-                        dist,
-                        a_x = a_pos.x,
-                        a_y = a_pos.y,
-                        b_x = b_pos.x,
-                        b_y = b_pos.y,
-                        "Merge alignment violated (>{threshold}m)",
-                        threshold = 0.05,
+        // Despite the name, this used to run in release too — and the cost
+        // is brutal: O(N) merges × 2 × O(N) `compute_station_raw_coords`
+        // per call, called from every mutating command. For a 1 200-section
+        // TML import this contributed ~1.5 billion operations to the hot
+        // path. Gate the whole body behind `debug_assertions` so it
+        // remains a sanity check during development without harming
+        // production performance. The release-mode `error!` log it used
+        // to emit was informational only — alignment drift inside a
+        // *single* command is a programmer bug, not a data condition the
+        // user can fix at runtime.
+        #[cfg(debug_assertions)]
+        {
+            for merge in &self.station_merges {
+                // Skip same-section merges (physically meaningless, used only in tests)
+                if merge.station_a.section_id == merge.station_b.section_id {
+                    continue;
+                }
+                let a = self.compute_station_raw_coords(merge.station_a);
+                let b = self.compute_station_raw_coords(merge.station_b);
+                if let (Some(a_pos), Some(b_pos)) = (a, b) {
+                    let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
+                    if dist >= 0.05 {
+                        error!(
+                            context,
+                            a_ref = ?merge.station_a,
+                            b_ref = ?merge.station_b,
+                            dist,
+                            a_x = a_pos.x,
+                            a_y = a_pos.y,
+                            b_x = b_pos.x,
+                            b_y = b_pos.y,
+                            "Merge alignment violated (>{threshold}m)",
+                            threshold = 0.05,
+                        );
+                    }
+                    #[cfg(test)]
+                    debug_assert!(
+                        dist < 0.01,
+                        "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
+                         are {dist:.6}m apart (threshold 0.01m). \
+                         A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
+                        a_ref = merge.station_a,
+                        b_ref = merge.station_b,
+                        ax = a_pos.x,
+                        ay = a_pos.y,
+                        bx = b_pos.x,
+                        by = b_pos.y,
                     );
                 }
-                #[cfg(test)]
-                debug_assert!(
-                    dist < 0.01,
-                    "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
-                     are {dist:.6}m apart (threshold 0.01m). \
-                     A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
-                    a_ref = merge.station_a,
-                    b_ref = merge.station_b,
-                    ax = a_pos.x,
-                    ay = a_pos.y,
-                    bx = b_pos.x,
-                    by = b_pos.y,
-                );
             }
         }
+        // Suppress unused warning in release.
+        let _ = context;
     }
 
     /// Shift all StationRef indices in the project for the given section.
@@ -1557,6 +1584,16 @@ impl Project {
     ///
     /// Zero-datum-bearing sections are always included as authoritative.
     pub(crate) fn cascade_connection_offsets(&mut self, seeds: &[SectionId]) {
+        // Honor the batch-import opt-out: skip cascade during the
+        // per-section import loop so the cost stays linear. The batch
+        // driver in execute_import_sections runs ONE final cascade
+        // (with all created sections as seeds) after the loop, which
+        // is equivalent to the union of the deferred cascades for a
+        // tree-shaped import.
+        if self.cascade_deferred {
+            return;
+        }
+
         let mut authoritative: HashSet<SectionId> = HashSet::new();
         for &sid in seeds {
             authoritative.insert(sid);

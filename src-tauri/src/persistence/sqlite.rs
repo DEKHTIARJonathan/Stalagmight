@@ -1809,6 +1809,7 @@ impl Database {
             imported_file_hashes,
             imported_section_hashes,
             next_closure_id,
+            cascade_deferred: false,
         })
     }
 
