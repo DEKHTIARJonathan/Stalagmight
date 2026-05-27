@@ -19,8 +19,12 @@ export default defineConfig({
   // Retry failed tests in CI
   retries: process.env.CI ? 2 : 0,
 
-  // Use PW_WORKERS env var to override, otherwise half CPU cores
-  workers: process.env.PW_WORKERS ? parseInt(process.env.PW_WORKERS, 10) : undefined,
+  // Use PW_WORKERS env var to override (Playwright accepts either an
+  // integer count or a percentage of logical CPU cores, e.g. "50%").
+  // Pass the env var through as a string so percent values aren't
+  // silently truncated by parseInt ("50%" → 50, which would launch
+  // fifty workers instead of half the cores).
+  workers: process.env.PW_WORKERS || undefined,
 
   // Test reporter: 'list' for live progress, 'github' for CI annotations
   // Override with PW_REPORTER env var (e.g. PW_REPORTER=html)
