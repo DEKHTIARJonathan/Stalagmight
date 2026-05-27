@@ -279,6 +279,13 @@ function isPartialMultiStepFailure(error: string | null): boolean {
   return parseInt(match[1], 10) > 1;
 }
 
+/**
+ * Tracks in-flight `loadProject(path)` calls so concurrent requests for the
+ * same path share one execution. Each entry is removed when the underlying
+ * promise settles. See loadProject for rationale.
+ */
+const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
+
 export const useProjectStore = create<ProjectStore>((set, get) => {
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async (
@@ -424,106 +431,126 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Load project using the consolidated load_project_full command
-  loadProject: async (path: string) => {
-    // [perf-debug] Trace each post-IPC step distinctly so we know whether
-    // the visible "stuck progress bar" freeze is JSON.parse on the IPC
-    // resolution, the Zustand set, the view switch / MapCanvas mount, or
-    // something else. Each checkpoint is logged to the MemoryProbe panel.
-    const { recordPerfTiming } = await import('../utils/memoryProbe');
-    const tStart = performance.now();
+  //
+  // Concurrent calls for the same path share one execution. Without this,
+  // a fast double-click on a SystemCard (or React StrictMode dev re-mount)
+  // fires loadProject multiple times; each call decodes ~600 KB of shot
+  // floats + 350 KB of station coords and rebuilds 240 k MapLibre
+  // features in two workers, even though all but the last result are
+  // discarded by the clientOpId race check. The thrown-away allocations
+  // churn JSC's bmalloc slabs and leave committed (but unused) memory
+  // behind. The dedup map ensures the heavy path runs exactly once.
+  loadProject: (path: string) => {
+    const existing = inFlightLoads.get(path);
+    if (existing) return existing;
 
-    // Clear GlobalView geometry cache to cancel pending loads and free memory
-    useGlobalViewStore.getState().clearGeometryCache();
+    const promise: Promise<{ success: boolean }> = (async () => {
+      // [perf-debug] Trace each post-IPC step distinctly so we know whether
+      // the visible "stuck progress bar" freeze is JSON.parse on the IPC
+      // resolution, the Zustand set, the view switch / MapCanvas mount, or
+      // something else. Each checkpoint is logged to the MemoryProbe panel.
+      const { recordPerfTiming } = await import('../utils/memoryProbe');
+      const tStart = performance.now();
 
-    // ALWAYS cancel first - NO isLoading guard
-    // cancel_loading is idempotent on backend
-    await get().cancelLoading();
+      // Clear GlobalView geometry cache to cancel pending loads and free memory
+      useGlobalViewStore.getState().clearGeometryCache();
 
-    // Use cross-platform path splitting for project name extraction
-    const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
-    const clientOpId = get().startLoading(initialName, path);
+      // ALWAYS cancel first - NO isLoading guard
+      // cancel_loading is idempotent on backend
+      await get().cancelLoading();
 
-    try {
-      const tIpcStart = performance.now();
-      // Binary IPC: msgpack envelope + typed-array byte buffers for shots
-      // and stations. The decoder reconstructs the same shape as the legacy
-      // `load_project_full` JSON response so the rest of the load pipeline
-      // doesn't need to change. See utils/loadProjectBinary.ts.
-      const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
-      const result = await loadProjectFullBinary(path);
-      // The await above includes both the Rust handler runtime AND the
-      // JS-side msgpack decode + typed-array materialization.
-      const tIpcDone = performance.now();
-      recordPerfTiming('load_project_full IPC+parse', tIpcDone - tIpcStart);
+      // Use cross-platform path splitting for project name extraction
+      const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
+      const clientOpId = get().startLoading(initialName, path);
 
-      // Check clientOpId hasn't changed (cancelled/new load started)
-      if (get().loading.clientOpId !== clientOpId) {
-        return { success: false };
-      }
+      try {
+        const tIpcStart = performance.now();
+        // Binary IPC: msgpack envelope + typed-array byte buffers for shots
+        // and stations. The decoder reconstructs the same shape as the legacy
+        // `load_project_full` JSON response so the rest of the load pipeline
+        // doesn't need to change. See utils/loadProjectBinary.ts.
+        const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
+        const result = await loadProjectFullBinary(path);
+        // The await above includes both the Rust handler runtime AND the
+        // JS-side msgpack decode + typed-array materialization.
+        const tIpcDone = performance.now();
+        recordPerfTiming('load_project_full IPC+parse', tIpcDone - tIpcStart);
 
-      // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: result.loadingId });
+        // Check clientOpId hasn't changed (cancelled/new load started)
+        if (get().loading.clientOpId !== clientOpId) {
+          return { success: false };
+        }
 
-      // Update loading title with actual project name from result
-      if (result.project.name !== initialName) {
-        get().setLoadingProgress({ projectName: result.project.name });
-      }
+        // Set backend loadingId from result for event correlation
+        get().setLoadingProgress({ loadingId: result.loadingId });
 
-      // Apply ALL state from single response
-      const tSetStart = performance.now();
-      set({
-        project: result.project,
-        stations: result.stations,
-        surveyData: result.surveyData,
-        stats: result.stats,
-        warnings: result.warnings,
-        isDirty: false,
-      });
-      const tSetDone = performance.now();
-      recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
+        // Update loading title with actual project name from result
+        if (result.project.name !== initialName) {
+          get().setLoadingProgress({ projectName: result.project.name });
+        }
 
-      // Apply display settings to UI store (merge, don't overwrite)
-      useUIStore.getState().applyDisplaySettings(result.displaySettings);
-      useUIStore.getState().triggerFitToBounds();
-      const tViewStart = performance.now();
-      useUIStore.getState().setView('single');
-      const tViewDone = performance.now();
-      recordPerfTiming('setView(single)', tViewDone - tViewStart);
+        // Apply ALL state from single response
+        const tSetStart = performance.now();
+        set({
+          project: result.project,
+          stations: result.stations,
+          surveyData: result.surveyData,
+          stats: result.stats,
+          warnings: result.warnings,
+          isDirty: false,
+        });
+        const tSetDone = performance.now();
+        recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
 
-      // Update recent projects list
-      await get().loadRecentProjects();
-
-      get().resetLoading();
-      await get().refreshUndoState();
-      recordPerfTiming('loadProject total', performance.now() - tStart);
-      return { success: true };
-    } catch (e) {
-      const error = parseLoadError(e);
-
-      // Handle ALREADY_OPEN specially - not an error, just switch view
-      if (error.code === 'ALREADY_OPEN') {
+        // Apply display settings to UI store (merge, don't overwrite)
+        useUIStore.getState().applyDisplaySettings(result.displaySettings);
+        useUIStore.getState().triggerFitToBounds();
+        const tViewStart = performance.now();
         useUIStore.getState().setView('single');
+        const tViewDone = performance.now();
+        recordPerfTiming('setView(single)', tViewDone - tViewStart);
+
+        // Update recent projects list
+        await get().loadRecentProjects();
+
         get().resetLoading();
         await get().refreshUndoState();
+        recordPerfTiming('loadProject total', performance.now() - tStart);
         return { success: true };
-      }
+      } catch (e) {
+        const error = parseLoadError(e);
 
-      // Handle CORRUPT - open recovery dialog instead of generic error
-      if (error.code === 'CORRUPT' && error.details) {
-        get().resetLoading();
-        useUIStore.getState().openDialog('corruption-recovery', {
-          corruptPath: error.details,
-          errorMessage: error.message,
-        });
+        // Handle ALREADY_OPEN specially - not an error, just switch view
+        if (error.code === 'ALREADY_OPEN') {
+          useUIStore.getState().setView('single');
+          get().resetLoading();
+          await get().refreshUndoState();
+          return { success: true };
+        }
+
+        // Handle CORRUPT - open recovery dialog instead of generic error
+        if (error.code === 'CORRUPT' && error.details) {
+          get().resetLoading();
+          useUIStore.getState().openDialog('corruption-recovery', {
+            corruptPath: error.details,
+            errorMessage: error.message,
+          });
+          return { success: false };
+        }
+
+        // Only set error if this is still the current load operation
+        if (get().loading.clientOpId === clientOpId) {
+          get().setLoadingError(error.message, error.details);
+        }
         return { success: false };
       }
+    })();
 
-      // Only set error if this is still the current load operation
-      if (get().loading.clientOpId === clientOpId) {
-        get().setLoadingError(error.message, error.details);
-      }
-      return { success: false };
-    }
+    inFlightLoads.set(path, promise);
+    void promise.finally(() => {
+      if (inFlightLoads.get(path) === promise) inFlightLoads.delete(path);
+    });
+    return promise;
   },
 
   // Project operations - uses consolidated create_project_full command

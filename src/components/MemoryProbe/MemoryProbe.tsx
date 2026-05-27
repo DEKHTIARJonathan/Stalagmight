@@ -58,6 +58,7 @@ interface Snapshot {
 function takeSnapshot(memory: MemoryStats | null): Snapshot {
   const featureCounts = getFeatureCounts();
   const project = useProjectStore.getState().project;
+  const surveyData = useProjectStore.getState().surveyData;
   const stations = useProjectStore.getState().stations;
   const geometryData = useGlobalViewStore.getState().geometryData;
 
@@ -66,8 +67,14 @@ function takeSnapshot(memory: MemoryStats | null): Snapshot {
     geometryTotalShots += g.shots.length;
   }
 
+  // Read shot count from the SoA store (typed-array length) so the probe
+  // itself doesn't force-materialize every section's lazy `.shots` getter
+  // on every tick. The legacy fallback only fires when no project is loaded
+  // through the binary IPC path.
   let projectShots = 0;
-  if (project) {
+  if (surveyData) {
+    projectShots = surveyData.shotCount;
+  } else if (project) {
     for (const s of project.sections) projectShots += s.shots.length;
   }
 
