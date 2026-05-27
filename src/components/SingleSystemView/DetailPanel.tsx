@@ -905,6 +905,14 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     openDialog('edit-section', { sectionId: section.id });
   };
 
+  const handleDeleteSection = () => {
+    setSource('detail-panel');
+    openDialog('confirm-delete', {
+      type: 'section',
+      sectionId: section.id,
+    });
+  };
+
   const sectionDisplayName = section.name ?? t('detailPanel.section.unnamed');
 
   const centerButton = (
@@ -1052,9 +1060,12 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
         </div>
       </Panel>
 
-      <div className="p-3 border-t border-border">
+      <div className="p-3 border-t border-border space-y-2">
         <Button size="sm" className="w-full" onClick={handleEditSection}>
           {t('detailPanel.section.edit')}
+        </Button>
+        <Button size="sm" variant="danger" className="w-full" onClick={handleDeleteSection} data-testid="delete-section-button">
+          {t('common.actions.delete')}
         </Button>
       </div>
     </div>
