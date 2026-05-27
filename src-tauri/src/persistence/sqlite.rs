@@ -47,12 +47,11 @@ pub struct Database {
 impl Database {
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
-        tracing::info!("Opening database at: {:?}", path);
-        let exists = path.exists();
-        tracing::info!("File existed before open: {}", exists);
+        // Per-open chatter is debug-only — `open` is called for every
+        // project create / save-as / import / recent-list refresh.
+        tracing::debug!("Opening database at: {:?}", path);
 
         let conn = Connection::open(path).context("Failed to open database")?;
-        tracing::info!("SQLite connection created");
 
         let db = Self { conn };
         db.enable_foreign_keys()?;
@@ -68,15 +67,7 @@ impl Database {
         }
         db.init_schema()?;
         db.set_user_version(SCHEMA_VERSION)?;
-        tracing::info!("Schema initialized");
-
-        // Verify tables exist after schema init
-        let table_count: i32 = db.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
-        tracing::info!("Tables in database after init: {}", table_count);
+        tracing::debug!("Schema initialized");
 
         Ok(db)
     }
@@ -942,15 +933,12 @@ impl Database {
 
     /// Check if the database has valid project data
     pub fn has_project_data(&self) -> Result<bool> {
-        tracing::info!("Checking if database has project data...");
-
         // First check if project table exists
         let table_exists: i32 = self.conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='project'",
             [],
             |row| row.get(0),
         )?;
-        tracing::info!("project table exists: {}", table_exists > 0);
 
         if table_exists == 0 {
             tracing::warn!("project table does not exist in database");
@@ -963,7 +951,6 @@ impl Database {
             [],
             |row| row.get(0),
         )?;
-        tracing::info!("project table row count: {}", count);
 
         Ok(count > 0)
     }
@@ -1157,14 +1144,10 @@ impl Database {
 
     /// Save a project to the database
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
-        tracing::info!("Saving project: name={}, sections={}", project.name, project.sections.len());
+        tracing::debug!("Saving project: name={}, sections={}", project.name, project.sections.len());
 
-        tracing::info!("About to start transaction...");
         let tx = match self.conn.transaction() {
-            Ok(t) => {
-                tracing::info!("Transaction started successfully");
-                t
-            }
+            Ok(t) => t,
             Err(e) => {
                 tracing::error!("Failed to start transaction: {}", e);
                 return Err(e.into());
@@ -1187,12 +1170,11 @@ impl Database {
             DELETE FROM project;
             ",
         )?;
-        tracing::info!("Existing data cleared");
 
         // Save project metadata (including next_closure_id for monotonic ID persistence)
         let next_closure_id_i64 = i64::try_from(project.next_closure_id)
             .map_err(|_| anyhow::anyhow!("next_closure_id {} exceeds i64 range", project.next_closure_id))?;
-        let rows_affected = tx.execute(
+        tx.execute(
             "INSERT INTO project (id, name, location, created_at, modified_at, schema_version, next_closure_id) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 project.name,
@@ -1203,7 +1185,6 @@ impl Database {
                 next_closure_id_i64
             ],
         )?;
-        tracing::info!("Project metadata inserted, rows_affected={}", rows_affected);
 
         // Save sections and shots
         for section in &project.sections {
@@ -1394,7 +1375,7 @@ impl Database {
         }
 
         tx.commit()?;
-        tracing::info!("Transaction committed");
+        tracing::debug!("Transaction committed");
 
         // Verify the data was written
         let verify_count: i64 = self.conn.query_row(
@@ -1402,7 +1383,7 @@ impl Database {
             [],
             |row| row.get(0),
         ).unwrap_or(0);
-        tracing::info!("Save verification: project table has {} rows", verify_count);
+        tracing::debug!("Save verification: project table has {} rows", verify_count);
 
         Ok(())
     }
@@ -1539,7 +1520,7 @@ impl Database {
     }
 
     pub fn load_project(&self) -> Result<Project> {
-        tracing::info!("Loading project from database");
+        tracing::debug!("Loading project from database");
 
         // First check if project table has data and log what's there
         let count: i64 = self.conn.query_row(
@@ -1547,7 +1528,7 @@ impl Database {
             [],
             |row| row.get(0),
         ).unwrap_or(0);
-        tracing::info!("Project table row count: {}", count);
+        tracing::debug!("Project table row count: {}", count);
 
         if count == 0 {
             anyhow::bail!("Project table is empty - file may be corrupted");
@@ -1986,7 +1967,7 @@ impl Database {
             )?;
         }
 
-        tracing::info!(count = entries.len(), "Saved undo stack to database");
+        tracing::debug!(count = entries.len(), "Saved undo stack to database");
         Ok(())
     }
 
@@ -2007,7 +1988,7 @@ impl Database {
             )?;
         }
 
-        tracing::info!(count = entries.len(), "Saved undo stack with timestamps to database");
+        tracing::debug!(count = entries.len(), "Saved undo stack with timestamps to database");
         Ok(())
     }
 

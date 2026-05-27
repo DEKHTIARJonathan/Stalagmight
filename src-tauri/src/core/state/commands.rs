@@ -445,7 +445,7 @@ impl AppState {
                             if let Some(v) = update.updates.right { shot.right = v; }
                             if let Some(v) = update.updates.up { shot.up = v; }
                             if let Some(v) = update.updates.down { shot.down = v; }
-                            tracing::info!(
+                            tracing::debug!(
                                 section_id = update.section_id,
                                 shot_id = update.shot_id,
                                 old_length = old_len,
@@ -725,7 +725,10 @@ impl AppState {
                 let now_elapsed = loop_start.elapsed();
                 let batch = now_elapsed.saturating_sub(last_report_elapsed);
                 let batch_n = (idx + 1) - last_report_idx;
-                tracing::info!(
+                // Per-batch import progress is debug-only — it's
+                // perf-investigation noise, not something a release
+                // log should record.
+                tracing::debug!(
                     sections_done = idx + 1,
                     total = sections.len(),
                     batch_n,
@@ -741,7 +744,7 @@ impl AppState {
             }
         }
 
-        tracing::info!(
+        tracing::debug!(
             sections = sections.len(),
             total_ms = loop_start.elapsed().as_millis() as u64,
             create_ms = create_total.as_millis() as u64,
@@ -762,7 +765,7 @@ impl AppState {
                 project.cascade_connection_offsets(&all_section_ids);
             }
         }
-        tracing::info!(
+        tracing::debug!(
             sections = all_section_ids.len(),
             cascade_ms = cascade_start.elapsed().as_millis() as u64,
             purpose = "TML import batch cascade",
@@ -804,7 +807,7 @@ impl AppState {
             };
             match result {
                 Ok(lc) => {
-                    tracing::info!(
+                    tracing::debug!(
                         closure_id = lc.id,
                         ?station_a,
                         ?station_b,
@@ -914,7 +917,7 @@ impl AppState {
 
         let section = project.add_section(data);
         let section_id = section.id;
-        tracing::info!(
+        tracing::debug!(
             section_id = section_id,
             purpose = "add section to project",
             "Section created"
@@ -934,7 +937,7 @@ impl AppState {
                 project.preserve_connections_for_section_deletion(section_id);
                 project.cleanup_section_references(section_id);
                 project.remove_section(section_id);
-                tracing::info!(
+                tracing::debug!(
                     section_id,
                     purpose = "remove section and cleanup references",
                     "Section deleted (with cleanup)"
@@ -949,7 +952,7 @@ impl AppState {
     pub(super) fn update_section(&self, section_id: SectionId, updates: SectionUpdates) -> CommandResult {
         self.with_project_mut(|project| {
             if project.update_section(section_id, &updates).is_some() {
-                tracing::info!(
+                tracing::debug!(
                     section_id,
                     purpose = "update section metadata or shots",
                     "Section updated"
@@ -1045,7 +1048,7 @@ impl AppState {
 
         if let Some(new_shot) = shot {
             let new_shot_id = new_shot.id;
-            tracing::info!(
+            tracing::debug!(
                 section_id,
                 shot_id = new_shot_id,
                 purpose = "add shot to section",
@@ -1125,7 +1128,7 @@ impl AppState {
             if updates.touches_geometry() {
                 project.realign_after_shot_edit(section_id);
             }
-            tracing::info!(
+            tracing::debug!(
                 section_id,
                 shot_id,
                 purpose = "update shot measurements",
@@ -1161,7 +1164,7 @@ impl AppState {
 
         match project.remove_shot_with_rewire(section_id, shot_id) {
             Ok(_) => {
-                tracing::info!(
+                tracing::debug!(
                     section_id,
                     shot_id,
                     purpose = "remove shot and rewire geometry",
@@ -1215,7 +1218,7 @@ impl AppState {
 
             match project.merge_stations(station_a, station_b) {
                 Ok(_) => {
-                    tracing::info!(
+                    tracing::debug!(
                         ?station_a,
                         ?station_b,
                         purpose = "connect survey sections",
@@ -1253,7 +1256,7 @@ impl AppState {
 
         match project.create_loop_closure(station_a, station_b, strategy) {
             Ok(_) => {
-                tracing::info!(
+                tracing::debug!(
                     ?station_a,
                     ?station_b,
                     purpose = "add loop closure to improve accuracy",
@@ -1277,7 +1280,7 @@ impl AppState {
     pub(super) fn remove_loop_closure(&self, closure_id: u64) -> CommandResult {
         self.with_project_mut(|project| match project.remove_loop_closure(closure_id) {
             Ok(closure) => {
-                tracing::info!(
+                tracing::debug!(
                     closure_id,
                     ?closure.station_a,
                     ?closure.station_b,
@@ -1315,7 +1318,7 @@ impl AppState {
                 Ok(()) => {
                     working.touch();
                     *project = working;
-                    tracing::info!(
+                    tracing::debug!(
                         ?anchor_station,
                         ?method,
                         purpose = "reduce misclosure error",
@@ -1414,7 +1417,7 @@ impl AppState {
     pub(super) fn remove_zero_datum(&self, station_ref: StationRef) -> CommandResult {
         self.with_project_mut(|project| {
             if project.remove_zero_datum(station_ref) {
-                tracing::info!(
+                tracing::debug!(
                     ?station_ref,
                     purpose = "remove GPS anchor",
                     "Zero datum removed"
@@ -1634,7 +1637,7 @@ impl AppState {
 
             project.adjust_section_offset(section_id, offset.x, offset.y);
             project.touch();
-            tracing::info!(
+            tracing::debug!(
                 ?section_id,
                 ?offset,
                 purpose = "reposition section for alignment",
