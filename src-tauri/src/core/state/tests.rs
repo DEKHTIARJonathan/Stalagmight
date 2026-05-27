@@ -11304,3 +11304,70 @@ fn profile_tml_import_full() {
 
     assert!(result.success, "execute_import_sections failed: {:?}", result.error);
 }
+
+// ============================================================================
+// Performance profiler for project load (not a unit test)
+// ============================================================================
+//
+// Run with:
+//   STALAGMIGHT_PROFILE_STALX=/home/user/Documents/stalagmight/92.stalx \
+//     cargo test --release --manifest-path src-tauri/Cargo.toml --lib \
+//     state::tests::profile_stalx_load -- --nocapture --ignored
+
+#[test]
+#[ignore = "profiling harness — run explicitly with STALAGMIGHT_PROFILE_STALX=<path>"]
+fn profile_stalx_load() {
+    use crate::persistence::Database;
+    use std::time::Instant;
+
+    let path = std::env::var("STALAGMIGHT_PROFILE_STALX")
+        .expect("set STALAGMIGHT_PROFILE_STALX to the .stalx file path");
+
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    // === Phase 0: SQLite open ===
+    let t0 = Instant::now();
+    let db = Database::open_existing(std::path::Path::new(&path)).expect("open_existing");
+    let t1 = Instant::now();
+
+    // === Phase 1: load_project (the bulk query loop) ===
+    let project = db.load_project().expect("load_project");
+    let t2 = Instant::now();
+
+    let section_count = project.sections.len();
+    let shot_count: usize = project.sections.iter().map(|s| s.shots.len()).sum();
+
+    // === Phase 2: station coordinate computation ===
+    let stations = project.compute_station_coordinates();
+    let t3 = Instant::now();
+    let station_count = stations.len();
+
+    // === Phase 3: project stats ===
+    let stats = project.stats();
+    let t4 = Instant::now();
+
+    eprintln!("\n┌─ profile_stalx_load ──────────────────────────────────");
+    eprintln!("│ file:      {path}");
+    eprintln!("│ sections:  {section_count}");
+    eprintln!("│ shots:     {shot_count}");
+    eprintln!("│ stations:  {station_count}");
+    eprintln!("│ closures:  {}", project.loop_closures.len());
+    eprintln!("│ merges:    {}", project.station_merges.len());
+    eprintln!("│ total_length: {:.1} m", stats.total_length);
+    eprintln!("├─ phase timings ───────────────────────────────────────");
+    eprintln!("│ Database::open_existing:        {:>9.2} ms", (t1 - t0).as_secs_f64() * 1000.0);
+    eprintln!("│ db.load_project (SQLite):       {:>9.2} ms", (t2 - t1).as_secs_f64() * 1000.0);
+    eprintln!("│ compute_station_coordinates:    {:>9.2} ms", (t3 - t2).as_secs_f64() * 1000.0);
+    eprintln!("│ project.stats:                  {:>9.2} ms", (t4 - t3).as_secs_f64() * 1000.0);
+    eprintln!("├─ totals ──────────────────────────────────────────────");
+    eprintln!("│ end-to-end:                     {:>9.2} ms",
+        (t4 - t0).as_secs_f64() * 1000.0);
+    eprintln!("└───────────────────────────────────────────────────────");
+}
