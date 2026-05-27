@@ -1927,14 +1927,39 @@ impl Database {
             ))
         })?;
 
-        let mut entries = Vec::new();
+        // Collect compressed blobs first, then decompress in parallel —
+        // the command_json and undo_data_json blobs of a single entry
+        // are independent of each other, and on big undo entries (e.g.
+        // a multi-MB project snapshot from a batch import) gzip
+        // decompression is single-threaded and slow.  std::thread::scope
+        // keeps us dep-free.
+        let mut raw: Vec<(i64, Vec<u8>, Vec<u8>, Option<String>)> = Vec::new();
         for row in rows {
-            let (seq, cmd_bytes, undo_bytes, ts) = row?;
-            let command_json = decompress_json(&cmd_bytes)?;
-            let undo_data_json = decompress_json(&undo_bytes)?;
-            entries.push((seq, command_json, undo_data_json, ts));
+            raw.push(row?);
         }
-        Ok(entries)
+        let entries: Result<Vec<_>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = raw
+                .into_iter()
+                .map(|(seq, cmd_bytes, undo_bytes, ts)| {
+                    let h_cmd = scope.spawn(move || decompress_json(&cmd_bytes));
+                    let h_undo = scope.spawn(move || decompress_json(&undo_bytes));
+                    (seq, h_cmd, h_undo, ts)
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|(seq, h_cmd, h_undo, ts)| {
+                    let cmd = h_cmd.join().map_err(|_| {
+                        anyhow::anyhow!("undo decompress thread panicked")
+                    })??;
+                    let undo = h_undo.join().map_err(|_| {
+                        anyhow::anyhow!("undo decompress thread panicked")
+                    })??;
+                    Ok((seq, cmd, undo, ts))
+                })
+                .collect()
+        });
+        entries
     }
 
     /// Clear undo stack entries after a given sequence
@@ -2000,13 +2025,35 @@ impl Database {
             ))
         })?;
 
-        let mut entries = Vec::new();
+        // Parallel gzip decompression of the per-entry blobs — see
+        // load_undo_stack_with_timestamps for the rationale.
+        let mut raw: Vec<(i64, Vec<u8>, Vec<u8>, Option<String>)> = Vec::new();
         for row in rows {
-            let (seq, cmd_bytes, undo_bytes, ts) = row?;
-            let command_json = decompress_json(&cmd_bytes)?;
-            let undo_data_json = decompress_json(&undo_bytes)?;
-            entries.push((seq, command_json, undo_data_json, ts));
+            raw.push(row?);
         }
+        let entries: Result<Vec<_>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = raw
+                .into_iter()
+                .map(|(seq, cmd_bytes, undo_bytes, ts)| {
+                    let h_cmd = scope.spawn(move || decompress_json(&cmd_bytes));
+                    let h_undo = scope.spawn(move || decompress_json(&undo_bytes));
+                    (seq, h_cmd, h_undo, ts)
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|(seq, h_cmd, h_undo, ts)| {
+                    let cmd = h_cmd.join().map_err(|_| {
+                        anyhow::anyhow!("redo decompress thread panicked")
+                    })??;
+                    let undo = h_undo.join().map_err(|_| {
+                        anyhow::anyhow!("redo decompress thread panicked")
+                    })??;
+                    Ok((seq, cmd, undo, ts))
+                })
+                .collect()
+        });
+        let entries = entries?;
         Ok(entries)
     }
 
