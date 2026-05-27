@@ -322,7 +322,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let bytes = rmp_serde::to_vec_named(&result)
         .map_err(|e| anyhow::anyhow!("msgpack encode of load result: {e}"))?;
     let t_total = start.elapsed();
-    tracing::info!(
+    tracing::debug!(
         shots = shot_count,
         stations = station_count,
         bytes = bytes.len(),

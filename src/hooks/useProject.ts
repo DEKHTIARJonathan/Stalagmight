@@ -17,6 +17,7 @@ import {
   saveDialog,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
+import { debugLog } from '../utils/debugLog';
 
 export function useProject() {
   const store = useProjectStore();
@@ -33,7 +34,7 @@ export function useProject() {
       filters: projectOpenFilters(),
     });
 
-    console.log('[useProject] Open dialog result:', selected, typeof selected);
+    debugLog('[useProject] Open dialog result:', selected, typeof selected);
 
     // Handle both string and single-item array returns
     let path: string | null = null;
@@ -44,10 +45,10 @@ export function useProject() {
     }
 
     if (path) {
-      console.log('[useProject] Opening project via loadProject:', path);
+      debugLog('[useProject] Opening project via loadProject:', path);
       // loadProject handles view switching and error display internally via LoadingProgress
       const result = await store.loadProject(path);
-      console.log('[useProject] loadProject result:', result);
+      debugLog('[useProject] loadProject result:', result);
       return result;
     }
     return null;
@@ -99,7 +100,7 @@ export function useProject() {
   const handleCloseProject = useCallback(async () => {
     // Check for unsaved changes - use getState() to get current value, not stale closure
     const currentIsDirty = useProjectStore.getState().isDirty;
-    console.log('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
+    debugLog('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
     if (currentIsDirty) {
       // Open styled dialog - the dialog will handle the actual close
       openDialog('unsaved-changes');
@@ -132,7 +133,7 @@ export function useProject() {
         const toRafMs = t3 - t2;
         const rafToPaintMs = t4 - t3;
         const totalMs = t4 - t0;
-        console.log(
+        debugLog(
           `[perf:close] closeProject=${closeMs.toFixed(0)}ms  toRAF=${toRafMs.toFixed(0)}ms  rAF→paint=${rafToPaintMs.toFixed(0)}ms  total=${totalMs.toFixed(0)}ms`
         );
         recordPerfTiming('closeProject IPC', closeMs);

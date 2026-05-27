@@ -180,7 +180,7 @@ pub async fn load_project_full(
         Ok(Err(load_error)) => Err(load_error),
         Err(join_error) => Err(LoadError::internal(join_error.to_string())),
     };
-    tracing::info!(
+    tracing::debug!(
         handler_ms = handler_elapsed.as_millis() as u64,
         ok = mapped.is_ok(),
         "load_project_full handler returning (serialize+transport+JSON.parse begins now)"
@@ -221,7 +221,7 @@ pub async fn load_project_full_binary(
         .map_err(|e| LoadError::internal(format!("encode binary: {e}")))?;
     let encode_elapsed = encode_start.elapsed();
 
-    tracing::info!(
+    tracing::debug!(
         handler_ms = handler_elapsed.as_millis() as u64,
         encode_ms = encode_elapsed.as_millis() as u64,
         bytes = bytes.len(),

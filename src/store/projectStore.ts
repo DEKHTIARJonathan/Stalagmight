@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
+import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { useUIStore } from './uiStore';
 import { useGlobalViewStore } from './globalViewStore';
@@ -692,7 +693,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
-      console.log('[projectStore] closeProject ignored - already closing');
+      debugLog('[projectStore] closeProject ignored - already closing');
       return emptyCommandResult(false, 'Already closing');
     }
 
@@ -718,11 +719,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   refreshProjectState: async () => {
     try {
-      console.log('[projectStore] refreshProjectState: invoking get_project_state...');
+      debugLog('[projectStore] refreshProjectState: invoking get_project_state...');
       const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
         purpose: 'refresh project state in UI',
       });
-      console.log('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
+      debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
       if (state) {
         // Build the SoA layout alongside the legacy shapes for the
         // duration of the Phase-A migration. After Phase A.6 this is
@@ -736,11 +737,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           frozenShots: state.frozen_shots,
         });
       }
-      console.log('[projectStore] refreshProjectState: calling refreshUndoState...');
+      debugLog('[projectStore] refreshProjectState: calling refreshUndoState...');
       await get().refreshUndoState();
       // Also refresh warnings
       await get().refreshWarnings();
-      console.log('[projectStore] refreshProjectState: done');
+      debugLog('[projectStore] refreshProjectState: done');
     } catch (e) {
       console.error('Failed to refresh project state:', e);
     }

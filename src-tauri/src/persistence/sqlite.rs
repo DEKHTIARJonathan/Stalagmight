@@ -1491,10 +1491,12 @@ impl Database {
         // station_count = shot_count + section_count per Project::stats().
         let station_count = (shot_count as usize) + (section_count as usize);
 
-        // Trace where the time went, in ms, so we can spot which query is
-        // the bottleneck. Logged at INFO so it shows in the running tauri-dev
-        // terminal without enabling debug logging.
-        tracing::info!(
+        // Trace where the time went, in ms, so we can spot which query
+        // is the bottleneck. Debug-level — fires for every recent
+        // project on every metadata refresh, so default releases skip
+        // it.  Enable with `RUST_LOG=stalagmight_lib=debug` when you
+        // need to see it.
+        tracing::debug!(
             path = ?file_path,
             shots = shot_count,
             header_ms = t_header.as_micros() as f64 / 1000.0,

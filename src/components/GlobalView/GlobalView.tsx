@@ -15,6 +15,7 @@ import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import type { ProjectMetadata } from '../../types/project';
 import { formatNumber } from '../../i18n/format';
+import { debugLog } from '../../utils/debugLog';
 
 /** Map phase enum values to human-readable labels */
 function formatPhaseLabel(
@@ -67,7 +68,7 @@ export default function GlobalView() {
   const _mountTimeRef = useRef(performance.now());
   useEffect(() => {
     const ms = performance.now() - _mountTimeRef.current;
-    console.log(`[perf:globalview-mount] firstEffect=${ms.toFixed(0)}ms after construction`);
+    debugLog(`[perf:globalview-mount] firstEffect=${ms.toFixed(0)}ms after construction`);
     void import('../../utils/memoryProbe').then(({ recordPerfTiming }) => {
       recordPerfTiming('GlobalView mount', ms);
     });

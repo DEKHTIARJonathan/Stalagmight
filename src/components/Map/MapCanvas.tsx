@@ -32,6 +32,7 @@ import { FitToViewIcon } from '../common/icons';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
 import { setSource } from '../../utils/telemetry';
+import { debugLog } from '../../utils/debugLog';
 
 // Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
@@ -1462,7 +1463,7 @@ export default function MapCanvas() {
       map.current?.remove();
       const tB = performance.now();
       map.current = null;
-      console.log(`[perf:mapcanvas-unmount] preRemove=${(tA - t0).toFixed(0)}ms  mapRemove=${(tB - tA).toFixed(0)}ms`);
+      debugLog(`[perf:mapcanvas-unmount] preRemove=${(tA - t0).toFixed(0)}ms  mapRemove=${(tB - tA).toFixed(0)}ms`);
       void import('../../utils/memoryProbe').then(({ recordPerfTiming }) => {
         recordPerfTiming('map.remove()', tB - tA);
       });
