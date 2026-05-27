@@ -156,6 +156,7 @@ struct RawShot {
 // ============================================================================
 
 /// Normalize an XML element name to a canonical key.
+#[cfg(test)]
 fn normalize_key(name: &str) -> Option<&'static str> {
     normalize_key_bytes(name.as_bytes())
 }
