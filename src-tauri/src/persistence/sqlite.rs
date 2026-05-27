@@ -83,28 +83,40 @@ impl Database {
 
     /// Open an existing database (does not create if missing)
     pub fn open_existing(path: &Path) -> Result<Self> {
-        tracing::info!("Opening existing database at: {:?}", path);
+        // Verbose open-time logging is debug-only — it fires on every
+        // project load and every recent-projects metadata read, which
+        // adds up.  The error paths still log at error/warn.
+        tracing::debug!("Opening existing database at: {:?}", path);
 
         if !path.exists() {
             tracing::error!("File does not exist: {:?}", path);
             anyhow::bail!("File does not exist");
         }
-        tracing::info!("File exists, size: {:?} bytes", std::fs::metadata(path).map(|m| m.len()).ok());
 
         // Open in read-only mode first to check if it's valid
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database - file may not be a valid SQLite database")?;
-        tracing::info!("SQLite connection opened successfully");
 
         let mut db = Self { conn };
         db.enable_foreign_keys()?;
 
+        // Let SQLite mmap the whole file (up to 256 MB).  Sequential
+        // scans during integrity check / shot load go through the OS
+        // page cache without a per-row copy into SQLite's buffer.
+        // Cheap to enable; bounded by SQLite's own mmap_size cap.
+        let _ = db
+            .conn
+            .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
+
         // Run quick integrity check before reading any data (SPEC 14.4)
+        let t = std::time::Instant::now();
         db.validate_integrity().context("Database file may be corrupted")?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: validate_integrity");
 
         // Check if the project table exists and has data
+        let t = std::time::Instant::now();
         let has_data = db.has_project_data()?;
-        tracing::info!("has_project_data returned: {}", has_data);
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: has_project_data");
 
         if !has_data {
             tracing::error!("File does not contain valid Stalagmight project data");
@@ -112,8 +124,13 @@ impl Database {
         }
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
+        let t = std::time::Instant::now();
         db.ensure_schema_version()?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: ensure_schema_version");
+
+        let t = std::time::Instant::now();
         db.validate_foreign_keys()?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: validate_foreign_keys");
 
         Ok(db)
     }
@@ -1820,6 +1837,20 @@ impl Database {
         for (i, s) in sections.iter().enumerate() {
             section_index_cache.insert(s.id, i);
         }
+        // Same for merge adjacency — the first compute_station_coordinates
+        // call hammers get_merged_section_ids and would otherwise pay the
+        // O(N) linear fallback on every BFS step.
+        let mut merge_adjacency_cache: HashMap<u32, Vec<u32>> = HashMap::new();
+        for m in &station_merges {
+            merge_adjacency_cache
+                .entry(m.station_a.section_id)
+                .or_default()
+                .push(m.station_b.section_id);
+            merge_adjacency_cache
+                .entry(m.station_b.section_id)
+                .or_default()
+                .push(m.station_a.section_id);
+        }
         Ok(Project {
             name,
             location,
@@ -1839,10 +1870,7 @@ impl Database {
             next_closure_id,
             cascade_deferred: false,
             section_index_cache,
-            // Lazy: built on first read via the fallback path. The hot
-            // path (batch importer) explicitly rebuilds via
-            // `rebuild_merge_adjacency()` before the loop.
-            merge_adjacency_cache: HashMap::new(),
+            merge_adjacency_cache,
         })
     }
 

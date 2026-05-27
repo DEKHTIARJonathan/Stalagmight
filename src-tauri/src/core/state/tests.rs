@@ -11338,7 +11338,7 @@ fn profile_stalx_load() {
     let t1 = Instant::now();
 
     // === Phase 1: load_project (the bulk query loop) ===
-    let project = db.load_project().expect("load_project");
+    let mut project = db.load_project().expect("load_project");
     let t2 = Instant::now();
 
     let section_count = project.sections.len();
@@ -11349,25 +11349,59 @@ fn profile_stalx_load() {
     let t3 = Instant::now();
     let station_count = stations.len();
 
-    // === Phase 3: project stats ===
-    let stats = project.stats();
+    // === Phase 3: project stats + penetration ===
+    let mut stats = project.stats();
+    stats.penetration_distance = project.calculate_penetration(&stations);
     let t4 = Instant::now();
+
+    // === Phase 4: warnings (via AppState because the impl is on AppState) ===
+    project.file_path = Some(PathBuf::from(&path));
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project.clone());
+    let warnings = state.compute_project_warnings(&project, Some(&db));
+    let t5 = Instant::now();
+
+    // === Phase 5: load_display_settings ===
+    let _settings = db.load_display_settings().unwrap_or_default();
+    let t6 = Instant::now();
+
+    // === Phase 6: load_undo_stack_with_timestamps ===
+    let _undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
+    let _redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
+    let t7 = Instant::now();
+
+    // === Phase 7: binary envelope encoding ===
+    let display_settings = crate::core::loading::DisplaySettings::from_stored(
+        &db.load_display_settings().unwrap_or_default()
+    );
+    let result = crate::core::loading::LoadProjectFullResult {
+        project,
+        stations,
+        stats,
+        warnings,
+        display_settings,
+        loading_id: 0,
+    };
+    let bin = crate::core::load_binary::encode(result).expect("encode");
+    let t8 = Instant::now();
 
     eprintln!("\n┌─ profile_stalx_load ──────────────────────────────────");
     eprintln!("│ file:      {path}");
     eprintln!("│ sections:  {section_count}");
     eprintln!("│ shots:     {shot_count}");
     eprintln!("│ stations:  {station_count}");
-    eprintln!("│ closures:  {}", project.loop_closures.len());
-    eprintln!("│ merges:    {}", project.station_merges.len());
-    eprintln!("│ total_length: {:.1} m", stats.total_length);
+    eprintln!("│ binary envelope: {} bytes ({:.1} MB)", bin.len(), bin.len() as f64 / 1024.0 / 1024.0);
     eprintln!("├─ phase timings ───────────────────────────────────────");
     eprintln!("│ Database::open_existing:        {:>9.2} ms", (t1 - t0).as_secs_f64() * 1000.0);
     eprintln!("│ db.load_project (SQLite):       {:>9.2} ms", (t2 - t1).as_secs_f64() * 1000.0);
     eprintln!("│ compute_station_coordinates:    {:>9.2} ms", (t3 - t2).as_secs_f64() * 1000.0);
-    eprintln!("│ project.stats:                  {:>9.2} ms", (t4 - t3).as_secs_f64() * 1000.0);
+    eprintln!("│ project.stats + penetration:    {:>9.2} ms", (t4 - t3).as_secs_f64() * 1000.0);
+    eprintln!("│ compute_project_warnings:       {:>9.2} ms", (t5 - t4).as_secs_f64() * 1000.0);
+    eprintln!("│ load_display_settings:          {:>9.2} ms", (t6 - t5).as_secs_f64() * 1000.0);
+    eprintln!("│ load_undo+redo_stacks:          {:>9.2} ms", (t7 - t6).as_secs_f64() * 1000.0);
+    eprintln!("│ binary envelope encode:         {:>9.2} ms", (t8 - t7).as_secs_f64() * 1000.0);
     eprintln!("├─ totals ──────────────────────────────────────────────");
     eprintln!("│ end-to-end:                     {:>9.2} ms",
-        (t4 - t0).as_secs_f64() * 1000.0);
+        (t8 - t0).as_secs_f64() * 1000.0);
     eprintln!("└───────────────────────────────────────────────────────");
 }
