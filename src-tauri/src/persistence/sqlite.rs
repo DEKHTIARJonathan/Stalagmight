@@ -98,6 +98,20 @@ impl Database {
         let _ = db
             .conn
             .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
+        // Default cache_size is 2 000 pages (~2 MB). Large projects
+        // benefit from holding more pages resident so the per-section
+        // shot SELECT and the integrity check don't re-fault from
+        // mmap. 32 MiB covers the 11 MB 92.stalx with headroom for
+        // the indexes; SQLite caps this against its own limits.
+        let _ = db
+            .conn
+            .pragma_update(None, "cache_size", -32_000i64); // negative = KiB
+        // Skip syncing on read-only-equivalent operations.
+        // (load path doesn't write — this is harmless on writes too;
+        // we already use a single transaction in save_project.)
+        let _ = db
+            .conn
+            .pragma_update(None, "temp_store", "MEMORY");
 
         // Run quick integrity check before reading any data (SPEC 14.4)
         let t = std::time::Instant::now();
