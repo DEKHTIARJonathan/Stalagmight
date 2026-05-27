@@ -1992,7 +1992,10 @@ impl Project {
         let mut depths: Vec<f64> = Vec::new();
 
         for &sr in colocated {
-            if let Some(section) = self.sections.iter().find(|s| s.id == sr.section_id) {
+            // O(1) cache lookup; legacy linear scan was the hot path —
+            // 79 k groups × O(N sections) per `compute_station_coordinates`
+            // call dominated load time for large projects.
+            if let Some(section) = self.get_section(sr.section_id) {
                 let idx = sr.station_index as usize;
 
                 // Incoming shot: shot at index station_index - 1 → use depth_out
@@ -2016,7 +2019,7 @@ impl Project {
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
     pub(crate) fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
-        let section = self.sections.iter().find(|s| s.id == station_ref.section_id)?;
+        let section = self.get_section(station_ref.section_id)?;
 
         // Get section offset
         let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
@@ -2169,7 +2172,7 @@ impl Project {
             self.get_merged_section_ids(station_a.section_id)
         };
         fallback_sections.iter()
-            .filter_map(|sid| self.sections.iter().find(|s| s.id == *sid))
+            .filter_map(|sid| self.get_section(*sid))
             .flat_map(|s| s.shots.iter())
             .map(|shot| shot.length)
             .sum()
@@ -4486,7 +4489,7 @@ impl Project {
         // Enumerate all stations in connected sections
         let mut connected = HashSet::new();
         for section_id in connected_sections {
-            if let Some(section) = self.sections.iter().find(|s| s.id == section_id) {
+            if let Some(section) = self.get_section(section_id) {
                 // A section with N shots has N+1 stations (indices 0 to N)
                 for i in 0..=section.shots.len() {
                     connected.insert(StationRef {
@@ -4885,7 +4888,14 @@ impl Project {
         // Pre-compute absolute station depths using colocated groups.
         // Each station's Z is the average of surrounding shot depths across
         // all merge/closure partners — no cumulative dz walk needed.
+        let t_phase = std::time::Instant::now();
         let colocated_groups = self.build_colocated_groups();
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            groups = colocated_groups.len(),
+            "compute_station_coordinates: build_colocated_groups"
+        );
+        let t_phase = std::time::Instant::now();
         let mut station_depths: HashMap<StationRef, f64> = HashMap::new();
         for group in colocated_groups.values() {
             let depth = self.compute_station_depth(group);
@@ -4893,6 +4903,11 @@ impl Project {
                 station_depths.insert(sr, depth);
             }
         }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: depths loop"
+        );
+        let t_phase = std::time::Instant::now();
 
         let mut stations: Vec<Station> = Vec::new();
         let mut station_count = 0u32;
@@ -4957,6 +4972,11 @@ impl Project {
         // NOTE: Global zero datum subtraction removed (fn-19-mmx.2).
         // Positioning is now controlled solely by section_offsets, which are
         // computed when set_zero_datum() is called.
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: xyz walk"
+        );
+        let t_phase = std::time::Instant::now();
 
         // Mark merged stations - build merge groups (transitive closure)
         // First, build a map of station_ref -> group_id using Union-Find logic
@@ -5000,6 +5020,13 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            groups = groups.len(),
+            "compute_station_coordinates: union-find groups"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Now assign merged_with for each station based on their group
         for station in &mut stations {
             if let Some(&group_id) = station_to_group.get(&station.station_ref) {
@@ -5010,6 +5037,11 @@ impl Project {
                 }
             }
         }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: merged_with"
+        );
+        let t_phase = std::time::Instant::now();
 
         // Populate closures_with for each station from loop_closures
         // For each closure, both endpoint stations (and their merged equivalents)
@@ -5089,6 +5121,13 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            closures = self.loop_closures.len(),
+            "compute_station_coordinates: closures_with"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Closure-chain transitivity: when a station has direct closures to multiple
         // other stations, those other stations should see transitive closures to each
         // other via the shared station.
@@ -5160,6 +5199,12 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: closure-chain transitivity"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Mark zero datums
         for zd in &self.zero_datums {
             for station in &mut stations {
@@ -5170,6 +5215,12 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: zero datums"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Assign station comments
         for (station_ref, comment) in &self.station_comments {
             for station in &mut stations {
@@ -5178,6 +5229,10 @@ impl Project {
                 }
             }
         }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: station comments"
+        );
 
         stations
     }
