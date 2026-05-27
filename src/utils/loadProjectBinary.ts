@@ -194,52 +194,57 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
   const shotCommentByIdx = new Map<number, string>();
   for (const [idx, c] of env.shot_comments) shotCommentByIdx.set(idx, c);
 
-  // Materialize Section[] with embedded Shot[]. Sections are laid out
-  // contiguously in `shots_*` so each section reads its slice by offset.
+  // Build Section[] with a *lazy* `shots` getter backed by the typed
+  // arrays we already have. Materializing all 75k Shot objects up
+  // front committed bmalloc slabs for the Shot class that never
+  // decommitted (the residue we measured at ~2 GB after close).
+  // Lazy materialization means the slab only commits if a consumer
+  // actually iterates `section.shots`; sections nobody touches stay
+  // typed-array-only.
+  //
+  // Each Section's shots getter caches the materialized array after
+  // first access (consumer code expects identity stability — repeat
+  // calls return the same array). The cache is per-section, so the
+  // memory cost is bounded by which sections are accessed × shots in
+  // those sections. For typical UI use (one section at a time in
+  // DataTable, single shots in DetailPanel) this is ~100s of shots
+  // materialized vs the legacy 75 000.
   const sections: Section[] = env.project_header.sections.map((sh) => {
-    const shots: Shot[] = new Array(sh.shot_count);
-    for (let j = 0; j < sh.shot_count; j++) {
-      const globalIdx = sh.shot_offset + j;
-      const fBase = globalIdx * SHOT_FLOAT_FIELDS;
-      const uBase = globalIdx * SHOT_UINT_FIELDS;
-      const azimuth_in = shotsF32[fBase]!;
-      const azimuth_out = shotsF32[fBase + 1]!;
-      const length = shotsF32[fBase + 2]!;
-      const depth_in = shotsF32[fBase + 3]!;
-      const depth_out = shotsF32[fBase + 4]!;
-      const pitch_in = nanToNull(shotsF32[fBase + 5]!);
-      const pitch_out = nanToNull(shotsF32[fBase + 6]!);
-      const left = nanToNull(shotsF32[fBase + 7]!);
-      const right = nanToNull(shotsF32[fBase + 8]!);
-      const up = nanToNull(shotsF32[fBase + 9]!);
-      const down = nanToNull(shotsF32[fBase + 10]!);
-      const temperature = nanToNull(shotsF32[fBase + 11]!);
-      // u32: section_id [uBase], shot_id [uBase+1], marker_or_max [uBase+2].
-      const shot_id = shotsU32[uBase + 1]!;
-      const markerRaw = shotsU32[uBase + 2]!;
-      const marker_index = markerRaw === 0xFFFFFFFF ? null : markerRaw;
-      const is_reference = (shotsFlags[globalIdx]! & 1) !== 0;
-      const comment = shotCommentByIdx.get(globalIdx) ?? null;
-      shots[j] = {
-        id: shot_id,
-        azimuth_in,
-        azimuth_out,
-        length,
-        depth_in,
-        depth_out,
-        pitch_in,
-        pitch_out,
-        left,
-        right,
-        up,
-        down,
-        comment,
-        is_reference,
-        marker_index,
-        temperature,
-      };
-    }
-    return {
+    const materializeShots = (): Shot[] => {
+      const shots: Shot[] = new Array(sh.shot_count);
+      for (let j = 0; j < sh.shot_count; j++) {
+        const globalIdx = sh.shot_offset + j;
+        const fBase = globalIdx * SHOT_FLOAT_FIELDS;
+        const uBase = globalIdx * SHOT_UINT_FIELDS;
+        const shot_id = shotsU32[uBase + 1]!;
+        const markerRaw = shotsU32[uBase + 2]!;
+        shots[j] = {
+          id: shot_id,
+          azimuth_in: shotsF32[fBase]!,
+          azimuth_out: shotsF32[fBase + 1]!,
+          length: shotsF32[fBase + 2]!,
+          depth_in: shotsF32[fBase + 3]!,
+          depth_out: shotsF32[fBase + 4]!,
+          pitch_in: nanToNull(shotsF32[fBase + 5]!),
+          pitch_out: nanToNull(shotsF32[fBase + 6]!),
+          left: nanToNull(shotsF32[fBase + 7]!),
+          right: nanToNull(shotsF32[fBase + 8]!),
+          up: nanToNull(shotsF32[fBase + 9]!),
+          down: nanToNull(shotsF32[fBase + 10]!),
+          temperature: nanToNull(shotsF32[fBase + 11]!),
+          comment: shotCommentByIdx.get(globalIdx) ?? null,
+          is_reference: (shotsFlags[globalIdx]! & 1) !== 0,
+          marker_index: markerRaw === 0xFFFFFFFF ? null : markerRaw,
+        };
+      }
+      return shots;
+    };
+    let shotsCache: Shot[] | null = null;
+    // `Object.defineProperty` for `shots` so we can install a getter
+    // without breaking the `Section` interface (which declares it as
+    // a plain `Shot[]`). Consumers read `section.shots` exactly as
+    // before; the materialization happens transparently on first read.
+    const section = {
       id: sh.id,
       name: sh.name,
       surveyor: sh.surveyor,
@@ -247,9 +252,17 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
       color: sh.color,
       direction: sh.direction,
       quality: sh.quality,
-      shots,
       next_shot_id: sh.next_shot_id,
-    };
+    } as Section;
+    Object.defineProperty(section, 'shots', {
+      get() {
+        if (shotsCache === null) shotsCache = materializeShots();
+        return shotsCache;
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    return section;
   });
 
   // Reconstruct the section_offsets record: Vec<(SectionId, (f64,f64))> -> Record<number, [number, number]>

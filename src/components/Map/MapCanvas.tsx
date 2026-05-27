@@ -235,7 +235,7 @@ export default function MapCanvas() {
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
   const { t } = useTranslation();
 
-  const { project, stations, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
@@ -251,27 +251,55 @@ export default function MapCanvas() {
   // Compute depth range from both station coordinates and shot depth endpoints.
   // Including shot depths avoids a flat scale when station Z isn't populated yet.
   const depthRange = useMemo(() => {
+    // SoA iteration: walks typed arrays instead of triggering the
+    // lazy `section.shots` getter (which would materialize Shot
+    // objects for every section). For 75k shots + 89k stations
+    // this drops from "force-materialize all" to a 3 × O(N) typed
+    // array pass. When `surveyData` isn't available (very early in
+    // initial load or unusual init paths), fall back to the legacy
+    // shape — accepted regression cost in that corner case.
     let min = Infinity;
     let max = -Infinity;
-    if (stations && stations.length > 0) {
-      for (const station of stations) {
-        const z = station.coordinates.z;
+    if (surveyData) {
+      // Station z coordinates live at stride 3 in stationCoords:
+      // [x0,y0,z0, x1,y1,z1, …]. Read directly from the typed array.
+      const coords = surveyData.stationCoords;
+      for (let i = 2; i < coords.length; i += 3) {
+        const z = coords[i]!;
         if (z < min) min = z;
         if (z > max) max = z;
       }
-    }
-    const sections = project?.sections ?? [];
-    for (const section of sections) {
-      for (const shot of section.shots) {
-        if (shot.depth_in < min) min = shot.depth_in;
-        if (shot.depth_in > max) max = shot.depth_in;
-        if (shot.depth_out < min) min = shot.depth_out;
-        if (shot.depth_out > max) max = shot.depth_out;
+      const depthIn = surveyData.shotDepthIn;
+      const depthOut = surveyData.shotDepthOut;
+      for (let i = 0; i < surveyData.shotCount; i++) {
+        const di = depthIn[i]!;
+        const dout = depthOut[i]!;
+        if (di < min) min = di;
+        if (di > max) max = di;
+        if (dout < min) min = dout;
+        if (dout > max) max = dout;
+      }
+    } else {
+      if (stations && stations.length > 0) {
+        for (const station of stations) {
+          const z = station.coordinates.z;
+          if (z < min) min = z;
+          if (z > max) max = z;
+        }
+      }
+      const sections = project?.sections ?? [];
+      for (const section of sections) {
+        for (const shot of section.shots) {
+          if (shot.depth_in < min) min = shot.depth_in;
+          if (shot.depth_in > max) max = shot.depth_in;
+          if (shot.depth_out < min) min = shot.depth_out;
+          if (shot.depth_out > max) max = shot.depth_out;
+        }
       }
     }
     if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 50 };
     return { min, max };
-  }, [stations, project?.sections]);
+  }, [surveyData, stations, project?.sections]);
 
   // Extract zoom config values for stable dependencies (used by zoom handlers and effects)
   const zoomStep = config?.map.zoom_step ?? 1.0;
