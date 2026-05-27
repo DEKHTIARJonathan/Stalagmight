@@ -30,7 +30,26 @@ import type { ProjectStats } from '../types/ipc/ProjectStats';
 import type { ProjectWarning } from '../types/ipc/ProjectWarning';
 import type { DisplaySettings } from '../types/ipc/DisplaySettings';
 import type { SurveyDirection } from '../types/ipc/SurveyDirection';
+import {
+  type SurveyData,
+  type SectionMetadata,
+  SHOT_FLAG_IS_REFERENCE,
+  SHOT_MARKER_NULL,
+  STATION_FLAG_IS_ZERO_DATUM,
+} from '../types/survey-data';
 import { recordPerfTiming } from './memoryProbe';
+
+/**
+ * Extended result type that carries both the legacy LoadProjectFullResult
+ * shape (Project + Station[]) and the new Struct-of-Arrays `surveyData`.
+ * During Phase A migration both are populated from the same typed-array
+ * buffers. Phase A.6 removes the legacy fields and consumers source
+ * everything from `surveyData`.
+ */
+export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
+  /** Struct-of-Arrays bulk-data layout. Phase-A staging area. */
+  surveyData: SurveyData;
+}
 
 /** Wire format version expected from the Rust encoder. */
 const EXPECTED_VERSION = 1;
@@ -104,7 +123,7 @@ interface SectionHeaderBinary {
  * shape `load_project_full` returned. The frontend can swap one call for
  * the other without touching consumers.
  */
-export async function loadProjectFullBinary(path: string): Promise<LoadProjectFullResult> {
+export async function loadProjectFullBinary(path: string): Promise<LoadProjectFullResultWithSoa> {
   const tInvoke = performance.now();
   let raw: ArrayBuffer | Uint8Array | unknown;
   try {
@@ -154,7 +173,7 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
   return result;
 }
 
-function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResult {
+function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullResultWithSoa {
   // Build typed-array views over the bulk byte buffers. These views don't
   // copy; they just point into the underlying ArrayBuffers.
   const shotsF32 = bytesToFloat32(env.shots_floats);
@@ -307,6 +326,23 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
     stations[i] = station;
   }
 
+  // Build the new SoA layout. This reuses the same typed-array views we
+  // already created above; per-shot/station numeric fields aren't copied,
+  // we just expose them under field-named arrays so consumers don't have
+  // to know about the multiplexed `shots_floats`/`shots_uints` layout.
+  // No additional allocations beyond:
+  //   - 12 per-field Float32 views over the same `shots_floats` buffer
+  //     (and similar for stations) — DataView-style, zero copy
+  //   - 1 Int32Array `shotSectionIds` (4 bytes/shot, derived from the
+  //     section metadata + offsets — we have to materialize this because
+  //     it's not in the wire format)
+  //   - 1 Uint8Array `shotFlags` mapping the wire's u32 marker_or_max
+  //     into the Int32Array `shotMarkerIndex` and bit-packed flags
+  //
+  // Once the legacy Project/Station[] materialization above is removed
+  // (Phase A.6), the memory savings show up.
+  const surveyData = buildSurveyData(env, shotsF32, shotsU32, shotsFlags, stationsF64, stationsU32, stationsFlags, shotCommentByIdx, gpsByIdx, mergedByIdx, closuresByIdx, commentByIdx);
+
   // For visibility in the perf panel, also record the wire size.
   recordPerfTiming('binary payload size (KB)', totalBytes / 1024);
 
@@ -317,6 +353,144 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
     stats: env.stats,
     warnings: env.warnings,
     displaySettings: env.display_settings,
+    surveyData,
+  };
+}
+
+/**
+ * Project the wire-format typed-array buffers into the field-named
+ * `SurveyData` layout. Zero-copy where the layout allows it; the
+ * fields with stride 1 (one value per shot) become `subarray` views
+ * over the multiplexed `shots_floats` buffer, while the per-field
+ * unstrided ones are unpacked into their own typed array.
+ *
+ * Choosing `subarray` views vs unpacked arrays: `subarray` would be
+ * stride-N (e.g. azimuth_in at indices 0, 12, 24, …) which JS doesn't
+ * support directly. So we unpack to dense per-field arrays. Cost is
+ * one `Float32Array(shot_count)` per field × 12 fields ≈ 3.5 MB for
+ * 75k shots, which is still ~50× smaller than the legacy 75k Shot
+ * objects we materialized above.
+ */
+function buildSurveyData(
+  env: BinaryEnvelope,
+  shotsF32: Float32Array,
+  shotsU32: Uint32Array,
+  shotsFlags: Uint8Array,
+  stationsF64: Float64Array,
+  stationsU32: Uint32Array,
+  stationsFlags: Uint8Array,
+  shotCommentByIdx: Map<number, string>,
+  stationGps: Map<number, GpsCoordinates>,
+  stationMerged: Map<number, StationRef[]>,
+  stationClosures: Map<number, ClosureRef[]>,
+  stationComments: Map<number, string>,
+): SurveyData {
+  const N = env.shot_count;
+  const shotIds = new Int32Array(N);
+  const shotSectionIds = new Int32Array(N);
+  const shotAzimuthIn = new Float32Array(N);
+  const shotAzimuthOut = new Float32Array(N);
+  const shotLength = new Float32Array(N);
+  const shotDepthIn = new Float32Array(N);
+  const shotDepthOut = new Float32Array(N);
+  const shotPitchIn = new Float32Array(N);
+  const shotPitchOut = new Float32Array(N);
+  const shotLeft = new Float32Array(N);
+  const shotRight = new Float32Array(N);
+  const shotUp = new Float32Array(N);
+  const shotDown = new Float32Array(N);
+  const shotTemperature = new Float32Array(N);
+  const shotFlags = new Uint8Array(N);
+  const shotMarkerIndex = new Int32Array(N);
+
+  // The wire format multiplexes f32 fields at SHOT_FLOAT_FIELDS stride;
+  // unpack into field-aligned arrays. Single tight loop touches each
+  // shot's row exactly once.
+  for (let i = 0; i < N; i++) {
+    const fBase = i * SHOT_FLOAT_FIELDS;
+    shotAzimuthIn[i]   = shotsF32[fBase]!;
+    shotAzimuthOut[i]  = shotsF32[fBase + 1]!;
+    shotLength[i]      = shotsF32[fBase + 2]!;
+    shotDepthIn[i]     = shotsF32[fBase + 3]!;
+    shotDepthOut[i]    = shotsF32[fBase + 4]!;
+    shotPitchIn[i]     = shotsF32[fBase + 5]!;
+    shotPitchOut[i]    = shotsF32[fBase + 6]!;
+    shotLeft[i]        = shotsF32[fBase + 7]!;
+    shotRight[i]       = shotsF32[fBase + 8]!;
+    shotUp[i]          = shotsF32[fBase + 9]!;
+    shotDown[i]        = shotsF32[fBase + 10]!;
+    shotTemperature[i] = shotsF32[fBase + 11]!;
+
+    const uBase = i * SHOT_UINT_FIELDS;
+    shotSectionIds[i] = shotsU32[uBase]! | 0;       // section_id (u32 → i32 via |0 for typed-array store)
+    shotIds[i]        = shotsU32[uBase + 1]! | 0;   // shot.id
+    const markerRaw   = shotsU32[uBase + 2]!;
+    shotMarkerIndex[i] = markerRaw === 0xFFFFFFFF ? SHOT_MARKER_NULL : (markerRaw | 0);
+
+    // Wire format used bit 0 for is_reference and we keep that mapping.
+    shotFlags[i] = (shotsFlags[i]! & 1) !== 0 ? SHOT_FLAG_IS_REFERENCE : 0;
+  }
+
+  const sections: SectionMetadata[] = env.project_header.sections.map((sh) => ({
+    id: sh.id,
+    name: sh.name,
+    surveyor: sh.surveyor,
+    date: sh.date,
+    color: sh.color,
+    direction: sh.direction,
+    quality: sh.quality,
+    next_shot_id: sh.next_shot_id,
+    shotOffset: sh.shot_offset,
+    shotCount: sh.shot_count,
+  }));
+
+  // ─── Stations ──────────────────────────────────────────────────
+  const SN = env.station_count;
+  const stationSectionIds = new Int32Array(SN);
+  const stationIndices = new Uint32Array(SN);
+  // Reuse the existing stationsF64 view directly — it's already
+  // [x0,y0,z0,x1,y1,z1,…] which matches our stationCoords stride-3.
+  // Take a copy though, because the underlying buffer is borrowed from
+  // msgpack's decoded Uint8Array which can be reused/recycled.
+  const stationCoords = new Float64Array(stationsF64);
+  const stationFlagsOut = new Uint8Array(SN);
+
+  for (let i = 0; i < SN; i++) {
+    const uBase = i * STATION_UINT_FIELDS;
+    stationSectionIds[i] = stationsU32[uBase]! | 0;
+    stationIndices[i] = stationsU32[uBase + 1]!;
+    stationFlagsOut[i] = (stationsFlags[i]! & 1) !== 0 ? STATION_FLAG_IS_ZERO_DATUM : 0;
+  }
+
+  return {
+    sections,
+    shotCount: N,
+    shotIds,
+    shotSectionIds,
+    shotAzimuthIn,
+    shotAzimuthOut,
+    shotLength,
+    shotDepthIn,
+    shotDepthOut,
+    shotPitchIn,
+    shotPitchOut,
+    shotLeft,
+    shotRight,
+    shotUp,
+    shotDown,
+    shotTemperature,
+    shotFlags,
+    shotMarkerIndex,
+    shotComments: shotCommentByIdx,
+    stationCount: SN,
+    stationSectionIds,
+    stationIndices,
+    stationCoords,
+    stationFlags: stationFlagsOut,
+    stationGps,
+    stationMergedWith: stationMerged,
+    stationClosuresWith: stationClosures,
+    stationComments,
   };
 }
 

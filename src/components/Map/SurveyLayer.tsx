@@ -11,6 +11,8 @@ import type {
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
 import {
   buildGhostFeatures,
@@ -3435,12 +3437,23 @@ export default class SurveyLayer {
     // while the worker is still building from the previous args.
     const myToken = ++this.lastUpdateToken;
 
+    // Convert to SurveyData once before posting to the worker. Doing
+    // this here (rather than at the call boundary in MapCanvas) lets
+    // the existing cached `sections`/`stations` continue to feed
+    // drag-preview / theme-rebuild paths inside SurveyLayer that
+    // haven't been migrated yet. The conversion is bounded by N (one
+    // pass over shots + stations); for the 75k-shot project it's
+    // ~10 ms on a single tight loop and the result is a typed-array
+    // bundle that structured-clones to the worker far cheaper than
+    // 75k+89k JS objects ever would.
+    const surveyData = useProjectStore.getState().surveyData
+      ?? surveyDataFromLegacy(sections, stations);
+
     const tBuildStart = performance.now();
     let features: ReturnType<typeof buildSurveyFeatures>;
     try {
       features = await buildSurveyFeaturesAsync({
-        sections,
-        stations,
+        surveyData,
         loopClosures,
         gpsOrigin: this.gpsOrigin,
         showDepthGradient: this.showDepthGradient,
@@ -3453,8 +3466,7 @@ export default class SurveyLayer {
       console.error('[SurveyLayer] feature worker failed, falling back to inline build:', e);
       // Inline fallback so the survey still renders.
       features = buildSurveyFeatures(
-        sections,
-        stations,
+        surveyData,
         loopClosures,
         this.gpsOrigin,
         this.showDepthGradient,
@@ -3530,9 +3542,13 @@ export default class SurveyLayer {
       : zoom >= SurveyLayer.LABEL_BUILD_ZOOM;
     this.labelsCurrentlyBuilt = buildLabels;
 
+    // Synchronous (drag-commit) path: convert to SurveyData inline
+    // before building. See the async counterpart for the rationale.
+    const surveyData = useProjectStore.getState().surveyData
+      ?? surveyDataFromLegacy(sections, stations);
+
     const features = buildSurveyFeatures(
-      sections,
-      stations,
+      surveyData,
       loopClosures,
       this.gpsOrigin,
       this.showDepthGradient,

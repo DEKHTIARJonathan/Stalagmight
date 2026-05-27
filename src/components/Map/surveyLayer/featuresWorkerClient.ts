@@ -19,14 +19,17 @@ import {
   type DepthRange,
   type SurveyFeatureSets,
 } from './features';
-import type { LoopClosure, Section, Station } from '../../../types/project';
+import type { LoopClosure } from '../../../types/project';
+import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type { MapThemeColors } from '../../../utils/themeColors';
 import { recordPerfTiming } from '../../../utils/memoryProbe';
 
 interface BuildArgs {
-  sections: Section[];
-  stations: Station[];
+  /** Struct-of-Arrays survey data. Posted to the worker via structured
+   *  clone; the underlying typed arrays clone efficiently as a single
+   *  large block per array (vs the legacy ~75k JS objects). */
+  surveyData: SurveyData;
   loopClosures: LoopClosure[] | undefined;
   gpsOrigin: GpsOrigin | null;
   showDepthGradient: boolean;
@@ -96,8 +99,7 @@ export function buildSurveyFeaturesAsync(args: BuildArgs): Promise<SurveyFeature
     // site uniform; the (small) microtask shift is harmless.
     const t0 = performance.now();
     const features = buildSurveyFeatures(
-      args.sections,
-      args.stations,
+      args.surveyData,
       args.loopClosures,
       args.gpsOrigin,
       args.showDepthGradient,

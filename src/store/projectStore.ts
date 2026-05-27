@@ -24,6 +24,8 @@ import type {
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
+import type { SurveyData } from '../types/survey-data';
+import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -136,6 +138,14 @@ interface ProjectStore {
   // State
   project: Project | null;
   stations: Station[];
+  /**
+   * Struct-of-Arrays representation of the loaded project's bulk
+   * data (shots + stations). Lives alongside `project` and `stations`
+   * during the Phase-A migration; once consumers are migrated this
+   * becomes the primary representation and `project.sections[].shots`
+   * + `stations` go away. See docs/plans/memory-soa-and-mvt.md.
+   */
+  surveyData: SurveyData | null;
   stats: ProjectStats | null;
   frozenShots: FrozenShotRef[];
   warnings: ProjectWarning[];
@@ -316,6 +326,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Initial state
   project: null,
   stations: [],
+  surveyData: null,
   stats: null,
   frozenShots: [],
   warnings: [],
@@ -463,6 +474,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       set({
         project: result.project,
         stations: result.stations,
+        surveyData: result.surveyData,
         stats: result.stats,
         warnings: result.warnings,
         isDirty: false,
@@ -542,10 +554,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Set backend loadingId from result for event correlation
       get().setLoadingProgress({ loadingId: result.loadingId });
 
-      // Apply project state from result
+      // Apply project state from result. Fresh project has no shots /
+      // stations yet, so `surveyData` starts as an empty SoA.
       set({
         project: result.project,
         stations: [],
+        surveyData: emptySurveyData(),
         stats: null,
         frozenShots: [],
         warnings: [],
@@ -661,7 +675,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], stats: null, frozenShots: [], isDirty: false });
+        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false });
       }
       return result;
     } finally {
@@ -683,9 +697,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       });
       console.log('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
       if (state) {
+        // Build the SoA layout alongside the legacy shapes for the
+        // duration of the Phase-A migration. After Phase A.6 this is
+        // the only shape stored; project loses .sections[i].shots.
+        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
         set({
           project: state.project,
           stations: state.stations,
+          surveyData,
           stats: state.stats,
           frozenShots: state.frozen_shots,
         });

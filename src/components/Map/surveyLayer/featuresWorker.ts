@@ -14,13 +14,13 @@ import {
   type DepthRange,
   type SurveyFeatureSets,
 } from './features';
-import type { LoopClosure, Section, Station } from '../../../types/project';
+import type { LoopClosure } from '../../../types/project';
+import type { SurveyData } from '../../../types/survey-data';
 import type { GpsOrigin, DecimalPrecision } from '../../../types/config';
 import type { MapThemeColors } from '../../../utils/themeColors';
 
 interface BuildArgs {
-  sections: Section[];
-  stations: Station[];
+  surveyData: SurveyData;
   loopClosures: LoopClosure[] | undefined;
   gpsOrigin: GpsOrigin | null;
   showDepthGradient: boolean;
@@ -57,8 +57,7 @@ self.onmessage = (e: MessageEvent<IncomingMessage>) => {
 
   try {
     const features = buildSurveyFeatures(
-      msg.args.sections,
-      msg.args.stations,
+      msg.args.surveyData,
       msg.args.loopClosures,
       msg.args.gpsOrigin,
       msg.args.showDepthGradient,
