@@ -909,24 +909,30 @@ impl Database {
             return Ok(());
         }
 
-        if current <= SCHEMA_VERSION {
-            self.migrate_schema()?;
-            if current < 2 {
-                self.rebuild_tables_with_foreign_keys()?;
-            }
-            if current < 3 {
-                self.migrate_undo_redo_to_blob()?;
-            }
-            if current < 4 {
-                Self::migrate_is_virtual_to_is_reference(&self.conn)?;
-            }
-            self.set_user_version(SCHEMA_VERSION)?;
-            // Keep project-level schema_version in sync with PRAGMA user_version.
-            let _ = self.conn.execute(
-                "UPDATE project SET schema_version = ?1",
-                params![SCHEMA_VERSION],
-            );
+        // Fast path: already current.  migrate_schema() scans pragma
+        // table_info() for every conditional column add on every open,
+        // which previously cost ~10 ms per project load even when no
+        // migration was needed.
+        if current == SCHEMA_VERSION {
+            return Ok(());
         }
+
+        self.migrate_schema()?;
+        if current < 2 {
+            self.rebuild_tables_with_foreign_keys()?;
+        }
+        if current < 3 {
+            self.migrate_undo_redo_to_blob()?;
+        }
+        if current < 4 {
+            Self::migrate_is_virtual_to_is_reference(&self.conn)?;
+        }
+        self.set_user_version(SCHEMA_VERSION)?;
+        // Keep project-level schema_version in sync with PRAGMA user_version.
+        let _ = self.conn.execute(
+            "UPDATE project SET schema_version = ?1",
+            params![SCHEMA_VERSION],
+        );
 
         Ok(())
     }
