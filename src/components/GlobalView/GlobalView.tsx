@@ -15,6 +15,7 @@ import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import type { ProjectMetadata } from '../../types/project';
 import { formatNumber } from '../../i18n/format';
+import { debugLog } from '../../utils/debugLog';
 
 /** Map phase enum values to human-readable labels */
 function formatPhaseLabel(
@@ -62,11 +63,24 @@ interface ContextMenuState {
 }
 
 export default function GlobalView() {
+  // [perf] Mark GlobalView mount + first effect so we can see when the
+  // post-back UI is actually live (paired with [perf:close]).
+  const _mountTimeRef = useRef(performance.now());
+  useEffect(() => {
+    const ms = performance.now() - _mountTimeRef.current;
+    debugLog(`[perf:globalview-mount] firstEffect=${ms.toFixed(0)}ms after construction`);
+    void import('../../utils/memoryProbe').then(({ recordPerfTiming }) => {
+      recordPerfTiming('GlobalView mount', ms);
+    });
+  }, []);
+
   const {
     recentProjects,
     handleNewProject,
     handleOpenProject,
     handleImportDmp,
+    handleImportTml,
+    handleImportCompass,
   } = useProject();
 
   const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects } = useProjectStore();
@@ -338,6 +352,12 @@ export default function GlobalView() {
         <div className="flex items-center gap-3">
           <Button onClick={() => handleImportDmp()} data-testid="global-import-dmp-button">
             {t('globalView.actions.importDmp')}
+          </Button>
+          <Button onClick={() => handleImportTml()} data-testid="global-import-tml-button">
+            {t('globalView.actions.importTml')}
+          </Button>
+          <Button onClick={() => handleImportCompass()} data-testid="global-import-compass-button">
+            {t('globalView.actions.importCompass')}
           </Button>
           <Button data-testid="new-project-button" onClick={() => handleNewProject()}>
             {t('globalView.actions.newProject')}

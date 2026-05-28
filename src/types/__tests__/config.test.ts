@@ -230,6 +230,7 @@ describe('Config type safety', () => {
           show_hitboxes: true,
           log_hit_detection: true,
         },
+        memory_probe: false,
       },
     };
 

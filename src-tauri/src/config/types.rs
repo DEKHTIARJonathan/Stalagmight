@@ -267,6 +267,12 @@ fn default_point_zoom() -> u8 {
 pub struct DebugConfig {
     #[serde(default)]
     pub map: MapDebugConfig,
+    /// Show the on-screen memory probe overlay (Ctrl+Shift+M toggles).
+    /// Polls /proc for backend + WebKit child RSS and shows in-process
+    /// counters for the JS heap retention sinks (geometryData, MapLibre
+    /// feature counts, etc).
+    #[serde(default)]
+    pub memory_probe: bool,
 }
 
 /// Map-specific debug options

@@ -330,4 +330,14 @@ export const EVENT_NAMES: readonly string[] = [
   'dialog-cancel.delete-shot-choice',
   'dwell.dialog.delete-shot-choice',
   'action.select-add.section',
+  // New IPC commands added since v2 baseline.  Append-only — keep in
+  // strict lockstep with src-tauri/src/telemetry/registry.rs:EVENT_NAMES.
+  'command.load_project_full_binary',
+  'command.get_memory_stats',
+  'command.parse_compass',
+  'command.execute_compass_import',
+  // compass-import dialog (action/cancel/dwell trio).
+  'action.dialog.compass-import',
+  'dialog-cancel.compass-import',
+  'dwell.dialog.compass-import',
 ];

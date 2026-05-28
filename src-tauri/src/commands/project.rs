@@ -162,23 +162,73 @@ pub async fn load_project_full(
     app_handle: tauri::AppHandle,
     path: PathBuf,
 ) -> Result<LoadProjectFullResult, LoadError> {
-    // Use AppHandle to access state inside spawn_blocking
-    // (State<'_, T> cannot be moved due to lifetime constraints)
+    // [perf-debug] Log when the Rust handler is about to return so we can
+    // subtract that from the JS-side IPC wait time and isolate IPC
+    // transport + JS JSON.parse. The "load_project_full handler returning"
+    // line lets us compute: js_total - rust_total ≈ serialize + parse.
+    let t_start = std::time::Instant::now();
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
             state.do_load_project_full(path)
         })
         .await;
+    let handler_elapsed = t_start.elapsed();
 
-    match result {
+    let mapped = match result {
         Ok(Ok(load_result)) => Ok(load_result),
         Ok(Err(load_error)) => Err(load_error),
-        Err(join_error) => {
-            // Task panicked or was cancelled
-            Err(LoadError::internal(join_error.to_string()))
-        }
-    }
+        Err(join_error) => Err(LoadError::internal(join_error.to_string())),
+    };
+    tracing::debug!(
+        handler_ms = handler_elapsed.as_millis() as u64,
+        ok = mapped.is_ok(),
+        "load_project_full handler returning (serialize+transport+JSON.parse begins now)"
+    );
+    mapped
+}
+
+/// Binary variant of `load_project_full` that returns a msgpack-encoded
+/// payload with shot/station bulk data packed into typed-array byte buffers.
+///
+/// Replaces ~25 MB of JSON with ~7 MB of binary on a 75k-shot project, and
+/// removes the synchronous `serde_json::to_string` + `JSON.parse` cost from
+/// both threads. See [`crate::core::load_binary`] for the wire format. The
+/// JSON variant is kept for back-compat and tests; new callers should use
+/// this one.
+#[tauri::command]
+pub async fn load_project_full_binary(
+    app_handle: tauri::AppHandle,
+    path: PathBuf,
+) -> Result<tauri::ipc::Response, LoadError> {
+    let t_start = std::time::Instant::now();
+    let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = app_handle.state::<AppState>();
+            state.do_load_project_full(path)
+        })
+        .await;
+    let handler_elapsed = t_start.elapsed();
+
+    let load_result = match result {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return Err(e),
+        Err(join_err) => return Err(LoadError::internal(join_err.to_string())),
+    };
+
+    let encode_start = std::time::Instant::now();
+    let bytes = crate::core::load_binary::encode(load_result)
+        .map_err(|e| LoadError::internal(format!("encode binary: {e}")))?;
+    let encode_elapsed = encode_start.elapsed();
+
+    tracing::debug!(
+        handler_ms = handler_elapsed.as_millis() as u64,
+        encode_ms = encode_elapsed.as_millis() as u64,
+        bytes = bytes.len(),
+        "load_project_full_binary returning"
+    );
+
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Cancel any active loading operation.

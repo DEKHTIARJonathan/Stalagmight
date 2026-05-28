@@ -5,7 +5,7 @@ import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { ensureExtension, projectSaveFilters, saveDialog, PROJECT_EXTENSION } from '../../utils/fileDialogs';
-import type { DmpFile, TmlFile, GpxFile } from '../../types/commands';
+import type { DmpFile, TmlFile, GpxFile, CompassFile } from '../../types/commands';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 /**
@@ -22,11 +22,13 @@ export default function NewProjectForImportDialog() {
   const dmpFile = dialogData.dmpFile as DmpFile | undefined;
   const tmlFile = dialogData.tmlFile as TmlFile | undefined;
   const gpxFile = dialogData.gpxFile as GpxFile | undefined;
+  const compassFile = dialogData.compassFile as CompassFile | undefined;
   const filePath = dialogData.filePath as string | undefined;
   const importType = dialogData.importType as string | undefined;
   const defaultName = (dialogData.defaultName as string) || '';
   const isTml = importType === 'tml' || !!tmlFile;
   const isGpx = importType === 'gpx' || !!gpxFile;
+  const isCompass = importType === 'compass' || !!compassFile;
 
   const [name, setName] = useState(defaultName);
   const [projectLocation, setProjectLocation] = useState('');
@@ -118,7 +120,7 @@ export default function NewProjectForImportDialog() {
       return;
     }
 
-    if (!filePath || (!dmpFile && !tmlFile && !gpxFile)) {
+    if (!filePath || (!dmpFile && !tmlFile && !gpxFile && !compassFile)) {
       setError('Import file data is missing');
       return;
     }
@@ -144,6 +146,10 @@ export default function NewProjectForImportDialog() {
           // Open TML import dialog
           setSource('dialog');
           openDialog('tml-import', { tmlFile, filePath });
+        } else if (isCompass && compassFile) {
+          // Open Compass import dialog
+          setSource('dialog');
+          openDialog('compass-import', { compassFile, filePath });
         } else if (dmpFile) {
           // Open DMP selection dialog
           setSource('dialog');
@@ -212,6 +218,16 @@ export default function NewProjectForImportDialog() {
               {gpxFile.tracks.length} tracks •{' '}
               {gpxFile.routes.length} routes
               {gpxFile.name ? ` • ${gpxFile.name}` : ''}
+            </div>
+          </div>
+        )}
+        {compassFile && (
+          <div className="p-3 bg-accent-10 border border-accent-20 rounded text-sm">
+            <div className="font-medium mb-1">Importing from Compass survey:</div>
+            <div className="text-text-secondary">
+              {compassFile.survey_count} surveys •{' '}
+              {compassFile.shot_count} shots
+              {compassFile.cave_name ? ` • ${compassFile.cave_name}` : ''}
             </div>
           </div>
         )}

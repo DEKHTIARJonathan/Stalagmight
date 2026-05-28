@@ -3,6 +3,7 @@ import type maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../types/survey';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
+import { recordFeatureCount, clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
 import { hasLiveStyle } from '../Map/mapUtils';
 import i18n from '../../i18n';
 import { formatFixed, formatNumber } from '../../i18n/format';
@@ -137,8 +138,13 @@ export default class GlobalSurveyLayer {
   // Current GeoJSON tolerance (for simplification)
   private currentTolerance = 0.5;
 
-  // Cached GeoJSON data for tolerance updates
-  private cachedFeatures: GeoJSON.Feature[] = [];
+  // Cached system input for tolerance updates. We hold the small input
+  // (references back into globalViewStore.geometryData) rather than the
+  // materialized FeatureCollection because MapLibre already owns a copy
+  // of the latter — caching features here meant 2× main-thread storage
+  // for the same data. Tolerance changes rebuild features from this
+  // cached input on demand, which is one buildFeatures pass per change.
+  private cachedSystems: SystemGeometry[] = [];
 
   // Tooltip element
   private tooltip: HTMLDivElement | null = null;
@@ -548,17 +554,46 @@ export default class GlobalSurveyLayer {
    * Update the layer with new system geometry data.
    */
   update(systems: SystemGeometry[]): void {
-    // Build all features in a single array
-    const features: GeoJSON.Feature[] = [];
+    // Cache the small input; build features fresh for MapLibre. We deliberately
+    // do NOT keep our own copy of `features` — MapLibre's source owns the
+    // canonical copy and the worker holds a structured clone of it. Holding a
+    // third copy here would double the per-shot retention on dense maps.
+    this.cachedSystems = systems;
 
     // Clear and rebuild system colors
     this.systemColors.clear();
-
     for (const system of systems) {
-      const color = generateSystemColor(system.metadata.file_path);
-      this.systemColors.set(system.metadata.file_path, color);
+      this.systemColors.set(system.metadata.file_path, generateSystemColor(system.metadata.file_path));
+    }
 
-      // Build shot features
+    const features = this.buildFeatures(systems);
+
+    // Update the single source with all features
+    const source = this.map.getSource(this.sourceId);
+    if (source && 'setData' in source) {
+      (source as maplibregl.GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features,
+      });
+      recordFeatureCount('global-survey', features.length);
+    }
+
+    // Update color expressions using match on systemId
+    this.updateColorExpressions();
+
+    // Reapply hover/selection styling in case selection existed before data loaded
+    this.updateVisualState();
+  }
+
+  /**
+   * Materialize MapLibre Features from the cached SystemGeometry list. Same
+   * shape as before — kept as a pure function of `systems` so tolerance
+   * changes (which reset the source) can rebuild without us holding a
+   * second copy of the resulting array.
+   */
+  private buildFeatures(systems: SystemGeometry[]): GeoJSON.Feature[] {
+    const features: GeoJSON.Feature[] = [];
+    for (const system of systems) {
       for (const shot of system.geometry.shots) {
         features.push({
           type: 'Feature',
@@ -577,7 +612,6 @@ export default class GlobalSurveyLayer {
         });
       }
 
-      // Extract and build station features
       const stations = extractStations(system.geometry.shots);
       for (const [lng, lat, allShotsReference] of stations) {
         features.push({
@@ -597,24 +631,7 @@ export default class GlobalSurveyLayer {
         });
       }
     }
-
-    // Cache features for tolerance updates
-    this.cachedFeatures = features;
-
-    // Update the single source with all features
-    const source = this.map.getSource(this.sourceId);
-    if (source && 'setData' in source) {
-      (source as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features,
-      });
-    }
-
-    // Update color expressions using match on systemId
-    this.updateColorExpressions();
-
-    // Reapply hover/selection styling in case selection existed before data loaded
-    this.updateVisualState();
+    return features;
   }
 
   /**
@@ -795,15 +812,19 @@ export default class GlobalSurveyLayer {
         this.map.removeSource(this.sourceId);
       }
 
+      // Rebuild features from cached input — see comment on `cachedSystems`.
+      // For an empty cache this yields an empty array; addSource accepts that.
+      const features = this.buildFeatures(this.cachedSystems);
       this.map.addSource(this.sourceId, {
         type: 'geojson',
         data: {
           type: 'FeatureCollection',
-          features: this.cachedFeatures, // May be empty, that's OK
+          features,
         },
         tolerance,
         generateId: true,
       });
+      recordFeatureCount('global-survey', features.length);
 
       // Re-add layers
       this.initializeLayers();
@@ -1095,6 +1116,9 @@ export default class GlobalSurveyLayer {
    * Destroy the layer, removing all sources and event handlers.
    */
   destroy(): void {
+    // Zero memory-probe count for our source so the panel reflects teardown.
+    clearFeatureCountsForPrefix('global-survey');
+
     // Clean up touch long-press timer
     if (this.touchLongPressTimer) {
       clearTimeout(this.touchLongPressTimer);

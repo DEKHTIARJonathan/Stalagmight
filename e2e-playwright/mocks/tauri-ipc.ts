@@ -1,4 +1,32 @@
 import { Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve as pathResolve } from 'node:path';
+import { createRequire } from 'node:module';
+
+// ----------------------------------------------------------------------------
+// msgpack UMD bundle loader.
+//
+// The production frontend hits `load_project_full_binary` and expects a
+// msgpack-encoded `BinaryEnvelope` (see src/utils/loadProjectBinary.ts).
+// The mock runs inside the browser via `addInitScript` and can't import
+// from npm, so before the mock attaches we inject the @msgpack/msgpack
+// UMD bundle, which exposes `window.MessagePack.encode`.  The mock
+// handler for `load_project_full_binary` builds the same fixture as
+// `load_project_full`, repacks it into the binary wire format, and
+// encodes it — exercising the real decoder end-to-end with no
+// production-code fallbacks.
+// ----------------------------------------------------------------------------
+let cachedMsgpackUmd: string | null = null;
+function loadMsgpackUmd(): string {
+  if (cachedMsgpackUmd !== null) return cachedMsgpackUmd;
+  const req = createRequire(import.meta.url);
+  const cjsPath = req.resolve('@msgpack/msgpack');
+  // dist.cjs/index.cjs → ../dist.umd/msgpack.min.js
+  const pkgRoot = dirname(dirname(cjsPath));
+  const umdPath = pathResolve(pkgRoot, 'dist.umd/msgpack.min.js');
+  cachedMsgpackUmd = readFileSync(umdPath, 'utf8');
+  return cachedMsgpackUmd;
+}
 
 /**
  * Mock data types matching the Stalagmight Rust backend models.
@@ -70,6 +98,11 @@ function createMockSection(overrides?: Partial<MockSection>): MockSection {
  * This intercepts all Tauri API calls and returns mock data.
  */
 export async function setupTauriMocks(page: Page): Promise<void> {
+  // Inject the msgpack UMD bundle first so the load_project_full_binary
+  // mock can encode its result the same way the real backend does.
+  // Exposes `window.MessagePack` synchronously before any app JS runs.
+  await page.addInitScript({ content: loadMsgpackUmd() });
+
   await page.addInitScript(() => {
     // Event listener registry for mock Tauri events (plugin:event|listen/emit/unlisten)
     // This is defined early so it can be used by both mockHandler and __tauriEventMock
@@ -701,6 +734,202 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 gridSpacing: 10,
               },
             };
+          }
+
+          case 'load_project_full_binary': {
+            // Mirror the binary IPC wire format that the Rust backend
+            // emits from `src-tauri/src/core/load_binary.rs::encode`:
+            // build the same JSON fixture the legacy `load_project_full`
+            // case produces, pack shots / stations into Uint8Array byte
+            // buffers, msgpack-encode the BinaryEnvelope, and return
+            // bytes as a number array (the frontend's `Array.isArray`
+            // fallback in loadProjectBinary.ts converts that to a real
+            // Uint8Array). The msgpack UMD was injected by the wrapping
+            // setupTauriMocks before this script ran, so
+            // `window.MessagePack.encode` is available synchronously.
+            const jsonResult = mockHandler('load_project_full', args) as {
+              loadingId: number;
+              project: {
+                id?: number; name?: string; location?: string | null;
+                created_at?: string; modified_at?: string; file_path?: string | null;
+                next_section_id?: number; next_closure_id?: number;
+                sections: Array<{
+                  id: number; name?: string | null; surveyor?: string | null;
+                  date?: string | null; color?: string; direction?: string; quality?: number;
+                  shots?: Array<{
+                    id: number; azimuth_in?: number; azimuth_out?: number;
+                    length?: number; depth_in?: number; depth_out?: number;
+                    pitch_in?: number | null; pitch_out?: number | null;
+                    left?: number | null; right?: number | null;
+                    up?: number | null; down?: number | null;
+                    temperature?: number | null;
+                    comment?: string | null;
+                    is_reference?: boolean;
+                    marker_index?: number | null;
+                  }>;
+                }>;
+                station_merges?: unknown[]; zero_datums?: unknown[];
+                loop_closures?: unknown[]; section_offsets?: Record<string, [number, number]>;
+              };
+              stations: Array<{
+                station_ref: { section_id: number; station_index: number };
+                coordinates?: { x: number; y: number; z: number };
+                is_zero_datum?: boolean;
+                gps_coordinates?: unknown | null;
+                merged_with?: unknown[];
+                closures_with?: unknown[];
+                comment?: string | null;
+              }>;
+              stats: Record<string, unknown>;
+              warnings: unknown[];
+              displaySettings: Record<string, unknown>;
+            };
+
+            const totalShots = jsonResult.project.sections.reduce(
+              (n, s) => n + (s.shots?.length ?? 0),
+              0,
+            );
+            const SHOT_FLOAT_STRIDE = 48;
+            const SHOT_UINT_STRIDE = 12;
+            const shotsFloats = new Uint8Array(totalShots * SHOT_FLOAT_STRIDE);
+            const shotsUints = new Uint8Array(totalShots * SHOT_UINT_STRIDE);
+            const shotsFlags = new Uint8Array(totalShots);
+            const shotsFloatsView = new DataView(shotsFloats.buffer);
+            const shotsUintsView = new DataView(shotsUints.buffer);
+            const sectionsMeta: Array<Record<string, unknown>> = [];
+            const shotComments: Array<[number, string]> = [];
+            let shotCursor = 0;
+
+            for (const section of jsonResult.project.sections) {
+              const shot_offset = shotCursor;
+              const shot_count = section.shots?.length ?? 0;
+              for (const shot of section.shots ?? []) {
+                const fOff = shotCursor * SHOT_FLOAT_STRIDE;
+                const nullToNaN = (v: number | null | undefined): number =>
+                  v === null || v === undefined ? NaN : v;
+                shotsFloatsView.setFloat32(fOff + 0,  shot.azimuth_in ?? 0, true);
+                shotsFloatsView.setFloat32(fOff + 4,  shot.azimuth_out ?? 0, true);
+                shotsFloatsView.setFloat32(fOff + 8,  shot.length ?? 0, true);
+                shotsFloatsView.setFloat32(fOff + 12, shot.depth_in ?? 0, true);
+                shotsFloatsView.setFloat32(fOff + 16, shot.depth_out ?? 0, true);
+                shotsFloatsView.setFloat32(fOff + 20, nullToNaN(shot.pitch_in), true);
+                shotsFloatsView.setFloat32(fOff + 24, nullToNaN(shot.pitch_out), true);
+                shotsFloatsView.setFloat32(fOff + 28, nullToNaN(shot.left), true);
+                shotsFloatsView.setFloat32(fOff + 32, nullToNaN(shot.right), true);
+                shotsFloatsView.setFloat32(fOff + 36, nullToNaN(shot.up), true);
+                shotsFloatsView.setFloat32(fOff + 40, nullToNaN(shot.down), true);
+                shotsFloatsView.setFloat32(fOff + 44, nullToNaN(shot.temperature), true);
+                const uOff = shotCursor * SHOT_UINT_STRIDE;
+                shotsUintsView.setUint32(uOff + 0, section.id >>> 0, true);
+                shotsUintsView.setUint32(uOff + 4, shot.id >>> 0, true);
+                shotsUintsView.setUint32(
+                  uOff + 8,
+                  shot.marker_index === null || shot.marker_index === undefined
+                    ? 0xffffffff
+                    : shot.marker_index >>> 0,
+                  true,
+                );
+                shotsFlags[shotCursor] = shot.is_reference ? 1 : 0;
+                if (shot.comment) shotComments.push([shotCursor, shot.comment]);
+                shotCursor++;
+              }
+              sectionsMeta.push({
+                id: section.id,
+                name: section.name ?? null,
+                surveyor: section.surveyor ?? null,
+                date: section.date ?? null,
+                color: section.color ?? '#888888',
+                direction: section.direction ?? 'Forward',
+                quality: section.quality ?? 1.0,
+                shot_offset,
+                shot_count,
+                next_shot_id: shot_offset + shot_count,
+              });
+            }
+
+            const STATION_FLOAT_STRIDE = 24;
+            const STATION_UINT_STRIDE = 8;
+            const totalStations = jsonResult.stations.length;
+            const stationsFloats = new Uint8Array(totalStations * STATION_FLOAT_STRIDE);
+            const stationsUints = new Uint8Array(totalStations * STATION_UINT_STRIDE);
+            const stationsFlags = new Uint8Array(totalStations);
+            const stationsFloatsView = new DataView(stationsFloats.buffer);
+            const stationsUintsView = new DataView(stationsUints.buffer);
+            const stationGps: Array<[number, unknown]> = [];
+            const stationMergedWith: Array<[number, unknown[]]> = [];
+            const stationClosuresWith: Array<[number, unknown[]]> = [];
+            const stationCommentsArr: Array<[number, string]> = [];
+
+            jsonResult.stations.forEach((station, idx) => {
+              const fOff = idx * STATION_FLOAT_STRIDE;
+              stationsFloatsView.setFloat64(fOff + 0,  station.coordinates?.x ?? 0, true);
+              stationsFloatsView.setFloat64(fOff + 8,  station.coordinates?.y ?? 0, true);
+              stationsFloatsView.setFloat64(fOff + 16, station.coordinates?.z ?? 0, true);
+              const uOff = idx * STATION_UINT_STRIDE;
+              stationsUintsView.setUint32(uOff + 0, station.station_ref.section_id >>> 0, true);
+              stationsUintsView.setUint32(uOff + 4, station.station_ref.station_index >>> 0, true);
+              stationsFlags[idx] = station.is_zero_datum ? 1 : 0;
+              if (station.gps_coordinates) stationGps.push([idx, station.gps_coordinates]);
+              if (station.merged_with?.length) stationMergedWith.push([idx, station.merged_with]);
+              if (station.closures_with?.length) stationClosuresWith.push([idx, station.closures_with]);
+              if (station.comment) stationCommentsArr.push([idx, station.comment]);
+            });
+
+            const envelope = {
+              version: 1,
+              loading_id: jsonResult.loadingId,
+              project_header: {
+                name: jsonResult.project.name ?? 'Test Project',
+                location: jsonResult.project.location ?? null,
+                created_at: jsonResult.project.created_at ?? new Date().toISOString(),
+                modified_at: jsonResult.project.modified_at ?? new Date().toISOString(),
+                file_path: jsonResult.project.file_path ?? null,
+                next_section_id: jsonResult.project.next_section_id
+                  ?? (sectionsMeta.length + 1),
+                next_closure_id: jsonResult.project.next_closure_id ?? 1,
+                sections: sectionsMeta,
+                station_merges: jsonResult.project.station_merges ?? [],
+                zero_datums: jsonResult.project.zero_datums ?? [],
+                loop_closures: jsonResult.project.loop_closures ?? [],
+                section_offsets: Object.entries(jsonResult.project.section_offsets ?? {})
+                  .map(([k, v]) => [Number(k), v]),
+                station_offsets: [],
+                station_comments_map: [],
+                imported_file_hashes: [],
+                imported_section_hashes: [],
+              },
+              shot_count: totalShots,
+              shots_floats: shotsFloats,
+              shots_uints: shotsUints,
+              shots_flags: shotsFlags,
+              shot_comments: shotComments,
+              station_count: totalStations,
+              stations_floats: stationsFloats,
+              stations_uints: stationsUints,
+              stations_flags: stationsFlags,
+              station_gps: stationGps,
+              station_merged_with: stationMergedWith,
+              station_closures_with: stationClosuresWith,
+              station_comments: stationCommentsArr,
+              stats: jsonResult.stats,
+              warnings: jsonResult.warnings,
+              display_settings: jsonResult.displaySettings,
+              frozen_shots: [],
+            };
+
+            const MessagePack = (window as unknown as {
+              MessagePack?: { encode: (v: unknown) => Uint8Array };
+            }).MessagePack;
+            if (!MessagePack) {
+              throw new Error(
+                'load_project_full_binary mock: window.MessagePack missing — setupTauriMocks must inject the msgpack UMD',
+              );
+            }
+            const bytes = MessagePack.encode(envelope);
+            // Return as plain number[] so the frontend's
+            // `Array.isArray` fallback converts to Uint8Array without
+            // any extra cross-realm dance.
+            return Array.from(bytes);
           }
 
           case 'load_project':

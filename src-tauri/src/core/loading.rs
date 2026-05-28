@@ -224,6 +224,11 @@ pub enum LoadingPhase {
     ExportGenerating,
     ExportWriting,
     ExportComplete,
+    // Import phases (4 total) — used by TML and Compass survey-file imports
+    ImportParsing,
+    ImportConverting,
+    ImportApplyingChanges,
+    ImportFinalizing,
 }
 
 impl LoadingPhase {
@@ -245,6 +250,10 @@ impl LoadingPhase {
             Self::ExportGenerating => "Generating...",
             Self::ExportWriting => "Writing file...",
             Self::ExportComplete => "Export complete",
+            Self::ImportParsing => "Reading survey file...",
+            Self::ImportConverting => "Converting to project model...",
+            Self::ImportApplyingChanges => "Applying sections and merges...",
+            Self::ImportFinalizing => "Finalizing import...",
         }
     }
 
@@ -271,6 +280,12 @@ impl LoadingPhase {
             Self::ExportGenerating => 60.0,
             Self::ExportWriting => 20.0,
             Self::ExportComplete => 10.0,
+            // Import phases sum to 100. Applying dominates because section
+            // creation + station merges scale with N.
+            Self::ImportParsing => 15.0,
+            Self::ImportConverting => 20.0,
+            Self::ImportApplyingChanges => 55.0,
+            Self::ImportFinalizing => 10.0,
         }
     }
 }
@@ -396,6 +411,24 @@ impl ProgressEmitter {
         Self::new(handle, weights, cancelled)
     }
 
+    /// Create a new emitter for survey-file import operations (TML, Compass)
+    /// with 4 phases summing to 100%. Import doesn't support cancellation today,
+    /// so this uses a dummy token.
+    pub fn new_for_import(handle: AppHandle) -> Self {
+        let weights = vec![
+            (LoadingPhase::ImportParsing, 15.0),
+            (LoadingPhase::ImportConverting, 20.0),
+            (LoadingPhase::ImportApplyingChanges, 55.0),
+            (LoadingPhase::ImportFinalizing, 10.0),
+        ];
+        debug_assert!(
+            (weights.iter().map(|(_, w)| w).sum::<f32>() - 100.0).abs() < 0.01,
+            "Import phase weights must sum to 100"
+        );
+        let dummy_cancelled = Arc::new(AtomicBool::new(false));
+        Self::new(handle, weights, dummy_cancelled)
+    }
+
     /// Create a new emitter for export operations (4 phases summing to 100%).
     ///
     /// Export operations don't support cancellation, so this uses a dummy token.
@@ -459,12 +492,21 @@ impl ProgressEmitter {
 
     /// Update progress within a phase with throttling.
     /// Use 0-indexed current (0..total-1) or 1-indexed (1..total) - both work.
+    ///
+    /// Throttle: always emit at the start (current=0/1) and end (current=total)
+    /// of a phase, otherwise emit only when BOTH (a) at least `THROTTLE_ITEMS`
+    /// items have advanced since the last emit AND (b) at least `THROTTLE_MS`
+    /// have elapsed. The previous implementation OR'd the conditions, which
+    /// for fast inner loops (e.g. computing 5k+ stations in ~1 s) emitted
+    /// ~500 events because the items rule kept tripping every couple of ms.
+    /// Each event triggers a full Zustand + React re-render on the JS side,
+    /// so a fast Rust loop translated into a ~5 s freeze processing the
+    /// event backlog. AND-gating caps emission at ~20/s in practice.
     pub fn update_phase(&mut self, phase: LoadingPhase, current: u32, total: u32) {
-        let should_emit = current == 0
-            || current == 1
-            || current == total
-            || current >= self.last_item + THROTTLE_ITEMS
-            || self.last_emit.elapsed() >= Duration::from_millis(THROTTLE_MS);
+        let at_boundary = current == 0 || current == 1 || current == total;
+        let enough_items = current >= self.last_item + THROTTLE_ITEMS;
+        let enough_time = self.last_emit.elapsed() >= Duration::from_millis(THROTTLE_MS);
+        let should_emit = at_boundary || (enough_items && enough_time);
 
         if should_emit {
             self.last_item = current;

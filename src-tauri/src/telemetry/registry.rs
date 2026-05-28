@@ -331,6 +331,18 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.delete-shot-choice",
     "dwell.dialog.delete-shot-choice",
     "action.select-add.section",
+    // New IPC commands added since v2 baseline.  Append-only — the
+    // first V2_FROZEN_EVENTS entries above are content-hashed in
+    // `registry_id_stability` and their positions baked into older
+    // clients' payloads.
+    "command.load_project_full_binary",
+    "command.get_memory_stats",
+    "command.parse_compass",
+    "command.execute_compass_import",
+    // compass-import dialog (action/cancel/dwell trio).
+    "action.dialog.compass-import",
+    "dialog-cancel.compass-import",
+    "dwell.dialog.compass-import",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -453,7 +465,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 291);
+        assert_eq!(EVENT_NAMES.len(), 298);
     }
 
     #[test]

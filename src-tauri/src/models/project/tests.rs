@@ -5738,3 +5738,76 @@ fn lsq_spur_shots_are_not_modified() {
         pos_c0.x, pos_c0.y, pos_a50.x, pos_a50.y,
     );
 }
+
+#[test]
+fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
+    // Reproduce the half-populated-cache trap Codex round-4 flagged:
+    // `delete_section` clears `merge_adjacency_cache` while keeping
+    // surviving merges in `station_merges`, leaving the cache empty
+    // and the merges intact.  Before the fix, the next
+    // `record_station_merge` only inserted ITS edge into the cache —
+    // and since `get_merged_section_ids` treats any non-empty cache as
+    // authoritative, every surviving merge from before the delete
+    // became invisible.
+    let mut project = Project::new("Cache".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let c = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let d = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+
+    // Establish two surviving merges A↔B and B↔C via the maintained
+    // helper so the cache is fully populated.
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(b, 0),
+        station_b: StationRef::new(c, 0),
+        merged_at: Utc::now(),
+    });
+    assert_eq!(project.get_merged_section_ids(a).len(), 3);
+
+    // Simulate the `delete_section` cleanup: clear the cache while
+    // keeping `station_merges` populated.  The cache invariant is now
+    // "empty but merges exist".
+    project.merge_adjacency_cache.clear();
+
+    // Now record a NEW merge (e.g. user merges D into the group).
+    // Without the rebuild-first guard this would leave the cache
+    // containing ONLY {C, D} edges; with the guard it must contain
+    // all three groups.
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(c, 0),
+        station_b: StationRef::new(d, 0),
+        merged_at: Utc::now(),
+    });
+    let merged = project.get_merged_section_ids(a);
+    assert!(
+        merged.contains(&a) && merged.contains(&b) && merged.contains(&c) && merged.contains(&d),
+        "expected the surviving A-B-C merges to still propagate after the cache was \
+         cleared + a new merge recorded; got {merged:?}"
+    );
+    assert_eq!(merged.len(), 4);
+}

@@ -12,7 +12,14 @@ impl AppState {
         self.project.lock().ok().and_then(|p| p.clone())
     }
 
-    /// Get recent projects list
+    /// Get recent projects list.
+    ///
+    /// Hot path on every navigation to the global view. Uses SQL aggregates
+    /// to compute metadata without deserializing the full project — the
+    /// previous implementation called `db.load_project()` for every entry,
+    /// which on a 75k-shot project parsed every shot row only to throw it
+    /// all away. That caused a multi-second freeze every time the user hit
+    /// "back" with a large project in the recent list.
     pub fn get_recent_projects(&self) -> Vec<ProjectMetadata> {
         let recent = match self.recent_projects.lock() {
             Ok(r) => r.clone(),
@@ -22,14 +29,21 @@ impl AppState {
         recent
             .iter()
             .filter_map(|path| {
-                // Use open_existing to avoid creating files for missing projects
-                if let Ok(db) = Database::open_existing(path) {
-                    if let Ok(mut project) = db.load_project() {
-                        project.file_path = Some(path.clone());
-                        return project.metadata();
+                // open_for_metadata skips PRAGMA quick_check and migrations —
+                // both are unnecessary when we're only reading aggregate
+                // columns and the user hasn't asked to open the project.
+                let db = Database::open_for_metadata(path).ok()?;
+                match db.load_metadata(path.clone()) {
+                    Ok(m) => Some(m),
+                    Err(e) => {
+                        tracing::debug!(
+                            path = ?path,
+                            error = %e,
+                            "Failed to read recent project metadata; skipping"
+                        );
+                        None
                     }
                 }
-                None
             })
             .collect()
     }

@@ -248,7 +248,13 @@ impl AppState {
     /// Handles poisoned mutex gracefully (recovery is more important than panic).
     pub(super) fn rollback_project(&self, snapshot: &str) {
         match serde_json::from_str::<Project>(snapshot) {
-            Ok(restored) => {
+            Ok(mut restored) => {
+                // serde skips the transient caches → empty maps after
+                // deserialization. Rebuild so subsequent lookups stay
+                // O(1) / O(group) and don't fall back to the linear
+                // scans in `get_section` and `get_merged_section_ids`.
+                restored.rebuild_section_index();
+                restored.rebuild_merge_adjacency();
                 match self.project.lock() {
                     Ok(mut proj) => {
                         *proj = Some(restored);

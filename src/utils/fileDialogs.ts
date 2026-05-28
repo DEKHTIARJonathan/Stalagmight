@@ -41,10 +41,18 @@ export function dmpOpenFilters() {
 
 export const TML_EXTENSIONS = ['tml', 'tmlu'];
 export const GPX_EXTENSION = 'gpx';
+export const COMPASS_EXTENSIONS = ['mak', 'dat'];
 
 export function tmlOpenFilters() {
   return [
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
+export function compassOpenFilters() {
+  return [
+    { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
     { name: 'All Files', extensions: ['*'] },
   ];
 }
@@ -58,9 +66,10 @@ export function gpxOpenFilters() {
 
 export function importOpenFilters() {
   return [
-    { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION] },
+    { name: 'Survey Files', extensions: [DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION, ...COMPASS_EXTENSIONS] },
     { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
     { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
+    { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
     { name: 'GPX Files', extensions: [GPX_EXTENSION] },
     { name: 'All Files', extensions: ['*'] },
   ];

@@ -11227,3 +11227,181 @@ fn test_triangle_topology_with_loop_closure() {
         (lc.station_b.station_index as usize) <= s.shots.len()
     ), "closure station_b should be valid");
 }
+
+// ============================================================================
+// Performance profiler (not a unit test — a measurement harness)
+// ============================================================================
+//
+// Run with:
+//   STALAGMIGHT_PROFILE_TML=/home/user/src/cave/data/koox_baal/synthetic/93.tml \
+//     cargo test --release --manifest-path src-tauri/Cargo.toml --lib \
+//     state::tests::profile_tml_import_full -- --nocapture --ignored
+//
+// The harness drives parse_tml → convert_tml_to_import_configs →
+// execute_import_sections end-to-end on an empty in-memory project,
+// installs a real tracing-subscriber so the timing markers added to
+// commands.rs land on stdout, and prints wall-clock for each phase.
+
+#[test]
+#[ignore = "profiling harness — run explicitly with STALAGMIGHT_PROFILE_TML=<path>"]
+fn profile_tml_import_full() {
+    use crate::models::Project;
+    use crate::parsers::tml as tml_parser;
+    use crate::persistence::Database;
+    use std::time::Instant;
+
+    let path = std::env::var("STALAGMIGHT_PROFILE_TML")
+        .expect("set STALAGMIGHT_PROFILE_TML to the .tml file path");
+
+    // Use the test framework's tracing-subscriber init guard so we
+    // don't double-init when the test runs alongside others.
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    let t0 = Instant::now();
+    let tml = tml_parser::parse_tml(std::path::Path::new(&path)).expect("parse_tml");
+    let t1 = Instant::now();
+    let (sections, closures) = tml_parser::convert_tml_to_import_configs(&tml, false, false)
+        .expect("convert");
+    let t2 = Instant::now();
+
+    let project = Project::new("profile".to_string(), None);
+    let temp = TempDir::new().unwrap();
+    let db_path = temp.path().join("profile.stalx");
+    let mut db = Database::open(&db_path).unwrap();
+    db.save_project(&project).unwrap();
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+    state.set_database_for_tests(db);
+    let t3 = Instant::now();
+
+    let total_shots: usize = sections.iter().map(|s| s.shots.len()).sum();
+
+    eprintln!("\n┌─ profile_tml_import_full ─────────────────────────────");
+    eprintln!("│ file:     {path}");
+    eprintln!("│ sections: {}", sections.len());
+    eprintln!("│ shots:    {}", total_shots);
+    eprintln!("│ closures: {}", closures.len());
+    eprintln!("├─ phase timings ───────────────────────────────────────");
+    eprintln!("│ parse_tml:                   {:>9.2} ms", (t1 - t0).as_secs_f64() * 1000.0);
+    eprintln!("│ convert_tml_to_import_configs:{:>9.2} ms", (t2 - t1).as_secs_f64() * 1000.0);
+    eprintln!("│ AppState setup (excluded):   {:>9.2} ms", (t3 - t2).as_secs_f64() * 1000.0);
+
+    let t_exec_start = Instant::now();
+    let result = state.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+    let exec_elapsed = t_exec_start.elapsed();
+    eprintln!("│ execute_import_sections:     {:>9.2} ms", exec_elapsed.as_secs_f64() * 1000.0);
+    eprintln!("├─ totals ──────────────────────────────────────────────");
+    eprintln!("│ end-to-end (parse+convert+execute): {:>9.2} ms",
+        ((t1 - t0) + (t2 - t1) + exec_elapsed).as_secs_f64() * 1000.0);
+    eprintln!("└───────────────────────────────────────────────────────");
+
+    assert!(result.success, "execute_import_sections failed: {:?}", result.error);
+}
+
+// ============================================================================
+// Performance profiler for project load (not a unit test)
+// ============================================================================
+//
+// Run with:
+//   STALAGMIGHT_PROFILE_STALX=/home/user/Documents/stalagmight/92.stalx \
+//     cargo test --release --manifest-path src-tauri/Cargo.toml --lib \
+//     state::tests::profile_stalx_load -- --nocapture --ignored
+
+#[test]
+#[ignore = "profiling harness — run explicitly with STALAGMIGHT_PROFILE_STALX=<path>"]
+fn profile_stalx_load() {
+    use crate::persistence::Database;
+    use std::time::Instant;
+
+    let path = std::env::var("STALAGMIGHT_PROFILE_STALX")
+        .expect("set STALAGMIGHT_PROFILE_STALX to the .stalx file path");
+
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    // === Phase 0: SQLite open ===
+    let t0 = Instant::now();
+    let db = Database::open_existing(std::path::Path::new(&path)).expect("open_existing");
+    let t1 = Instant::now();
+
+    // === Phase 1: load_project (the bulk query loop) ===
+    let mut project = db.load_project().expect("load_project");
+    let t2 = Instant::now();
+
+    let section_count = project.sections.len();
+    let shot_count: usize = project.sections.iter().map(|s| s.shots.len()).sum();
+
+    // === Phase 2: station coordinate computation ===
+    let stations = project.compute_station_coordinates();
+    let t3 = Instant::now();
+    let station_count = stations.len();
+
+    // === Phase 3: project stats + penetration ===
+    let mut stats = project.stats();
+    stats.penetration_distance = project.calculate_penetration(&stations);
+    let t4 = Instant::now();
+
+    // === Phase 4: warnings (via AppState because the impl is on AppState) ===
+    project.file_path = Some(PathBuf::from(&path));
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project.clone());
+    let warnings = state.compute_project_warnings(&project, Some(&db));
+    let t5 = Instant::now();
+
+    // === Phase 5: load_display_settings ===
+    let _settings = db.load_display_settings().unwrap_or_default();
+    let t6 = Instant::now();
+
+    // === Phase 6: load_undo_stack_with_timestamps ===
+    let _undo = db.load_undo_stack_with_timestamps().unwrap_or_default();
+    let _redo = db.load_redo_stack_with_timestamps().unwrap_or_default();
+    let t7 = Instant::now();
+
+    // === Phase 7: binary envelope encoding ===
+    let display_settings = crate::core::loading::DisplaySettings::from_stored(
+        &db.load_display_settings().unwrap_or_default()
+    );
+    let result = crate::core::loading::LoadProjectFullResult {
+        project,
+        stations,
+        stats,
+        warnings,
+        display_settings,
+        loading_id: 0,
+    };
+    let bin = crate::core::load_binary::encode(result).expect("encode");
+    let t8 = Instant::now();
+
+    eprintln!("\n┌─ profile_stalx_load ──────────────────────────────────");
+    eprintln!("│ file:      {path}");
+    eprintln!("│ sections:  {section_count}");
+    eprintln!("│ shots:     {shot_count}");
+    eprintln!("│ stations:  {station_count}");
+    eprintln!("│ binary envelope: {} bytes ({:.1} MB)", bin.len(), bin.len() as f64 / 1024.0 / 1024.0);
+    eprintln!("├─ phase timings ───────────────────────────────────────");
+    eprintln!("│ Database::open_existing:        {:>9.2} ms", (t1 - t0).as_secs_f64() * 1000.0);
+    eprintln!("│ db.load_project (SQLite):       {:>9.2} ms", (t2 - t1).as_secs_f64() * 1000.0);
+    eprintln!("│ compute_station_coordinates:    {:>9.2} ms", (t3 - t2).as_secs_f64() * 1000.0);
+    eprintln!("│ project.stats + penetration:    {:>9.2} ms", (t4 - t3).as_secs_f64() * 1000.0);
+    eprintln!("│ compute_project_warnings:       {:>9.2} ms", (t5 - t4).as_secs_f64() * 1000.0);
+    eprintln!("│ load_display_settings:          {:>9.2} ms", (t6 - t5).as_secs_f64() * 1000.0);
+    eprintln!("│ load_undo+redo_stacks:          {:>9.2} ms", (t7 - t6).as_secs_f64() * 1000.0);
+    eprintln!("│ binary envelope encode:         {:>9.2} ms", (t8 - t7).as_secs_f64() * 1000.0);
+    eprintln!("├─ totals ──────────────────────────────────────────────");
+    eprintln!("│ end-to-end:                     {:>9.2} ms",
+        (t8 - t0).as_secs_f64() * 1000.0);
+    eprintln!("└───────────────────────────────────────────────────────");
+}

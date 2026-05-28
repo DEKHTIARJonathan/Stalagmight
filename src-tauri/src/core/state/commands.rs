@@ -1,11 +1,73 @@
+use std::sync::Mutex;
+
 use crate::core::{Command, CommentHolder, CommandResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
-    SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
+    Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
     FEATURE_ID_STRIDE,
 };
 
 use super::AppState;
+
+/// RAII guard for [`Project::cascade_deferred`].
+///
+/// `execute_import_sections` flips the flag on so each per-section
+/// `merge_stations` skips its O(N) cascade, then runs ONE cascade at the
+/// end.  If the apply loop panics (poisoning the mutex) or any code path
+/// returns early without clearing the flag, every subsequent command
+/// silently skips its cascade and accumulates section-offset drift.  The
+/// guard's `Drop` resets the flag to `false` even through a poisoned
+/// mutex, closing that window.
+///
+/// Call [`Self::disarm`] before the final cascade so the cascade is
+/// actually allowed to run (the cascade itself early-exits when the flag
+/// is still `true`).  After `disarm`, `Drop` is a no-op.
+struct CascadeDeferGuard<'a> {
+    project: &'a Mutex<Option<Project>>,
+    armed: bool,
+}
+
+impl<'a> CascadeDeferGuard<'a> {
+    /// Set `cascade_deferred = true` on the project (if present) and
+    /// return a guard.  If the lock is already poisoned the flag is set
+    /// anyway via `into_inner` — the import is about to run regardless,
+    /// and we still want the Drop reset to fire.
+    fn arm(project: &'a Mutex<Option<Project>>) -> Self {
+        Self::set_flag(project, true);
+        Self {
+            project,
+            armed: true,
+        }
+    }
+
+    /// Clear the flag now (allowing the final cascade to run) and skip
+    /// the Drop reset.
+    fn disarm(mut self) {
+        Self::set_flag(self.project, false);
+        self.armed = false;
+    }
+
+    fn set_flag(project: &Mutex<Option<Project>>, value: bool) {
+        let mut guard = match project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(p) = guard.as_mut() {
+            p.cascade_deferred = value;
+        }
+    }
+}
+
+impl<'a> Drop for CascadeDeferGuard<'a> {
+    fn drop(&mut self) {
+        if self.armed {
+            // Reset on the panic / early-return path.  `set_flag` tolerates
+            // a poisoned mutex so the flag is cleared even if the apply
+            // loop panicked while holding the lock.
+            Self::set_flag(self.project, false);
+        }
+    }
+}
 
 impl AppState {
     /// Execute a command and return the result
@@ -445,7 +507,7 @@ impl AppState {
                             if let Some(v) = update.updates.right { shot.right = v; }
                             if let Some(v) = update.updates.up { shot.up = v; }
                             if let Some(v) = update.updates.down { shot.down = v; }
-                            tracing::info!(
+                            tracing::debug!(
                                 section_id = update.section_id,
                                 shot_id = update.shot_id,
                                 old_length = old_len,
@@ -513,7 +575,45 @@ impl AppState {
         // Collect commands for the undo entry description
         let mut batch_commands: Vec<Command> = Vec::new();
 
-        for config in &sections {
+        // Defer per-merge cascades during the placement loop. Each
+        // `merge_stations` / `set_zero_datum` call would otherwise run a
+        // full O(N) `cascade_connection_offsets`, turning a 1 200-section
+        // tree-shaped import into ~O(N²) work. The cascade is purely
+        // defensive against drift in pre-existing connections, and the
+        // batch under us is creating its connections in dependency order
+        // (topological sort happens during `convert_tml_to_import_configs`).
+        // We arm the guard here, run the loop, then disarm + run one
+        // final cascade after the loop — equivalent to the union of the
+        // deferred per-call cascades.  The guard's Drop resets the flag
+        // even on the panic-poisoned-mutex path so a partial import
+        // can't leave `cascade_deferred = true` and silently skip
+        // cascades on every subsequent command.
+        let cascade_guard = CascadeDeferGuard::arm(&self.project);
+        // Eagerly populate the section-id and merge-adjacency lookups
+        // so the per-call `get_section` / `get_merged_section_ids` stay
+        // O(1) / O(group) instead of degrading into O(N) linear scans
+        // inside `merge_stations`.
+        if let Ok(mut proj_guard) = self.project.lock() {
+            if let Some(project) = proj_guard.as_mut() {
+                project.rebuild_section_index();
+                project.rebuild_merge_adjacency();
+            }
+        }
+
+        // [perf-debug] Time the per-section apply loop. Used to confirm
+        // whether the dominant cost in execute_import_sections scales
+        // linearly with section count (good) or super-linearly (bad —
+        // a per-section graph traversal that re-walks already-imported
+        // sections would show up here as quadratic growth).
+        let loop_start = std::time::Instant::now();
+        let mut create_total = std::time::Duration::ZERO;
+        let mut placement_total = std::time::Duration::ZERO;
+        let report_every = 100usize;
+        let mut last_report_idx = 0usize;
+        let mut last_report_elapsed = std::time::Duration::ZERO;
+
+        for (idx, config) in sections.iter().enumerate() {
+            let t_section_start = std::time::Instant::now();
             // Build SectionData from ImportSectionConfig
             let section_data = SectionData {
                 name: config.name.clone(),
@@ -526,7 +626,9 @@ impl AppState {
             };
 
             // Step 1: Create the section
+            let t_create_start = std::time::Instant::now();
             let create_result = self.create_section(section_data.clone());
+            create_total += t_create_start.elapsed();
             if !create_result.success {
                 // Rollback to before-snapshot
                 self.rollback_project(&before_snapshot);
@@ -570,6 +672,7 @@ impl AppState {
             });
 
             // Step 2: Apply placement
+            let t_placement_start = std::time::Instant::now();
             match &config.placement {
                 ImportPlacement::Origin => {
                     // No-op — section starts at origin
@@ -676,7 +779,65 @@ impl AppState {
                     });
                 }
             }
+            placement_total += t_placement_start.elapsed();
+            let _ = t_section_start;
+
+            // [perf-debug] Periodic log: emit every `report_every` sections.
+            // The "recent" delta highlights super-linear growth — if each
+            // 100-section batch is taking longer than the last, a
+            // per-section graph traversal is to blame.
+            if (idx + 1) % report_every == 0 || idx + 1 == sections.len() {
+                let now_elapsed = loop_start.elapsed();
+                let batch = now_elapsed.saturating_sub(last_report_elapsed);
+                let batch_n = (idx + 1) - last_report_idx;
+                // Per-batch import progress is debug-only — it's
+                // perf-investigation noise, not something a release
+                // log should record.
+                tracing::debug!(
+                    sections_done = idx + 1,
+                    total = sections.len(),
+                    batch_n,
+                    batch_ms = batch.as_millis() as u64,
+                    total_elapsed_ms = now_elapsed.as_millis() as u64,
+                    create_ms = create_total.as_millis() as u64,
+                    placement_ms = placement_total.as_millis() as u64,
+                    purpose = "TML import loop timing",
+                    "section import progress"
+                );
+                last_report_idx = idx + 1;
+                last_report_elapsed = now_elapsed;
+            }
         }
+
+        tracing::debug!(
+            sections = sections.len(),
+            total_ms = loop_start.elapsed().as_millis() as u64,
+            create_ms = create_total.as_millis() as u64,
+            placement_ms = placement_total.as_millis() as u64,
+            purpose = "TML import loop summary",
+            "execute_import_sections per-section loop done"
+        );
+
+        // Lift the deferral (clears the flag now so `cascade_connection_offsets`
+        // is allowed to run) and execute ONE cascade across every newly
+        // created section. This propagates any drift that would have
+        // been caught by the per-call cascades — for a tree-shaped
+        // import (no closures yet) this is a near-no-op single pass
+        // that early-exits on the first iteration.  `disarm` consumes
+        // the guard so its Drop becomes a no-op for the success path.
+        cascade_guard.disarm();
+        let cascade_start = std::time::Instant::now();
+        if let Ok(mut proj_guard) = self.project.lock() {
+            if let Some(project) = proj_guard.as_mut() {
+                project.cascade_connection_offsets(&all_section_ids);
+            }
+        }
+        tracing::debug!(
+            sections = all_section_ids.len(),
+            cascade_ms = cascade_start.elapsed().as_millis() as u64,
+            purpose = "TML import batch cascade",
+            "final cascade after deferred placement loop"
+        );
 
         // Create loop closures from TML CLOSURE shots (non-fatal)
         for closure in &closures {
@@ -713,7 +874,7 @@ impl AppState {
             };
             match result {
                 Ok(lc) => {
-                    tracing::info!(
+                    tracing::debug!(
                         closure_id = lc.id,
                         ?station_a,
                         ?station_b,
@@ -823,7 +984,7 @@ impl AppState {
 
         let section = project.add_section(data);
         let section_id = section.id;
-        tracing::info!(
+        tracing::debug!(
             section_id = section_id,
             purpose = "add section to project",
             "Section created"
@@ -843,7 +1004,7 @@ impl AppState {
                 project.preserve_connections_for_section_deletion(section_id);
                 project.cleanup_section_references(section_id);
                 project.remove_section(section_id);
-                tracing::info!(
+                tracing::debug!(
                     section_id,
                     purpose = "remove section and cleanup references",
                     "Section deleted (with cleanup)"
@@ -858,7 +1019,7 @@ impl AppState {
     pub(super) fn update_section(&self, section_id: SectionId, updates: SectionUpdates) -> CommandResult {
         self.with_project_mut(|project| {
             if project.update_section(section_id, &updates).is_some() {
-                tracing::info!(
+                tracing::debug!(
                     section_id,
                     purpose = "update section metadata or shots",
                     "Section updated"
@@ -954,7 +1115,7 @@ impl AppState {
 
         if let Some(new_shot) = shot {
             let new_shot_id = new_shot.id;
-            tracing::info!(
+            tracing::debug!(
                 section_id,
                 shot_id = new_shot_id,
                 purpose = "add shot to section",
@@ -1034,7 +1195,7 @@ impl AppState {
             if updates.touches_geometry() {
                 project.realign_after_shot_edit(section_id);
             }
-            tracing::info!(
+            tracing::debug!(
                 section_id,
                 shot_id,
                 purpose = "update shot measurements",
@@ -1070,7 +1231,7 @@ impl AppState {
 
         match project.remove_shot_with_rewire(section_id, shot_id) {
             Ok(_) => {
-                tracing::info!(
+                tracing::debug!(
                     section_id,
                     shot_id,
                     purpose = "remove shot and rewire geometry",
@@ -1124,7 +1285,7 @@ impl AppState {
 
             match project.merge_stations(station_a, station_b) {
                 Ok(_) => {
-                    tracing::info!(
+                    tracing::debug!(
                         ?station_a,
                         ?station_b,
                         purpose = "connect survey sections",
@@ -1162,7 +1323,7 @@ impl AppState {
 
         match project.create_loop_closure(station_a, station_b, strategy) {
             Ok(_) => {
-                tracing::info!(
+                tracing::debug!(
                     ?station_a,
                     ?station_b,
                     purpose = "add loop closure to improve accuracy",
@@ -1186,7 +1347,7 @@ impl AppState {
     pub(super) fn remove_loop_closure(&self, closure_id: u64) -> CommandResult {
         self.with_project_mut(|project| match project.remove_loop_closure(closure_id) {
             Ok(closure) => {
-                tracing::info!(
+                tracing::debug!(
                     closure_id,
                     ?closure.station_a,
                     ?closure.station_b,
@@ -1224,7 +1385,7 @@ impl AppState {
                 Ok(()) => {
                     working.touch();
                     *project = working;
-                    tracing::info!(
+                    tracing::debug!(
                         ?anchor_station,
                         ?method,
                         purpose = "reduce misclosure error",
@@ -1323,7 +1484,7 @@ impl AppState {
     pub(super) fn remove_zero_datum(&self, station_ref: StationRef) -> CommandResult {
         self.with_project_mut(|project| {
             if project.remove_zero_datum(station_ref) {
-                tracing::info!(
+                tracing::debug!(
                     ?station_ref,
                     purpose = "remove GPS anchor",
                     "Zero datum removed"
@@ -1451,7 +1612,7 @@ impl AppState {
 
     /// Read the comment from a CommentHolder (station or shot)
     fn get_holder_comment(
-        project: &crate::models::Project,
+        project: &Project,
         holder: &CommentHolder,
     ) -> Result<Option<String>, String> {
         match holder {
@@ -1486,7 +1647,7 @@ impl AppState {
 
     /// Set the comment on a CommentHolder (station or shot)
     fn set_holder_comment(
-        project: &mut crate::models::Project,
+        project: &mut Project,
         holder: &CommentHolder,
         comment: Option<String>,
     ) -> Result<(), String> {
@@ -1543,7 +1704,7 @@ impl AppState {
 
             project.adjust_section_offset(section_id, offset.x, offset.y);
             project.touch();
-            tracing::info!(
+            tracing::debug!(
                 ?section_id,
                 ?offset,
                 purpose = "reposition section for alignment",
@@ -2138,6 +2299,10 @@ impl AppState {
             project.station_merges.retain(|m| {
                 m.station_a.section_id != section_id && m.station_b.section_id != section_id
             });
+            // The retain just dropped entries the adjacency cache still
+            // claims exist — clear it so the next get_merged_section_ids
+            // doesn't fast-path against stale data.
+            project.merge_adjacency_cache.clear();
 
             project.loop_closures.retain(|lc| {
                 lc.station_a.section_id != section_id && lc.station_b.section_id != section_id
@@ -2172,7 +2337,7 @@ impl AppState {
                     purpose = "remove single-shot section",
                     "remove_section returned None after validation; rolling back"
                 );
-                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                match serde_json::from_str::<Project>(&before_snapshot) {
                     Ok(restored) => *proj_guard = Some(restored),
                     Err(e) => tracing::error!(
                         purpose = "remove single-shot section",
@@ -2200,7 +2365,7 @@ impl AppState {
                         reason = %e,
                         "Failed to serialize after snapshot; rolling back"
                     );
-                    match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                    match serde_json::from_str::<Project>(&before_snapshot) {
                         Ok(restored) => {
                             *proj_guard = Some(restored);
                             tracing::info!(
@@ -2222,7 +2387,7 @@ impl AppState {
                     purpose = "restore after mutation failure",
                     "Project became None after mutation; rolling back"
                 );
-                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                match serde_json::from_str::<Project>(&before_snapshot) {
                     Ok(restored) => *proj_guard = Some(restored),
                     Err(e) => tracing::error!(
                         purpose = "restore after mutation failure",

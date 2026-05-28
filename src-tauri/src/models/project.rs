@@ -176,6 +176,42 @@ pub struct Project {
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
     pub next_closure_id: u64,
+
+    /// Transient flag (NOT persisted) — when true,
+    /// [`Self::cascade_connection_offsets`] returns immediately. Used by
+    /// batch importers to skip the per-call O(N) cascade and run a
+    /// single cascade after all sections / merges are in place. Callers
+    /// must set the flag, run their batch, clear the flag, and then
+    /// invoke `cascade_connection_offsets` themselves to leave the
+    /// project in a consistent state.
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub cascade_deferred: bool,
+
+    /// Section-id → `sections[i]` index cache (transient, NOT persisted).
+    /// Lookups via [`Self::get_section`] / [`Self::get_section_mut`]
+    /// consult this map first to avoid the O(N) linear scan that used to
+    /// dominate `merge_stations` and `compute_station_raw_coords` on
+    /// large imports (~4 lookups per merge × 14 k merges = ~400 M ops).
+    /// Maintained incrementally by `add_section` / `remove_section`.
+    /// After deserialization the map is empty and a linear fallback
+    /// kicks in — callers that hammer the lookup (e.g. the batch
+    /// importer) should call [`Self::rebuild_section_index`] first.
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub section_index_cache: HashMap<SectionId, usize>,
+
+    /// Merge-only section adjacency cache: section_id → [neighbor section
+    /// ids via station_merges]. Transient, NOT persisted. Maintained
+    /// incrementally by `add_station_merge` / `remove_station_merge`;
+    /// any structural mutation outside those entry points is expected
+    /// to call `rebuild_merge_adjacency`. The cache exists to turn the
+    /// per-BFS-step iteration over all `station_merges` (O(N) inner)
+    /// into a HashMap lookup (O(1) inner). For a tree-shape import that
+    /// converts `get_merged_section_ids` from O(N²) to O(N) per call.
+    #[serde(skip, default)]
+    #[ts(skip)]
+    pub merge_adjacency_cache: HashMap<SectionId, Vec<SectionId>>,
 }
 
 /// Project metadata for listing
@@ -267,6 +303,9 @@ impl Project {
             imported_file_hashes: Vec::new(),
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
+            cascade_deferred: false,
+            section_index_cache: HashMap::new(),
+            merge_adjacency_cache: HashMap::new(),
         }
     }
 
@@ -301,19 +340,38 @@ impl Project {
     pub fn add_section(&mut self, data: SectionData) -> &Section {
         let section = Section::new(self.next_section_id, data);
         self.next_section_id += 1;
+        let new_idx = self.sections.len();
+        self.section_index_cache.insert(section.id, new_idx);
         self.sections.push(section);
         self.touch();
-        let idx = self.sections.len() - 1;
-        &self.sections[idx]
+        &self.sections[new_idx]
     }
 
-    /// Get a section by ID
+    /// Get a section by ID. First tries the O(1) `section_index_cache`;
+    /// if the cache is stale or empty (e.g. after deserialization), falls
+    /// back to an O(N) linear scan so we never return a wrong answer.
     pub fn get_section(&self, section_id: SectionId) -> Option<&Section> {
+        if let Some(&i) = self.section_index_cache.get(&section_id) {
+            if let Some(s) = self.sections.get(i) {
+                if s.id == section_id {
+                    return Some(s);
+                }
+            }
+        }
         self.sections.iter().find(|s| s.id == section_id)
     }
 
-    /// Get a mutable reference to a section by ID
+    /// Get a mutable reference to a section by ID. Same cache + fallback
+    /// strategy as [`Self::get_section`].
     pub fn get_section_mut(&mut self, section_id: SectionId) -> Option<&mut Section> {
+        let i = self.section_index_cache.get(&section_id).copied();
+        if let Some(i) = i {
+            if let Some(s) = self.sections.get(i) {
+                if s.id == section_id {
+                    return self.sections.get_mut(i);
+                }
+            }
+        }
         self.sections.iter_mut().find(|s| s.id == section_id)
     }
 
@@ -332,9 +390,78 @@ impl Project {
     /// Remove a section by ID
     pub fn remove_section(&mut self, section_id: SectionId) -> Option<Section> {
         let pos = self.sections.iter().position(|s| s.id == section_id)?;
+        // Removing shifts every later section's index down by one — rather
+        // than touching N cache entries, we drop the cache and let the
+        // linear fallback rebuild it on demand (removes are rare relative
+        // to lookups). Callers running a batch can call
+        // `rebuild_section_index()` to restore O(1) lookups afterwards.
+        self.section_index_cache.clear();
         self.touch();
         Some(self.sections.remove(pos))
     }
+
+    /// Rebuild the section-id → index cache from the current `sections`
+    /// vector. Cheap (O(N)) and safe to call any time; call this after a
+    /// bulk mutation (e.g. snapshot rollback) or before a hot lookup loop
+    /// when you can't guarantee the cache is current.
+    pub fn rebuild_section_index(&mut self) {
+        self.section_index_cache.clear();
+        self.section_index_cache.reserve(self.sections.len());
+        for (i, s) in self.sections.iter().enumerate() {
+            self.section_index_cache.insert(s.id, i);
+        }
+    }
+
+    /// Rebuild the merge-only section adjacency cache from
+    /// `station_merges`. O(N) where N is the merge count. Required
+    /// after any path that mutates `station_merges` outside the
+    /// `record_station_merge` / `remove_station_merges_matching`
+    /// helpers (e.g. a serde-deserialised project, or a snapshot
+    /// rollback).
+    pub fn rebuild_merge_adjacency(&mut self) {
+        self.merge_adjacency_cache.clear();
+        // Each merge contributes one entry in each direction.
+        self.merge_adjacency_cache.reserve(self.sections.len());
+        for m in &self.station_merges {
+            self.merge_adjacency_cache
+                .entry(m.station_a.section_id)
+                .or_default()
+                .push(m.station_b.section_id);
+            self.merge_adjacency_cache
+                .entry(m.station_b.section_id)
+                .or_default()
+                .push(m.station_a.section_id);
+        }
+    }
+
+    /// Push a new merge AND incrementally update the adjacency cache.
+    /// Always use this instead of writing to `station_merges` directly
+    /// so the cache stays in sync.
+    pub(crate) fn record_station_merge(&mut self, merge: StationMerge) {
+        // Guard against the half-populated-cache trap: `delete_section` /
+        // `delete_shot` clear `merge_adjacency_cache` after retaining
+        // surviving merges in `station_merges`, leaving the cache empty
+        // and the merges intact.  If we then incrementally insert just
+        // this new merge, the cache becomes non-empty but only contains
+        // THIS edge — and `get_merged_section_ids` treats any non-empty
+        // cache as authoritative, silently ignoring every surviving
+        // merge from before the delete.  Rebuild from `station_merges`
+        // first when the cache is empty but merges exist so the
+        // incremental insert lands on a whole base.
+        if self.merge_adjacency_cache.is_empty() && !self.station_merges.is_empty() {
+            self.rebuild_merge_adjacency();
+        }
+        self.merge_adjacency_cache
+            .entry(merge.station_a.section_id)
+            .or_default()
+            .push(merge.station_b.section_id);
+        self.merge_adjacency_cache
+            .entry(merge.station_b.section_id)
+            .or_default()
+            .push(merge.station_a.section_id);
+        self.station_merges.push(merge);
+    }
+
 
     /// Query relationships that reference the given section.
     /// Returns merges, closures, offset info, and zero datum count.
@@ -466,9 +593,10 @@ impl Project {
             }
         }
 
-        // Add replacement merges
+        // Add replacement merges (via the helper so the adjacency cache
+        // stays consistent for subsequent BFS calls in this transaction).
         for (a, b) in &replacement_merges {
-            self.station_merges.push(StationMerge {
+            self.record_station_merge(StationMerge {
                 station_a: *a,
                 station_b: *b,
                 merged_at: Utc::now(),
@@ -605,10 +733,13 @@ impl Project {
     /// Remove all merges, closures, section_offsets, station_offsets, and zero_datums
     /// that reference the given section. Call before `remove_section()` to avoid orphans.
     pub fn cleanup_section_references(&mut self, section_id: SectionId) {
-        // Remove merges referencing this section
+        // Remove merges referencing this section. Clearing the
+        // adjacency cache is mandatory — we just dropped entries that
+        // the cache still claims exist.
         self.station_merges.retain(|m| {
             m.station_a.section_id != section_id && m.station_b.section_id != section_id
         });
+        self.merge_adjacency_cache.clear();
 
         // Remove closures referencing this section
         self.loop_closures.retain(|lc| {
@@ -693,44 +824,59 @@ impl Project {
     /// across many shots in real survey data). In test builds, panics for
     /// gaps > 1cm to catch regressions with synthetic data.
     pub(crate) fn debug_assert_merge_alignment(&self, context: &str) {
-        for merge in &self.station_merges {
-            // Skip same-section merges (physically meaningless, used only in tests)
-            if merge.station_a.section_id == merge.station_b.section_id {
-                continue;
-            }
-            let a = self.compute_station_raw_coords(merge.station_a);
-            let b = self.compute_station_raw_coords(merge.station_b);
-            if let (Some(a_pos), Some(b_pos)) = (a, b) {
-                let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
-                if dist >= 0.05 {
-                    error!(
-                        context,
-                        a_ref = ?merge.station_a,
-                        b_ref = ?merge.station_b,
-                        dist,
-                        a_x = a_pos.x,
-                        a_y = a_pos.y,
-                        b_x = b_pos.x,
-                        b_y = b_pos.y,
-                        "Merge alignment violated (>{threshold}m)",
-                        threshold = 0.05,
+        // Despite the name, this used to run in release too — and the cost
+        // is brutal: O(N) merges × 2 × O(N) `compute_station_raw_coords`
+        // per call, called from every mutating command. For a 1 200-section
+        // TML import this contributed ~1.5 billion operations to the hot
+        // path. Gate the whole body behind `debug_assertions` so it
+        // remains a sanity check during development without harming
+        // production performance. The release-mode `error!` log it used
+        // to emit was informational only — alignment drift inside a
+        // *single* command is a programmer bug, not a data condition the
+        // user can fix at runtime.
+        #[cfg(debug_assertions)]
+        {
+            for merge in &self.station_merges {
+                // Skip same-section merges (physically meaningless, used only in tests)
+                if merge.station_a.section_id == merge.station_b.section_id {
+                    continue;
+                }
+                let a = self.compute_station_raw_coords(merge.station_a);
+                let b = self.compute_station_raw_coords(merge.station_b);
+                if let (Some(a_pos), Some(b_pos)) = (a, b) {
+                    let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
+                    if dist >= 0.05 {
+                        error!(
+                            context,
+                            a_ref = ?merge.station_a,
+                            b_ref = ?merge.station_b,
+                            dist,
+                            a_x = a_pos.x,
+                            a_y = a_pos.y,
+                            b_x = b_pos.x,
+                            b_y = b_pos.y,
+                            "Merge alignment violated (>{threshold}m)",
+                            threshold = 0.05,
+                        );
+                    }
+                    #[cfg(test)]
+                    debug_assert!(
+                        dist < 0.01,
+                        "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
+                         are {dist:.6}m apart (threshold 0.01m). \
+                         A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
+                        a_ref = merge.station_a,
+                        b_ref = merge.station_b,
+                        ax = a_pos.x,
+                        ay = a_pos.y,
+                        bx = b_pos.x,
+                        by = b_pos.y,
                     );
                 }
-                #[cfg(test)]
-                debug_assert!(
-                    dist < 0.01,
-                    "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
-                     are {dist:.6}m apart (threshold 0.01m). \
-                     A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
-                    a_ref = merge.station_a,
-                    b_ref = merge.station_b,
-                    ax = a_pos.x,
-                    ay = a_pos.y,
-                    bx = b_pos.x,
-                    by = b_pos.y,
-                );
             }
         }
+        // Suppress unused warning in release.
+        let _ = context;
     }
 
     /// Shift all StationRef indices in the project for the given section.
@@ -1342,6 +1488,7 @@ impl Project {
         self.station_merges.retain(|m| {
             m.station_a != removed_station && m.station_b != removed_station
         });
+        self.merge_adjacency_cache.clear();
 
         let mut closure_updates: HashMap<u64, StationRef> = HashMap::new();
         for update in &impact.replacement_closure_updates {
@@ -1367,7 +1514,7 @@ impl Project {
 
         for pair in &impact.replacement_merges {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
-                self.station_merges.push(StationMerge {
+                self.record_station_merge(StationMerge {
                     station_a: pair.station_a,
                     station_b: pair.station_b,
                     merged_at: Utc::now(),
@@ -1557,6 +1704,16 @@ impl Project {
     ///
     /// Zero-datum-bearing sections are always included as authoritative.
     pub(crate) fn cascade_connection_offsets(&mut self, seeds: &[SectionId]) {
+        // Honor the batch-import opt-out: skip cascade during the
+        // per-section import loop so the cost stays linear. The batch
+        // driver in execute_import_sections runs ONE final cascade
+        // (with all created sections as seeds) after the loop, which
+        // is equivalent to the union of the deferred cascades for a
+        // tree-shaped import.
+        if self.cascade_deferred {
+            return;
+        }
+
         let mut authoritative: HashSet<SectionId> = HashSet::new();
         for &sid in seeds {
             authoritative.insert(sid);
@@ -1697,8 +1854,31 @@ impl Project {
     /// datum propagation, offset application, zero-datum validation.
     pub fn get_merged_section_ids(&self, section_id: SectionId) -> HashSet<SectionId> {
         let mut connected = HashSet::new();
-        let mut queue = vec![section_id];
+        // Fast path: the adjacency cache is non-empty (or we have no
+        // merges at all). BFS visits each connected section once with
+        // O(neighbours) work per step → O(group size) total instead of
+        // the legacy O(group × N_merges).
+        if !self.merge_adjacency_cache.is_empty() || self.station_merges.is_empty() {
+            let mut queue = vec![section_id];
+            while let Some(current) = queue.pop() {
+                if connected.insert(current) {
+                    if let Some(neighbours) = self.merge_adjacency_cache.get(&current) {
+                        for &n in neighbours {
+                            if !connected.contains(&n) {
+                                queue.push(n);
+                            }
+                        }
+                    }
+                }
+            }
+            return connected;
+        }
 
+        // Cold path: cache was cleared (e.g. after deserialisation or a
+        // structural remove). Fall back to the legacy linear scan rather
+        // than mutating self here — callers that care about throughput
+        // call `rebuild_merge_adjacency` first.
+        let mut queue = vec![section_id];
         while let Some(current) = queue.pop() {
             if connected.insert(current) {
                 for merge in &self.station_merges {
@@ -1825,7 +2005,10 @@ impl Project {
         let mut depths: Vec<f64> = Vec::new();
 
         for &sr in colocated {
-            if let Some(section) = self.sections.iter().find(|s| s.id == sr.section_id) {
+            // O(1) cache lookup; legacy linear scan was the hot path —
+            // 79 k groups × O(N sections) per `compute_station_coordinates`
+            // call dominated load time for large projects.
+            if let Some(section) = self.get_section(sr.section_id) {
                 let idx = sr.station_index as usize;
 
                 // Incoming shot: shot at index station_index - 1 → use depth_out
@@ -1849,7 +2032,7 @@ impl Project {
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
     pub(crate) fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
-        let section = self.sections.iter().find(|s| s.id == station_ref.section_id)?;
+        let section = self.get_section(station_ref.section_id)?;
 
         // Get section offset
         let (offset_x, offset_y) = self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
@@ -2002,7 +2185,7 @@ impl Project {
             self.get_merged_section_ids(station_a.section_id)
         };
         fallback_sections.iter()
-            .filter_map(|sid| self.sections.iter().find(|s| s.id == *sid))
+            .filter_map(|sid| self.get_section(*sid))
             .flat_map(|s| s.shots.iter())
             .map(|shot| shot.length)
             .sum()
@@ -4044,8 +4227,10 @@ impl Project {
         );
         self.adjust_rigid_group_offsets(moving_section_id, offset_x, offset_y);
 
-        // Record the merge
-        self.station_merges.push(StationMerge {
+        // Record the merge via the helper so the merge-adjacency cache
+        // stays in sync. (Direct push would silently skip the cache,
+        // forcing the next BFS into the O(N) fallback path.)
+        self.record_station_merge(StationMerge {
             station_a,
             station_b,
             merged_at: Utc::now(),
@@ -4231,6 +4416,9 @@ impl Project {
 
         if let Some(pos) = pos {
             self.station_merges.remove(pos);
+            // Drop the adjacency cache — recomputing the precise edge
+            // deletion would duplicate the work `retain` already did.
+            self.merge_adjacency_cache.clear();
 
             // Remove closures for the specific unmerged pair only
             let mut removed_closures = Vec::new();
@@ -4314,7 +4502,7 @@ impl Project {
         // Enumerate all stations in connected sections
         let mut connected = HashSet::new();
         for section_id in connected_sections {
-            if let Some(section) = self.sections.iter().find(|s| s.id == section_id) {
+            if let Some(section) = self.get_section(section_id) {
                 // A section with N shots has N+1 stations (indices 0 to N)
                 for i in 0..=section.shots.len() {
                     connected.insert(StationRef {
@@ -4713,7 +4901,14 @@ impl Project {
         // Pre-compute absolute station depths using colocated groups.
         // Each station's Z is the average of surrounding shot depths across
         // all merge/closure partners — no cumulative dz walk needed.
+        let t_phase = std::time::Instant::now();
         let colocated_groups = self.build_colocated_groups();
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            groups = colocated_groups.len(),
+            "compute_station_coordinates: build_colocated_groups"
+        );
+        let t_phase = std::time::Instant::now();
         let mut station_depths: HashMap<StationRef, f64> = HashMap::new();
         for group in colocated_groups.values() {
             let depth = self.compute_station_depth(group);
@@ -4721,6 +4916,11 @@ impl Project {
                 station_depths.insert(sr, depth);
             }
         }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: depths loop"
+        );
+        let t_phase = std::time::Instant::now();
 
         let mut stations: Vec<Station> = Vec::new();
         let mut station_count = 0u32;
@@ -4785,6 +4985,11 @@ impl Project {
         // NOTE: Global zero datum subtraction removed (fn-19-mmx.2).
         // Positioning is now controlled solely by section_offsets, which are
         // computed when set_zero_datum() is called.
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: xyz walk"
+        );
+        let t_phase = std::time::Instant::now();
 
         // Mark merged stations - build merge groups (transitive closure)
         // First, build a map of station_ref -> group_id using Union-Find logic
@@ -4828,6 +5033,13 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            groups = groups.len(),
+            "compute_station_coordinates: union-find groups"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Now assign merged_with for each station based on their group
         for station in &mut stations {
             if let Some(&group_id) = station_to_group.get(&station.station_ref) {
@@ -4838,6 +5050,11 @@ impl Project {
                 }
             }
         }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: merged_with"
+        );
+        let t_phase = std::time::Instant::now();
 
         // Populate closures_with for each station from loop_closures
         // For each closure, both endpoint stations (and their merged equivalents)
@@ -4917,6 +5134,13 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            closures = self.loop_closures.len(),
+            "compute_station_coordinates: closures_with"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Closure-chain transitivity: when a station has direct closures to multiple
         // other stations, those other stations should see transitive closures to each
         // other via the shared station.
@@ -4988,6 +5212,12 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: closure-chain transitivity"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Mark zero datums
         for zd in &self.zero_datums {
             for station in &mut stations {
@@ -4998,6 +5228,12 @@ impl Project {
             }
         }
 
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: zero datums"
+        );
+        let t_phase = std::time::Instant::now();
+
         // Assign station comments
         for (station_ref, comment) in &self.station_comments {
             for station in &mut stations {
@@ -5006,6 +5242,10 @@ impl Project {
                 }
             }
         }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: station comments"
+        );
 
         stations
     }
@@ -5159,7 +5399,7 @@ impl Project {
 
     /// Compute longitude bounds with dateline awareness
     /// Returns (west, east) where east < west indicates crossing the dateline
-    fn compute_longitude_bounds(longitudes: &[f64]) -> (f64, f64) {
+    pub(crate) fn compute_longitude_bounds(longitudes: &[f64]) -> (f64, f64) {
         if longitudes.is_empty() {
             return (0.0, 0.0);
         }

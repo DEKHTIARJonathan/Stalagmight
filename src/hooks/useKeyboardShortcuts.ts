@@ -306,7 +306,7 @@ export function useKeyboardShortcuts() {
     showStations,
     showToast,
   } = useUIStore();
-  const { undo, redo, saveProject, project, stations, importDmp, parseTml, parseGpx, executeTmlImport, config } = useProjectStore();
+  const { undo, redo, saveProject, project, stations, importDmp, parseTml, parseCompass, parseGpx, executeTmlImport, config } = useProjectStore();
   const { setImportContext } = useUIStore();
 
   // Ref for shortcut map - uses ref to avoid stale closures in event handlers
@@ -737,24 +737,42 @@ export function useKeyboardShortcuts() {
                   });
                 }
               } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
-                // TML/TMLU import
-                const currentProject = useProjectStore.getState().project;
-                if (currentProject) {
-                  const tmlFile = await parseTml(selected);
-                  if (tmlFile) {
-                    openDialog('tml-import', { tmlFile, filePath: selected });
-                  }
-                } else {
-                  const tmlFile = await parseTml(selected);
-                  if (tmlFile) {
-                    const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
-                    openDialog('new-project-for-import', {
-                      tmlFile,
-                      filePath: selected,
-                      defaultName: fileName,
-                      importType: 'tml',
-                    });
-                  }
+                // TML/TMLU import (always creates a new project)
+                if (useProjectStore.getState().project) {
+                  openDialog('error', {
+                    title: 'Import survey',
+                    message: 'Close the current project before importing a new survey.',
+                  });
+                  return;
+                }
+                const tmlFile = await parseTml(selected);
+                if (tmlFile) {
+                  const fileName = extractFilename(selected, /\.tmlu?$/i) || 'Imported';
+                  openDialog('new-project-for-import', {
+                    tmlFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                    importType: 'tml',
+                  });
+                }
+              } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
+                // Compass import (always creates a new project)
+                if (useProjectStore.getState().project) {
+                  openDialog('error', {
+                    title: 'Import survey',
+                    message: 'Close the current project before importing a new survey.',
+                  });
+                  return;
+                }
+                const compassFile = await parseCompass(selected);
+                if (compassFile) {
+                  const fileName = extractFilename(selected, /\.(mak|dat)$/i) || 'Imported';
+                  openDialog('new-project-for-import', {
+                    compassFile,
+                    filePath: selected,
+                    defaultName: fileName,
+                    importType: 'compass',
+                  });
                 }
               } else {
                 // DMP import

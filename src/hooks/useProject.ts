@@ -11,11 +11,13 @@ import {
   projectSaveFilters,
   dmpOpenFilters,
   tmlOpenFilters,
+  compassOpenFilters,
   gpxOpenFilters,
   exportSaveFilters,
   saveDialog,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
+import { debugLog } from '../utils/debugLog';
 
 export function useProject() {
   const store = useProjectStore();
@@ -32,7 +34,7 @@ export function useProject() {
       filters: projectOpenFilters(),
     });
 
-    console.log('[useProject] Open dialog result:', selected, typeof selected);
+    debugLog('[useProject] Open dialog result:', selected, typeof selected);
 
     // Handle both string and single-item array returns
     let path: string | null = null;
@@ -43,10 +45,10 @@ export function useProject() {
     }
 
     if (path) {
-      console.log('[useProject] Opening project via loadProject:', path);
+      debugLog('[useProject] Opening project via loadProject:', path);
       // loadProject handles view switching and error display internally via LoadingProgress
       const result = await store.loadProject(path);
-      console.log('[useProject] loadProject result:', result);
+      debugLog('[useProject] loadProject result:', result);
       return result;
     }
     return null;
@@ -98,18 +100,48 @@ export function useProject() {
   const handleCloseProject = useCallback(async () => {
     // Check for unsaved changes - use getState() to get current value, not stale closure
     const currentIsDirty = useProjectStore.getState().isDirty;
-    console.log('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
+    debugLog('[useProject] handleCloseProject called, isDirty:', currentIsDirty);
     if (currentIsDirty) {
       // Open styled dialog - the dialog will handle the actual close
       openDialog('unsaved-changes');
       return { success: false, error: 'Showing dialog' };
     }
 
+    // [perf] Instrument the back path so we can see where the back-button
+    // freeze lives. Surfaced in the MemoryProbe panel for visibility
+    // without devtools. We measure four checkpoints to pinpoint the freeze:
+    //   t0→t1  closeProject IPC roundtrip
+    //   t1→t2  setView store update (synchronous)
+    //   t2→t3  first rAF after setView (= React commit + layout queued)
+    //   t3→t4  next rAF = AFTER first paint (browser had time to repaint)
+    // If t3→t4 is huge, the freeze is in JSC GC / paint between commit and
+    // visible update — the classic "old screen frozen, then snaps" symptom.
+    const t0 = performance.now();
     // Concurrency guard is handled at store level (store.isClosing)
     const result = await store.closeProject();
+    const t1 = performance.now();
     if (result.success) {
       setView('global');
     }
+    const t2 = performance.now();
+    const { recordPerfTiming } = await import('../utils/memoryProbe');
+    requestAnimationFrame(() => {
+      const t3 = performance.now();
+      requestAnimationFrame(() => {
+        const t4 = performance.now();
+        const closeMs = t1 - t0;
+        const toRafMs = t3 - t2;
+        const rafToPaintMs = t4 - t3;
+        const totalMs = t4 - t0;
+        debugLog(
+          `[perf:close] closeProject=${closeMs.toFixed(0)}ms  toRAF=${toRafMs.toFixed(0)}ms  rAF→paint=${rafToPaintMs.toFixed(0)}ms  total=${totalMs.toFixed(0)}ms`
+        );
+        recordPerfTiming('closeProject IPC', closeMs);
+        recordPerfTiming('setView→firstRAF', toRafMs);
+        recordPerfTiming('rAF→actual paint', rafToPaintMs);
+        recordPerfTiming('back total', totalMs);
+      });
+    });
     return result;
   }, [store, setView, openDialog]);
 
@@ -186,12 +218,18 @@ export function useProject() {
   }, [store, openDialog, setImportContext]);
 
   /**
-   * Handle TML/TMLU file import with context-aware dialog flow.
-   * - From existing project: Opens file picker, parses TML, then shows TmlImportDialog.
-   * - From home screen (no project): Opens file picker, parses TML, then shows NewProjectDialog,
-   *   which on completion opens TmlImportDialog.
+   * Handle TML/TMLU file import. A full survey import always creates a new
+   * project, so it is only allowed from the home screen (no project open).
    */
   const handleImportTml = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    if (store.project) {
+      openDialog('error', {
+        title: 'Import survey',
+        message: 'Close the current project before importing a new survey.',
+      });
+      return;
+    }
+
     let selectedPath = filePath;
 
     if (!skipFilePicker) {
@@ -208,30 +246,69 @@ export function useProject() {
 
     if (!selectedPath) return;
 
-    const hasProject = !!store.project;
-
     try {
       const tmlFile = await store.parseTml(selectedPath);
       if (!tmlFile) return;
 
-      if (hasProject) {
-        openDialog('tml-import', {
-          tmlFile,
-          filePath: selectedPath,
-        });
-      } else {
-        const fileName = extractFilename(selectedPath, /\.tmlu?$/i) || 'Imported';
-        openDialog('new-project-for-import', {
-          tmlFile,
-          filePath: selectedPath,
-          defaultName: fileName,
-          importType: 'tml',
-        });
-      }
+      const fileName = extractFilename(selectedPath, /\.tmlu?$/i) || 'Imported';
+      openDialog('new-project-for-import', {
+        tmlFile,
+        filePath: selectedPath,
+        defaultName: fileName,
+        importType: 'tml',
+      });
     } catch (e) {
       openDialog('error', {
         title: 'Import Failed',
         message: getErrorMessage(e, 'Failed to parse TML file'),
+      });
+    }
+  }, [store, openDialog]);
+
+  /**
+   * Handle Compass .DAT/.MAK import. Like TML, a Compass survey import always
+   * creates a new project, so it is only allowed when no project is open.
+   */
+  const handleImportCompass = useCallback(async (skipFilePicker = false, filePath?: string) => {
+    if (store.project) {
+      openDialog('error', {
+        title: 'Import survey',
+        message: 'Close the current project before importing a new survey.',
+      });
+      return;
+    }
+
+    let selectedPath = filePath;
+
+    if (!skipFilePicker) {
+      const selected = await open({
+        multiple: false,
+        filters: compassOpenFilters(),
+      });
+
+      if (!selected || typeof selected !== 'string') {
+        return;
+      }
+      selectedPath = selected;
+    }
+
+    if (!selectedPath) return;
+
+    try {
+      const compassFile = await store.parseCompass(selectedPath);
+      if (!compassFile) return;
+
+      const fileName = extractFilename(selectedPath, /\.(mak|dat)$/i) || 'Imported';
+      openDialog('new-project-for-import', {
+        compassFile,
+        filePath: selectedPath,
+        defaultName: fileName,
+        importType: 'compass',
+      });
+    } catch (e) {
+      openDialog('error', {
+        title: 'Import Failed',
+        message: getErrorMessage(e, 'Failed to parse Compass file'),
       });
     }
   }, [store, openDialog]);
@@ -333,6 +410,7 @@ export function useProject() {
     handleCloseProject,
     handleImportDmp,
     handleImportTml,
+    handleImportCompass,
     handleImportGpx,
     handleExportCsv,
     handleExportJson,
