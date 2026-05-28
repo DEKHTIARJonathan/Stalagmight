@@ -507,13 +507,15 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
 ///
 /// We need to turn the back-sight around to FROM → TO:
 ///   * Azimuth: add 180° after declination/convergence.
-///   * Inclination: flip sign to undo the TO-side reading direction.  That
-///     yields the equivalent fore-sight in Compass's +up convention; one more
-///     sign flip lands us in Stalagmight's +down (matching what
-///     `shot_to_shot_data` applies to the fore-sight via `Some(-inclination)`).
-///     The two flips cancel mathematically, so the final stored pitch_out
-///     equals the raw `back_inclination` after corrections — but the
-///     derivation is spelled out below so the intent is recoverable.
+///   * Inclination: convert through `inclination_to_degrees` first (the raw
+///     reading is in the survey's declared unit — Grads / DDD.MM / Percent
+///     Grade / DepthGauge — and only the Degrees case is pass-through).
+///     Then flip sign to undo the TO-side reading direction (yielding
+///     fore-direction in Compass's +up convention), and flip again to land
+///     in Stalagmight's +down — the two flips cancel, so the final stored
+///     `pitch_out` equals the degree-converted back-inclination.  Without
+///     the unit conversion, Grads / DDD.MM / Percent surveys with
+///     back-sights store `pitch_out` in the wrong units.
 ///
 /// Returns `(azimuth_out_grid_deg, pitch_out_deg_positive_down)` if both
 /// back-sight readings are present and non-sentinel, else `None`.
@@ -529,21 +531,37 @@ fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
     } else {
         back_inc_raw
     };
+    // Same raw-length-with-fore-sight-corrections that `shot_geometry`
+    // computes; needed by `inclination_to_degrees` for the DepthGauge
+    // depth/length ratio.  Survey-level CORRECTIONS apply to the
+    // physical slope distance regardless of sighting direction, so the
+    // fore-sight `cf.length` is the right offset for the back-sight too.
+    let mut slope_length_raw = if shot.length >= MISSING_VALUE_THRESHOLD {
+        0.0
+    } else {
+        shot.length
+    };
     if ctx.apply_corrections {
         if let Some(bcf) = &ctx.backsight_corrections {
             back_az += bcf.azimuth;
             back_inc += bcf.inclination;
+        }
+        if let Some(cf) = &ctx.corrections {
+            slope_length_raw += cf.length;
         }
     }
     // Declination + convergence (same as fore).
     let back_az_grid = (back_az + ctx.declination - ctx.convergence_angle).rem_euclid(360.0);
     // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
     let azimuth_out_fore_direction = (back_az_grid + 180.0).rem_euclid(360.0);
-    // Inclination: -back_inc gives the forward-direction inclination in
-    // Compass's +up convention.  Negating again converts to Stalagmight's
-    // +down (what shot_to_shot_data does to the fore-sight).  Net:
-    // identity — pitch_out_down equals back_inc after corrections.
-    let pitch_out_down_positive = back_inc;
+    // Convert the back-inclination into degrees first — Grads / DDD.MM /
+    // PercentGrade / DepthGauge are NOT pass-through.  After conversion,
+    // back_inc_deg is the TO→FROM slope in Compass +up; the double sign
+    // flip (TO→FROM ⇒ FROM→TO, then +up ⇒ +down) cancels, so the value
+    // we store IS that degree-converted reading.
+    let back_inc_deg =
+        inclination_to_degrees(back_inc, &ctx.inclination_units, slope_length_raw);
+    let pitch_out_down_positive = back_inc_deg;
     Some((azimuth_out_fore_direction, pitch_out_down_positive))
 }
 
@@ -642,16 +660,20 @@ fn build_ctx(
 /// * `DegreesAndMinutes` (M)    — DDD.MM packed, minutes in the
 ///                                fractional part (e.g. 12.34 → 12 + 34/60)
 /// * `DepthGauge` (W)           — `raw` is a vertical depth reading
-///                                (length units), not an angle.  Convert
-///                                to slope via asin(depth_m / slope_m).
-///                                Caller passes `slope_length_m` so we
-///                                can produce a degree result; if it's
-///                                zero we fall back to 0° (warned at
-///                                parse time).
+///                                (in the survey's length units), not an
+///                                angle.  Convert to a slope via
+///                                `asin(depth / slope_length)`.  The two
+///                                values must be in the SAME units so
+///                                the ratio is dimensionless; callers
+///                                pass the raw (pre-meter-conversion)
+///                                slope length to satisfy this.  If the
+///                                length is zero we fall back to 0° (a
+///                                parse-time warning has already fired
+///                                for DepthGauge surveys).
 fn inclination_to_degrees(
     raw: f64,
     units: &InclinationUnits,
-    slope_length_m: f64,
+    slope_length_raw: f64,
 ) -> f64 {
     match units {
         InclinationUnits::Degrees => raw,
@@ -667,18 +689,20 @@ fn inclination_to_degrees(
             sign * (degrees + minutes / 60.0)
         }
         InclinationUnits::DepthGauge => {
-            if slope_length_m.abs() < f64::EPSILON {
+            if slope_length_raw.abs() < f64::EPSILON {
                 0.0
             } else {
-                let depth_m = raw; // Compass stores depth in the same
-                // length units as the shot's length — we've already
-                // converted length to meters before calling here, so
-                // `raw` is in the same units as `slope_length_m`.  In
-                // Compass, positive depth = down (target station is
-                // below origin); Compass inclination convention is +up,
-                // so a +5 m depth reading corresponds to a -inclination
-                // (going down).
-                let ratio = (depth_m / slope_length_m).clamp(-1.0, 1.0);
+                // `raw` is a depth reading in the survey's length units
+                // (feet for `D` length, meters for `M`).  `shot_geometry`
+                // and `shot_backsight_geometry` deliberately pass the
+                // pre-meter-conversion `length` so the ratio is
+                // dimensionless regardless of which length unit the
+                // survey declared.  Compass convention: positive depth =
+                // down (target below origin); Compass inclination is +up;
+                // hence a +5 ft depth reading corresponds to a negative
+                // (downward) inclination.
+                let depth = raw;
+                let ratio = (depth / slope_length_raw).clamp(-1.0, 1.0);
                 -ratio.asin().to_degrees()
             }
         }
@@ -799,6 +823,27 @@ fn utm_to_wgs84(
 
 fn resolve_anchor(parsed: &ParsedCompass, warnings: &mut Vec<String>) -> Option<AnchorGeo> {
     let station = parsed.fixed_stations.first()?;
+    // Multi-entrance / split-survey MAK projects can declare more than
+    // one fixed station.  We only use the first as the GPS anchor; the
+    // rest are silently parsed but never projected.  Surface that
+    // limitation so users with multiple `#project_station` entries
+    // aren't surprised when only one zero-datum appears in the imported
+    // project.
+    if parsed.fixed_stations.len() > 1 {
+        let extras: Vec<&str> = parsed
+            .fixed_stations
+            .iter()
+            .skip(1)
+            .map(|s| s.name.as_str())
+            .collect();
+        warnings.push(format!(
+            "MAK declares {} fixed stations but only the first ('{}') is used as the GPS anchor; \
+             the others are not imported as additional zero-datums: {}.",
+            parsed.fixed_stations.len(),
+            station.name,
+            extras.join(", "),
+        ));
+    }
     // Prefer the anchor's own `#file` datum/zone, falling back to the
     // project-wide values (always populated from file 0).  This makes
     // multi-`#file` projects whose first fixed station lives outside
@@ -1624,5 +1669,47 @@ mod tests {
         // build_preview output: it must surface file 0's UTM zone (13).
         let preview = build_preview(&parsed);
         assert_eq!(preview.utm_zone, Some(13));
+    }
+
+    #[test]
+    fn backsight_inclination_converted_to_degrees_for_grads() {
+        // backsight_grads.dat declares FORMAT inclination unit `R` (Grads)
+        // and carries one shot with a backsight column.  Compass Grads:
+        // 400 grads = 360°, so `100 grads = 90°` and `-100 grads = -90°`.
+        //
+        // Forward: BEARING=90, INC=+100 grads (= +90° up).
+        // Back   : BEARING=270 (= 90+180), INC=-100 grads (B looking back
+        //          at A which is below — back-inc is the down-reading).
+        //
+        // The two-sign-flip in `shot_backsight_geometry` (TO→FROM ⇒ FROM→TO,
+        // then Compass +up ⇒ Stalagmight +down) collapses to identity on
+        // the VALUE — so pitch_out should equal the degree-converted
+        // back_inc, i.e. -100 grads * 0.9 = -90°.  Before the unit-
+        // conversion fix the function returned the raw -100 (a grads
+        // reading stored as if it were degrees), which is the regression
+        // this test pins.
+        let parsed = parse_compass(&fixture("backsight_grads.dat")).unwrap();
+        let (configs, _, _) = convert_compass_to_import_configs(
+            &parsed,
+            &CompassImportOptions::default(),
+        )
+        .unwrap();
+        let shot = configs
+            .iter()
+            .flat_map(|c| c.shots.iter())
+            .next()
+            .expect("at least one shot");
+        let pitch_out = shot.pitch_out.expect("backsight should yield pitch_out");
+        assert!(
+            (pitch_out + 90.0).abs() < 0.01,
+            "pitch_out should be -90° after Grads→degrees + back-to-fore + +down; got {pitch_out}"
+        );
+        // Sanity: pitch_in is also degree-converted on the fore-sight
+        // path.  +100 grads → +90° up; Stalagmight stores as -90° (+down).
+        let pitch_in = shot.pitch_in.expect("fore inclination should populate pitch_in");
+        assert!(
+            (pitch_in + 90.0).abs() < 0.01,
+            "pitch_in should be -90° after Grads→degrees + +down; got {pitch_in}"
+        );
     }
 }
