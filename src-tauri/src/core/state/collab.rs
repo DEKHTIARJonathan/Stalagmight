@@ -473,6 +473,39 @@ mod tests {
     }
 
     #[test]
+    fn apply_insert_preserves_collaborator_uuid() {
+        // Regression for the AddedShot-loses-uuid bug: when Ariane adds
+        // a brand-new shot and returns the .tml with a <UUID>, apply
+        // must store that UUID on the inserted shot.  Previously
+        // `AddedShot` only carried `ShotData` (no uuid field), so apply
+        // called `add_shot(data)` → `Shot::new` minted a fresh UUID and
+        // Ariane's identity for the new shot was lost on the very
+        // first round-trip.
+        let mut p = proj_abcd();
+        let sid = p.sections[0].id;
+        let b_id = p.sections[0].shots[1].id;
+
+        let mut cs = CollabChangeSet::empty();
+        let mut entry = added(sid, 2, Some(b_id), 25.0);
+        entry.uuid = Some("ariane-uuid-X".into());
+        cs.shots_added.push(entry);
+        apply_changeset(&mut p, &cs);
+
+        // X landed between B and C with Ariane's UUID intact.
+        assert_eq!(azimuths(&p), vec![10.0, 20.0, 25.0, 30.0, 40.0]);
+        let inserted = p.sections[0]
+            .shots
+            .iter()
+            .find(|s| (s.azimuth_in - 25.0).abs() < f64::EPSILON)
+            .expect("inserted shot present");
+        assert_eq!(
+            inserted.uuid.as_deref(),
+            Some("ariane-uuid-X"),
+            "apply must preserve the collaborator's UUID on the inserted shot"
+        );
+    }
+
+    #[test]
     fn apply_insert_honors_after_shot_id() {
         let mut p = proj_abcd();
         let sid = p.sections[0].id;

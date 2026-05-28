@@ -189,7 +189,14 @@ interface ProjectStore {
    * @deprecated Use loadProject() instead for progress UI support.
    */
   openProject: (path: string) => Promise<CommandResult>;
-  saveProject: (path?: string) => Promise<CommandResult>;
+  /**
+   * Save the project.  `isAutosave` should be set to `true` from the
+   * autosave hook so the Rust side can honour
+   * `CollabState.write_tml_on_autosave` and skip the sibling `.tml`
+   * write when the user has disabled it.  Manual / Save-As flows
+   * leave it `false` (the default) so the .tml is always written.
+   */
+  saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /** Check if a shot (by section_id + shot index) is frozen */
@@ -731,10 +738,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  saveProject: async (path?: string) => {
+  saveProject: async (path?: string, isAutosave?: boolean) => {
     const result = await invokeIpc<CommandResult>(
       'save_project',
-      { path },
+      { path, isAutosave: isAutosave ?? false },
       { purpose: 'persist project changes', fields: { path } }
     );
     if (result.success) {
