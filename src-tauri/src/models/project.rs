@@ -438,6 +438,19 @@ impl Project {
     /// Always use this instead of writing to `station_merges` directly
     /// so the cache stays in sync.
     pub(crate) fn record_station_merge(&mut self, merge: StationMerge) {
+        // Guard against the half-populated-cache trap: `delete_section` /
+        // `delete_shot` clear `merge_adjacency_cache` after retaining
+        // surviving merges in `station_merges`, leaving the cache empty
+        // and the merges intact.  If we then incrementally insert just
+        // this new merge, the cache becomes non-empty but only contains
+        // THIS edge — and `get_merged_section_ids` treats any non-empty
+        // cache as authoritative, silently ignoring every surviving
+        // merge from before the delete.  Rebuild from `station_merges`
+        // first when the cache is empty but merges exist so the
+        // incremental insert lands on a whole base.
+        if self.merge_adjacency_cache.is_empty() && !self.station_merges.is_empty() {
+            self.rebuild_merge_adjacency();
+        }
         self.merge_adjacency_cache
             .entry(merge.station_a.section_id)
             .or_default()

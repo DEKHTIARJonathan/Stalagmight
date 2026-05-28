@@ -445,6 +445,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const existing = inFlightLoads.get(path);
     if (existing) return existing;
 
+    // Drop in-flight entries for OTHER paths: this load is about to
+    // call `cancelLoading()` which will bump the clientOpId, dooming
+    // any in-flight load for a different path to return
+    // `{success: false}` from its clientOpId check.  If we kept those
+    // entries around, a user re-click for one of those paths would
+    // receive the now-doomed promise instead of starting a fresh load.
+    // The same-path entry below would have short-circuited above; this
+    // only clears stale ones.
+    for (const key of [...inFlightLoads.keys()]) {
+      if (key !== path) inFlightLoads.delete(key);
+    }
+
     const promise: Promise<{ success: boolean }> = (async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC

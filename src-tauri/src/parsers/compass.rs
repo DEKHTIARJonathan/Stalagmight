@@ -796,15 +796,60 @@ fn datum_proj_token(datum: Datum, warnings: &mut Vec<String>) -> String {
     }
 }
 
+/// Hemisphere inferred from the Compass datum, when the datum unambiguously
+/// implies one.  Compass `.MAK` files don't store a hemisphere flag, so we
+/// rely on the datum: most regional datums are bounded to a single
+/// hemisphere.  WGS-84 / WGS-72 / Pulkovo (worldwide / cross-hemisphere)
+/// fall through as `None` and the caller defaults to north.
+fn hemisphere_from_datum(datum: Datum) -> Option<bool> {
+    use Datum::*;
+    match datum {
+        // Unambiguously northern.
+        NorthAmerican1927
+        | NorthAmerican1983
+        | European1950
+        | European1979
+        | OrdinanceSurvey1936
+        | HongKong1963
+        | HuTzuShan
+        | Tokyo
+        | Oman
+        | Adindan => Some(false),
+        // Unambiguously southern.
+        Australian1966
+        | Australian1984
+        | SouthAmerican1956
+        | SouthAmerican1969
+        | Arc1950
+        | Cape
+        | Geodetic1949
+        | CampAreaAstro => Some(true),
+        // Worldwide / equatorial — caller defaults to north.
+        WGS1984 | WGS1972 | Pulkovo1942 | Indian | Arc1960 => None,
+    }
+}
+
 /// Convert a UTM easting/northing (meters) to WGS84 longitude/latitude in
-/// degrees.  The Compass `.MAK` format records the UTM zone but not the
-/// hemisphere, so we project both with and without the `+south` flag and
-/// pick the result whose absolute latitude is the smaller — the wrong
-/// hemisphere lands every survey south of the equator at ~+60 °N (or vice
-/// versa for genuinely-northern surveys mis-projected as +south), so the
-/// gap is large and unambiguous in practice.  Emits a warning when the
-/// inferred hemisphere isn't the obvious one (false-northing implies
-/// southern when the northing is large).
+/// degrees.
+///
+/// The Compass `.MAK` format records the UTM zone but not the hemisphere.
+/// An earlier "project both, pick the smaller `|lat|`" heuristic was
+/// pathological for northern caves at high latitude — a real anchor at
+/// +60 °N projects to ~-30 °S under `+south`, whose absolute latitude is
+/// smaller, so the heuristic silently flipped genuinely-northern surveys
+/// onto a different continent.
+///
+/// Instead, we:
+///   1. Try to infer the hemisphere from the Compass datum
+///      (`hemisphere_from_datum`); regional datums like NAD83 / Australian
+///      1984 lock the hemisphere with no ambiguity.
+///   2. Default to **north** when the datum is worldwide (WGS-84 etc.).
+///      Most Compass users survey in the northern hemisphere, and the
+///      worst case for getting it wrong is a clearly-wrong latitude the
+///      user can immediately see on the map.
+///   3. If the north projection lands above 84 °N (outside UTM's design
+///      range), fall back to the south projection — that's the one
+///      ambiguous case where "default north" is statistically wrong.
 fn utm_to_wgs84(
     easting: f64,
     northing: f64,
@@ -826,28 +871,37 @@ fn utm_to_wgs84(
         Some((lon.to_degrees(), lat.to_degrees()))
     };
 
-    let north = project(false);
-    let south = project(true);
-    match (north, south) {
-        (Some(n), Some(s)) => {
-            // Pick the projection whose latitude is the smaller in absolute
-            // terms.  For a survey actually in the southern hemisphere the
-            // northern projection lands at ~+60 °N while +south lands at the
-            // correct -30 °ish; the inverse for genuinely-northern surveys.
-            let pick_south = s.1.abs() < n.1.abs();
-            if pick_south {
-                warnings.push(format!(
-                    "UTM zone {zone} projected as southern hemisphere (northing {northing:.0}); \
-                     re-import without +south if this is a northern cave."
-                ));
-                Some(s)
-            } else {
-                Some(n)
-            }
+    // Strong signal: datum implies hemisphere.
+    if let Some(use_south) = hemisphere_from_datum(datum) {
+        return project(use_south);
+    }
+
+    // Worldwide datum: default to north.  Only switch to south when the
+    // north projection produces a latitude outside UTM's normal range
+    // (|lat| > 84°), which strongly implies the file actually encodes a
+    // southern false-northing.  Warn either way so the user can verify
+    // on the map.
+    let north = project(false)?;
+    if north.1.abs() <= 84.0 {
+        if !(-80.0..=84.0).contains(&north.1) {
+            warnings.push(format!(
+                "UTM zone {zone} projected at latitude {:.1}° N (datum {datum:?} doesn't \
+                 disambiguate hemisphere); verify on the map.",
+                north.1,
+            ));
         }
-        (Some(n), None) => Some(n),
-        (None, Some(s)) => Some(s),
-        (None, None) => None,
+        return Some(north);
+    }
+    // North gave us an out-of-range latitude — try south.
+    match project(true) {
+        Some(south) => {
+            warnings.push(format!(
+                "UTM zone {zone} northing {northing:.0} projected as southern hemisphere \
+                 (north projection out of range); verify on the map.",
+            ));
+            Some(south)
+        }
+        None => Some(north),
     }
 }
 
@@ -1549,6 +1603,63 @@ mod tests {
             utm_to_wgs84(500_000.0, 0.0, 31, Datum::WGS1984, &mut warnings).unwrap();
         assert!(lat.abs() < 1e-6, "lat {lat}");
         assert!((lon - 3.0).abs() < 1e-6, "lon {lon}");
+    }
+
+    #[test]
+    fn utm_to_wgs84_high_northing_wgs84_picks_north() {
+        // Regression for the "smaller |lat| wins" bug Codex flagged:
+        // a northern cave at +60° lat in Zone 30 (false-easting=500000,
+        // northing≈6_700_000) projects to ~+60° N when read as northern,
+        // and to ~-30° S when wrongly read as southern.  The earlier
+        // heuristic picked south because |-30| < |+60|; the new
+        // datum-defaulting heuristic must pick NORTH for WGS-84.
+        let mut warnings = Vec::new();
+        let (_lon, lat) = utm_to_wgs84(
+            500_000.0,
+            6_700_000.0,
+            30,
+            Datum::WGS1984,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(lat > 55.0 && lat < 65.0, "expected lat ≈ +60°, got {lat}");
+    }
+
+    #[test]
+    fn utm_to_wgs84_southern_datum_forces_south() {
+        // Genuinely-southern cave with an unambiguous southern datum
+        // (e.g. Australian 1984) must project as southern regardless of
+        // the worldwide-datum fallback heuristic.  Zone 55 central
+        // meridian is +147°; northing=6_300_000 under +south corresponds
+        // to ≈ -33° S (close to Sydney's latitude).
+        let mut warnings = Vec::new();
+        let (lon, lat) = utm_to_wgs84(
+            500_000.0,
+            6_300_000.0,
+            55,
+            Datum::Australian1984,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(lat < -25.0 && lat > -40.0, "expected lat ≈ -33°, got {lat}");
+        assert!((lon - 147.0).abs() < 1.0, "expected lon ≈ +147°, got {lon}");
+    }
+
+    #[test]
+    fn utm_to_wgs84_north_american_datum_forces_north() {
+        // NAD83 unambiguously implies northern hemisphere; the
+        // hemisphere-from-datum signal must short-circuit the worldwide
+        // fallback and project as north even for high northings.
+        let mut warnings = Vec::new();
+        let (_lon, lat) = utm_to_wgs84(
+            500_000.0,
+            6_700_000.0,
+            12,
+            Datum::NorthAmerican1983,
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(lat > 55.0 && lat < 65.0, "expected lat ≈ +60°, got {lat}");
     }
 
     #[test]
