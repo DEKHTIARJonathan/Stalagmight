@@ -22,7 +22,7 @@ use quick_xml::Writer;
 
 use sha2::{Digest, Sha256};
 
-use crate::models::{geo_key, Project, Section, SectionId, ShotBaselineEntry, StationRef};
+use crate::models::{geo_key, Project, Section, SectionId, Shot, ShotBaselineEntry, StationRef};
 
 // ============================================================================
 // Element‐name map (long vs. short)
@@ -415,9 +415,24 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
 // Build flat shot list from project model
 // ============================================================================
 
-/// Reuse the existing baseline UUID for a shot if present, else mint a new one,
-/// so UUIDs stay stable across repeated exports of the same project.
-fn pick_uuid(existing: &HashMap<(SectionId, u32), String>, section_id: SectionId, idx: u32) -> String {
+/// Resolve the UUID we'll emit into the TML for a given Stalagmight
+/// shot.  Prefer the persistent `shot.uuid` (schema v6+) since that is
+/// the only key that survives intervening insert/delete edits to the
+/// section.  Fall back to the last-export baseline keyed by
+/// `(section_id, shot_index)` for legacy projects whose shots haven't
+/// been re-saved since the v6 migration (the next save will mint and
+/// persist).  Last resort: mint a fresh UUID.
+fn pick_uuid(
+    shot: &Shot,
+    existing: &HashMap<(SectionId, u32), String>,
+    section_id: SectionId,
+    idx: u32,
+) -> String {
+    if let Some(u) = shot.uuid.as_deref() {
+        if !u.is_empty() {
+            return u.to_string();
+        }
+    }
     existing
         .get(&(section_id, idx))
         .filter(|u| !u.is_empty())
@@ -586,7 +601,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                     section_id: section.id,
                     shot_index: shot_idx as u32,
                     ariane_id: shot_ariane_id,
-                    uuid: pick_uuid(&existing_uuids, section.id, shot_idx as u32),
+                    uuid: pick_uuid(shot, &existing_uuids, section.id, shot_idx as u32),
                     geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
                     section_name: section_name.clone(),
                 });
@@ -732,7 +747,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             section_id: section.id,
                             shot_index: shot_idx as u32,
                             ariane_id: shot_ariane_id,
-                            uuid: pick_uuid(&existing_uuids, section.id, shot_idx as u32),
+                            uuid: pick_uuid(shot, &existing_uuids, section.id, shot_idx as u32),
                             geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
                             section_name: section_name.clone(),
                         });
@@ -986,7 +1001,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                 section_id: section.id,
                 shot_index: i as u32,
                 ariane_id: shot_ariane_id,
-                uuid: pick_uuid(&existing_uuids, section.id, i as u32),
+                uuid: pick_uuid(shot, &existing_uuids, section.id, i as u32),
                 geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
                 section_name: section_name.clone(),
             });
@@ -1389,6 +1404,77 @@ mod tests {
         assert_eq!(parsed_uuids.len(), baseline.len(), "all UUIDs survive export->parse");
         for e in &baseline {
             assert!(parsed_uuids.contains(&e.uuid), "uuid {} lost in round-trip", e.uuid);
+        }
+    }
+
+    #[test]
+    fn uuid_survives_insert_between_exports() {
+        // Regression for the silent-UUID-rebinding bug: when a shot is
+        // inserted in Stalagmight UI between two exports, the
+        // `(section_id, shot_index)` baseline key drifts and the
+        // pre-v6 lookup would assign the existing UUIDs to the WRONG
+        // shots.  With `shot.uuid` carried directly on Shot, the
+        // pre-existing shots keep their UUIDs and the new shot gets a
+        // fresh one — regardless of where it lands in the section.
+        let mut project = simple_project();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("out.tmlu");
+
+        let (b1, _, _) = export_tml_with_baseline(&project, &path).unwrap();
+        let uuids_v1: Vec<String> = project.sections[0]
+            .shots
+            .iter()
+            .map(|s| s.uuid.clone().unwrap_or_default())
+            .collect();
+        assert!(
+            uuids_v1.iter().all(|u| !u.is_empty()),
+            "every shot must carry a uuid after construction"
+        );
+
+        // Insert a brand-new shot at the FRONT of section 0.  All
+        // pre-existing shots' indices shift by +1.
+        use crate::models::ShotData;
+        let new_shot = Shot::new(
+            42,
+            ShotData {
+                azimuth_in: 270.0,
+                length: 1.5,
+                ..Default::default()
+            },
+        );
+        project.sections[0].shots.insert(0, new_shot);
+
+        let (b2, _, _) = export_tml_with_baseline(&project, &path).unwrap();
+        let uuids_v2: Vec<String> = project.sections[0]
+            .shots
+            .iter()
+            .map(|s| s.uuid.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(uuids_v2.len(), uuids_v1.len() + 1);
+        // The pre-existing shots keep their UUIDs even though their
+        // shot_index has shifted by 1.
+        for (i, prev_uuid) in uuids_v1.iter().enumerate() {
+            assert_eq!(
+                &uuids_v2[i + 1], prev_uuid,
+                "pre-existing shot at new index {} lost its uuid", i + 1
+            );
+        }
+        // The new shot got its OWN, distinct uuid.
+        assert!(!uuids_v2[0].is_empty(), "new shot must have a uuid");
+        assert!(
+            !uuids_v1.contains(&uuids_v2[0]),
+            "new shot's uuid must not collide with any pre-existing one"
+        );
+
+        // And the baseline now references the shifted indices correctly:
+        // the v2 baseline must contain every v1 uuid plus the new one.
+        let b1_uuids: HashSet<&String> = b1.iter().map(|e| &e.uuid).collect();
+        let b2_uuids: HashSet<&String> = b2.iter().map(|e| &e.uuid).collect();
+        for u in &b1_uuids {
+            assert!(
+                b2_uuids.contains(u),
+                "uuid {u} dropped from baseline after insert"
+            );
         }
     }
 

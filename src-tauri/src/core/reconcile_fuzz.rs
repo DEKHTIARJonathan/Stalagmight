@@ -344,17 +344,92 @@ fn prop_edit_converges(seed: u64) {
     );
 }
 
+/// Run one iteration of property 4: the diff is deterministic.  Running
+/// `diff` twice on identical inputs must produce identical changesets
+/// — catches non-determinism from `HashMap::into_iter` (e.g. the
+/// majority-vote tie-break before the `Reverse(sid)` ordering fix).
+fn prop_diff_is_deterministic(seed: u64, kind: Kind) {
+    let dir = TempDir::new().unwrap();
+    let mut p = gen_project(&mut Rng::new(seed), kind);
+    seed_baseline(&mut p, dir.path());
+    let ret = returned(&p, dir.path());
+    let cs_a = diff(&p, &ret);
+    let cs_b = diff(&p, &ret);
+    assert_eq!(
+        format!("{cs_a:#?}"),
+        format!("{cs_b:#?}"),
+        "seed={seed} kind={kind:?}: diff output not deterministic across calls"
+    );
+}
+
+/// Run one iteration of property 5: inserting a shot in Stalagmight
+/// between two exports must not silently re-bind UUIDs.  This is the
+/// regression net for the `pick_uuid((section_id, shot_index))` bug —
+/// before the `Shot.uuid` field, the second export would assign the
+/// pre-existing shots' UUIDs to whichever shot happened to land at that
+/// `(section_id, shot_index)` slot after the insert.
+fn prop_uuid_survives_local_insert(seed: u64) {
+    use crate::models::{Shot, ShotData};
+    let dir = TempDir::new().unwrap();
+    let mut p = gen_project(&mut Rng::new(seed), Kind::Plain);
+    seed_baseline(&mut p, dir.path());
+    let pre_uuids: Vec<String> = p.sections[0]
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone().unwrap_or_default())
+        .collect();
+    assert!(
+        pre_uuids.iter().all(|u| !u.is_empty()),
+        "seed={seed}: every shot must already carry a uuid"
+    );
+
+    // Stalagmight-side insert at the front of section 0 → all indices
+    // shift by +1.  We do NOT update the baseline (no save happened
+    // yet from the user's perspective).
+    let depth = p.sections[0].shots[0].depth_in;
+    p.sections[0].shots.insert(
+        0,
+        Shot::new(
+            99,
+            ShotData {
+                azimuth_in: 12.0,
+                length: 1.0,
+                depth_in: depth,
+                depth_out: depth,
+                ..Default::default()
+            },
+        ),
+    );
+
+    // Export again; baseline must contain every pre-existing UUID.
+    let (b2, _, _) = export_tml_with_baseline(&p, &dir.path().join("v2.tmlu")).unwrap();
+    let b2_uuids: HashSet<&String> = b2.iter().map(|e| &e.uuid).collect();
+    for u in &pre_uuids {
+        assert!(
+            b2_uuids.contains(u),
+            "seed={seed}: pre-existing UUID {u} dropped from baseline after local insert"
+        );
+    }
+    assert_eq!(
+        b2.len(),
+        pre_uuids.len() + 1,
+        "seed={seed}: baseline must have grown by exactly one for the inserted shot"
+    );
+}
+
 /// Re-run a single seed across all properties — for pinning a discovered failure
 /// as a deterministic regression test.
 #[expect(dead_code)]
 fn run_seed(seed: u64) {
     for kind in [Kind::Plain, Kind::Datum, Kind::Merge, Kind::DupNames] {
         prop_clean_roundtrip(seed, kind);
+        prop_diff_is_deterministic(seed, kind);
     }
     for kind in [Kind::Plain, Kind::Datum, Kind::Merge] {
         prop_degraded_roundtrip(seed, kind);
     }
     prop_edit_converges(seed);
+    prop_uuid_survives_local_insert(seed);
 }
 
 const KINDS_ALL: [Kind; 4] = [Kind::Plain, Kind::Datum, Kind::Merge, Kind::DupNames];
@@ -381,6 +456,22 @@ fn fuzz_edit_converges() {
     for i in 0..iters() {
         let seed = i ^ 0xC011AB_0003;
         prop_edit_converges(seed);
+    }
+}
+
+#[test]
+fn fuzz_diff_is_deterministic() {
+    for i in 0..iters() {
+        let seed = i ^ 0xC011AB_0004;
+        prop_diff_is_deterministic(seed, KINDS_ALL[(i as usize) % KINDS_ALL.len()]);
+    }
+}
+
+#[test]
+fn fuzz_uuid_survives_local_insert() {
+    for i in 0..iters() {
+        let seed = i ^ 0xC011AB_0005;
+        prop_uuid_survives_local_insert(seed);
     }
 }
 

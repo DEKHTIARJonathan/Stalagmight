@@ -49,8 +49,20 @@ pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
 /// A single survey measurement between two stations
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Shot {
-    /// Internal immutable ID
+    /// Internal immutable ID, regenerated on load from sequence order.
+    /// Use [`Shot::uuid`] instead when you need an identity that survives
+    /// save/load — the collaboration round-trip with Ariane relies on it.
     pub id: ShotId,
+    /// Persistent v4 UUID minted at shot creation, stable across saves
+    /// and reloads.  Emitted into the TML on export so Ariane 26+ can
+    /// round-trip shot identity without depending on the lossy
+    /// `(section_id, shot_index)` key (which drifts as soon as the user
+    /// inserts or deletes a shot in the same section).  `None` only for
+    /// shots loaded from .stalx files written before schema v6; those
+    /// get a fresh UUID minted lazily on the next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub uuid: Option<String>,
     /// First forward azimuth reading for the shot (degrees, 0-360)
     pub azimuth_in: f64,
     /// Second forward azimuth reading for the shot (degrees, 0-360).
@@ -180,10 +192,19 @@ impl ShotUpdates {
 }
 
 impl Shot {
-    /// Create a new shot from shot data
+    /// Create a new shot from shot data.  A fresh v4 UUID is minted for
+    /// collaboration identity (see `Shot::uuid`); call [`Shot::with_uuid`]
+    /// instead when restoring a shot from a persisted UUID.
     pub fn new(id: ShotId, data: ShotData) -> Self {
+        Self::with_uuid(id, data, Some(uuid::Uuid::new_v4().to_string()))
+    }
+
+    /// Construct a shot with an explicit UUID (`None` = pre-v6 .stalx
+    /// shot loaded without a recorded UUID; the next save will mint one).
+    pub fn with_uuid(id: ShotId, data: ShotData, uuid: Option<String>) -> Self {
         Self {
             id,
+            uuid,
             azimuth_in: data.azimuth_in,
             azimuth_out: data.azimuth_out,
             length: data.length,

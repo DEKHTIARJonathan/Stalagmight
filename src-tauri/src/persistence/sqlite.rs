@@ -15,7 +15,7 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 
 fn compress_json(json: &str) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -380,6 +380,27 @@ impl Database {
             [],
         )?;
 
+        // Add uuid column to shots table (schema v5→v6: per-shot UUIDs
+        // for collaboration round-trip identity).  We don't backfill
+        // existing rows here — `load_project` lazily mints a UUID for
+        // any row that comes back with NULL, and the next save persists
+        // it.  That keeps the migration cost a single ALTER TABLE for
+        // even very large pre-v6 databases.
+        let has_shot_uuid_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('shots') WHERE name='uuid'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_shot_uuid_column {
+            self.conn
+                .execute("ALTER TABLE shots ADD COLUMN uuid TEXT", [])?;
+            tracing::info!("Added uuid column to shots table (schema v6)");
+        }
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -657,6 +678,7 @@ impl Database {
                 is_reference INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
+                uuid TEXT,
                 UNIQUE(section_id, sequence_order),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -995,6 +1017,7 @@ impl Database {
                 is_reference INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
+                uuid TEXT,
                 UNIQUE(section_id, sequence_order),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -1200,14 +1223,23 @@ impl Database {
 
             for (seq, shot) in section.shots.iter().enumerate() {
                 // Note: We don't store shot.id - it's regenerated on load based on sequence_order
-                // The database uses auto-increment for the id column
+                // The database uses auto-increment for the id column.
+                // `shot.uuid` IS persisted — it's the only stable identity
+                // a shot has across save/load and the basis for the
+                // collaboration round-trip with Ariane.  Mint one lazily
+                // here for any shot that arrived without (e.g. loaded
+                // from a pre-v6 .stalx) so we never write NULL twice.
+                let uuid = shot
+                    .uuid
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 tx.execute(
                     r"INSERT INTO shots (
                         section_id, sequence_order,
                         azimuth_in, azimuth_out, length, depth_in, depth_out,
                         pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                        comment, is_reference, marker_index, temperature
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                        comment, is_reference, marker_index, temperature, uuid
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                     params![
                         section.id,
                         seq as i64,
@@ -1225,7 +1257,8 @@ impl Database {
                         shot.comment,
                         i32::from(shot.is_reference),
                         shot.marker_index,
-                        shot.temperature
+                        shot.temperature,
+                        uuid,
                     ],
                 )?;
             }
@@ -1526,7 +1559,7 @@ impl Database {
                 let mut shot_stmt = self.conn.prepare(
                     r"SELECT sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                              comment, is_reference, marker_index, temperature
+                              comment, is_reference, marker_index, temperature, uuid
                        FROM shots WHERE section_id = ?1 ORDER BY sequence_order",
                 )?;
 
@@ -1551,6 +1584,14 @@ impl Database {
                         is_reference: row.get::<_, i32>(13)? != 0,
                         marker_index: row.get(14)?,
                         temperature: row.get(15)?,
+                        // `uuid` column was added in schema v6; pre-v6
+                        // rows return NULL here.  Treat NULL and empty
+                        // string the same — the next save mints a fresh
+                        // UUID and persists it (`shot.uuid` path in the
+                        // INSERT above).
+                        uuid: row
+                            .get::<_, Option<String>>(16)?
+                            .filter(|s| !s.is_empty()),
                     })
                 })?;
 

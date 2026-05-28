@@ -242,12 +242,35 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     let mut cs = CollabChangeSet::empty();
     let mut quality = MatchQuality::Uuid;
 
-    // Exported section name -> SectionId.
-    let name_to_id: HashMap<&str, SectionId> = collab
-        .section_name_map
-        .iter()
-        .map(|(n, id)| (n.as_str(), *id))
-        .collect();
+    // Exported section name -> SectionId.  Duplicate names are
+    // intentional: two Stalagmight sections legitimately can share a
+    // name and the user expects both to round-trip.  The matcher
+    // disambiguates via UUID (Ariane 26+) or Ariane-id (when reliable);
+    // the name map is a fallback hint only.  But for Ariane ≤25
+    // (UUID unavailable) and renumber-prone Ariane-id batches, that
+    // fallback is silently the FIRST exported section — the second
+    // would look like "deleted + re-added" with the same shots.  Surface
+    // that explicitly so the user can investigate before applying.
+    let mut name_to_id: HashMap<&str, SectionId> = HashMap::new();
+    let mut duplicate_names: Vec<&str> = Vec::new();
+    for (n, id) in &collab.section_name_map {
+        let entry = name_to_id.entry(n.as_str());
+        if let std::collections::hash_map::Entry::Vacant(v) = entry {
+            v.insert(*id);
+        } else if !duplicate_names.contains(&n.as_str()) {
+            duplicate_names.push(n.as_str());
+        }
+    }
+    if !duplicate_names.is_empty() {
+        cs.warnings.push(CollabWarning {
+            message: format!(
+                "Duplicate exported section name(s): {}.  Without Ariane-26+ UUIDs the matcher \
+                 can only disambiguate the first occurrence — any edits to the others may \
+                 appear as 'removed + re-added' in this changeset.",
+                duplicate_names.join(", "),
+            ),
+        });
+    }
 
     // Synthetic export legs (`<name> (reversed)`, `<name> (pre-zero-datum)`) are
     // reversed duplicates of forward geometry we wrote ourselves — never edits.
@@ -334,9 +357,22 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
             }
         }
     }
+    // `HashMap::into_iter` is non-deterministic, so a plain `max_by_key`
+    // on vote count picks an arbitrary winner when two baseline sections
+    // tie — the next reconcile of the same `.tml` could route shots to
+    // a different owner.  Break ties by smaller `SectionId`
+    // (deterministic, also tends to prefer the older / parent section in
+    // chronologically-grown projects).  `max_by` returns the last
+    // element of any equal-keyed run, so the key is
+    // `(count, Reverse(sid))` — higher count wins; on a tie, the
+    // smaller `sid` is "greater" under Reverse and is returned last.
     let name_owner: HashMap<&str, SectionId> = votes
         .into_iter()
-        .filter_map(|(name, m)| m.into_iter().max_by_key(|&(_, c)| c).map(|(s, _)| (name, s)))
+        .filter_map(|(name, m)| {
+            m.into_iter()
+                .max_by_key(|&(sid, c)| (c, std::cmp::Reverse(sid)))
+                .map(|(s, _)| (name, s))
+        })
         .collect();
 
     // Pass 2: assign every returned shot to an owner section (identity → section
@@ -1118,5 +1154,78 @@ mod tests {
         let ret = returned(&base, dir.path());
         let cs = diff(&base, &ret);
         assert!(cs.is_empty(), "duplicate-named clean round-trip must be empty: {cs:?}");
+    }
+
+    #[test]
+    fn test_duplicate_exported_names_emit_warning() {
+        // Two sections sharing the same exported name produce a
+        // section_name_map with a collision.  `name_to_id` can only hold
+        // one entry per key, so the fallback "name → SectionId" lookup
+        // silently picks the first occurrence.  For Ariane ≤25 (no
+        // UUIDs) and renumber-prone Ariane-id sets, that means edits to
+        // the second duplicate-named section look like "removed +
+        // re-added".  The diff surfaces a CollabWarning so the user is
+        // told before applying.
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut p = Project::new("Cave".into(), None);
+        p.add_section(section_with("Main", three()));
+        // Second "Main" — same exported name as the first.  Wire it up
+        // as a child merge so the export pipeline succeeds.
+        p.add_section(section_with(
+            "Main",
+            vec![shot(40.0, 4.0, 1.0, 1.5), shot(50.0, 5.0, 1.5, 2.0)],
+        ));
+        let root_id = p.sections[0].id;
+        let child_id = p.sections[1].id;
+        p.station_merges.push(StationMerge {
+            station_a: StationRef::new(root_id, 1),
+            station_b: StationRef::new(child_id, 0),
+            merged_at: chrono::Utc::now(),
+        });
+        let base = baseline_for(p, dir.path());
+
+        // Round-trip the export so the returned file is well-formed.
+        let ret = returned(&base, dir.path());
+        let cs = diff(&base, &ret);
+
+        // The shot-identity tiers fully match (clean round-trip), so the
+        // changeset is empty — but the duplicate-name warning must
+        // still fire because the section_name_map carries the collision.
+        assert!(
+            cs.warnings
+                .iter()
+                .any(|w| w.message.contains("Duplicate exported section name")),
+            "expected a duplicate-name warning, got {:?}",
+            cs.warnings,
+        );
+    }
+
+    #[test]
+    fn test_diff_is_deterministic_across_calls() {
+        // Catches the non-deterministic `HashMap::into_iter` tie-break
+        // (the bug Codex's round-4 fix re-keyed via Reverse(sid)).  Even
+        // when ties exist (or none — this test runs the duplicate-name
+        // topology to maximise hash-iteration variation), two diff calls
+        // on identical inputs must produce identical debug-formatted
+        // changesets.
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut p = Project::new("Cave".into(), None);
+        p.add_section(section_with("Main", three()));
+        p.add_section(section_with(
+            "Main",
+            vec![shot(40.0, 4.0, 1.0, 1.5), shot(50.0, 5.0, 1.5, 2.0)],
+        ));
+        let root_id = p.sections[0].id;
+        let child_id = p.sections[1].id;
+        p.station_merges.push(StationMerge {
+            station_a: StationRef::new(root_id, 1),
+            station_b: StationRef::new(child_id, 0),
+            merged_at: chrono::Utc::now(),
+        });
+        let base = baseline_for(p, dir.path());
+        let ret = returned(&base, dir.path());
+        let cs_a = diff(&base, &ret);
+        let cs_b = diff(&base, &ret);
+        assert_eq!(format!("{cs_a:#?}"), format!("{cs_b:#?}"));
     }
 }
