@@ -64,6 +64,14 @@ pub struct AddedShot {
     /// Anchoring on a stable shot id keeps the insert correct regardless of the
     /// edit/remove phases that run first at apply time.
     pub after_shot_id: Option<ShotId>,
+    /// The collaborator's UUID for this shot — Ariane 26+ writes the
+    /// `<UUID>` element on its new shots so we can round-trip identity
+    /// back.  `None` for Ariane ≤25 (no UUID emission).  Apply uses
+    /// this to mint the shot with the collaborator's UUID instead of a
+    /// fresh one, so the next Ariane round-trip still matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub uuid: Option<String>,
     pub data: ShotData,
 }
 
@@ -101,6 +109,13 @@ pub struct AddedSection {
     #[ts(type = "string | null")]
     pub date: Option<chrono::NaiveDate>,
     pub shots: Vec<ShotData>,
+    /// Per-shot UUIDs from the returned `.tml` (Ariane 26+), parallel
+    /// to `shots`.  Same length as `shots`; each entry is `None` for
+    /// Ariane ≤25 shots that arrived without `<UUID>`.  Apply uses
+    /// these to mint the new section's shots with their original
+    /// collaborator UUIDs preserved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shot_uuids: Vec<Option<String>>,
 }
 
 /// A section matched by name whose metadata (name/color/surveyor/date) changed.
@@ -401,8 +416,10 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
                             surveyor: section.surveyor.clone(),
                             date: section.date,
                             shots: Vec::new(),
+                            shot_uuids: Vec::new(),
                         }
                     });
+                    entry.shot_uuids.push(r.uuid.filter(|u| !u.is_empty()));
                     entry.shots.push(r.data);
                 }
             }
@@ -427,7 +444,12 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         } else {
             source.name.as_str()
         };
-        if old_name != new_name {
+        // Emit a `name` change only when the baseline carries a real
+        // (non-empty) name — otherwise a baseline section with no name
+        // would compare-unequal to any non-empty returned name and
+        // we'd silently auto-assign the parser's fallback string (e.g.
+        // "Section 12") onto the user's intentionally-nameless section.
+        if old_name != new_name && !old_name.is_empty() {
             meta.push(CollabFieldChange {
                 field: "name".into(),
                 old: old_name.to_string(),
@@ -638,6 +660,10 @@ fn align_section(
             section_name: section_name.to_string(),
             position: r_idx as u32,
             after_shot_id,
+            uuid: returned[r_idx]
+                .uuid
+                .clone()
+                .filter(|u| !u.is_empty()),
             data: returned[r_idx].data.clone(),
         });
     }
@@ -671,11 +697,27 @@ fn push_removed(
     section_name: &str,
     cs: &mut CollabChangeSet,
 ) {
-    let impact = proj_section
-        .shots
-        .get(shot_index as usize)
-        .and_then(|s| project.preview_delete_shot(sid, s.id).ok())
-        .unwrap_or_else(|| empty_impact(sid, shot_index));
+    let impact = match proj_section.shots.get(shot_index as usize) {
+        Some(s) => match project.preview_delete_shot(sid, s.id) {
+            Ok(i) => i,
+            Err(e) => {
+                // Surface preview-failure as a CollabWarning so the
+                // user knows the deletion impact wasn't checked, rather
+                // than silently rendering "no merges/closures affected"
+                // and letting them Apply blind.
+                cs.warnings.push(CollabWarning {
+                    message: format!(
+                        "Could not compute removal impact for '{section_name}' shot #{shot_idx} \
+                         ({e}); applying the change set may orphan a merge or closure that \
+                         depended on this shot.",
+                        shot_idx = shot_index + 1,
+                    ),
+                });
+                empty_impact(sid, shot_index)
+            }
+        },
+        None => empty_impact(sid, shot_index),
+    };
 
     if !impact.removed_merges.is_empty()
         || !impact.removed_closures.is_empty()

@@ -144,7 +144,7 @@ impl AppState {
             Err(r) => return r,
         };
 
-        {
+        let skipped = {
             let mut guard = match self.project.lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
@@ -152,7 +152,7 @@ impl AppState {
             let Some(project) = guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
-            apply_changeset(project, &changeset);
+            let warnings = apply_changeset(project, &changeset);
             // Mark the returned file as consumed so open-detect won't re-fire
             // before the next save re-exports a fresh baseline.
             if let Some(c) = project.collab.as_mut() {
@@ -160,7 +160,8 @@ impl AppState {
                 c.last_reconcile_at = Some(Utc::now());
             }
             project.touch();
-        }
+            warnings
+        };
 
         let after = match self.capture_after_snapshot_or_rollback(&before) {
             Ok(s) => s,
@@ -168,7 +169,16 @@ impl AppState {
         };
         self.push_snapshot_undo(crate::core::Command::ApplyCollabChanges, before, after);
 
-        CommandResult::success()
+        let mut result = CommandResult::success();
+        result.warnings = skipped
+            .into_iter()
+            .map(|message| crate::core::ValidationWarning {
+                code: "COLLAB_APPLY_SKIPPED".to_string(),
+                message,
+                severity: crate::core::WarningSeverity::Warning,
+            })
+            .collect();
+        result
     }
 
     // --- internals ---
@@ -244,43 +254,62 @@ fn default_sibling_name(project: &Project) -> String {
 /// Mutate the project in place to apply a reconciled change set. Order matters:
 /// edits (no length change) → removes (descending index) → appends → new
 /// sections → section metadata. Stalagmight-only shot fields are preserved.
-pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
+pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Vec<String> {
+    let mut skipped: Vec<String> = Vec::new();
     // Edits in place, preserving Stalagmight-only fields.
     for e in &cs.shots_edited {
-        if let Some(section) = project.get_section_mut(e.section_id) {
-            if let Some(shot) = section.shots.get_mut(e.shot_index as usize) {
-                let d = &e.new_data;
-                shot.azimuth_in = d.azimuth_in;
-                shot.length = d.length;
-                shot.depth_in = d.depth_in;
-                shot.depth_out = d.depth_out;
-                shot.pitch_in = d.pitch_in;
-                shot.left = d.left;
-                shot.right = d.right;
-                shot.up = d.up;
-                shot.down = d.down;
-                shot.comment = d.comment.clone();
-                shot.is_reference = d.is_reference;
-                // Preserved (no TML equivalent): azimuth_out, pitch_out,
-                // marker_index, temperature.
-            }
-        }
+        let Some(section) = project.get_section_mut(e.section_id) else {
+            skipped.push(format!(
+                "Skipped edit on '{}' (section gone — baseline drifted from current project)",
+                e.section_name
+            ));
+            continue;
+        };
+        let Some(shot) = section.shots.get_mut(e.shot_index as usize) else {
+            skipped.push(format!(
+                "Skipped edit on '{}' shot #{} (index out of range — Stalagmight edited the section after the baseline was captured)",
+                e.section_name,
+                e.shot_index + 1,
+            ));
+            continue;
+        };
+        let d = &e.new_data;
+        shot.azimuth_in = d.azimuth_in;
+        shot.length = d.length;
+        shot.depth_in = d.depth_in;
+        shot.depth_out = d.depth_out;
+        shot.pitch_in = d.pitch_in;
+        shot.left = d.left;
+        shot.right = d.right;
+        shot.up = d.up;
+        shot.down = d.down;
+        shot.comment = d.comment.clone();
+        shot.is_reference = d.is_reference;
+        // Preserved (no TML equivalent): azimuth_out, pitch_out,
+        // marker_index, temperature.
     }
 
     // Removes — descending shot index so earlier indices stay valid.
-    let mut removals: Vec<(SectionId, u32)> = cs
+    let mut removals: Vec<(SectionId, u32, String)> = cs
         .shots_removed
         .iter()
-        .map(|r| (r.section_id, r.shot_index))
+        .map(|r| (r.section_id, r.shot_index, r.section_name.clone()))
         .collect();
     removals.sort_by(|a, b| b.1.cmp(&a.1));
-    for (sid, idx) in removals {
+    for (sid, idx, section_name) in removals {
         let shot_id = project
             .get_section(sid)
             .and_then(|s| s.shots.get(idx as usize))
             .map(|s| s.id);
-        if let Some(shot_id) = shot_id {
-            let _ = project.remove_shot_with_rewire(sid, shot_id);
+        match shot_id {
+            Some(shot_id) => {
+                let _ = project.remove_shot_with_rewire(sid, shot_id);
+            }
+            None => skipped.push(format!(
+                "Skipped removal on '{}' shot #{} (index out of range — Stalagmight already removed this shot, or the section is missing)",
+                section_name,
+                idx + 1,
+            )),
         }
     }
 
@@ -311,13 +340,30 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
             }
         };
         if let Some(nid) = new_id {
+            // Preserve the collaborator's UUID on the inserted shot so
+            // the next Ariane round-trip still matches via tier-1.  We
+            // post-patch instead of plumbing a uuid parameter through
+            // the Project insert/add path because those methods do
+            // significant offset / station-ref bookkeeping we don't
+            // want to fork.
+            if let Some(uuid) = a.uuid.as_ref() {
+                if let Some(section) = project.get_section_mut(sid) {
+                    if let Some(shot) = section.shots.iter_mut().find(|s| s.id == nid) {
+                        shot.uuid = Some(uuid.clone());
+                    }
+                }
+            }
             last_add = Some((sid, a.after_shot_id, nid));
         }
     }
 
-    // Whole new sections.
+    // Whole new sections.  Preserve per-shot UUIDs that came back from
+    // the collaborator (parallel to `s.shots`) by patching them onto
+    // the newly-added section's shots after add_section runs.  Shots
+    // without a returned UUID (Ariane ≤25 or shot lacked `<UUID>`)
+    // keep the fresh UUID `Shot::new` minted.
     for s in &cs.sections_added {
-        project.add_section(SectionData {
+        let new_sid = project.add_section(SectionData {
             name: Some(s.name.clone()),
             surveyor: s.surveyor.clone(),
             date: s.date,
@@ -325,7 +371,16 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
             direction: None,
             quality: 1.0,
             shots: s.shots.clone(),
-        });
+        }).id;
+        if !s.shot_uuids.is_empty() {
+            if let Some(section) = project.get_section_mut(new_sid) {
+                for (shot, uuid_opt) in section.shots.iter_mut().zip(s.shot_uuids.iter()) {
+                    if let Some(u) = uuid_opt.as_ref() {
+                        shot.uuid = Some(u.clone());
+                    }
+                }
+            }
+        }
     }
 
     // Section metadata.
@@ -341,14 +396,30 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) {
                         section.surveyor = (!ch.new.is_empty()).then(|| ch.new.clone());
                     }
                     "date" => {
-                        section.date =
-                            chrono::NaiveDate::parse_from_str(&ch.new, "%Y-%m-%d").ok();
+                        // Distinguish "clear the date" (Ariane sent the
+                        // empty string) from "malformed date" (Ariane
+                        // sent a non-ISO format).  Silently clearing on
+                        // a parse error wipes the user's date without
+                        // warning; preserve the previous value and
+                        // surface a skip warning instead.
+                        if ch.new.is_empty() {
+                            section.date = None;
+                        } else {
+                            match chrono::NaiveDate::parse_from_str(&ch.new, "%Y-%m-%d") {
+                                Ok(d) => section.date = Some(d),
+                                Err(_) => skipped.push(format!(
+                                    "Skipped date change on section: '{}' is not a valid YYYY-MM-DD date (kept previous value)",
+                                    ch.new
+                                )),
+                            }
+                        }
                     }
                     _ => {}
                 }
             }
         }
     }
+    skipped
 }
 
 #[cfg(test)]
@@ -396,6 +467,7 @@ mod tests {
             section_name: "Main".into(),
             position,
             after_shot_id: after,
+            uuid: None,
             data: shot(az, 6.5),
         }
     }

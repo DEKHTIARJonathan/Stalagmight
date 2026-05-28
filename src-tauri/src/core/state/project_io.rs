@@ -282,7 +282,7 @@ impl AppState {
         CommandResult::success()
     }
 
-    pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
+    pub(super) fn save_project(&self, path: Option<PathBuf>, is_autosave: bool) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -290,6 +290,16 @@ impl AppState {
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
         };
+
+        // Mint UUIDs for any shot still missing one (pre-v6 .stalx
+        // files loaded today come back with NULL uuid columns).
+        // Doing this BEFORE the SQLite write and BEFORE the sibling
+        // .tml export guarantees both sides receive the same UUIDs —
+        // without it, db.save_project's INSERT path would mint one set
+        // of fresh UUIDs and `write_collab_sibling`'s export would mint
+        // a different set, leaving the .stalx and the .tml disagreeing
+        // about every shot's identity until the next reload.
+        project.ensure_shot_uuids();
 
         // Determine save path and ensure .stalx extension
         let is_implicit_save = path.is_none();
@@ -465,8 +475,15 @@ impl AppState {
         project.file_path = Some(save_path.clone());
 
         // Collaboration mode: also write the sibling .tml and refresh the
-        // baseline. Best-effort — never fail the .stalx save if this fails.
-        if project.collab.as_ref().is_some_and(|c| c.enabled) {
+        // baseline. Best-effort — never fail the .stalx save if this
+        // fails.  Autosaves honour `CollabState.write_tml_on_autosave`
+        // — when that flag is `false` we skip the .tml rewrite on
+        // background saves so the file Ariane is editing doesn't churn
+        // every 30 seconds; manual / explicit saves always rewrite.
+        let collab_writes_tml = project.collab.as_ref().is_some_and(|c| {
+            c.enabled && (!is_autosave || c.write_tml_on_autosave)
+        });
+        if collab_writes_tml {
             if let Err(e) = Self::write_collab_sibling(project, &save_path, &db) {
                 tracing::warn!(
                     error = %e,

@@ -167,7 +167,7 @@ fn project_with_section(shots: Vec<ShotData>) -> Project {
 
 fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf {
     let path = dir.path().join("project");
-    let result = project::save_project(state(app), Some(path.clone()));
+    let result = project::save_project(state(app), Some(path.clone()), None);
     assert_success(&result);
     path.with_extension("stalx")
 }
@@ -580,7 +580,7 @@ fn test_close_project_clears_state() {
 #[test]
 fn test_save_project_fails_when_no_project() {
     let app = app_with_state();
-    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")));
+    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")), None);
     assert_failure_contains(&result, "No project open");
 }
 
@@ -598,7 +598,7 @@ fn test_save_project_creates_stalx_extension() {
         create_project(&app);
         let dir = TempDir::new().unwrap();
         let raw_path = dir.path().join("project_data");
-        let result = project::save_project(state(&app), Some(raw_path));
+        let result = project::save_project(state(&app), Some(raw_path), None);
         assert_success(&result);
         let saved_path = dir.path().join("project_data.stalx");
         assert!(saved_path.exists());
@@ -862,7 +862,7 @@ fn test_save_project_fails_when_output_is_directory() {
             let blocked = dir.path().join("blocked.stalx");
             fs::create_dir_all(&blocked).unwrap();
 
-            let result = project::save_project(state(&app), Some(blocked.clone()));
+            let result = project::save_project(state(&app), Some(blocked.clone()), None);
             assert_failure_contains(&result, "Failed to finalize save");
 
             let temp_path = blocked.with_extension("stalx.tmp");
@@ -925,7 +925,7 @@ fn test_save_project_fails_when_directory_missing() {
         let missing_dir = dir.path().join("missing");
         let path = missing_dir.join("project");
 
-        let result = project::save_project(state(&app), Some(path));
+        let result = project::save_project(state(&app), Some(path), None);
         assert_failure_contains(&result, "Failed to create save file");
         assert!(!missing_dir.exists());
     });

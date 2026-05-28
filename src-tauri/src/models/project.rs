@@ -408,6 +408,30 @@ impl Project {
         Some(self.sections.remove(pos))
     }
 
+    /// Mint v4 UUIDs for any shot whose `uuid` field is `None` and write
+    /// them back into the in-memory project.
+    ///
+    /// The save flow needs this before either the SQLite INSERT or the
+    /// TML export runs.  Without it, pre-v6 .stalx files loaded today
+    /// have `Shot::uuid = None` everywhere; the SQLite INSERT path
+    /// mints fresh UUIDs at write time but does NOT update the in-memory
+    /// shot, so a subsequent `export_tml_with_baseline` call in the
+    /// SAME save sees the shots still as `uuid: None` and mints a
+    /// SECOND, different set of UUIDs for the .tml.  The DB and the
+    /// sibling .tml then disagree on every shot's identity until the
+    /// next reload, breaking the collaboration round-trip.  Calling
+    /// this once at the top of `save_project` guarantees both sides
+    /// receive the same UUIDs.
+    pub fn ensure_shot_uuids(&mut self) {
+        for section in &mut self.sections {
+            for shot in &mut section.shots {
+                if shot.uuid.as_deref().map_or(true, str::is_empty) {
+                    shot.uuid = Some(uuid::Uuid::new_v4().to_string());
+                }
+            }
+        }
+    }
+
     /// Rebuild the section-id → index cache from the current `sections`
     /// vector. Cheap (O(N)) and safe to call any time; call this after a
     /// bulk mutation (e.g. snapshot rollback) or before a hot lookup loop

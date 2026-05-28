@@ -444,7 +444,7 @@ fn test_save_project_persists_display_settings_cache() {
         .unwrap();
 
     let save_path = temp_dir.path().join("cache-save");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     let saved_path = save_path.with_extension("stalx");
@@ -1450,7 +1450,7 @@ fn test_is_undoable_commands() {
     assert!(!AppState::is_undoable(&Command::OpenProject {
         path: PathBuf::from("/test.stalx"),
     }));
-    assert!(!AppState::is_undoable(&Command::SaveProject { path: None }));
+    assert!(!AppState::is_undoable(&Command::SaveProject { path: None, is_autosave: false }));
     assert!(!AppState::is_undoable(&Command::CloseProject));
     assert!(!AppState::is_undoable(&Command::CreateProject {
         name: "Test".to_string(),
@@ -1536,7 +1536,7 @@ fn test_save_project_prefers_database_display_settings_over_cache() {
     }
 
     let save_path = temp_dir.path().join("dest");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     let saved_path = save_path.with_extension("stalx");
@@ -1568,7 +1568,7 @@ fn test_save_project_failure_does_not_change_existing_file() {
     let blocked_path = temp_dir.path().join("blocked.stalx");
     std::fs::create_dir_all(&blocked_path).unwrap();
 
-    let result = state.save_project(Some(blocked_path.clone()));
+    let result = state.save_project(Some(blocked_path.clone()), false);
     assert!(!result.success);
 
     let reloaded = Database::open_existing(&original_path)
@@ -8009,7 +8009,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
 #[test]
 fn test_save_project_no_project_open() {
     let state = AppState::new().unwrap();
-    let result = state.save_project(Some(PathBuf::from("/tmp/test.stalx")));
+    let result = state.save_project(Some(PathBuf::from("/tmp/test.stalx")), false);
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No project open"));
 }
@@ -8022,7 +8022,7 @@ fn test_save_project_no_path_specified() {
         location: None,
     });
     // No file_path on project and no path argument
-    let result = state.save_project(None);
+    let result = state.save_project(None, false);
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No save path"));
 }
@@ -8051,7 +8051,7 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
         *db_guard = None;
     }
 
-    let result = state.save_project(None);
+    let result = state.save_project(None, false);
     assert!(result.success, "unexpected save failure: {:?}", result.error);
 
     // Existing file must remain untouched.
@@ -8074,7 +8074,7 @@ fn test_save_project_adds_stalx_extension() {
     });
     // Save without .stalx extension
     let save_path = temp_dir.path().join("myproject");
-    let result = state.save_project(Some(save_path));
+    let result = state.save_project(Some(save_path), false);
     assert!(result.success);
     assert!(temp_dir.path().join("myproject.stalx").exists());
 }
@@ -8098,7 +8098,7 @@ fn test_save_project_cleans_up_temp_on_reopen_failure() {
     });
 
     let save_path = temp_dir.path().join("project.stalx");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Verify temp file was cleaned up
@@ -8129,7 +8129,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
 
     // First save
     let save_path = temp_dir.path().join("atomic.stalx");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Modify project
@@ -8143,7 +8143,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
     });
 
     // Save again — should succeed and update the file
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Reload and verify both sections are there
@@ -8183,7 +8183,7 @@ fn test_save_project_persists_undo_redo_stacks() {
     state.undo();
 
     let save_path = temp_dir.path().join("undo-persist.stalx");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Reload and verify undo/redo stacks are persisted
@@ -8221,7 +8221,7 @@ fn test_open_project_clears_previous_state() {
         shots: vec![test_shot_data(5.0)],
     });
     let path_a = temp_dir.path().join("a.stalx");
-    state.save_project(Some(path_a.clone()));
+    state.save_project(Some(path_a.clone()), false);
 
     // Create and save project B
     state.execute(Command::CreateProject {
@@ -8245,7 +8245,7 @@ fn test_open_project_clears_previous_state() {
         shots: vec![test_shot_data(4.0)],
     });
     let path_b = temp_dir.path().join("b.stalx");
-    state.save_project(Some(path_b.clone()));
+    state.save_project(Some(path_b.clone()), false);
 
     // Open project A — should replace B's state
     let result = state.open_project(path_a);
@@ -8990,6 +8990,7 @@ fn test_batch_disallowed_command_save_project() {
     let result = state.execute(Command::Batch {
         commands: vec![Command::SaveProject {
             path: Some(PathBuf::from("/tmp/test.stalx")),
+            is_autosave: false,
         }],
     });
     assert!(!result.success);
@@ -10218,7 +10219,7 @@ fn test_station_comment_persists_across_save_open() {
     }).section_id.unwrap();
     let station = StationRef::new(sec, 1);
     state.execute(Command::SetStationComment { station_ref: station, comment: Some("persisted note".to_string()) });
-    assert!(state.save_project(Some(save_path.clone())).success);
+    assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
     assert_eq!(state2.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("persisted note"),
@@ -10340,7 +10341,7 @@ fn test_undo_actually_works_after_project_reopen() {
     });
     assert!(create_result.success);
     let section_id = create_result.section_id.unwrap();
-    assert!(state1.save_project(Some(save_path.clone())).success);
+    assert!(state1.save_project(Some(save_path.clone()), false).success);
     // Session 2: reopen and undo
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
@@ -10497,7 +10498,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
     assert_eq!(project_before.zero_datums.len(), 1);
 
     // Save and reopen
-    assert!(state.save_project(Some(save_path.clone())).success);
+    assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
     let project_after = state2.get_project_state().unwrap();
@@ -11147,7 +11148,7 @@ fn test_merge_chain_survives_save_reopen() {
     let c1_before = project_before.compute_station_raw_coords(StationRef::new(sec_c, 1));
 
     // Save and reopen
-    assert!(state.save_project(Some(save_path.clone())).success);
+    assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
 
@@ -11279,7 +11280,7 @@ fn test_collab_save_writes_sibling_tml_and_baseline() {
     state.set_project_for_tests(project);
 
     let stalx = temp_dir.path().join("collab-cave.stalx");
-    let r = state.execute(Command::SaveProject { path: Some(stalx.clone()) });
+    let r = state.execute(Command::SaveProject { path: Some(stalx.clone()), is_autosave: false });
     assert!(r.success, "save failed: {:?}", r.error);
 
     // Sibling .tml written next to the .stalx.
@@ -11294,7 +11295,7 @@ fn test_collab_save_writes_sibling_tml_and_baseline() {
     assert_eq!(collab.shot_baseline.len(), 2, "baseline has both shots");
 
     // A second save with no edits is idempotent (UUIDs reused -> same hash).
-    let r2 = state.execute(Command::SaveProject { path: None });
+    let r2 = state.execute(Command::SaveProject { path: None, is_autosave: false });
     assert!(r2.success);
     let loaded2 = Database::open(&stalx).unwrap().load_project().unwrap();
     let sha2 = loaded2.collab.unwrap().last_export_tml_sha256.unwrap();
@@ -11327,7 +11328,7 @@ fn test_apply_collab_changes_preserves_native_data_and_is_undoable() {
     state.set_project_for_tests(project);
 
     let stalx = dir.path().join("c.stalx");
-    assert!(state.execute(Command::SaveProject { path: Some(stalx) }).success);
+    assert!(state.execute(Command::SaveProject { path: Some(stalx), is_autosave: false }).success);
     let sibling = dir.path().join("c.tml");
     assert!(sibling.exists());
 

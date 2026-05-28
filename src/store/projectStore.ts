@@ -542,12 +542,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // has collab on AND the sibling .tml was edited externally
         // (Ariane), offer to reconcile.  When collab is off but a
         // companion .tml exists, warn the user that Ariane edits won't
-        // flow in and saves won't update it.  Either path fires
-        // asynchronously so the load returns immediately.
+        // flow in and saves won't update it.  Both paths fire
+        // asynchronously so the load returns immediately, and both
+        // re-check `clientOpId` / `loading` state inside `.then` so a
+        // user who navigated away (closeProject, switched projects)
+        // before the IPC resolved doesn't get a dialog or toast for a
+        // project that's no longer open.
+        const detectOpId = clientOpId;
+        const isStillCurrentLoad = (): boolean => {
+          const state = get();
+          return (
+            state.project !== null &&
+            state.loading.clientOpId === detectOpId
+          );
+        };
         if (result.project.collab?.enabled) {
           void get()
             .detectCollabChanges()
             .then((cs) => {
+              if (!isStillCurrentLoad()) return;
               if (
                 cs &&
                 cs.shots_added.length +
@@ -567,6 +580,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           void get()
             .checkCollabSibling()
             .then((siblingName) => {
+              if (!isStillCurrentLoad()) return;
               if (siblingName) {
                 useUIStore
                   .getState()
