@@ -77,7 +77,7 @@ test.describe('Zoom Tool', () => {
   });
 
   test.describe('Click Zoom', () => {
-    test('left-click zooms in', async ({ page }) => {
+    test('left-click zooms in @smoke', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
       await page.waitForTimeout(50);
@@ -97,7 +97,7 @@ test.describe('Zoom Tool', () => {
       expect(newZoom).toBeGreaterThan(initialZoom!);
     });
 
-    test('right-click zooms out', async ({ page }) => {
+    test('right-click zooms out @smoke', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
       await page.waitForTimeout(50);
@@ -381,7 +381,7 @@ test.describe('Zoom Tool', () => {
   });
 
   test.describe('Keyboard Shortcuts', () => {
-    test('= key zooms in', async ({ page }) => {
+    test('= key zooms in @smoke', async ({ page }) => {
       const initialZoom = await getMapZoom(page);
       expect(initialZoom).not.toBeNull();
 
@@ -660,7 +660,7 @@ test.describe('Zoom Tool', () => {
   });
 
   test.describe('Wheel Zoom Interaction', () => {
-    test('scroll wheel zooms in and out', async ({ page }) => {
+    test('scroll wheel zooms in and out @smoke', async ({ page }) => {
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();

@@ -70,7 +70,7 @@ test.describe('Back Button Navigation', () => {
     expect(relevantErrors, 'No JavaScript errors should occur').toHaveLength(0);
   });
 
-  test('should return to Global View without crashing (clean state)', async ({ page }) => {
+  test('should return to Global View without crashing (clean state) @smoke', async ({ page }) => {
     // Create a project to get to SingleSystemView
     await createProject(page, 'Back Button Test Project');
 
@@ -84,7 +84,7 @@ test.describe('Back Button Navigation', () => {
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
   });
 
-  test('should handle unsaved changes dialog correctly', async ({ page }) => {
+  test('should handle unsaved changes dialog correctly @smoke', async ({ page }) => {
     // Create a project
     await createProject(page, 'Unsaved Changes Test Project');
 

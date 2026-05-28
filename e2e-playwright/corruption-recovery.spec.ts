@@ -87,7 +87,7 @@ test.describe('Corruption Recovery Dialog', () => {
     await clearRecoveryMocks(page);
   });
 
-  test('dialog renders with title and error message', async ({ page }) => {
+  test('dialog renders with title and error message @smoke', async ({ page }) => {
     await openRecoveryDialog(page);
 
     const dialog = page.getByTestId('corruption-recovery-dialog');
@@ -138,7 +138,7 @@ test.describe('Corruption Recovery Dialog', () => {
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
   });
 
-  test('Attempt Repair shows success result', async ({ page }) => {
+  test('Attempt Repair shows success result @smoke', async ({ page }) => {
     await openRecoveryDialog(page);
 
     await page.getByTestId('recovery-attempt-repair').click();

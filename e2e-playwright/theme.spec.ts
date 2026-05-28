@@ -179,7 +179,7 @@ test.describe('Theme Switching - Default Dark Theme', () => {
     ).toBeVisible({ timeout: 10000 });
   });
 
-  test('default theme is dark on app load', async ({ page }) => {
+  test('default theme is dark on app load @smoke', async ({ page }) => {
     // Verify data-theme attribute on document root immediately after load
     // Config has theme:'dark' + night_color_theme:'cave', so data-theme resolves to 'cave'
     const dataTheme = await page.evaluate(
@@ -211,7 +211,7 @@ test.describe('Theme Switching - Via Settings UI', () => {
     await createProject(page, 'Theme Settings Test');
   });
 
-  test('theme can be changed to light via Settings Appearance tab', async ({
+  test('theme can be changed to light via Settings Appearance tab @smoke', async ({
     page,
   }) => {
     await openSettingsDialog(page);

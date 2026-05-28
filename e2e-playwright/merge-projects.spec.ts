@@ -64,7 +64,7 @@ test.describe('Merge Projects Dialog', () => {
     await setupMockedPage(page);
   });
 
-  test('dialog renders with selected project list', async ({ page }) => {
+  test('dialog renders with selected project list @smoke', async ({ page }) => {
     await openMergeDialog(page);
 
     const dialog = page.getByTestId('merge-projects-dialog');
@@ -132,7 +132,7 @@ test.describe('Merge Projects Dialog', () => {
     await expect(checkbox).toBeChecked();
   });
 
-  test('confirm button calls merge IPC and closes dialog', async ({ page }) => {
+  test('confirm button calls merge IPC and closes dialog @smoke', async ({ page }) => {
     // Set up mock override for merge_projects
     await page.evaluate(() => {
       const overrides = (window as any).__MOCK_IPC_OVERRIDES__ ?? {};
