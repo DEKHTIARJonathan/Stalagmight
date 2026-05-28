@@ -968,7 +968,9 @@ pub fn convert_compass_to_import_configs(
     // by a spanning-tree walk over chain connectivity, so it doesn't depend on
     // survey/file order (the previous one-pass first-occurrence registration
     // mis-placed every chain whose shared station was first defined in a
-    // later-processed survey, dumping ~280 shots at origin in Minotauro).
+    // later-processed survey, dumping ~280 shots at origin in the
+    // private real-cave corpus the spanning-tree placement was first
+    // validated against).
     struct PendingChain {
         section_index: u32,
         names: Vec<String>,
@@ -1320,39 +1322,39 @@ mod tests {
         configs.iter().map(|c| c.shots.len()).sum()
     }
 
+    // The private_cave_* tests below exercise the importer end-to-end against
+    // a real-cave Compass corpus.  That corpus is private survey data and is
+    // not committed; place `PrivateCave.MAK` (and the .DAT files it
+    // references) under `src-tauri/tests/fixtures/compass/` locally and
+    // re-run with `cargo test -- --ignored` to enable them.
+
     #[test]
-    fn parse_minotauro_mak_reads_georeference() {
-        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+    #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
+    fn private_cave_mak_reads_georeference() {
+        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         assert!(!parsed.surveys.is_empty());
-        assert_eq!(parsed.datum, Some(Datum::WGS1984));
-        assert_eq!(parsed.utm_zone, Some(16));
-        let anchor = parsed
-            .fixed_stations
-            .iter()
-            .find(|f| f.name == "00")
-            .expect("fixed station 00");
-        assert!((anchor.easting - 471_750.0).abs() < 1.0);
-        assert!((anchor.northing - 2_264_824.0).abs() < 1.0);
+        assert!(parsed.datum.is_some());
+        assert!(parsed.utm_zone.is_some());
+        assert!(
+            !parsed.fixed_stations.is_empty(),
+            "expected at least one fixed station to anchor the project"
+        );
     }
 
     #[test]
-    fn minotauro_first_shot_geometry_is_depth_based() {
-        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+    #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
+    fn private_cave_first_shot_geometry_is_depth_based() {
+        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         let (configs, _closures, _warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         assert!(!configs.is_empty());
 
-        // The chain containing the anchor "00" gets a ZeroDatum placement; its
-        // first shot is 00 -> MNUS1 (49.00 ft length, 66.00 deg bearing,
-        // -5.86 ft depth reading, decl 0).  The Minotauro DAT FORMAT line is
-        // `DDDWLRUDALDN` — the 4th char `W` declares inclination units as
-        // DepthGauge, so the -5.86 column is a vertical-depth offset in the
-        // shot's length units (feet here), not a slope angle in degrees.
-        // The pipeline turns this into a Compass +up slope of
-        // -asin(-5.86 / 49.00) ≈ +6.87° (target is shallower than origin),
-        // which Stalagmight stores as pitch_in = -6.87° (+down) and
-        // elevation_gain = 14.9352 m * sin(+6.87°) ≈ +1.787 m → MNUS1
-        // ends up 1.787 m UP from "00", i.e. depth_out ≈ -1.787 m.
+        // The private corpus uses a survey FORMAT whose 4th character is `W`
+        // (DepthGauge), so each shot's "inclination" column is actually a
+        // vertical depth offset in the shot's length units, not a slope
+        // angle in degrees.  The pipeline converts it via
+        // `-asin(depth / length)` into a Compass +up slope which Stalagmight
+        // then stores as +down pitch.
         let anchor_config = configs
             .iter()
             .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
@@ -1361,14 +1363,14 @@ mod tests {
             assert_eq!(station_index, 0);
         }
         let shot = &anchor_config.shots[0];
-        assert!((shot.azimuth_in - 66.0).abs() < 0.01, "azimuth {}", shot.azimuth_in);
-        assert!((shot.length - 14.9352).abs() < 0.01, "length {}", shot.length);
+        // DepthGauge surveys produce a finite, non-trivial pitch out of a
+        // raw "inclination" column that would otherwise be near-zero.
         assert!(shot.depth_in.abs() < 0.01, "depth_in {}", shot.depth_in);
-        // -asin(-5.86/49.00) ≈ +6.871° in Compass +up; 14.9352 * sin(6.871°)
-        // ≈ +1.787 m gained going up, so MNUS1 ends ~1.787 m shallower
-        // than "00" — depth_out ≈ -1.787 m in Stalagmight's +down convention.
-        assert!((shot.depth_out + 1.7867).abs() < 0.01, "depth_out {}", shot.depth_out);
-        assert!((shot.pitch_in.unwrap() + 6.871).abs() < 0.01, "pitch {:?}", shot.pitch_in);
+        assert!(
+            shot.pitch_in.is_some_and(|p| p.abs() > 0.5),
+            "expected a meaningful DepthGauge-derived pitch, got {:?}",
+            shot.pitch_in
+        );
 
         // Exactly one zero datum for the whole project.
         let zero_datums = configs
@@ -1379,8 +1381,9 @@ mod tests {
     }
 
     #[test]
-    fn minotauro_zero_datum_projects_to_tulum() {
-        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+    #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
+    fn private_cave_zero_datum_projects_to_plausible_coords() {
+        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         let (configs, _closures, _warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let coords = configs
@@ -1390,14 +1393,25 @@ mod tests {
                 _ => None,
             })
             .expect("zero datum coordinates");
-        // Cenote Minotauro is near Tulum, Quintana Roo, Mexico.
-        assert!(coords.latitude > 20.0 && coords.latitude < 21.0, "lat {}", coords.latitude);
-        assert!(coords.longitude > -88.0 && coords.longitude < -87.0, "lng {}", coords.longitude);
+        // The fixture's anchor must reach `GpsCoordinates::new` with a
+        // finite, in-range result — the actual lat/lon is intentionally
+        // unchecked here so this test doesn't pin a real location.
+        assert!(
+            coords.latitude.is_finite() && coords.latitude.abs() < 90.0,
+            "lat {} out of range",
+            coords.latitude
+        );
+        assert!(
+            coords.longitude.is_finite() && coords.longitude.abs() < 180.0,
+            "lng {} out of range",
+            coords.longitude
+        );
     }
 
     #[test]
-    fn excluded_shots_are_filtered_by_default() {
-        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+    #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
+    fn private_cave_excluded_shots_are_filtered_by_default() {
+        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         let (default_configs, _, _) = convert_compass_to_import_configs(
             &parsed,
             &CompassImportOptions {
@@ -1416,8 +1430,9 @@ mod tests {
             },
         )
         .unwrap();
-        // The MNEstrella survey is entirely #|X# flagged, so including excluded
-        // shots must add shots, imported as reference shots.
+        // The fixture contains at least one survey that is entirely
+        // `#|X#`-flagged; including excluded shots must add shots, which
+        // are imported as reference shots.
         assert!(total_shots(&included_configs) > total_shots(&default_configs));
         assert!(
             included_configs
@@ -1438,24 +1453,30 @@ mod tests {
     }
 
     #[test]
-    fn utm_to_wgs84_matches_expected_region() {
+    fn utm_to_wgs84_matches_pyproj_reference() {
+        // Reference point with no real-world cave attached: UTM Zone 31N's
+        // false-easting / false-northing origin (easting=500000, northing=0)
+        // is by construction the central-meridian / equator intersection.
+        // Zone 31's central meridian is +3°, so EPSG:32631 → EPSG:4326
+        // must round-trip to exactly (lon=3, lat=0).
         let mut warnings = Vec::new();
         let (lon, lat) =
-            utm_to_wgs84(471_750.0, 2_264_824.0, 16, Datum::WGS1984, &mut warnings).unwrap();
-        // Reference: pyproj EPSG:32616 -> EPSG:4326 gives lat 20.481817, lon -87.270896.
-        assert!((lat - 20.481817).abs() < 0.0005, "lat {lat}");
-        assert!((lon - (-87.270896)).abs() < 0.0005, "lon {lon}");
+            utm_to_wgs84(500_000.0, 0.0, 31, Datum::WGS1984, &mut warnings).unwrap();
+        assert!(lat.abs() < 1e-6, "lat {lat}");
+        assert!((lon - 3.0).abs() < 1e-6, "lon {lon}");
     }
 
     #[test]
-    fn comments_promoted_to_from_station_by_default() {
+    #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
+    fn private_cave_comments_promoted_to_from_station_by_default() {
         // Compass convention: a shot comment describes the FROM station (the
-        // point the surveyor was standing at). With comments_on_stations on
+        // point the surveyor was standing at).  With comments_on_stations on
         // (the default), each non-empty shot comment should become a
         // station_comment at station_index = shot index, and the shot's own
-        // comment should be cleared. Minotauro's first shot 00->MNUS1 carries
-        // the cenote entrance note, which must land on station 0 ("00").
-        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        // comment should be cleared.  The private fixture's first shot
+        // carries an entrance note on its FROM station; this test asserts
+        // that note migrates to station 0 of the anchor section.
+        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         let (promoted, _, _) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let anchor = promoted
@@ -1472,8 +1493,8 @@ mod tests {
             .iter()
             .find_map(|(idx, text)| (*idx == 0).then_some(text.as_str()));
         assert!(
-            station_zero_comment.is_some_and(|s| s.contains("Cenote Minotauro")),
-            "station 0 should carry the cenote entrance note, got {:?}",
+            station_zero_comment.is_some_and(|s| !s.is_empty()),
+            "station 0 should carry a non-empty promoted comment, got {:?}",
             station_zero_comment
         );
 
@@ -1497,20 +1518,22 @@ mod tests {
             anchor_raw.shots[0]
                 .comment
                 .as_deref()
-                .is_some_and(|c| c.contains("Cenote Minotauro"))
+                .is_some_and(|s| !s.is_empty()),
+            "first shot should retain its non-empty comment when promotion is off"
         );
     }
 
     #[test]
-    fn minotauro_every_section_connects_to_the_zero_datum() {
-        // Regression guard for the spanning-tree placement: every Compass section
-        // in the Minotauro corpus must attach to the network through a
+    #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
+    fn private_cave_every_section_connects_to_the_zero_datum() {
+        // Regression guard for the spanning-tree placement: every Compass
+        // section in the private corpus must attach to the network through a
         // station-name path back to the zero datum (1 ZeroDatum + the rest
-        // FromImporting), with no chains stranded at origin. A one-pass
-        // first-occurrence placement previously left ~20 sections (~280 shots)
-        // detached because their connection station was first defined in a
+        // FromImporting), with no chains stranded at origin.  A one-pass
+        // first-occurrence placement previously left ~20 sections detached
+        // because their connection station was first defined in a
         // later-processed survey.
-        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         let (configs, _closures, warnings) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         let mut zero = 0;
@@ -1531,8 +1554,9 @@ mod tests {
     }
 
     #[test]
-    fn corpus_minotauro_converts_without_error() {
-        let parsed = parse_compass(&fixture("Minotauro.MAK")).unwrap();
+    #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
+    fn private_cave_corpus_converts_without_error() {
+        let parsed = parse_compass(&fixture("PrivateCave.MAK")).unwrap();
         let preview = build_preview(&parsed);
         assert!(preview.has_georeference);
         assert!(preview.survey_count >= 3);
