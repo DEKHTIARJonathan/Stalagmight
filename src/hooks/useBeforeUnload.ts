@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { debugLog } from '../utils/debugLog';
 
 /**
  * Hook to show a confirmation dialog when the user tries to close the app window
@@ -45,12 +46,12 @@ export function useBeforeUnload(
 
     // Close the window immediately without confirmation
     const closeWindowNow = async () => {
-      console.log('[useBeforeUnload] closeWindowNow called');
+      debugLog('[useBeforeUnload] closeWindowNow called');
       try {
         const appWindow = getCurrentWindow();
-        console.log('[useBeforeUnload] Got window, calling destroy');
+        debugLog('[useBeforeUnload] Got window, calling destroy');
         await appWindow.destroy();
-        console.log('[useBeforeUnload] Window destroyed');
+        debugLog('[useBeforeUnload] Window destroyed');
       } catch (e) {
         console.error('[useBeforeUnload] Window destroy failed:', e);
       }
@@ -60,19 +61,19 @@ export function useBeforeUnload(
     // ALWAYS listen for this event - the backend always prevents default close
     const setupTauriListener = async () => {
       try {
-        console.log('[useBeforeUnload] Setting up close listener');
+        debugLog('[useBeforeUnload] Setting up close listener');
         const unlisten = await listen('tauri://close-requested', async () => {
-          console.log('[useBeforeUnload] Close requested, shouldBlock:', shouldBlockRef.current, 'isClosing:', isClosing.current);
+          debugLog('[useBeforeUnload] Close requested, shouldBlock:', shouldBlockRef.current, 'isClosing:', isClosing.current);
 
           // If we're already closing, don't do anything
           if (isClosing.current) {
-            console.log('[useBeforeUnload] Already closing, ignoring');
+            debugLog('[useBeforeUnload] Already closing, ignoring');
             return;
           }
 
           // If not blocking, immediately close the window
           if (!shouldBlockRef.current) {
-            console.log('[useBeforeUnload] Not blocking, closing immediately');
+            debugLog('[useBeforeUnload] Not blocking, closing immediately');
             isClosing.current = true;
             await closeWindowNow();
             return;

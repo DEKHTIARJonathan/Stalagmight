@@ -8,7 +8,7 @@ default-run = "stalagmight"
 
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
-telemetry = ["rmp-serde", "serde_bytes"]
+telemetry = []
 
 [lib]
 name = "stalagmight_lib"
@@ -46,9 +46,16 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 quick-xml = "0.37"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
-rmp-serde = { version = "1", optional = true }
-serde_bytes = { version = "0.11", optional = true }
+# Used both for telemetry's batched event encoding and for the binary
+# load_project_full IPC. Always available so we can switch the load path
+# off JSON without conditional compilation.
+rmp-serde = "1"
+serde_bytes = "0.11"
 tauri-plugin-webdriver-automation = { git = "https://github.com/FumblingBarbell/tauri-webdriver", branch = "fix/resolve-element-refs-in-execute-sync", optional = true }
+compass_data = { path = "vendor/compass_data" }
+igrf = "0.2"
+proj4rs = "0.1"
+time = "0.3"
 
 [profile.release]
 lto = true

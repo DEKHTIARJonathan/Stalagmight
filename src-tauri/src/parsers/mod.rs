@@ -1,3 +1,4 @@
+pub mod compass;
 pub mod dmp;
 pub mod gpx;
 pub mod tml;

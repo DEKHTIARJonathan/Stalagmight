@@ -1365,6 +1365,8 @@
   "globalView": {
     "actions": {
       "importDmp": "Import DMP",
+      "importTml": "Import Ariane",
+      "importCompass": "Import Compass",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",

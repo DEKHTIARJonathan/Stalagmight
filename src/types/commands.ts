@@ -19,6 +19,8 @@ export type {
   TmlUnit,
   TmlGeoCoding,
   TmlClosure,
+  CompassFile,
+  CompassSurveySummary,
   ImportSectionConfig,
   ImportPlacement,
   SectionRelationships,

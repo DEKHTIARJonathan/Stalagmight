@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
+import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { useUIStore } from './uiStore';
 import { useGlobalViewStore } from './globalViewStore';
@@ -23,8 +24,10 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet } from '../types/commands';
-import type { LoadProjectFullResult, CreateProjectFullResult } from '../types/loading';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet } from '../types/commands';
+import type { CreateProjectFullResult } from '../types/loading';
+import type { SurveyData } from '../types/survey-data';
+import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -137,6 +140,14 @@ interface ProjectStore {
   // State
   project: Project | null;
   stations: Station[];
+  /**
+   * Struct-of-Arrays representation of the loaded project's bulk
+   * data (shots + stations). Lives alongside `project` and `stations`
+   * during the Phase-A migration; once consumers are migrated this
+   * becomes the primary representation and `project.sections[].shots`
+   * + `stations` go away. See docs/plans/memory-soa-and-mvt.md.
+   */
+  surveyData: SurveyData | null;
   stats: ProjectStats | null;
   frozenShots: FrozenShotRef[];
   warnings: ProjectWarning[];
@@ -242,6 +253,8 @@ interface ProjectStore {
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  parseCompass: (path: string) => Promise<CompassFile>;
+  executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   // Collaboration mode
   setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
   setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
@@ -274,6 +287,13 @@ function isPartialMultiStepFailure(error: string | null): boolean {
   if (!match || !match[1]) return false;
   return parseInt(match[1], 10) > 1;
 }
+
+/**
+ * Tracks in-flight `loadProject(path)` calls so concurrent requests for the
+ * same path share one execution. Each entry is removed when the underlying
+ * promise settles. See loadProject for rationale.
+ */
+const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
 
 export const useProjectStore = create<ProjectStore>((set, get) => {
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
@@ -322,6 +342,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Initial state
   project: null,
   stations: [],
+  surveyData: null,
   stats: null,
   frozenShots: [],
   warnings: [],
@@ -419,128 +440,182 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Load project using the consolidated load_project_full command
-  loadProject: async (path: string) => {
-    // Clear GlobalView geometry cache to cancel pending loads and free memory
-    useGlobalViewStore.getState().clearGeometryCache();
+  //
+  // Concurrent calls for the same path share one execution. Without this,
+  // a fast double-click on a SystemCard (or React StrictMode dev re-mount)
+  // fires loadProject multiple times; each call decodes ~600 KB of shot
+  // floats + 350 KB of station coords and rebuilds 240 k MapLibre
+  // features in two workers, even though all but the last result are
+  // discarded by the clientOpId race check. The thrown-away allocations
+  // churn JSC's bmalloc slabs and leave committed (but unused) memory
+  // behind. The dedup map ensures the heavy path runs exactly once.
+  loadProject: (path: string) => {
+    const existing = inFlightLoads.get(path);
+    if (existing) return existing;
 
-    // ALWAYS cancel first - NO isLoading guard
-    // cancel_loading is idempotent on backend
-    await get().cancelLoading();
+    // Drop in-flight entries for OTHER paths: this load is about to
+    // call `cancelLoading()` which will bump the clientOpId, dooming
+    // any in-flight load for a different path to return
+    // `{success: false}` from its clientOpId check.  If we kept those
+    // entries around, a user re-click for one of those paths would
+    // receive the now-doomed promise instead of starting a fresh load.
+    // The same-path entry below would have short-circuited above; this
+    // only clears stale ones.
+    for (const key of [...inFlightLoads.keys()]) {
+      if (key !== path) inFlightLoads.delete(key);
+    }
 
-    // Use cross-platform path splitting for project name extraction
-    const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
-    const clientOpId = get().startLoading(initialName, path);
+    const promise: Promise<{ success: boolean }> = (async () => {
+      // [perf-debug] Trace each post-IPC step distinctly so we know whether
+      // the visible "stuck progress bar" freeze is JSON.parse on the IPC
+      // resolution, the Zustand set, the view switch / MapCanvas mount, or
+      // something else. Each checkpoint is logged to the MemoryProbe panel.
+      const { recordPerfTiming } = await import('../utils/memoryProbe');
+      const tStart = performance.now();
 
-    try {
-      const result = await invokeIpc<LoadProjectFullResult>(
-        'load_project_full',
-        { path },
-        { purpose: 'load project for workspace', fields: { path } }
-      );
+      // Clear GlobalView geometry cache to cancel pending loads and free memory
+      useGlobalViewStore.getState().clearGeometryCache();
 
-      // Check clientOpId hasn't changed (cancelled/new load started)
-      if (get().loading.clientOpId !== clientOpId) {
-        return { success: false };
-      }
+      // ALWAYS cancel first - NO isLoading guard
+      // cancel_loading is idempotent on backend
+      await get().cancelLoading();
 
-      // Set backend loadingId from result for event correlation
-      get().setLoadingProgress({ loadingId: result.loadingId });
+      // Use cross-platform path splitting for project name extraction
+      const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
+      const clientOpId = get().startLoading(initialName, path);
 
-      // Update loading title with actual project name from result
-      if (result.project.name !== initialName) {
-        get().setLoadingProgress({ projectName: result.project.name });
-      }
+      try {
+        const tIpcStart = performance.now();
+        // Binary IPC: msgpack envelope + typed-array byte buffers for shots
+        // and stations. The decoder reconstructs the same shape as the legacy
+        // `load_project_full` JSON response so the rest of the load pipeline
+        // doesn't need to change. See utils/loadProjectBinary.ts.
+        const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
+        const result = await loadProjectFullBinary(path);
+        // The await above includes both the Rust handler runtime AND the
+        // JS-side msgpack decode + typed-array materialization.
+        const tIpcDone = performance.now();
+        recordPerfTiming('load_project_full IPC+parse', tIpcDone - tIpcStart);
 
-      // Apply ALL state from single response
-      set({
-        project: result.project,
-        stations: result.stations,
-        stats: result.stats,
-        warnings: result.warnings,
-        isDirty: false,
-      });
+        // Check clientOpId hasn't changed (cancelled/new load started)
+        if (get().loading.clientOpId !== clientOpId) {
+          return { success: false };
+        }
 
-      // Apply display settings to UI store (merge, don't overwrite)
-      useUIStore.getState().applyDisplaySettings(result.displaySettings);
-      useUIStore.getState().triggerFitToBounds();
-      useUIStore.getState().setView('single');
+        // Set backend loadingId from result for event correlation
+        get().setLoadingProgress({ loadingId: result.loadingId });
 
-      // Update recent projects list
-      await get().loadRecentProjects();
+        // Update loading title with actual project name from result
+        if (result.project.name !== initialName) {
+          get().setLoadingProgress({ projectName: result.project.name });
+        }
 
-      get().resetLoading();
-      await get().refreshUndoState();
+        // Apply ALL state from single response
+        const tSetStart = performance.now();
+        set({
+          project: result.project,
+          stations: result.stations,
+          surveyData: result.surveyData,
+          stats: result.stats,
+          warnings: result.warnings,
+          isDirty: false,
+        });
+        const tSetDone = performance.now();
+        recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
 
-      // Collaboration mode (non-blocking, best-effort):
-      if (result.project.collab?.enabled) {
-        // If the sibling .tml was edited externally (Ariane), detect the
-        // changes and offer to reconcile them.
-        void get()
-          .detectCollabChanges()
-          .then((cs) => {
-            if (
-              cs &&
-              cs.shots_added.length +
-                cs.shots_edited.length +
-                cs.shots_removed.length +
-                cs.sections_added.length +
-                cs.section_meta_changed.length >
-                0
-            ) {
-              useUIStore.getState().openDialog('collab-review', { changeSet: cs });
-            }
-          })
-          .catch(() => {
-            /* detection is best-effort; ignore errors */
-          });
-      } else {
-        // Collaboration is off but a companion .tml exists next to the project:
-        // warn that Ariane edits won't flow in and saves won't update it.
-        void get()
-          .checkCollabSibling()
-          .then((siblingName) => {
-            if (siblingName) {
-              useUIStore
-                .getState()
-                .showToast(
-                  i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
-                  'collab-sibling-warning'
-                );
-            }
-          })
-          .catch(() => {
-            /* best-effort; ignore errors */
-          });
-      }
-
-      return { success: true };
-    } catch (e) {
-      const error = parseLoadError(e);
-
-      // Handle ALREADY_OPEN specially - not an error, just switch view
-      if (error.code === 'ALREADY_OPEN') {
+        // Apply display settings to UI store (merge, don't overwrite)
+        useUIStore.getState().applyDisplaySettings(result.displaySettings);
+        useUIStore.getState().triggerFitToBounds();
+        const tViewStart = performance.now();
         useUIStore.getState().setView('single');
+        const tViewDone = performance.now();
+        recordPerfTiming('setView(single)', tViewDone - tViewStart);
+
+        // Update recent projects list
+        await get().loadRecentProjects();
+
         get().resetLoading();
         await get().refreshUndoState();
-        return { success: true };
-      }
+        recordPerfTiming('loadProject total', performance.now() - tStart);
 
-      // Handle CORRUPT - open recovery dialog instead of generic error
-      if (error.code === 'CORRUPT' && error.details) {
-        get().resetLoading();
-        useUIStore.getState().openDialog('corruption-recovery', {
-          corruptPath: error.details,
-          errorMessage: error.message,
-        });
+        // Collaboration mode (non-blocking, best-effort): if the project
+        // has collab on AND the sibling .tml was edited externally
+        // (Ariane), offer to reconcile.  When collab is off but a
+        // companion .tml exists, warn the user that Ariane edits won't
+        // flow in and saves won't update it.  Either path fires
+        // asynchronously so the load returns immediately.
+        if (result.project.collab?.enabled) {
+          void get()
+            .detectCollabChanges()
+            .then((cs) => {
+              if (
+                cs &&
+                cs.shots_added.length +
+                  cs.shots_edited.length +
+                  cs.shots_removed.length +
+                  cs.sections_added.length +
+                  cs.section_meta_changed.length >
+                  0
+              ) {
+                useUIStore.getState().openDialog('collab-review', { changeSet: cs });
+              }
+            })
+            .catch(() => {
+              /* detection is best-effort; ignore errors */
+            });
+        } else {
+          void get()
+            .checkCollabSibling()
+            .then((siblingName) => {
+              if (siblingName) {
+                useUIStore
+                  .getState()
+                  .showToast(
+                    i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
+                    'collab-sibling-warning'
+                  );
+              }
+            })
+            .catch(() => {
+              /* best-effort; ignore errors */
+            });
+        }
+
+        return { success: true };
+      } catch (e) {
+        const error = parseLoadError(e);
+
+        // Handle ALREADY_OPEN specially - not an error, just switch view
+        if (error.code === 'ALREADY_OPEN') {
+          useUIStore.getState().setView('single');
+          get().resetLoading();
+          await get().refreshUndoState();
+          return { success: true };
+        }
+
+        // Handle CORRUPT - open recovery dialog instead of generic error
+        if (error.code === 'CORRUPT' && error.details) {
+          get().resetLoading();
+          useUIStore.getState().openDialog('corruption-recovery', {
+            corruptPath: error.details,
+            errorMessage: error.message,
+          });
+          return { success: false };
+        }
+
+        // Only set error if this is still the current load operation
+        if (get().loading.clientOpId === clientOpId) {
+          get().setLoadingError(error.message, error.details);
+        }
         return { success: false };
       }
+    })();
 
-      // Only set error if this is still the current load operation
-      if (get().loading.clientOpId === clientOpId) {
-        get().setLoadingError(error.message, error.details);
-      }
-      return { success: false };
-    }
+    inFlightLoads.set(path, promise);
+    void promise.finally(() => {
+      if (inFlightLoads.get(path) === promise) inFlightLoads.delete(path);
+    });
+    return promise;
   },
 
   // Project operations - uses consolidated create_project_full command
@@ -571,10 +646,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Set backend loadingId from result for event correlation
       get().setLoadingProgress({ loadingId: result.loadingId });
 
-      // Apply project state from result
+      // Apply project state from result. Fresh project has no shots /
+      // stations yet, so `surveyData` starts as an empty SoA.
       set({
         project: result.project,
         stations: [],
+        surveyData: emptySurveyData(),
         stats: null,
         frozenShots: [],
         warnings: [],
@@ -664,9 +741,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   closeProject: async () => {
+    // Terminate the feature-build worker on close so its JSC heap (and any
+    // bmalloc slabs it committed during the last load) goes back to the OS.
+    // The worker is a singleton lazily recreated on the next project open;
+    // start-up cost is small (~50 ms) compared to keeping ~1 GB of committed
+    // slabs alive across the global view. The terminate() helper rejects
+    // any pending build promises with a clear error.
+    try {
+      const { terminateFeaturesWorker } = await import('../components/Map/surveyLayer/featuresWorkerClient');
+      terminateFeaturesWorker();
+    } catch {
+      // Best-effort; the worker module might not have been loaded if the
+      // user never opened a project (unlikely path but harmless).
+    }
+
     // Guard against concurrent close operations (rapid Back clicks or double Discard)
     if (get().isClosing) {
-      console.log('[projectStore] closeProject ignored - already closing');
+      debugLog('[projectStore] closeProject ignored - already closing');
       return emptyCommandResult(false, 'Already closing');
     }
 
@@ -676,7 +767,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], stats: null, frozenShots: [], isDirty: false });
+        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false });
       }
       return result;
     } finally {
@@ -692,24 +783,29 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   refreshProjectState: async () => {
     try {
-      console.log('[projectStore] refreshProjectState: invoking get_project_state...');
+      debugLog('[projectStore] refreshProjectState: invoking get_project_state...');
       const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
         purpose: 'refresh project state in UI',
       });
-      console.log('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
+      debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project?.sections?.length);
       if (state) {
+        // Build the SoA layout alongside the legacy shapes for the
+        // duration of the Phase-A migration. After Phase A.6 this is
+        // the only shape stored; project loses .sections[i].shots.
+        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
         set({
           project: state.project,
           stations: state.stations,
+          surveyData,
           stats: state.stats,
           frozenShots: state.frozen_shots,
         });
       }
-      console.log('[projectStore] refreshProjectState: calling refreshUndoState...');
+      debugLog('[projectStore] refreshProjectState: calling refreshUndoState...');
       await get().refreshUndoState();
       // Also refresh warnings
       await get().refreshWarnings();
-      console.log('[projectStore] refreshProjectState: done');
+      debugLog('[projectStore] refreshProjectState: done');
     } catch (e) {
       console.error('Failed to refresh project state:', e);
     }
@@ -770,9 +866,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   loadRecentProjects: async () => {
     try {
+      // [perf] Hot path on every navigation to GlobalView. Surfaced in the
+      // memory probe panel to confirm the SQL-aggregate fast path stays fast.
+      const t0 = performance.now();
       const recent = await invokeIpc<ProjectMetadata[]>('list_recent_projects', undefined, {
         purpose: 'load recent projects list',
       });
+      const ms = performance.now() - t0;
+      const { recordPerfTiming } = await import('../utils/memoryProbe');
+      recordPerfTiming('list_recent_projects IPC', ms);
       set({ recentProjects: recent });
     } catch (e) {
       console.error('Failed to load recent projects:', e);
@@ -1131,6 +1233,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
+  parseCompass: async (path: string) => {
+    return await invokeIpc<CompassFile>('parse_compass', { path }, {
+      purpose: 'parse Compass for import preview',
+      fields: { path },
+    });
+  },
+
+  executeCompassImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => {
+    return executeCommand(
+      'execute_compass_import',
+      {
+        path,
+        fileHash: fileHash ?? null,
+        includeExcluded: includeExcluded ?? false,
+        applyCorrections: applyCorrections ?? true,
+        commentsOnStations: commentsOnStations ?? true,
+      },
+      { purpose: 'import Compass', fields: { path } }
+    );
+  },
+
   // Collaboration mode
   setCollabEnabled: async (enabled: boolean) => {
     return executeCommand(
@@ -1171,6 +1294,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       purpose: 'warn about an unsynced Ariane sibling file',
     });
   },
+
 
   parseGpx: async (path: string) => {
     return await invokeIpc<GpxFile>('parse_gpx', { path }, {

@@ -5,6 +5,7 @@ pub mod export;
 pub mod history;
 pub mod import;
 pub mod logging;
+pub mod memory;
 pub mod project;
 pub mod recovery;
 pub mod section;

@@ -45,14 +45,14 @@ test.describe('Auto-Save Status Bar', () => {
     await setupMockedPage(page);
   });
 
-  test('save-status element exists in project view footer', async ({ page }) => {
+  test('save-status element exists in project view footer @smoke', async ({ page }) => {
     await createProject(page, 'Status Bar Test');
 
     const saveStatus = page.getByTestId('save-status');
     await expect(saveStatus).toBeVisible({ timeout: 5000 });
   });
 
-  test('shows "Saved" when project is clean', async ({ page }) => {
+  test('shows "Saved" when project is clean @smoke', async ({ page }) => {
     await createProject(page, 'Clean Project');
 
     const saveStatus = page.getByTestId('save-status');

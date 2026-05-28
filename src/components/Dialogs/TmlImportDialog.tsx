@@ -14,7 +14,7 @@ interface TmlImportDialogProps {
 }
 
 export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogProps) {
-  const { executeTmlImport, calculateFileHash, checkDuplicateImport } = useProjectStore();
+  const { executeTmlImport, calculateFileHash, checkDuplicateImport, startLoading, setLoadingProgress, resetLoading } = useProjectStore();
   const { closeDialog, openDialog, setView, triggerFitToBounds } = useUIStore();
 
   const [isImporting, setIsImporting] = useState(false);
@@ -77,8 +77,13 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
 
   const handleImport = useCallback(async () => {
     setIsImporting(true);
+    // Show the loading overlay so the user sees Reading -> Converting ->
+    // Applying -> Finalizing phase ticks from the backend ProgressEmitter.
+    startLoading(tmlFile.cave_name || fileName, filePath);
+    setLoadingProgress({ phase: 'import_parsing' });
     try {
       const result = await executeTmlImport(filePath, fileHash, includeExcluded, commentsOnStations);
+      resetLoading();
 
       if (!result.success) {
         trackDialogComplete('tml-import');
@@ -115,13 +120,14 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
       setView('single');
       triggerFitToBounds();
     } catch (e) {
+      resetLoading();
       setIsImporting(false);
       openDialog('error', {
         title: 'Import Failed',
         message: getErrorMessage(e, 'Failed to import TML file'),
       });
     }
-  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, closeDialog, openDialog, setView, triggerFitToBounds]);
+  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   return (
     <DialogWrapper title="Import Ariane Survey" onClose={closeDialog} size="lg" data-testid="tml-import-dialog">

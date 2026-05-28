@@ -7,7 +7,7 @@ import {
 } from './helpers/app';
 
 test.describe('Placement Overlay Coverage', () => {
-  test('shows placement preview and cancels on Escape', async ({ page }) => {
+  test('shows placement preview and cancels on Escape @smoke', async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Placement Overlay');
     await waitForMapReady(page);

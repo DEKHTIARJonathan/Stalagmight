@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
+use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
@@ -43,6 +44,7 @@ use stalagmight_lib::models::placement_suggest::{
     CrossSectionSuggestion, ImportSectionForSuggestion, MatchDirection,
     OrphanPlacementSuggestion, PlacementSuggestion, SuggestionConfidence, TargetType,
 };
+use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
     GpxFile, GpxRoute, GpxRoutePoint, GpxSectionPlacement, GpxTrack, GpxTrackPoint,
@@ -167,6 +169,10 @@ fn main() {
     export::<TmlGeoCoding>(&out_dir);
     export::<TmlClosure>(&out_dir);
 
+    // Compass import
+    export::<CompassFile>(&out_dir);
+    export::<CompassSurveySummary>(&out_dir);
+
     // Export/image types
     export::<ExportImageOptions>(&out_dir);
     export::<ImageFormat>(&out_dir);
@@ -189,6 +195,10 @@ fn main() {
     export::<GeometryShot>(&out_dir);
     export::<SurveyGeometry>(&out_dir);
     export::<SurveyGeometryError>(&out_dir);
+
+    // Memory probe (debug)
+    export::<ProcessMemory>(&out_dir);
+    export::<MemoryStats>(&out_dir);
 
     // Recovery (SPEC 14.4)
     export::<BackupInfo>(&out_dir);
@@ -316,6 +326,8 @@ fn main() {
         "TmlUnit",
         "TmlGeoCoding",
         "TmlClosure",
+        "CompassFile",
+        "CompassSurveySummary",
         "ExportImageOptions",
         "ImageFormat",
         "ColorMode",
@@ -331,6 +343,8 @@ fn main() {
         "GeometryShot",
         "SurveyGeometry",
         "SurveyGeometryError",
+        "ProcessMemory",
+        "MemoryStats",
         "BackupInfo",
         "RepairResult",
         "SalvagedData",

@@ -52,7 +52,7 @@ test.describe('Toolbar Tool Groups', () => {
     await setupMockedPage(page);
   });
 
-  test('tool group buttons are visible with correct testids', async ({ page }) => {
+  test('tool group buttons are visible with correct testids @smoke', async ({ page }) => {
     await createProjectWithSections(page);
 
     // Navigate group and Move group should be visible
@@ -63,7 +63,7 @@ test.describe('Toolbar Tool Groups', () => {
     await expect(moveGroup).toBeVisible();
   });
 
-  test('left-click on inactive group activates last-used subtool', async ({ page }) => {
+  test('left-click on inactive group activates last-used subtool @smoke', async ({ page }) => {
     await createProjectWithSections(page);
 
     // Start with select tool active
@@ -97,7 +97,7 @@ test.describe('Toolbar Tool Groups', () => {
     await waitForActiveTool(page, 'move_segment');
   });
 
-  test('right-click on group opens flyout panel', async ({ page }) => {
+  test('right-click on group opens flyout panel @smoke', async ({ page }) => {
     await createProjectWithSections(page);
 
     // Right-click on the move group

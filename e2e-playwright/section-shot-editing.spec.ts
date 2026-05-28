@@ -164,7 +164,7 @@ test.describe('Section and Shot Editing', () => {
     await createProjectWithSections(page);
   });
 
-  test('should show shot details in detail panel', async ({ page }) => {
+  test('should show shot details in detail panel @smoke', async ({ page }) => {
     await selectShotInStore(page, 'Main Passage', 0);
 
     const detailPanel = page.getByTestId('detail-panel');
@@ -179,7 +179,7 @@ test.describe('Section and Shot Editing', () => {
     await expect(detailPanel).toContainText('Entrance point with good visibility');
   });
 
-  test('should edit shot values in edit section dialog', async ({ page }) => {
+  test('should edit shot values in edit section dialog @smoke', async ({ page }) => {
     await openEditSectionDialog(page, 'Main Passage');
 
     const dialog = page.getByTestId('edit-section-dialog');
@@ -300,7 +300,7 @@ test.describe('Section and Shot Editing', () => {
     await expect(confirmDialog).not.toBeVisible({ timeout: 3000 });
   });
 
-  test('should add new shot to section', async ({ page }) => {
+  test('should add new shot to section @smoke', async ({ page }) => {
     await openEditSectionDialog(page, 'Main Passage');
 
     const dialog = page.getByTestId('edit-section-dialog');

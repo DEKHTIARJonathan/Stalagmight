@@ -1,0 +1,490 @@
+use std::fmt::Write;
+
+use chrono::{Datelike, NaiveDate};
+
+use crate::Error;
+
+mod parser;
+
+/// Bearing Units are used to represent heading measurements
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum BearingUnits {
+    Degrees,
+    Quads,
+    Grads,
+}
+
+impl BearingUnits {
+    fn as_char(&self) -> char {
+        match self {
+            Self::Degrees => 'D',
+            Self::Quads => 'Q',
+            Self::Grads => 'R',
+        }
+    }
+}
+
+/// Length Units are used to represent distance measurements
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum LengthUnits {
+    DecimalFeet,
+    FeetAndInches,
+    Meters,
+}
+
+impl LengthUnits {
+    fn as_char(&self) -> char {
+        match self {
+            Self::DecimalFeet => 'D',
+            Self::FeetAndInches => 'I',
+            Self::Meters => 'M',
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum InclinationUnits {
+    Degrees,
+    PercentGrade,
+    DegreesAndMinutes,
+    Grads,
+    DepthGauge,
+}
+
+impl InclinationUnits {
+    fn as_char(&self) -> char {
+        match self {
+            Self::Degrees => 'D',
+            Self::PercentGrade => 'G',
+            Self::DegreesAndMinutes => 'M',
+            Self::Grads => 'R',
+            Self::DepthGauge => 'W',
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum PassageDimension {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl PassageDimension {
+    fn as_char(&self) -> char {
+        match self {
+            Self::Left => 'L',
+            Self::Right => 'R',
+            Self::Up => 'U',
+            Self::Down => 'D',
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum ShotItem {
+    Length,
+    Azimuth,
+    Inclination,
+    BackAzimuth,
+    BackInclination,
+}
+
+impl ShotItem {
+    fn as_char(&self) -> char {
+        match self {
+            Self::Length => 'L',
+            Self::Azimuth => 'A',
+            Self::Inclination => 'D',
+            Self::BackAzimuth => 'a',
+            Self::BackInclination => 'd',
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum RedundantBackSight {
+    RedundantBacksight,
+    NoRedundantBacksight,
+}
+
+impl RedundantBackSight {
+    fn as_char(&self) -> char {
+        match self {
+            Self::RedundantBacksight => 'B',
+            Self::NoRedundantBacksight => 'N',
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum LRUDAssociation {
+    FromStation,
+    ToStation,
+}
+
+impl LRUDAssociation {
+    fn as_char(&self) -> char {
+        match self {
+            Self::FromStation => 'F',
+            Self::ToStation => 'T',
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct SurveyFormat11 {
+    bearing_units: BearingUnits,
+    length_units: LengthUnits,
+    passage_units: LengthUnits,
+    inclination_units: InclinationUnits,
+    passage_dimension_order: [PassageDimension; 4],
+    shot_item_order: [ShotItem; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct SurveyFormat12 {
+    bearing_units: BearingUnits,
+    length_units: LengthUnits,
+    passage_units: LengthUnits,
+    inclination_units: InclinationUnits,
+    passage_dimension_order: [PassageDimension; 4],
+    shot_item_order: [ShotItem; 3],
+    backsight: RedundantBackSight,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct SurveyFormat13 {
+    bearing_units: BearingUnits,
+    length_units: LengthUnits,
+    passage_units: LengthUnits,
+    inclination_units: InclinationUnits,
+    passage_dimension_order: [PassageDimension; 4],
+    shot_item_order: [ShotItem; 3],
+    backsight: RedundantBackSight,
+    lrud_association: LRUDAssociation,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct SurveyFormat15 {
+    bearing_units: BearingUnits,
+    length_units: LengthUnits,
+    passage_units: LengthUnits,
+    inclination_units: InclinationUnits,
+    passage_dimension_order: [PassageDimension; 4],
+    shot_item_order: [ShotItem; 5],
+    backsight: RedundantBackSight,
+    lrud_association: LRUDAssociation,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub enum SurveyFormat {
+    None,
+    Format11(SurveyFormat11),
+    Format12(SurveyFormat12),
+    Format13(SurveyFormat13),
+    Format15(SurveyFormat15),
+}
+
+impl SurveyFormat11 {
+    fn serialize(&self) -> String {
+        let mut result = String::with_capacity(11);
+        result.push(self.bearing_units.as_char());
+        result.push(self.length_units.as_char());
+        result.push(self.passage_units.as_char());
+        result.push(self.inclination_units.as_char());
+        for dim in &self.passage_dimension_order {
+            result.push(dim.as_char());
+        }
+        for item in &self.shot_item_order {
+            result.push(item.as_char());
+        }
+        result
+    }
+}
+
+impl SurveyFormat12 {
+    fn serialize(&self) -> String {
+        let mut result = String::with_capacity(12);
+        result.push(self.bearing_units.as_char());
+        result.push(self.length_units.as_char());
+        result.push(self.passage_units.as_char());
+        result.push(self.inclination_units.as_char());
+        for dim in &self.passage_dimension_order {
+            result.push(dim.as_char());
+        }
+        for item in &self.shot_item_order {
+            result.push(item.as_char());
+        }
+        result.push(self.backsight.as_char());
+        result
+    }
+}
+
+impl SurveyFormat13 {
+    fn serialize(&self) -> String {
+        let mut result = String::with_capacity(13);
+        result.push(self.bearing_units.as_char());
+        result.push(self.length_units.as_char());
+        result.push(self.passage_units.as_char());
+        result.push(self.inclination_units.as_char());
+        for dim in &self.passage_dimension_order {
+            result.push(dim.as_char());
+        }
+        for item in &self.shot_item_order {
+            result.push(item.as_char());
+        }
+        result.push(self.backsight.as_char());
+        result.push(self.lrud_association.as_char());
+        result
+    }
+}
+
+impl SurveyFormat15 {
+    fn serialize(&self) -> String {
+        let mut result = String::with_capacity(15);
+        result.push(self.bearing_units.as_char());
+        result.push(self.length_units.as_char());
+        result.push(self.passage_units.as_char());
+        result.push(self.inclination_units.as_char());
+        for dim in &self.passage_dimension_order {
+            result.push(dim.as_char());
+        }
+        for item in &self.shot_item_order {
+            result.push(item.as_char());
+        }
+        result.push(self.backsight.as_char());
+        result.push(self.lrud_association.as_char());
+        result
+    }
+}
+
+impl SurveyFormat {
+    fn serialize(&self) -> Option<String> {
+        match self {
+            Self::None => None,
+            Self::Format11(f) => Some(f.serialize()),
+            Self::Format12(f) => Some(f.serialize()),
+            Self::Format13(f) => Some(f.serialize()),
+            Self::Format15(f) => Some(f.serialize()),
+        }
+    }
+
+    /// Whether the survey format records redundant backsights (Stalagmight fork addition).
+    #[must_use]
+    pub fn has_backsights(&self) -> bool {
+        let backsight = match self {
+            Self::Format12(f) => Some(&f.backsight),
+            Self::Format13(f) => Some(&f.backsight),
+            Self::Format15(f) => Some(&f.backsight),
+            Self::Format11(_) | Self::None => None,
+        };
+        matches!(backsight, Some(RedundantBackSight::RedundantBacksight))
+    }
+
+    /// The length units declared by the format, if any (Stalagmight fork addition).
+    #[must_use]
+    pub fn length_units(&self) -> Option<LengthUnits> {
+        match self {
+            Self::None => None,
+            Self::Format11(f) => Some(f.length_units.clone()),
+            Self::Format12(f) => Some(f.length_units.clone()),
+            Self::Format13(f) => Some(f.length_units.clone()),
+            Self::Format15(f) => Some(f.length_units.clone()),
+        }
+    }
+
+    /// The inclination units declared by the format, if any (Stalagmight fork addition).
+    #[must_use]
+    pub fn inclination_units(&self) -> Option<InclinationUnits> {
+        match self {
+            Self::None => None,
+            Self::Format11(f) => Some(f.inclination_units.clone()),
+            Self::Format12(f) => Some(f.inclination_units.clone()),
+            Self::Format13(f) => Some(f.inclination_units.clone()),
+            Self::Format15(f) => Some(f.inclination_units.clone()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct CorrectionFactors {
+    pub azimuth: f64,
+    pub inclination: f64,
+    pub length: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct BackSightCorrectionFactors {
+    pub azimuth: f64,
+    pub inclination: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct SurveyParameters {
+    pub declination: f64,
+    pub format_parameters: SurveyFormat,
+    pub correction_factors: Option<CorrectionFactors>,
+    pub backsight_correction_factors: Option<BackSightCorrectionFactors>,
+}
+
+impl SurveyParameters {
+    fn serialize(&self) -> String {
+        let mut result = String::new();
+        let _ = write!(result, "DECLINATION:   {:>4.2}  ", self.declination);
+        if let Some(format_str) = self.format_parameters.serialize() {
+            let _ = write!(result, "FORMAT: {format_str}  ");
+        }
+        if let Some(cf) = &self.correction_factors {
+            let _ = write!(
+                result,
+                "CORRECTIONS:  {:.2} {:.2} {:.2}  ",
+                cf.azimuth, cf.inclination, cf.length
+            );
+        }
+        if let Some(bcf) = &self.backsight_correction_factors {
+            let _ = write!(
+                result,
+                "CORRECTIONS2: {:.1} {:.1}",
+                bcf.azimuth, bcf.inclination
+            );
+        }
+        result.push_str("\r\n");
+        result
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct Shot {
+    pub from: String,
+    pub to: String,
+    pub length: f64,
+    pub azimuth: f64,
+    pub inclination: f64,
+    pub up: f64,
+    pub down: f64,
+    pub left: f64,
+    pub right: f64,
+    /// Redundant backsight azimuth, present when the survey format records
+    /// backsights. (Stalagmight fork addition; upstream drops this column.)
+    pub back_azimuth: Option<f64>,
+    /// Redundant backsight inclination, present when the survey format records
+    /// backsights. (Stalagmight fork addition; upstream drops this column.)
+    pub back_inclination: Option<f64>,
+    pub flags: Option<String>,
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+pub struct Survey {
+    pub cave_name: String,
+    pub name: String,
+    pub date: NaiveDate,
+    pub comment: Option<String>,
+    pub team: String,
+    pub parameters: SurveyParameters,
+    pub shots: Vec<Shot>,
+}
+
+impl Survey {
+    /// Parse a survey from a string
+    /// # Arguments
+    /// input - A string containing the survey data
+    /// # Returns
+    /// Result containing the parsed survey or an error message
+    /// # Errors
+    /// If the input is not a valid survey
+    pub fn parse_survey(input: &str) -> Result<Self, String> {
+        match parser::parse_survey(input) {
+            Ok((_, survey)) => Ok(survey),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Parse the contents of a survey.dat file
+    /// # Arguments
+    /// input - A string containing the contents of the survey.dat file
+    /// # Returns
+    /// Result containing the parsed survey or an error message
+    /// # Errors
+    /// If the input is not a valid survey.dat file
+    pub fn parse_dat_file(input: &str) -> Result<Vec<Self>, Error> {
+        match parser::parse_dat_file(input) {
+            Ok((_, survey)) => Ok(survey),
+            Err(e) => Err(Error::CouldntParseSurvey(e.to_string())),
+        }
+    }
+
+    #[must_use]
+    pub fn serialize(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(result, "{}\r", self.cave_name);
+        let _ = writeln!(result, "SURVEY NAME: {}\r", self.name);
+        let _ = write!(
+            result,
+            "SURVEY DATE: {} {} {}",
+            self.date.month(),
+            self.date.day0() + 1,
+            self.date.year_ce().1,
+        );
+        if let Some(comment) = &self.comment {
+            let _ = writeln!(result, "  COMMENT:{comment}\r");
+        } else {
+            result.push_str("\r\n");
+        }
+        result.push_str("SURVEY TEAM:\r\n");
+        let _ = writeln!(result, "{}\r", self.team);
+        result.push_str(&self.parameters.serialize());
+        result.push_str("\n        FROM           TO   LENGTH  BEARING      INC     LEFT       UP     DOWN    RIGHT   FLAGS  COMMENTS\r\n\r\n");
+        for shot in &self.shots {
+            let _ = write!(
+                result,
+                "{:>12}{:>13}{:>9.2}{:>9.2}{:>9.2}{:>9.2}{:>9.2}{:>9.2}{:>9.2}",
+                shot.from,
+                shot.to,
+                shot.length,
+                shot.azimuth,
+                shot.inclination,
+                shot.left,
+                shot.up,
+                shot.down,
+                shot.right
+            );
+            // Stalagmight fork: emit backsight columns, flags, and comment so that
+            // parse -> serialize -> parse round-trips the data the forked parser now
+            // captures.
+            if let (Some(back_azimuth), Some(back_inclination)) =
+                (shot.back_azimuth, shot.back_inclination)
+            {
+                let _ = write!(result, "{back_azimuth:>9.2}{back_inclination:>9.2}");
+            }
+            if let Some(flags) = &shot.flags {
+                let _ = write!(result, " #|{flags}#");
+            }
+            if let Some(comment) = &shot.comment {
+                let _ = write!(result, " {comment}");
+            }
+            result.push_str("\r\n");
+        }
+        result.push_str("\x0c\r\n");
+        result
+    }
+}

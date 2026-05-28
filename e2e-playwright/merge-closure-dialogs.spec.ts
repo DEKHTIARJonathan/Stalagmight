@@ -37,7 +37,7 @@ test.describe('Merge and Closure Dialogs', () => {
     await seedProjectWithSections(page, [sectionA, sectionB]);
   });
 
-  test('MergeDialog renders with station info when opened for unconnected stations', async ({ page }) => {
+  test('MergeDialog renders with station info when opened for unconnected stations @smoke', async ({ page }) => {
     // Get section IDs from project store
     const sectionIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
@@ -81,7 +81,7 @@ test.describe('Merge and Closure Dialogs', () => {
     await expect(mergeDialog).toBeHidden({ timeout: 3000 });
   });
 
-  test('ClosureDialog renders with preview data and action buttons', async ({ page }) => {
+  test('ClosureDialog renders with preview data and action buttons @smoke', async ({ page }) => {
     const sectionIds = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return [];

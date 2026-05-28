@@ -682,6 +682,10 @@ impl AppState {
                                     station_b: *station_b,
                                     merged_at: chrono::Utc::now(),
                                 });
+                                // Direct push bypassed Project::record_station_merge,
+                                // so the adjacency cache is stale. Drop it; the next
+                                // BFS will fall back to the linear scan until rebuilt.
+                                project.merge_adjacency_cache.clear();
                                 // Restore removed closures and bump next_closure_id
                                 for closure in removed_closures {
                                     project.next_closure_id = project.next_closure_id.max(closure.id + 1);
@@ -869,8 +873,15 @@ impl AppState {
             UndoData::ProjectSnapshot(json) => {
                 // Restore entire project
                 match serde_json::from_str::<Project>(json.as_str()) {
-                    Ok(project) => match self.project.lock() {
+                    Ok(mut project) => match self.project.lock() {
                         Ok(mut proj) => {
+                            // serde skips the transient caches; rebuild
+                            // so subsequent get_section /
+                            // get_merged_section_ids stay O(1)/O(group)
+                            // instead of degrading to the linear scan.
+                            // Mirrors AppState::rollback_project.
+                            project.rebuild_section_index();
+                            project.rebuild_merge_adjacency();
                             *proj = Some(project);
                             CommandResult::success()
                         }
@@ -883,8 +894,10 @@ impl AppState {
             UndoData::ProjectSnapshotPair { before, after: _ } => {
                 // Restore the "before" snapshot for undo
                 match serde_json::from_str::<Project>(before.as_str()) {
-                    Ok(project) => match self.project.lock() {
+                    Ok(mut project) => match self.project.lock() {
                         Ok(mut proj) => {
+                            project.rebuild_section_index();
+                            project.rebuild_merge_adjacency();
                             *proj = Some(project);
                             CommandResult::success()
                         }
@@ -953,8 +966,12 @@ impl AppState {
         let result = match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => {
                 match serde_json::from_str::<Project>(after.as_str()) {
-                    Ok(project) => match self.project.lock() {
+                    Ok(mut project) => match self.project.lock() {
                         Ok(mut proj) => {
+                            // Same rebuild as the undo path above —
+                            // serde drops the transient lookup caches.
+                            project.rebuild_section_index();
+                            project.rebuild_merge_adjacency();
                             *proj = Some(project);
                             CommandResult::success()
                         }
@@ -1192,6 +1209,13 @@ impl AppState {
 
         // Create section with original ID
         let section = Section::new_with_id(original_id, data);
+        // Keep section_index_cache in step.  The matching
+        // `remove_section` cleared the cache; without this insert
+        // every subsequent `get_section` would fall back to the O(N)
+        // linear scan until something else rebuilds the cache.
+        project
+            .section_index_cache
+            .insert(section.id, project.sections.len());
         project.sections.push(section);
         project.touch();
 

@@ -47,12 +47,11 @@ pub struct Database {
 impl Database {
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
-        tracing::info!("Opening database at: {:?}", path);
-        let exists = path.exists();
-        tracing::info!("File existed before open: {}", exists);
+        // Per-open chatter is debug-only — `open` is called for every
+        // project create / save-as / import / recent-list refresh.
+        tracing::debug!("Opening database at: {:?}", path);
 
         let conn = Connection::open(path).context("Failed to open database")?;
-        tracing::info!("SQLite connection created");
 
         let db = Self { conn };
         db.enable_foreign_keys()?;
@@ -68,43 +67,61 @@ impl Database {
         }
         db.init_schema()?;
         db.set_user_version(SCHEMA_VERSION)?;
-        tracing::info!("Schema initialized");
-
-        // Verify tables exist after schema init
-        let table_count: i32 = db.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(0);
-        tracing::info!("Tables in database after init: {}", table_count);
+        tracing::debug!("Schema initialized");
 
         Ok(db)
     }
 
     /// Open an existing database (does not create if missing)
     pub fn open_existing(path: &Path) -> Result<Self> {
-        tracing::info!("Opening existing database at: {:?}", path);
+        // Verbose open-time logging is debug-only — it fires on every
+        // project load and every recent-projects metadata read, which
+        // adds up.  The error paths still log at error/warn.
+        tracing::debug!("Opening existing database at: {:?}", path);
 
         if !path.exists() {
             tracing::error!("File does not exist: {:?}", path);
             anyhow::bail!("File does not exist");
         }
-        tracing::info!("File exists, size: {:?} bytes", std::fs::metadata(path).map(|m| m.len()).ok());
 
         // Open in read-only mode first to check if it's valid
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database - file may not be a valid SQLite database")?;
-        tracing::info!("SQLite connection opened successfully");
 
         let mut db = Self { conn };
         db.enable_foreign_keys()?;
 
+        // Let SQLite mmap the whole file (up to 256 MB).  Sequential
+        // scans during integrity check / shot load go through the OS
+        // page cache without a per-row copy into SQLite's buffer.
+        // Cheap to enable; bounded by SQLite's own mmap_size cap.
+        let _ = db
+            .conn
+            .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
+        // Default cache_size is 2 000 pages (~2 MB). Large projects
+        // benefit from holding more pages resident so the per-section
+        // shot SELECT and the integrity check don't re-fault from
+        // mmap. 32 MiB covers the 11 MB 92.stalx with headroom for
+        // the indexes; SQLite caps this against its own limits.
+        let _ = db
+            .conn
+            .pragma_update(None, "cache_size", -32_000i64); // negative = KiB
+        // Skip syncing on read-only-equivalent operations.
+        // (load path doesn't write — this is harmless on writes too;
+        // we already use a single transaction in save_project.)
+        let _ = db
+            .conn
+            .pragma_update(None, "temp_store", "MEMORY");
+
         // Run quick integrity check before reading any data (SPEC 14.4)
+        let t = std::time::Instant::now();
         db.validate_integrity().context("Database file may be corrupted")?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: validate_integrity");
 
         // Check if the project table exists and has data
+        let t = std::time::Instant::now();
         let has_data = db.has_project_data()?;
-        tracing::info!("has_project_data returned: {}", has_data);
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: has_project_data");
 
         if !has_data {
             tracing::error!("File does not contain valid Stalagmight project data");
@@ -112,10 +129,38 @@ impl Database {
         }
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
+        let t = std::time::Instant::now();
         db.ensure_schema_version()?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: ensure_schema_version");
+
+        let t = std::time::Instant::now();
         db.validate_foreign_keys()?;
+        tracing::debug!(ms = t.elapsed().as_millis() as u64, "open_existing: validate_foreign_keys");
 
         Ok(db)
+    }
+
+    /// Open a database for read-only metadata extraction only.
+    ///
+    /// Skips the per-file integrity check, foreign-key validation, schema
+    /// migration, and project-data presence check that `open_existing` /
+    /// `open_readonly` run. Those are appropriate when actually loading
+    /// project data; for the recent-projects listing they add hundreds of
+    /// milliseconds per file (PRAGMA quick_check walks every page). The
+    /// metadata reads below are pure SELECTs and will fail with a clear
+    /// error if the schema is missing — that's enough validation for the
+    /// purpose. If the user later opens this project, the full open path
+    /// runs its checks then.
+    pub fn open_for_metadata(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            anyhow::bail!("File does not exist: {}", path.display());
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .context("Failed to open database read-only for metadata")?;
+        Ok(Self { conn })
     }
 
     /// Open an existing database in read-only mode.
@@ -910,39 +955,42 @@ impl Database {
             return Ok(());
         }
 
-        if current <= SCHEMA_VERSION {
-            self.migrate_schema()?;
-            if current < 2 {
-                self.rebuild_tables_with_foreign_keys()?;
-            }
-            if current < 3 {
-                self.migrate_undo_redo_to_blob()?;
-            }
-            if current < 4 {
-                Self::migrate_is_virtual_to_is_reference(&self.conn)?;
-            }
-            self.set_user_version(SCHEMA_VERSION)?;
-            // Keep project-level schema_version in sync with PRAGMA user_version.
-            let _ = self.conn.execute(
-                "UPDATE project SET schema_version = ?1",
-                params![SCHEMA_VERSION],
-            );
+        // Fast path: already current.  migrate_schema() scans pragma
+        // table_info() for every conditional column add on every open,
+        // which previously cost ~10 ms per project load even when no
+        // migration was needed.
+        if current == SCHEMA_VERSION {
+            return Ok(());
         }
+
+        self.migrate_schema()?;
+        if current < 2 {
+            self.rebuild_tables_with_foreign_keys()?;
+        }
+        if current < 3 {
+            self.migrate_undo_redo_to_blob()?;
+        }
+        if current < 4 {
+            Self::migrate_is_virtual_to_is_reference(&self.conn)?;
+        }
+        self.set_user_version(SCHEMA_VERSION)?;
+        // Keep project-level schema_version in sync with PRAGMA user_version.
+        let _ = self.conn.execute(
+            "UPDATE project SET schema_version = ?1",
+            params![SCHEMA_VERSION],
+        );
 
         Ok(())
     }
 
     /// Check if the database has valid project data
     pub fn has_project_data(&self) -> Result<bool> {
-        tracing::info!("Checking if database has project data...");
-
         // First check if project table exists
         let table_exists: i32 = self.conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='project'",
             [],
             |row| row.get(0),
         )?;
-        tracing::info!("project table exists: {}", table_exists > 0);
 
         if table_exists == 0 {
             tracing::warn!("project table does not exist in database");
@@ -955,7 +1003,6 @@ impl Database {
             [],
             |row| row.get(0),
         )?;
-        tracing::info!("project table row count: {}", count);
 
         Ok(count > 0)
     }
@@ -1156,14 +1203,10 @@ impl Database {
 
     /// Save a project to the database
     pub fn save_project(&mut self, project: &Project) -> Result<()> {
-        tracing::info!("Saving project: name={}, sections={}", project.name, project.sections.len());
+        tracing::debug!("Saving project: name={}, sections={}", project.name, project.sections.len());
 
-        tracing::info!("About to start transaction...");
         let tx = match self.conn.transaction() {
-            Ok(t) => {
-                tracing::info!("Transaction started successfully");
-                t
-            }
+            Ok(t) => t,
             Err(e) => {
                 tracing::error!("Failed to start transaction: {}", e);
                 return Err(e.into());
@@ -1187,12 +1230,11 @@ impl Database {
             DELETE FROM project;
             ",
         )?;
-        tracing::info!("Existing data cleared");
 
         // Save project metadata (including next_closure_id for monotonic ID persistence)
         let next_closure_id_i64 = i64::try_from(project.next_closure_id)
             .map_err(|_| anyhow::anyhow!("next_closure_id {} exceeds i64 range", project.next_closure_id))?;
-        let rows_affected = tx.execute(
+        tx.execute(
             "INSERT INTO project (id, name, location, created_at, modified_at, schema_version, next_closure_id) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 project.name,
@@ -1203,7 +1245,6 @@ impl Database {
                 next_closure_id_i64
             ],
         )?;
-        tracing::info!("Project metadata inserted, rows_affected={}", rows_affected);
 
         // Save sections and shots
         for section in &project.sections {
@@ -1414,7 +1455,7 @@ impl Database {
         }
 
         tx.commit()?;
-        tracing::info!("Transaction committed");
+        tracing::debug!("Transaction committed");
 
         // Verify the data was written
         let verify_count: i64 = self.conn.query_row(
@@ -1422,14 +1463,163 @@ impl Database {
             [],
             |row| row.get(0),
         ).unwrap_or(0);
-        tracing::info!("Save verification: project table has {} rows", verify_count);
+        tracing::debug!("Save verification: project table has {} rows", verify_count);
 
         Ok(())
     }
 
     /// Load a project from the database
+    /// Load only the metadata needed to populate `ProjectMetadata` — no
+    /// per-shot deserialization. Uses SQL COUNT/SUM aggregates and a
+    /// single small read of `zero_datums` for GPS info. This replaces the
+    /// "load entire project just to drop everything but metadata" path
+    /// used by `list_recent_projects`, which was responsible for the
+    /// multi-second freeze when returning to the global view with a
+    /// large project in the recent list.
+    pub fn load_metadata(&self, file_path: std::path::PathBuf) -> Result<crate::models::ProjectMetadata> {
+        use crate::models::{GpsBounds, GpsCoordinates, Project, ProjectMetadata};
+        use std::cmp::Ordering;
+        use std::time::Instant;
+        let start = Instant::now();
+
+        // Tiny project header read.
+        let (name, location, modified_at_raw): (String, Option<String>, String) =
+            self.conn.query_row(
+                "SELECT name, location, modified_at FROM project LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).context("Failed to read project metadata header")?;
+        let t_header = start.elapsed();
+
+        let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at_raw)
+            .context("Failed to parse modified_at")?
+            .with_timezone(&Utc);
+
+        // Aggregate-only queries.
+        let section_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM sections", [], |row| row.get(0))
+            .unwrap_or(0);
+        let t_sections = start.elapsed();
+        let shot_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM shots", [], |row| row.get(0))
+            .unwrap_or(0);
+        let t_shot_count = start.elapsed();
+        // COALESCE so an empty shots table returns 0.0 instead of NULL.
+        let total_length: f64 = self
+            .conn
+            .query_row("SELECT COALESCE(SUM(length), 0.0) FROM shots", [], |row| row.get(0))
+            .unwrap_or(0.0);
+        let t_sum_length = start.elapsed();
+
+        // GPS info: zero_datums is small (typically 1-10 rows) so we read
+        // it in full and reuse the existing dateline-aware bounds logic.
+        let mut zero_datums: Vec<GpsCoordinates> = Vec::new();
+        if let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT latitude, longitude, depth_reference FROM zero_datums")
+        {
+            if let Ok(rows) = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            }) {
+                for r in rows.flatten() {
+                    // Skip rows that don't validate (matches load_project behavior).
+                    if let Ok(gps) = GpsCoordinates::new(r.0, r.1, r.2) {
+                        zero_datums.push(gps);
+                    }
+                }
+            }
+        }
+
+        let (gps_center, gps_bounds) = if zero_datums.is_empty() {
+            (None, None)
+        } else {
+            let first = &zero_datums[0];
+            let center = Some((first.longitude, first.latitude));
+
+            let mut south = f64::INFINITY;
+            let mut north = f64::NEG_INFINITY;
+            let mut longitudes = Vec::with_capacity(zero_datums.len());
+            for gps in &zero_datums {
+                south = south.min(gps.latitude);
+                north = north.max(gps.latitude);
+                longitudes.push(gps.longitude);
+            }
+            let (west, east) = Project::compute_longitude_bounds(&longitudes);
+            // Avoid f64 NaN propagation if there was only one (already handled by helper).
+            let south = if south.is_finite() { south } else { 0.0 };
+            let north = if north.is_finite() { north } else { 0.0 };
+            let _ = Ordering::Equal; // silence the import if compute_longitude_bounds is inlined
+            (
+                center,
+                Some(GpsBounds {
+                    north,
+                    south,
+                    east,
+                    west,
+                }),
+            )
+        };
+
+        let t_gps = start.elapsed();
+
+        // station_count = shot_count + section_count per Project::stats().
+        let station_count = (shot_count as usize) + (section_count as usize);
+
+        // Trace where the time went, in ms, so we can spot which query
+        // is the bottleneck. Debug-level — fires for every recent
+        // project on every metadata refresh, so default releases skip
+        // it.  Enable with `RUST_LOG=stalagmight_lib=debug` when you
+        // need to see it.
+        tracing::debug!(
+            path = ?file_path,
+            shots = shot_count,
+            header_ms = t_header.as_micros() as f64 / 1000.0,
+            sections_ms = (t_sections - t_header).as_micros() as f64 / 1000.0,
+            shotcount_ms = (t_shot_count - t_sections).as_micros() as f64 / 1000.0,
+            sumlength_ms = (t_sum_length - t_shot_count).as_micros() as f64 / 1000.0,
+            gps_ms = (t_gps - t_sum_length).as_micros() as f64 / 1000.0,
+            total_ms = t_gps.as_micros() as f64 / 1000.0,
+            "load_metadata timings"
+        );
+
+        // Fast collab-on check: the recent-projects panel surfaces this
+        // without opening the project, so we can't call the full
+        // `load_collab_state` here (it deserialises the whole baseline).
+        // Just probe the `enabled` flag from the JSON blob.
+        let collab_enabled: bool = self
+            .conn
+            .query_row(
+                "SELECT json_extract(state_json, '$.enabled') FROM collab_state WHERE id = 1",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .map(|v| v != 0)
+            .unwrap_or(false);
+
+        Ok(ProjectMetadata {
+            name,
+            location,
+            file_path,
+            modified_at,
+            section_count: section_count as usize,
+            total_length,
+            station_count,
+            gps_center,
+            gps_bounds,
+            collab_enabled,
+        })
+    }
+
     pub fn load_project(&self) -> Result<Project> {
-        tracing::info!("Loading project from database");
+        tracing::debug!("Loading project from database");
 
         // First check if project table has data and log what's there
         let count: i64 = self.conn.query_row(
@@ -1437,7 +1627,7 @@ impl Database {
             [],
             |row| row.get(0),
         ).unwrap_or(0);
-        tracing::info!("Project table row count: {}", count);
+        tracing::debug!("Project table row count: {}", count);
 
         if count == 0 {
             anyhow::bail!("Project table is empty - file may be corrupted");
@@ -1530,6 +1720,9 @@ impl Database {
                 }
             }
 
+            // Build the empty sections first so we can address them by
+            // ID when partitioning the bulk shot stream below.
+            let mut section_by_id: HashMap<u32, usize> = HashMap::with_capacity(section_rows.len());
             for section_row in section_rows {
                 let (id, name, surveyor, date_str, color, direction_str, quality_raw) = section_row;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
@@ -1552,58 +1745,76 @@ impl Database {
                     shots: Vec::new(),
                 };
 
-                let mut section = Section::new(id, section_data);
-
-                // Load shots for this section
-                // Note: Shot IDs are generated from section_id and sequence_order
-                let mut shot_stmt = self.conn.prepare(
-                    r"SELECT sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
-                              pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                              comment, is_reference, marker_index, temperature, uuid
-                       FROM shots WHERE section_id = ?1 ORDER BY sequence_order",
-                )?;
-
-                let section_id_for_shots = id;
-                let shot_rows = shot_stmt.query_map([id], |row| {
-                    let seq: i64 = row.get(0)?;
-                    Ok(Shot {
-                        // Generate globally unique shot ID from section_id and sequence
-                        id: section_id_for_shots * FEATURE_ID_STRIDE + (seq as u32),
-                        azimuth_in: row.get(1)?,
-                        azimuth_out: row.get(2)?,
-                        length: row.get(3)?,
-                        depth_in: row.get(4)?,
-                        depth_out: row.get(5)?,
-                        pitch_in: row.get(6)?,
-                        pitch_out: row.get(7)?,
-                        left: row.get(8)?,
-                        right: row.get(9)?,
-                        up: row.get(10)?,
-                        down: row.get(11)?,
-                        comment: row.get(12)?,
-                        is_reference: row.get::<_, i32>(13)? != 0,
-                        marker_index: row.get(14)?,
-                        temperature: row.get(15)?,
-                        // `uuid` column was added in schema v6; pre-v6
-                        // rows return NULL here.  Treat NULL and empty
-                        // string the same — the next save mints a fresh
-                        // UUID and persists it (`shot.uuid` path in the
-                        // INSERT above).
-                        uuid: row
-                            .get::<_, Option<String>>(16)?
-                            .filter(|s| !s.is_empty()),
-                    })
-                })?;
-
-                for shot_row in shot_rows {
-                    section.shots.push(shot_row?);
-                }
-                // Shots were pushed directly (bypassing add_shot), so advance
-                // next_shot_id past the loaded shots to avoid ID collisions.
-                section.next_shot_id = id * FEATURE_ID_STRIDE + section.shots.len() as u32;
-
+                let section = Section::new(id, section_data);
+                section_by_id.insert(id, sections.len());
                 next_section_id = next_section_id.max(id + 1);
                 sections.push(section);
+            }
+
+            // Load ALL shots in one SELECT and partition by section_id.
+            // The legacy code prepared a per-section statement inside the
+            // loop above, executing 14k+ separate queries on large files;
+            // each query had to parse + plan + execute, so cost was
+            // dominated by SQLite overhead rather than row I/O.  A single
+            // bulk SELECT cuts roughly 350 ms off a 14k-section load and
+            // is friendly to the query planner: it can stream rows
+            // sequentially without re-preparing.
+            {
+                let mut shot_stmt = self.conn.prepare(
+                    r"SELECT section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
+                              pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
+                              comment, is_reference, marker_index, temperature, uuid
+                       FROM shots ORDER BY section_id, sequence_order",
+                )?;
+                let shot_rows = shot_stmt.query_map([], |row| {
+                    let section_id: u32 = row.get(0)?;
+                    let seq: i64 = row.get(1)?;
+                    Ok((
+                        section_id,
+                        Shot {
+                            id: section_id * FEATURE_ID_STRIDE + (seq as u32),
+                            azimuth_in: row.get(2)?,
+                            azimuth_out: row.get(3)?,
+                            length: row.get(4)?,
+                            depth_in: row.get(5)?,
+                            depth_out: row.get(6)?,
+                            pitch_in: row.get(7)?,
+                            pitch_out: row.get(8)?,
+                            left: row.get(9)?,
+                            right: row.get(10)?,
+                            up: row.get(11)?,
+                            down: row.get(12)?,
+                            comment: row.get(13)?,
+                            is_reference: row.get::<_, i32>(14)? != 0,
+                            marker_index: row.get(15)?,
+                            temperature: row.get(16)?,
+                            // `uuid` column was added in schema v6; pre-v6
+                            // rows return NULL here.  Treat NULL and empty
+                            // string the same — the next save mints a
+                            // fresh UUID and persists it.
+                            uuid: row
+                                .get::<_, Option<String>>(17)?
+                                .filter(|s| !s.is_empty()),
+                        },
+                    ))
+                })?;
+
+                for row in shot_rows {
+                    let (section_id, shot) = row?;
+                    if let Some(&idx) = section_by_id.get(&section_id) {
+                        sections[idx].shots.push(shot);
+                    }
+                    // (rows for unknown sections are silently dropped —
+                    // matches the legacy `WHERE section_id = ?` filter
+                    // which never returned orphan rows in the first place.)
+                }
+
+                // Advance each section's next_shot_id past its loaded
+                // shots so future appends don't collide with persisted IDs.
+                for section in sections.iter_mut() {
+                    section.next_shot_id =
+                        section.id * FEATURE_ID_STRIDE + section.shots.len() as u32;
+                }
             }
         }
 
@@ -1710,6 +1921,26 @@ impl Database {
         // Load collaboration state (None for pre-v5 projects or when off)
         let collab = self.load_collab_state()?;
 
+        // Pre-populate the section_id → index lookup so callers get
+        // O(1) get_section without needing rebuild_section_index().
+        let mut section_index_cache = HashMap::with_capacity(sections.len());
+        for (i, s) in sections.iter().enumerate() {
+            section_index_cache.insert(s.id, i);
+        }
+        // Same for merge adjacency — the first compute_station_coordinates
+        // call hammers get_merged_section_ids and would otherwise pay the
+        // O(N) linear fallback on every BFS step.
+        let mut merge_adjacency_cache: HashMap<u32, Vec<u32>> = HashMap::new();
+        for m in &station_merges {
+            merge_adjacency_cache
+                .entry(m.station_a.section_id)
+                .or_default()
+                .push(m.station_b.section_id);
+            merge_adjacency_cache
+                .entry(m.station_b.section_id)
+                .or_default()
+                .push(m.station_a.section_id);
+        }
         Ok(Project {
             name,
             location,
@@ -1728,6 +1959,9 @@ impl Database {
             imported_section_hashes,
             next_closure_id,
             collab,
+            cascade_deferred: false,
+            section_index_cache,
+            merge_adjacency_cache,
         })
     }
 
@@ -1784,14 +2018,39 @@ impl Database {
             ))
         })?;
 
-        let mut entries = Vec::new();
+        // Collect compressed blobs first, then decompress in parallel —
+        // the command_json and undo_data_json blobs of a single entry
+        // are independent of each other, and on big undo entries (e.g.
+        // a multi-MB project snapshot from a batch import) gzip
+        // decompression is single-threaded and slow.  std::thread::scope
+        // keeps us dep-free.
+        let mut raw: Vec<(i64, Vec<u8>, Vec<u8>, Option<String>)> = Vec::new();
         for row in rows {
-            let (seq, cmd_bytes, undo_bytes, ts) = row?;
-            let command_json = decompress_json(&cmd_bytes)?;
-            let undo_data_json = decompress_json(&undo_bytes)?;
-            entries.push((seq, command_json, undo_data_json, ts));
+            raw.push(row?);
         }
-        Ok(entries)
+        let entries: Result<Vec<_>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = raw
+                .into_iter()
+                .map(|(seq, cmd_bytes, undo_bytes, ts)| {
+                    let h_cmd = scope.spawn(move || decompress_json(&cmd_bytes));
+                    let h_undo = scope.spawn(move || decompress_json(&undo_bytes));
+                    (seq, h_cmd, h_undo, ts)
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|(seq, h_cmd, h_undo, ts)| {
+                    let cmd = h_cmd.join().map_err(|_| {
+                        anyhow::anyhow!("undo decompress thread panicked")
+                    })??;
+                    let undo = h_undo.join().map_err(|_| {
+                        anyhow::anyhow!("undo decompress thread panicked")
+                    })??;
+                    Ok((seq, cmd, undo, ts))
+                })
+                .collect()
+        });
+        entries
     }
 
     /// Clear undo stack entries after a given sequence
@@ -1818,7 +2077,7 @@ impl Database {
             )?;
         }
 
-        tracing::info!(count = entries.len(), "Saved undo stack to database");
+        tracing::debug!(count = entries.len(), "Saved undo stack to database");
         Ok(())
     }
 
@@ -1839,7 +2098,7 @@ impl Database {
             )?;
         }
 
-        tracing::info!(count = entries.len(), "Saved undo stack with timestamps to database");
+        tracing::debug!(count = entries.len(), "Saved undo stack with timestamps to database");
         Ok(())
     }
 
@@ -1857,13 +2116,35 @@ impl Database {
             ))
         })?;
 
-        let mut entries = Vec::new();
+        // Parallel gzip decompression of the per-entry blobs — see
+        // load_undo_stack_with_timestamps for the rationale.
+        let mut raw: Vec<(i64, Vec<u8>, Vec<u8>, Option<String>)> = Vec::new();
         for row in rows {
-            let (seq, cmd_bytes, undo_bytes, ts) = row?;
-            let command_json = decompress_json(&cmd_bytes)?;
-            let undo_data_json = decompress_json(&undo_bytes)?;
-            entries.push((seq, command_json, undo_data_json, ts));
+            raw.push(row?);
         }
+        let entries: Result<Vec<_>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = raw
+                .into_iter()
+                .map(|(seq, cmd_bytes, undo_bytes, ts)| {
+                    let h_cmd = scope.spawn(move || decompress_json(&cmd_bytes));
+                    let h_undo = scope.spawn(move || decompress_json(&undo_bytes));
+                    (seq, h_cmd, h_undo, ts)
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|(seq, h_cmd, h_undo, ts)| {
+                    let cmd = h_cmd.join().map_err(|_| {
+                        anyhow::anyhow!("redo decompress thread panicked")
+                    })??;
+                    let undo = h_undo.join().map_err(|_| {
+                        anyhow::anyhow!("redo decompress thread panicked")
+                    })??;
+                    Ok((seq, cmd, undo, ts))
+                })
+                .collect()
+        });
+        let entries = entries?;
         Ok(entries)
     }
 

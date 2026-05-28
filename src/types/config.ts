@@ -208,6 +208,7 @@ export const defaultConfig: Config = {
       show_hitboxes: false,
       log_hit_detection: false,
     },
+    memory_probe: false,
   },
   global_view: {
     fps_threshold: 30,

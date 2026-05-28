@@ -229,8 +229,6 @@ test.describe('Depth Gradient', () => {
           getStyle: () => { sources?: Record<string, unknown> };
           querySourceFeatures: (sourceId: string) => Array<{
             properties?: {
-              fromColor?: string;
-              toColor?: string;
               sectionId?: number;
               shotId?: number;
               color?: string;
@@ -240,13 +238,18 @@ test.describe('Depth Gradient', () => {
       }).__stalagmight_map__;
       if (!map) return null;
 
-      const style = map.getStyle();
       const shots = map.querySourceFeatures('survey-data-shots');
       const gradientSegments = map.querySourceFeatures('survey-data-shot-gradients');
+      // In flat (non-depth) mode every shot carries a single solid
+      // `color` property and the gradient overlay layer is empty.
+      // Per-endpoint colors (fromColor/toColor on individual shots)
+      // were retired when the shot-features payload was slimmed
+      // down — the gradient layer now emits per-segment features
+      // with their own colors, exercised by the
+      // hasPerShotGradientSegments check further down.
       const flatShotFound = shots.some((feature) => {
-        const fromColor = feature.properties?.fromColor;
-        const toColor = feature.properties?.toColor;
-        return typeof fromColor === 'string' && fromColor.length > 0 && fromColor === toColor;
+        const color = feature.properties?.color;
+        return typeof color === 'string' && color.length > 0;
       });
 
       return {

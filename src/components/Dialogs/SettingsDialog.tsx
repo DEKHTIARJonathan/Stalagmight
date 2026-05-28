@@ -107,7 +107,7 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
       return { appearance: { ...defaultConfig.appearance } };
     case 'advanced':
       return {
-        debug: { map: { ...defaultConfig.debug.map } },
+        debug: { map: { ...defaultConfig.debug.map }, memory_probe: defaultConfig.debug.memory_probe },
         logging: { ...defaultConfig.logging },
         closure_adjustment: { ...defaultConfig.closure_adjustment },
         panels: { ...defaultConfig.panels },
@@ -214,7 +214,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     shortcuts: { ...base.shortcuts },
     panels: { ...base.panels },
     cache: { ...base.cache },
-    debug: { map: { ...base.debug.map } },
+    debug: { map: { ...base.debug.map }, memory_probe: base.debug.memory_probe },
     global_view: { ...base.global_view },
     appearance: { ...base.appearance },
     import: { ...base.import },

@@ -802,6 +802,13 @@ impl AppState {
         // Reassign closure IDs to ensure uniqueness across merged sources
         merged_project.assign_closure_ids();
 
+        // Direct pushes to station_merges above (line ~685) bypassed
+        // Project::record_station_merge, so the adjacency cache is
+        // empty and out of step with the populated merges vec.
+        // Rebuild now so the next get_merged_section_ids on the freshly
+        // merged project takes the O(group) fast path.
+        merged_project.rebuild_merge_adjacency();
+
         // Set the output file path
         merged_project.file_path = Some(output_path.clone());
 
@@ -1003,6 +1010,17 @@ impl AppState {
 
         // === PHASE 3: Computing stations (20%) ===
         progress.start_phase(LoadingPhase::ComputingStations);
+        // Pre-compute the expected station total so the UI can show a real
+        // progress bar from the start of this phase. Otherwise the first
+        // ~second of the phase (build_colocated_groups + station_depths)
+        // shows an indeterminate spinner — the per-station callback only
+        // fires once the main walk begins.
+        let expected_station_total: u32 = project
+            .sections
+            .iter()
+            .map(|s| s.shots.len() as u32 + 1)
+            .sum();
+        progress.update_phase(LoadingPhase::ComputingStations, 0, expected_station_total);
         let stations = project.compute_station_coordinates_with_progress(Some(&mut |current, total| {
             if !progress.is_cancelled() {
                 progress.update_phase(LoadingPhase::ComputingStations, current, total);

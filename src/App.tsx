@@ -14,15 +14,16 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry } from './utils/telemetry';
 import { ContextMenu } from './components/common';
+import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
 import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
-  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseGpx, setConfig } = useProjectStore();
+  const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseCompass, parseGpx, setConfig } = useProjectStore();
   const {
     view,
     setView,
@@ -176,10 +177,39 @@ function App() {
   const handleImportFileDrop = useCallback(async (filePath: string) => {
     const lowerPath = filePath.toLowerCase();
     const isTml = lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu');
+    const isCompass = lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat');
     const isGpx = lowerPath.endsWith('.gpx');
     const currentProject = useProjectStore.getState().project;
 
-    if (isGpx) {
+    // TML and Compass are full-survey imports that always create a new project,
+    // so they are only accepted from the home screen.
+    if ((isTml || isCompass) && currentProject) {
+      openDialog('error', {
+        title: 'Import survey',
+        message: 'Close the current project before importing a new survey.',
+      });
+      return;
+    }
+
+    if (isCompass) {
+      try {
+        const compassFile = await parseCompass(filePath);
+        if (!compassFile) return;
+
+        const fileName = extractFilename(filePath, /\.(mak|dat)$/i) || 'Imported';
+        openDialog('new-project-for-import', {
+          compassFile,
+          filePath,
+          defaultName: fileName,
+          importType: 'compass',
+        });
+      } catch (e) {
+        openDialog('error', {
+          title: 'Import Failed',
+          message: getErrorMessage(e, 'Failed to parse Compass file'),
+        });
+      }
+    } else if (isGpx) {
       try {
         const gpxFile = await parseGpx(filePath);
         if (!gpxFile) return;
@@ -206,17 +236,13 @@ function App() {
         const tmlFile = await parseTml(filePath);
         if (!tmlFile) return;
 
-        if (currentProject) {
-          openDialog('tml-import', { tmlFile, filePath });
-        } else {
-          const fileName = extractFilename(filePath, /\.tmlu?$/i) || 'Imported';
-          openDialog('new-project-for-import', {
-            tmlFile,
-            filePath,
-            defaultName: fileName,
-            importType: 'tml',
-          });
-        }
+        const fileName = extractFilename(filePath, /\.tmlu?$/i) || 'Imported';
+        openDialog('new-project-for-import', {
+          tmlFile,
+          filePath,
+          defaultName: fileName,
+          importType: 'tml',
+        });
       } catch (e) {
         openDialog('error', {
           title: 'Import Failed',
@@ -260,12 +286,12 @@ function App() {
         }
       }
     }
-  }, [importDmp, parseTml, parseGpx, openDialog, setImportContext]);
+  }, [importDmp, parseTml, parseCompass, parseGpx, openDialog, setImportContext]);
 
-  // Set up drag-drop event listener for importable files (DMP/TML/TMLU)
+  // Set up drag-drop event listener for importable files (DMP/TML/TMLU/Compass/GPX)
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    const importExts = ['.dmp', '.tml', '.tmlu', '.gpx'];
+    const importExts = ['.dmp', '.tml', '.tmlu', '.gpx', '.mak', '.dat'];
 
     const setupDragDrop = async () => {
       try {
@@ -400,6 +426,8 @@ function App() {
         <SingleSystemView />
       )}
 
+      <MemoryProbe />
+
       {/* Dialogs */}
       {activeDialog === 'import' && <ImportDialog />}
       {activeDialog === 'export' && <ExportDialog />}
@@ -525,6 +553,12 @@ function App() {
       {activeDialog === 'tml-import' && dialogData.tmlFile ? (
         <TmlImportDialog
           tmlFile={dialogData.tmlFile as import('./types/commands').TmlFile}
+          filePath={dialogData.filePath as string}
+        />
+      ) : null}
+      {activeDialog === 'compass-import' && dialogData.compassFile ? (
+        <CompassImportDialog
+          compassFile={dialogData.compassFile as import('./types/commands').CompassFile}
           filePath={dialogData.filePath as string}
         />
       ) : null}

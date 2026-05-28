@@ -1127,6 +1127,7 @@ pub fn run() {
             commands::project::remove_from_recent_projects,
             commands::project::merge_projects,
             commands::project::load_project_full,
+            commands::project::load_project_full_binary,
             commands::project::create_project_full,
             commands::project::cancel_loading,
             // Section commands
@@ -1182,6 +1183,8 @@ pub fn run() {
             commands::import::import_sections,
             commands::import::parse_tml,
             commands::import::execute_tml_import,
+            commands::import::parse_compass,
+            commands::import::execute_compass_import,
             commands::import::parse_gpx,
             commands::import::execute_gpx_import,
             commands::import::suggest_import_placement,
@@ -1224,6 +1227,8 @@ pub fn run() {
             // Logging
             commands::logging::get_recent_logs,
             commands::logging::push_frontend_log,
+            // Memory probe (debug)
+            commands::memory::get_memory_stats,
             // Telemetry
             commands::telemetry::track_events,
             commands::telemetry::flush_telemetry,

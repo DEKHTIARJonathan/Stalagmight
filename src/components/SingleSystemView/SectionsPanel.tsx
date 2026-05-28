@@ -2,6 +2,8 @@ import { useRef, useEffect, useState, memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { SHOT_FLAG_IS_REFERENCE } from '../../types/survey-data';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -264,17 +266,48 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   );
 }
 
-function calculateSectionStats(section: Section) {
-  let length = 0;
-  let referenceCount = 0;
-
-  for (const shot of section.shots) {
-    length += shot.length;
-    if (shot.is_reference) {
-      referenceCount++;
+/**
+ * Compute total length + reference-shot count for the section row.
+ * Called once per visible section row by `SectionRow`. With 14k sections
+ * this used to iterate `section.shots` 14k times — triggering the lazy
+ * Shot materialization for every section on first render, defeating the
+ * Phase-A.5 memory optimization.
+ *
+ * Reads from `surveyData.shotLength` / `shotFlags` typed arrays directly
+ * when available (the common path post Phase A.5). Falls back to the
+ * legacy `section.shots` walk on the unusual path where surveyData
+ * isn't populated yet (e.g. legacy JSON refresh in-flight).
+ */
+function calculateSectionStats(section: Section): {
+  shotCount: number;
+  length: number;
+  referenceCount: number;
+} {
+  const surveyData = useProjectStore.getState().surveyData;
+  if (surveyData) {
+    const meta = surveyData.sections.find((s) => s.id === section.id);
+    if (meta) {
+      let length = 0;
+      let referenceCount = 0;
+      const end = meta.shotOffset + meta.shotCount;
+      for (let g = meta.shotOffset; g < end; g++) {
+        length += surveyData.shotLength[g]!;
+        if ((surveyData.shotFlags[g]! & SHOT_FLAG_IS_REFERENCE) !== 0) {
+          referenceCount++;
+        }
+      }
+      return { shotCount: meta.shotCount, length, referenceCount };
     }
   }
-
+  // Legacy fallback — only hit during the JSON refresh window where
+  // `surveyData` may briefly be a stale legacy-converted copy. Same
+  // behavior as before, just kept for safety.
+  let length = 0;
+  let referenceCount = 0;
+  for (const shot of section.shots) {
+    length += shot.length;
+    if (shot.is_reference) referenceCount++;
+  }
   return {
     shotCount: section.shots.length,
     length,

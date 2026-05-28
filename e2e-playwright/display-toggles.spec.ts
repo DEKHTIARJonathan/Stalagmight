@@ -141,7 +141,7 @@ test.describe('Display Toggle Visibility', () => {
     await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
-  test('toggle stations hides and shows station markers on canvas', async ({ page }) => {
+  test('toggle stations hides and shows station markers on canvas @smoke', async ({ page }) => {
     // Wait for station layer to be visible before testing
     await waitForLayerVisible(page, 'survey-stations');
 
@@ -185,7 +185,7 @@ test.describe('Display Toggle Visibility', () => {
     await expect.poll(async () => getLayerVisibility(page, 'survey-stations'), { timeout: 2000 }).toBe('visible');
   });
 
-  test('toggle shots hides and shows shot lines on canvas', async ({ page }) => {
+  test('toggle shots hides and shows shot lines on canvas @smoke', async ({ page }) => {
     // Wait for shot layer to be visible
     await waitForLayerVisible(page, 'survey-shots');
 
