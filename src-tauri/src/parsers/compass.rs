@@ -110,16 +110,53 @@ struct FixedStation {
     elevation: f64,
 }
 
-/// Fully parsed Compass data plus the project-level georeference state.
-pub struct ParsedCompass {
-    cave_name: String,
+/// Per-`#file` Compass state.  `.MAK` projects can change DATUM, UTM zone,
+/// convergence, and declination-mode policy between successive `#file`
+/// entries, so the state has to travel alongside each survey instead of
+/// being collapsed to the first file's values.
+#[derive(Debug, Clone)]
+struct CompassFileState {
     datum: Option<Datum>,
     utm_zone: Option<u8>,
     convergence: f64,
     convergence_applied: bool,
     declination_mode: DeclinationMode,
+}
+
+impl Default for CompassFileState {
+    fn default() -> Self {
+        Self {
+            datum: None,
+            utm_zone: None,
+            convergence: 0.0,
+            convergence_applied: false,
+            declination_mode: DeclinationMode::default(),
+        }
+    }
+}
+
+/// A survey paired with the per-file Compass state in effect when it was
+/// declared.  Used downstream by `build_ctx` so each survey sees its own
+/// declination-mode / convergence rather than the first file's.
+struct SurveyWithState {
+    survey: Survey,
+    state: CompassFileState,
+}
+
+/// Fully parsed Compass data plus the project-level georeference state.
+/// `datum` / `utm_zone` come from the FIRST `#file` entry and feed
+/// `resolve_anchor` (UTM-zone overrides on later files would need to be
+/// projected per-file).  `declination_mode` is reported in the preview;
+/// per-file overrides for declination/convergence flow through the
+/// corresponding `SurveyWithState.state` so each survey's geometry uses
+/// the policy declared in its own `#file` entry.
+pub struct ParsedCompass {
+    cave_name: String,
+    datum: Option<Datum>,
+    utm_zone: Option<u8>,
+    declination_mode: DeclinationMode,
     fixed_stations: Vec<FixedStation>,
-    surveys: Vec<Survey>,
+    surveys: Vec<SurveyWithState>,
     warnings: Vec<String>,
 }
 
@@ -148,26 +185,40 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
 
     let mut datum = None;
     let mut utm_zone = None;
-    let mut convergence = 0.0;
-    let mut convergence_applied = false;
     let mut declination_mode = DeclinationMode::default();
     let mut fixed_stations = Vec::new();
-    let mut surveys = Vec::new();
+    let mut surveys: Vec<SurveyWithState> = Vec::new();
 
     for (i, dat) in loaded.survey_files.iter().enumerate() {
-        let state = &dat.file_state;
+        let raw_state = &dat.file_state;
+        // Reduce the vendor crate's FileState to the subset our pipeline
+        // actually consults.  This is computed per file so subsequent
+        // `#file` entries with different DATUM/UTM/CONVERGENCE/DECL
+        // settings flow through to the surveys they introduced.
+        let mut file_state = CompassFileState {
+            datum: Some(raw_state.datum),
+            utm_zone: raw_state.utm_zone.or(Some(raw_state.base_location.zone)),
+            convergence: raw_state.base_location.convergence_angle,
+            convergence_applied: false,
+            declination_mode: DeclinationMode::default(),
+        };
+        if let Some(fc) = &raw_state.file_convergence {
+            file_state.convergence = fc.angle;
+            file_state.convergence_applied = fc.enabled;
+        }
+        if let Some(pp) = &raw_state.project_parameters {
+            file_state.declination_mode = pp.declination_mode;
+            file_state.convergence_applied = pp.utm_convergence_applied;
+        }
         if i == 0 {
-            datum = Some(state.datum);
-            utm_zone = state.utm_zone.or(Some(state.base_location.zone));
-            convergence = state.base_location.convergence_angle;
-            if let Some(fc) = &state.file_convergence {
-                convergence = fc.angle;
-                convergence_applied = fc.enabled;
-            }
-            if let Some(pp) = &state.project_parameters {
-                declination_mode = pp.declination_mode;
-                convergence_applied = pp.utm_convergence_applied;
-            }
+            // Mirror the first-file state into the project-wide fields
+            // used by resolve_anchor (UTM/datum) and the preview
+            // (declination_mode).  Per-file overrides for declination /
+            // convergence flow through SurveyWithState.state — see
+            // build_ctx.
+            datum = file_state.datum;
+            utm_zone = file_state.utm_zone;
+            declination_mode = file_state.declination_mode;
         }
         for station in &dat.project_stations {
             if let Some(loc) = station.location {
@@ -180,20 +231,21 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
             }
         }
         for survey in dat.surveys() {
-            surveys.push(survey.clone());
+            surveys.push(SurveyWithState {
+                survey: survey.clone(),
+                state: file_state.clone(),
+            });
         }
     }
 
     let cave_name = surveys
         .first()
-        .map_or_else(String::new, |s| s.cave_name.clone());
+        .map_or_else(String::new, |s| s.survey.cave_name.clone());
 
     Ok(ParsedCompass {
         cave_name,
         datum,
         utm_zone,
-        convergence,
-        convergence_applied,
         declination_mode,
         fixed_stations,
         surveys,
@@ -203,17 +255,25 @@ fn parse_mak(path: &Path) -> Result<ParsedCompass> {
 
 fn parse_dat(path: &Path) -> Result<ParsedCompass> {
     let contents = read_latin1(path)?;
-    let surveys = Survey::parse_dat_file(&contents)
+    let raw_surveys = Survey::parse_dat_file(&contents)
         .map_err(|e| anyhow!("Failed to parse Compass .DAT file: {e}"))?;
-    let cave_name = surveys
+    let cave_name = raw_surveys
         .first()
         .map_or_else(String::new, |s| s.cave_name.clone());
+    // A bare .DAT lacks #file scope, so every survey shares the same
+    // default state.  parse_mak builds richer per-file state.
+    let default_state = CompassFileState::default();
+    let surveys = raw_surveys
+        .into_iter()
+        .map(|survey| SurveyWithState {
+            survey,
+            state: default_state.clone(),
+        })
+        .collect();
     Ok(ParsedCompass {
         cave_name,
         datum: None,
         utm_zone: None,
-        convergence: 0.0,
-        convergence_applied: false,
         declination_mode: DeclinationMode::default(),
         fixed_stations: Vec::new(),
         surveys,
@@ -233,21 +293,21 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
     let shot_count = parsed
         .surveys
         .iter()
-        .map(|s| s.shots.len())
+        .map(|s| s.survey.shots.len())
         .sum::<usize>() as u32;
     let has_backsights = parsed
         .surveys
         .iter()
-        .any(|s| s.parameters.format_parameters.has_backsights());
+        .any(|s| s.survey.parameters.format_parameters.has_backsights());
     let surveys = parsed
         .surveys
         .iter()
         .map(|s| CompassSurveySummary {
-            name: s.name.clone(),
-            date: s.date.to_string(),
-            team: non_empty(&s.team),
-            shot_count: s.shots.len() as u32,
-            declination: s.parameters.declination,
+            name: s.survey.name.clone(),
+            date: s.survey.date.to_string(),
+            team: non_empty(&s.survey.team),
+            shot_count: s.survey.shots.len() as u32,
+            declination: s.survey.parameters.declination,
         })
         .collect();
     CompassFile {
@@ -276,6 +336,12 @@ struct SurveyCtx {
     apply_corrections: bool,
     corrections: Option<CorrectionFactors>,
     backsight_corrections: Option<BackSightCorrectionFactors>,
+    /// Inclination unit used by this survey.  Compass supports five
+    /// (Degrees, PercentGrade, DegreesAndMinutes, Grads, DepthGauge);
+    /// `shot_geometry` converts each to plain degrees before feeding
+    /// the trig in elevation_gain.  `None` (= unrecognized) is treated
+    /// as Degrees with a warning at parse time.
+    inclination_units: InclinationUnits,
 }
 
 /// Resolved georeference anchor for the project.
@@ -336,10 +402,26 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     } else {
         shot.azimuth
     };
-    let mut inclination = if angle_missing(shot.inclination) {
-        0.0
-    } else {
-        shot.inclination
+    // For Degrees / Grads / PercentGrade / DegreesAndMinutes the raw
+    // value is sentinel-tested as an angle.  For DepthGauge the field
+    // is a depth reading whose absolute value can equal the missing-
+    // threshold, so only the "+ infinity" half of the sentinel applies
+    // — pass the raw through.
+    let mut inclination = match ctx.inclination_units {
+        InclinationUnits::DepthGauge => {
+            if shot.inclination >= MISSING_VALUE_THRESHOLD {
+                0.0
+            } else {
+                shot.inclination
+            }
+        }
+        _ => {
+            if angle_missing(shot.inclination) {
+                0.0
+            } else {
+                shot.inclination
+            }
+        }
     };
     let mut length = if shot.length >= MISSING_VALUE_THRESHOLD {
         0.0
@@ -349,13 +431,26 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     if ctx.apply_corrections {
         if let Some(cf) = &ctx.corrections {
             azimuth += cf.azimuth;
+            // Corrections live in the survey's declared inclination
+            // unit; they apply naturally for Degrees/Grads/Percent/DM.
+            // For DepthGauge the field is a depth in length units;
+            // adding the inclination-correction (also a length under
+            // the DepthGauge convention per the Compass spec) is
+            // dimensionally consistent.
             inclination += cf.inclination;
             length += cf.length;
         }
     }
     let azimuth_final = (azimuth + ctx.declination - ctx.convergence_angle).rem_euclid(360.0);
     let length_m = length * ctx.length_to_m;
-    (azimuth_final, length_m, inclination)
+    // Single normalisation point: convert whatever Compass unit the
+    // survey declared into degrees so the rest of the pipeline
+    // (elevation_gain, shot_to_shot_data's pitch sign flip) stays
+    // unit-agnostic.  DepthGauge needs the slope length to resolve
+    // asin(depth / length) — pass the raw length (same units as the
+    // depth reading) so the ratio is dimensionless.
+    let inclination_deg = inclination_to_degrees(inclination, &ctx.inclination_units, length);
+    (azimuth_final, length_m, inclination_deg)
 }
 
 /// Process a back-sight pair (`back_azimuth`, `back_inclination`) and return
@@ -456,7 +551,7 @@ fn shot_to_shot_data(
 
 fn build_ctx(
     survey: &Survey,
-    parsed: &ParsedCompass,
+    file_state: &CompassFileState,
     anchor_lat_lng: Option<(f64, f64)>,
     opts: &CompassImportOptions,
     warnings: &mut Vec<String>,
@@ -466,16 +561,19 @@ fn build_ctx(
         Some(LengthUnits::Meters) => 1.0,
         _ => FEET_TO_METERS,
     };
-    match format.inclination_units() {
-        Some(InclinationUnits::Degrees | InclinationUnits::DepthGauge) | None => {}
-        Some(other) => warnings.push(format!(
-            "Survey '{}': inclination unit {other:?} is unsupported; treated as degrees",
+    let inclination_units = format.inclination_units().unwrap_or(InclinationUnits::Degrees);
+    if matches!(inclination_units, InclinationUnits::DepthGauge) {
+        warnings.push(format!(
+            "Survey '{}': inclination unit is DepthGauge (W); each shot's inclination \
+             is interpreted as a vertical depth delta and converted to a slope angle \
+             via asin(depth / length).  Depth-gauge surveys with zero-length shots \
+             can't produce a slope and will be treated as horizontal.",
             survey.name
-        )),
+        ));
     }
-    let declination = survey_declination(parsed.declination_mode, survey, anchor_lat_lng, warnings);
-    let convergence_angle = if parsed.convergence_applied {
-        parsed.convergence
+    let declination = survey_declination(file_state.declination_mode, survey, anchor_lat_lng, warnings);
+    let convergence_angle = if file_state.convergence_applied {
+        file_state.convergence
     } else {
         0.0
     };
@@ -486,6 +584,63 @@ fn build_ctx(
         apply_corrections: opts.apply_corrections,
         corrections: survey.parameters.correction_factors.clone(),
         backsight_corrections: survey.parameters.backsight_correction_factors.clone(),
+        inclination_units,
+    }
+}
+
+/// Convert a Compass-format inclination value to plain degrees.
+///
+/// Compass stores inclinations in one of five units (declared in the
+/// survey's format parameters).  The whole rest of `shot_geometry` /
+/// `elevation_gain` operates in degrees, so this is the single
+/// normalisation point.
+///
+/// * `Degrees` (D)              — pass through
+/// * `Grads` (R)                — × 0.9 (400 grads / 360°)
+/// * `PercentGrade` (G)         — atan(percent / 100)
+/// * `DegreesAndMinutes` (M)    — DDD.MM packed, minutes in the
+///                                fractional part (e.g. 12.34 → 12 + 34/60)
+/// * `DepthGauge` (W)           — `raw` is a vertical depth reading
+///                                (length units), not an angle.  Convert
+///                                to slope via asin(depth_m / slope_m).
+///                                Caller passes `slope_length_m` so we
+///                                can produce a degree result; if it's
+///                                zero we fall back to 0° (warned at
+///                                parse time).
+fn inclination_to_degrees(
+    raw: f64,
+    units: &InclinationUnits,
+    slope_length_m: f64,
+) -> f64 {
+    match units {
+        InclinationUnits::Degrees => raw,
+        InclinationUnits::Grads => raw * 0.9,
+        InclinationUnits::PercentGrade => (raw / 100.0).atan().to_degrees(),
+        InclinationUnits::DegreesAndMinutes => {
+            // DDD.MM format: integer part is degrees, fractional part *
+            // 100 is minutes (so 12.34 means 12° 34').  Preserve sign.
+            let sign = raw.signum();
+            let abs = raw.abs();
+            let degrees = abs.trunc();
+            let minutes = (abs - degrees) * 100.0;
+            sign * (degrees + minutes / 60.0)
+        }
+        InclinationUnits::DepthGauge => {
+            if slope_length_m.abs() < f64::EPSILON {
+                0.0
+            } else {
+                let depth_m = raw; // Compass stores depth in the same
+                // length units as the shot's length — we've already
+                // converted length to meters before calling here, so
+                // `raw` is in the same units as `slope_length_m`.  In
+                // Compass, positive depth = down (target station is
+                // below origin); Compass inclination convention is +up,
+                // so a +5 m depth reading corresponds to a -inclination
+                // (going down).
+                let ratio = (depth_m / slope_length_m).clamp(-1.0, 1.0);
+                -ratio.asin().to_degrees()
+            }
+        }
     }
 }
 
@@ -724,8 +879,9 @@ pub fn convert_compass_to_import_configs(
     // Pass 1: per-survey contexts, kept shots, and elevation graph edges.
     let mut kept: Vec<KeptSurvey> = Vec::new();
     let mut edges: Vec<(String, String, f64)> = Vec::new();
-    for survey in &parsed.surveys {
-        let ctx = build_ctx(survey, parsed, anchor_lat_lng, opts, &mut warnings);
+    for survey_with_state in &parsed.surveys {
+        let survey = &survey_with_state.survey;
+        let ctx = build_ctx(survey, &survey_with_state.state, anchor_lat_lng, opts, &mut warnings);
         let mut shots = Vec::new();
         for shot in &survey.shots {
             let flags = parse_flags(shot.flags.as_ref());
@@ -1139,7 +1295,16 @@ mod tests {
         assert!(!configs.is_empty());
 
         // The chain containing the anchor "00" gets a ZeroDatum placement; its
-        // first shot is 00 -> MNUS1 (49.00 ft, 66.00 deg, -5.86 deg, decl 0).
+        // first shot is 00 -> MNUS1 (49.00 ft length, 66.00 deg bearing,
+        // -5.86 ft depth reading, decl 0).  The Minotauro DAT FORMAT line is
+        // `DDDWLRUDALDN` — the 4th char `W` declares inclination units as
+        // DepthGauge, so the -5.86 column is a vertical-depth offset in the
+        // shot's length units (feet here), not a slope angle in degrees.
+        // The pipeline turns this into a Compass +up slope of
+        // -asin(-5.86 / 49.00) ≈ +6.87° (target is shallower than origin),
+        // which Stalagmight stores as pitch_in = -6.87° (+down) and
+        // elevation_gain = 14.9352 m * sin(+6.87°) ≈ +1.787 m → MNUS1
+        // ends up 1.787 m UP from "00", i.e. depth_out ≈ -1.787 m.
         let anchor_config = configs
             .iter()
             .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
@@ -1151,9 +1316,11 @@ mod tests {
         assert!((shot.azimuth_in - 66.0).abs() < 0.01, "azimuth {}", shot.azimuth_in);
         assert!((shot.length - 14.9352).abs() < 0.01, "length {}", shot.length);
         assert!(shot.depth_in.abs() < 0.01, "depth_in {}", shot.depth_in);
-        // Descending 5.86 deg over 14.9352 m -> +1.525 m deeper.
-        assert!((shot.depth_out - 1.5252).abs() < 0.01, "depth_out {}", shot.depth_out);
-        assert!((shot.pitch_in.unwrap() - 5.86).abs() < 0.01, "pitch {:?}", shot.pitch_in);
+        // -asin(-5.86/49.00) ≈ +6.871° in Compass +up; 14.9352 * sin(6.871°)
+        // ≈ +1.787 m gained going up, so MNUS1 ends ~1.787 m shallower
+        // than "00" — depth_out ≈ -1.787 m in Stalagmight's +down convention.
+        assert!((shot.depth_out + 1.7867).abs() < 0.01, "depth_out {}", shot.depth_out);
+        assert!((shot.pitch_in.unwrap() + 6.871).abs() < 0.01, "pitch {:?}", shot.pitch_in);
 
         // Exactly one zero datum for the whole project.
         let zero_datums = configs
@@ -1215,7 +1382,7 @@ mod tests {
     fn parse_dat_captures_backsights_flags_and_comments() {
         // simple.dat has a backsight format and flag/comment columns.
         let parsed = parse_compass(&fixture("simple.dat")).unwrap();
-        let survey = &parsed.surveys[0];
+        let survey = &parsed.surveys[0].survey;
         assert!(survey.parameters.format_parameters.has_backsights());
         assert!(survey.shots[0].back_azimuth.is_some());
         assert!(survey.shots.iter().any(|s| s.flags.as_deref() == Some("PC")));

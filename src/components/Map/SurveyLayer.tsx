@@ -3380,6 +3380,30 @@ export default class SurveyLayer {
     };
     this.coalescedUpdateCallsSinceLastFlush += 1;
 
+    // Drag-commit short-circuit: callers that registered onNextUpdate
+    // (e.g. MapCanvas.endDragPreview) expect the setData and the
+    // callback to land in the same frame — they're restoring filters
+    // that hide the dragged preview while the real geometry catches
+    // up.  The default async-worker path delays the callback by the
+    // worker round-trip (~100 ms on a 14 k-section project), leaving
+    // the user looking at the preview hanging on top of stale features.
+    // When a one-shot callback is pending, flush synchronously instead.
+    if (this.onNextUpdateCallback) {
+      this.updateScheduled = false;
+      const args = this.pendingUpdateArgs;
+      this.pendingUpdateArgs = null;
+      this.flushUpdateSync(
+        args.sections,
+        args.stations,
+        args.loopClosures,
+        args.gpsOrigin,
+        args.showDepthGradient,
+        args.depthRange,
+        args.precision,
+      );
+      return;
+    }
+
     if (this.updateScheduled) return;
     this.updateScheduled = true;
     queueMicrotask(() => {
@@ -3501,6 +3525,14 @@ export default class SurveyLayer {
     // Cancel any pending coalesced flush so we don't re-run with stale args.
     this.updateScheduled = false;
     this.pendingUpdateArgs = null;
+    // Bump the token so any in-flight `flushUpdateViaWorker` (started by
+    // an earlier update before this sync flush kicked in) discards its
+    // result via the `myToken !== this.lastUpdateToken` guard.  Without
+    // this the older worker could land its stale features on top of the
+    // freshly-applied sync data — most visibly during a drag commit
+    // that arrives between the user's last zoom rebuild and the worker
+    // finishing.
+    this.lastUpdateToken += 1;
     this.flushUpdate(sections, stations, loopClosures, gpsOrigin ?? null, showDepthGradient, depthRange, precision);
   }
 
