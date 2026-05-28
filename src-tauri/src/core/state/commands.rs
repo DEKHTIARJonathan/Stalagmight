@@ -2232,6 +2232,10 @@ impl AppState {
             project.station_merges.retain(|m| {
                 m.station_a.section_id != section_id && m.station_b.section_id != section_id
             });
+            // The retain just dropped entries the adjacency cache still
+            // claims exist — clear it so the next get_merged_section_ids
+            // doesn't fast-path against stale data.
+            project.merge_adjacency_cache.clear();
 
             project.loop_closures.retain(|lc| {
                 lc.station_a.section_id != section_id && lc.station_b.section_id != section_id

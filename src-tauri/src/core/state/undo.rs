@@ -680,6 +680,10 @@ impl AppState {
                                     station_b: *station_b,
                                     merged_at: chrono::Utc::now(),
                                 });
+                                // Direct push bypassed Project::record_station_merge,
+                                // so the adjacency cache is stale. Drop it; the next
+                                // BFS will fall back to the linear scan until rebuilt.
+                                project.merge_adjacency_cache.clear();
                                 // Restore removed closures and bump next_closure_id
                                 for closure in removed_closures {
                                     project.next_closure_id = project.next_closure_id.max(closure.id + 1);

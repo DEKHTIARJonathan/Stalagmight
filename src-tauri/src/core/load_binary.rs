@@ -179,6 +179,22 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         for shot in &section.shots {
             // Floats (f32): azimuth_in, azimuth_out, length, depth_in, depth_out,
             //               pitch_in, pitch_out, left, right, up, down, temperature.
+            //
+            // PRECISION: shot fields are stored as f64 in the in-memory
+            // `Shot` struct but emitted as f32 on the wire to halve the
+            // shot-floats buffer (48 vs 96 bytes per shot — ~3.6 MB
+            // saved on a 75 k-shot project, with matching memory in
+            // Float32Array views on the frontend).  f32 gives ~7
+            // significant decimal digits, which exceeds the precision
+            // of any field surveying instrument we know of in practice;
+            // but a loaded shot's geometry IS rounded, so editing one
+            // and saving (e.g. through EditShotDialog, which currently
+            // re-sends all fields) writes the rounded value back to
+            // SQLite.  Acceptable trade-off for now; revisit if a
+            // workflow needs lossless round-tripping (bump f32→f64
+            // here and in SurveyData's shot-float arrays, bump
+            // BINARY_FORMAT_VERSION).
+            //
             // Hot loop — pack into a single [u8; SHOT_FLOAT_STRIDE]
             // buffer and emit with one extend_from_slice rather than 12
             // separate calls. Saves ~10 % of the encode wall-clock on

@@ -7,6 +7,7 @@ import type {
 } from '../../../types/project';
 import {
   type SurveyData,
+  type SectionMetadata,
   SHOT_FLAG_IS_REFERENCE,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../types/survey-data';
@@ -175,6 +176,16 @@ export function buildSurveyFeatures(
     inner.set(stIdx, g);
   }
 
+  // sectionId → SectionMetadata. Built once, O(sections). The
+  // station-features loop below runs ~stationCount times and was
+  // previously calling `data.sections.find(...)` per iteration,
+  // turning the build into O(stationCount × sectionCount). For the
+  // 92.stalx fixture (89 k stations × 14 k sections) that was
+  // ~1.3 G comparisons inside the MapLibre features worker — visible
+  // as delayed first paint.
+  const sectionMetaById = new Map<number, SectionMetadata>();
+  for (const s of data.sections) sectionMetaById.set(s.id, s);
+
   /** Read station (x, y, z) from the SoA. Returns null if invalid global idx. */
   const stationXYZ = (gIdx: number): { x: number; y: number; z: number } => {
     const base = gIdx * 3;
@@ -320,7 +331,7 @@ export function buildSurveyFeatures(
   for (let g = 0; g < data.stationCount; g++) {
     const sectionId = data.stationSectionIds[g]!;
     const stationIndex = data.stationIndices[g]!;
-    const section = data.sections.find((s) => s.id === sectionId);
+    const section = sectionMetaById.get(sectionId);
     const sectionColor = section?.color ?? sectionDefault;
     const isZeroDatumStation = (data.stationFlags[g]! & STATION_FLAG_IS_ZERO_DATUM) !== 0;
     const xyz = stationXYZ(g);

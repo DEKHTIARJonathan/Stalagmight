@@ -747,6 +747,13 @@ impl AppState {
         // Reassign closure IDs to ensure uniqueness across merged sources
         merged_project.assign_closure_ids();
 
+        // Direct pushes to station_merges above (line ~685) bypassed
+        // Project::record_station_merge, so the adjacency cache is
+        // empty and out of step with the populated merges vec.
+        // Rebuild now so the next get_merged_section_ids on the freshly
+        // merged project takes the O(group) fast path.
+        merged_project.rebuild_merge_adjacency();
+
         // Set the output file path
         merged_project.file_path = Some(output_path.clone());
 
