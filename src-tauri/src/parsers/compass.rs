@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use compass_data::{
-    CorrectionFactors, Datum, DeclinationMode, InclinationUnits, LengthUnits, Project, Shot, Survey,
+    BackSightCorrectionFactors, CorrectionFactors, Datum, DeclinationMode, InclinationUnits,
+    LengthUnits, Project, Shot, Survey,
 };
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
@@ -274,6 +275,7 @@ struct SurveyCtx {
     length_to_m: f64,
     apply_corrections: bool,
     corrections: Option<CorrectionFactors>,
+    backsight_corrections: Option<BackSightCorrectionFactors>,
 }
 
 /// Resolved georeference anchor for the project.
@@ -356,6 +358,59 @@ fn shot_geometry(shot: &Shot, ctx: &SurveyCtx) -> (f64, f64, f64) {
     (azimuth_final, length_m, inclination)
 }
 
+/// Process a back-sight pair (`back_azimuth`, `back_inclination`) and return
+/// values comparable to the fore-sight after the same pipeline — i.e. in the
+/// forward (FROM → TO) direction, Stalagmight's `+down` pitch convention.
+///
+/// Compass records back-sight as the raw instrument reading from the TO
+/// station looking back at the FROM station, so for a well-calibrated survey
+/// of a shot with fore-azimuth `a` and fore-inclination `i` (Compass +up):
+///
+///   * `back_azimuth`     ≈ a + 180°
+///   * `back_inclination` ≈ -i   (uphill from FROM is downhill from TO)
+///
+/// We need to turn the back-sight around to FROM → TO:
+///   * Azimuth: add 180° after declination/convergence.
+///   * Inclination: flip sign to undo the TO-side reading direction.  That
+///     yields the equivalent fore-sight in Compass's +up convention; one more
+///     sign flip lands us in Stalagmight's +down (matching what
+///     `shot_to_shot_data` applies to the fore-sight via `Some(-inclination)`).
+///     The two flips cancel mathematically, so the final stored pitch_out
+///     equals the raw `back_inclination` after corrections — but the
+///     derivation is spelled out below so the intent is recoverable.
+///
+/// Returns `(azimuth_out_grid_deg, pitch_out_deg_positive_down)` if both
+/// back-sight readings are present and non-sentinel, else `None`.
+fn shot_backsight_geometry(shot: &Shot, ctx: &SurveyCtx) -> Option<(f64, f64)> {
+    let back_az_raw = shot.back_azimuth?;
+    let back_inc_raw = shot.back_inclination?;
+    if angle_missing(back_az_raw) {
+        return None;
+    }
+    let mut back_az = back_az_raw;
+    let mut back_inc = if angle_missing(back_inc_raw) {
+        0.0
+    } else {
+        back_inc_raw
+    };
+    if ctx.apply_corrections {
+        if let Some(bcf) = &ctx.backsight_corrections {
+            back_az += bcf.azimuth;
+            back_inc += bcf.inclination;
+        }
+    }
+    // Declination + convergence (same as fore).
+    let back_az_grid = (back_az + ctx.declination - ctx.convergence_angle).rem_euclid(360.0);
+    // Flip 180° so the bearing points FROM → TO, matching azimuth_in.
+    let azimuth_out_fore_direction = (back_az_grid + 180.0).rem_euclid(360.0);
+    // Inclination: -back_inc gives the forward-direction inclination in
+    // Compass's +up convention.  Negating again converts to Stalagmight's
+    // +down (what shot_to_shot_data does to the fore-sight).  Net:
+    // identity — pitch_out_down equals back_inc after corrections.
+    let pitch_out_down_positive = back_inc;
+    Some((azimuth_out_fore_direction, pitch_out_down_positive))
+}
+
 fn elevation_gain(length_m: f64, inclination_deg: f64) -> f64 {
     length_m * inclination_deg.to_radians().sin()
 }
@@ -370,15 +425,24 @@ fn shot_to_shot_data(
     is_reference: bool,
 ) -> ShotData {
     let (azimuth, length_m, inclination) = shot_geometry(shot, ctx);
+    // If the survey took back-sight readings (separate from the fore-sight),
+    // store them in the `_out` slots as forward-direction equivalents so
+    // Stalagmight has both legs of the measurement available for averaging
+    // and warnings.  When no back-sight is present, mirror the fore-sight
+    // into the `_out` slot — matching the TML importer's convention.
+    let (azimuth_out, pitch_out) = match shot_backsight_geometry(shot, ctx) {
+        Some((back_az, back_pitch)) => (back_az, Some(back_pitch)),
+        None => (azimuth, None),
+    };
     ShotData {
         azimuth_in: azimuth,
-        azimuth_out: azimuth,
+        azimuth_out,
         length: length_m,
         depth_in,
         depth_out,
         // Stalagmight pitch is positive downward; Compass inclination is positive up.
         pitch_in: Some(-inclination),
-        pitch_out: None,
+        pitch_out,
         left: lrud_meters(shot.left, ctx.length_to_m),
         right: lrud_meters(shot.right, ctx.length_to_m),
         up: lrud_meters(shot.up, ctx.length_to_m),
@@ -421,6 +485,7 @@ fn build_ctx(
         length_to_m,
         apply_corrections: opts.apply_corrections,
         corrections: survey.parameters.correction_factors.clone(),
+        backsight_corrections: survey.parameters.backsight_correction_factors.clone(),
     }
 }
 
@@ -481,8 +546,15 @@ fn datum_proj_token(datum: Datum, warnings: &mut Vec<String>) -> String {
     }
 }
 
-/// Convert a UTM easting/northing (meters, northern hemisphere) to WGS84
-/// longitude/latitude in degrees.
+/// Convert a UTM easting/northing (meters) to WGS84 longitude/latitude in
+/// degrees.  The Compass `.MAK` format records the UTM zone but not the
+/// hemisphere, so we project both with and without the `+south` flag and
+/// pick the result whose absolute latitude is the smaller — the wrong
+/// hemisphere lands every survey south of the equator at ~+60 °N (or vice
+/// versa for genuinely-northern surveys mis-projected as +south), so the
+/// gap is large and unambiguous in practice.  Emits a warning when the
+/// inferred hemisphere isn't the obvious one (false-northing implies
+/// southern when the northing is large).
 fn utm_to_wgs84(
     easting: f64,
     northing: f64,
@@ -491,13 +563,42 @@ fn utm_to_wgs84(
     warnings: &mut Vec<String>,
 ) -> Option<(f64, f64)> {
     let token = datum_proj_token(datum, warnings);
-    let from = proj4rs::Proj::from_proj_string(&format!(
-        "+proj=utm +zone={zone} +{token} +units=m +no_defs"
-    ))
-    .ok()?;
     let to = proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs").ok()?;
-    let (lon, lat, _) = proj4rs::adaptors::transform_xyz(&from, &to, easting, northing, 0.0).ok()?;
-    Some((lon.to_degrees(), lat.to_degrees()))
+
+    let project = |south: bool| -> Option<(f64, f64)> {
+        let south_token = if south { " +south" } else { "" };
+        let from = proj4rs::Proj::from_proj_string(&format!(
+            "+proj=utm +zone={zone}{south_token} +{token} +units=m +no_defs"
+        ))
+        .ok()?;
+        let (lon, lat, _) =
+            proj4rs::adaptors::transform_xyz(&from, &to, easting, northing, 0.0).ok()?;
+        Some((lon.to_degrees(), lat.to_degrees()))
+    };
+
+    let north = project(false);
+    let south = project(true);
+    match (north, south) {
+        (Some(n), Some(s)) => {
+            // Pick the projection whose latitude is the smaller in absolute
+            // terms.  For a survey actually in the southern hemisphere the
+            // northern projection lands at ~+60 °N while +south lands at the
+            // correct -30 °ish; the inverse for genuinely-northern surveys.
+            let pick_south = s.1.abs() < n.1.abs();
+            if pick_south {
+                warnings.push(format!(
+                    "UTM zone {zone} projected as southern hemisphere (northing {northing:.0}); \
+                     re-import without +south if this is a northern cave."
+                ));
+                Some(s)
+            } else {
+                Some(n)
+            }
+        }
+        (Some(n), None) => Some(n),
+        (None, Some(s)) => Some(s),
+        (None, None) => None,
+    }
 }
 
 fn resolve_anchor(parsed: &ParsedCompass, warnings: &mut Vec<String>) -> Option<AnchorGeo> {
@@ -951,24 +1052,36 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         })
         .collect();
 
+    // Ready-queue Kahn's: build a reverse-dependency adjacency list so
+    // each placed config can directly enqueue the configs that were
+    // waiting on it.  Replaces an outer-loop-scan-everything version
+    // that ran O(N²) for deeply-chained surveys (one section per pass
+    // dependency).
+    //
+    // children[i] = indices of configs whose `dep` is Some(i).
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); configs.len()];
     let mut placed = vec![false; configs.len()];
     let mut order: Vec<usize> = Vec::with_capacity(configs.len());
-    // Repeatedly emit configs whose dependency is already placed.
-    let mut progress = true;
-    while order.len() < configs.len() && progress {
-        progress = false;
-        for i in 0..configs.len() {
-            if placed[i] {
-                continue;
-            }
-            let ready = match dep[i] {
-                Some(target) => placed[target],
-                None => true,
-            };
-            if ready {
-                placed[i] = true;
-                order.push(i);
-                progress = true;
+    let mut ready: VecDeque<usize> = VecDeque::new();
+    for (i, d) in dep.iter().enumerate() {
+        match d {
+            Some(target) if *target < configs.len() => children[*target].push(i),
+            // Root: no dependency, immediately ready.
+            None => ready.push_back(i),
+            // Dependency points outside the slice — treat as ready (the
+            // legacy fallback was the same).
+            Some(_) => ready.push_back(i),
+        }
+    }
+    while let Some(i) = ready.pop_front() {
+        if placed[i] {
+            continue;
+        }
+        placed[i] = true;
+        order.push(i);
+        for &child in &children[i] {
+            if !placed[child] {
+                ready.push_back(child);
             }
         }
     }
