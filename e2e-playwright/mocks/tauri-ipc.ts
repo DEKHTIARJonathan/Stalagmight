@@ -876,7 +876,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             });
 
             const envelope = {
-              version: 1,
+              // Bumped to 2 to match collab-mode's
+              // `core/load_binary.rs::BINARY_FORMAT_VERSION` which
+              // grew the `collab` field on the project header.  Keep
+              // this in lockstep with `EXPECTED_VERSION` in
+              // `src/utils/loadProjectBinary.ts`.
+              version: 2,
               loading_id: jsonResult.loadingId,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
@@ -897,6 +902,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_comments_map: [],
                 imported_file_hashes: [],
                 imported_section_hashes: [],
+                // Collab is off for the test fixture; loadProjectBinary
+                // writes this through to `project.collab` and the
+                // load-time detect path short-circuits on
+                // `result.project.collab?.enabled`.
+                collab: null,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
