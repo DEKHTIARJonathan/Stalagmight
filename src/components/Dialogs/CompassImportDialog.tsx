@@ -106,7 +106,13 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
           {compassFile.cave_name && (
             <div className="text-lg font-medium">{compassFile.cave_name}</div>
           )}
-          <div className="text-xs text-text-tertiary">Lengths converted from feet to metric</div>
+          <div className="text-xs text-text-tertiary">
+            {compassFile.length_unit === 'meters'
+              ? 'Lengths kept as-is (survey is in meters)'
+              : compassFile.length_unit === 'mixed'
+                ? 'Surveys declare mixed length units; each is converted to meters per its own declaration'
+                : 'Lengths converted from feet to meters'}
+          </div>
         </div>
 
         {/* Summary stats */}
@@ -189,16 +195,16 @@ export default function CompassImportDialog({ compassFile, filePath }: CompassIm
             onChange={(e) => setApplyCorrections(e.target.checked)}
             data-testid="compass-apply-corrections"
           />
-          Apply declination &amp; instrument corrections
+          Apply per-survey instrument corrections (CORRECTIONS / CORRECTIONS2 lines)
         </label>
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input
             type="checkbox"
-            checked={!commentsOnStations}
-            onChange={(e) => setCommentsOnStations(!e.target.checked)}
-            data-testid="compass-comments-on-shots"
+            checked={commentsOnStations}
+            onChange={(e) => setCommentsOnStations(e.target.checked)}
+            data-testid="compass-comments-on-stations"
           />
-          Keep comments on shots (default: promote to FROM station)
+          Promote shot comments to the FROM station (Compass convention)
         </label>
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input

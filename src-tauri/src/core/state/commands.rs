@@ -1,11 +1,73 @@
+use std::sync::Mutex;
+
 use crate::core::{Command, CommentHolder, CommandResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
-    SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
+    Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
     FEATURE_ID_STRIDE,
 };
 
 use super::AppState;
+
+/// RAII guard for [`Project::cascade_deferred`].
+///
+/// `execute_import_sections` flips the flag on so each per-section
+/// `merge_stations` skips its O(N) cascade, then runs ONE cascade at the
+/// end.  If the apply loop panics (poisoning the mutex) or any code path
+/// returns early without clearing the flag, every subsequent command
+/// silently skips its cascade and accumulates section-offset drift.  The
+/// guard's `Drop` resets the flag to `false` even through a poisoned
+/// mutex, closing that window.
+///
+/// Call [`Self::disarm`] before the final cascade so the cascade is
+/// actually allowed to run (the cascade itself early-exits when the flag
+/// is still `true`).  After `disarm`, `Drop` is a no-op.
+struct CascadeDeferGuard<'a> {
+    project: &'a Mutex<Option<Project>>,
+    armed: bool,
+}
+
+impl<'a> CascadeDeferGuard<'a> {
+    /// Set `cascade_deferred = true` on the project (if present) and
+    /// return a guard.  If the lock is already poisoned the flag is set
+    /// anyway via `into_inner` — the import is about to run regardless,
+    /// and we still want the Drop reset to fire.
+    fn arm(project: &'a Mutex<Option<Project>>) -> Self {
+        Self::set_flag(project, true);
+        Self {
+            project,
+            armed: true,
+        }
+    }
+
+    /// Clear the flag now (allowing the final cascade to run) and skip
+    /// the Drop reset.
+    fn disarm(mut self) {
+        Self::set_flag(self.project, false);
+        self.armed = false;
+    }
+
+    fn set_flag(project: &Mutex<Option<Project>>, value: bool) {
+        let mut guard = match project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(p) = guard.as_mut() {
+            p.cascade_deferred = value;
+        }
+    }
+}
+
+impl<'a> Drop for CascadeDeferGuard<'a> {
+    fn drop(&mut self) {
+        if self.armed {
+            // Reset on the panic / early-return path.  `set_flag` tolerates
+            // a poisoned mutex so the flag is cleared even if the apply
+            // loop panicked while holding the lock.
+            Self::set_flag(self.project, false);
+        }
+    }
+}
 
 impl AppState {
     /// Execute a command and return the result
@@ -520,16 +582,19 @@ impl AppState {
         // defensive against drift in pre-existing connections, and the
         // batch under us is creating its connections in dependency order
         // (topological sort happens during `convert_tml_to_import_configs`).
-        // We flip the flag here, run the loop, then run one final cascade
-        // over all section ids after the loop — equivalent to the union
-        // of the deferred per-call cascades.
-        // Also eagerly populate the section-id and merge-adjacency
-        // lookups so the per-call `get_section` / `get_merged_section_ids`
-        // stay O(1) / O(group) instead of degrading into O(N) linear
-        // scans inside merge_stations.
+        // We arm the guard here, run the loop, then disarm + run one
+        // final cascade after the loop — equivalent to the union of the
+        // deferred per-call cascades.  The guard's Drop resets the flag
+        // even on the panic-poisoned-mutex path so a partial import
+        // can't leave `cascade_deferred = true` and silently skip
+        // cascades on every subsequent command.
+        let cascade_guard = CascadeDeferGuard::arm(&self.project);
+        // Eagerly populate the section-id and merge-adjacency lookups
+        // so the per-call `get_section` / `get_merged_section_ids` stay
+        // O(1) / O(group) instead of degrading into O(N) linear scans
+        // inside `merge_stations`.
         if let Ok(mut proj_guard) = self.project.lock() {
             if let Some(project) = proj_guard.as_mut() {
-                project.cascade_deferred = true;
                 project.rebuild_section_index();
                 project.rebuild_merge_adjacency();
             }
@@ -753,15 +818,17 @@ impl AppState {
             "execute_import_sections per-section loop done"
         );
 
-        // Lift the deferral and run ONE cascade across every newly
+        // Lift the deferral (clears the flag now so `cascade_connection_offsets`
+        // is allowed to run) and execute ONE cascade across every newly
         // created section. This propagates any drift that would have
         // been caught by the per-call cascades — for a tree-shaped
         // import (no closures yet) this is a near-no-op single pass
-        // that early-exits on the first iteration.
+        // that early-exits on the first iteration.  `disarm` consumes
+        // the guard so its Drop becomes a no-op for the success path.
+        cascade_guard.disarm();
         let cascade_start = std::time::Instant::now();
         if let Ok(mut proj_guard) = self.project.lock() {
             if let Some(project) = proj_guard.as_mut() {
-                project.cascade_deferred = false;
                 project.cascade_connection_offsets(&all_section_ids);
             }
         }
@@ -1545,7 +1612,7 @@ impl AppState {
 
     /// Read the comment from a CommentHolder (station or shot)
     fn get_holder_comment(
-        project: &crate::models::Project,
+        project: &Project,
         holder: &CommentHolder,
     ) -> Result<Option<String>, String> {
         match holder {
@@ -1580,7 +1647,7 @@ impl AppState {
 
     /// Set the comment on a CommentHolder (station or shot)
     fn set_holder_comment(
-        project: &mut crate::models::Project,
+        project: &mut Project,
         holder: &CommentHolder,
         comment: Option<String>,
     ) -> Result<(), String> {
@@ -2270,7 +2337,7 @@ impl AppState {
                     purpose = "remove single-shot section",
                     "remove_section returned None after validation; rolling back"
                 );
-                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                match serde_json::from_str::<Project>(&before_snapshot) {
                     Ok(restored) => *proj_guard = Some(restored),
                     Err(e) => tracing::error!(
                         purpose = "remove single-shot section",
@@ -2298,7 +2365,7 @@ impl AppState {
                         reason = %e,
                         "Failed to serialize after snapshot; rolling back"
                     );
-                    match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                    match serde_json::from_str::<Project>(&before_snapshot) {
                         Ok(restored) => {
                             *proj_guard = Some(restored);
                             tracing::info!(
@@ -2320,7 +2387,7 @@ impl AppState {
                     purpose = "restore after mutation failure",
                     "Project became None after mutation; rolling back"
                 );
-                match serde_json::from_str::<crate::models::Project>(&before_snapshot) {
+                match serde_json::from_str::<Project>(&before_snapshot) {
                     Ok(restored) => *proj_guard = Some(restored),
                     Err(e) => tracing::error!(
                         purpose = "restore after mutation failure",

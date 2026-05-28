@@ -60,6 +60,11 @@ pub struct CompassFile {
     pub utm_zone: Option<i32>,
     pub has_georeference: bool,
     pub declination_mode: String,
+    /// Length unit declared by the file's surveys: `"feet"`, `"meters"`,
+    /// `"mixed"` (surveys disagree), or `null` (no surveys / unknown).
+    /// Drives the unit blurb on the import dialog so we don't tell a
+    /// metric survey we're converting feet.
+    pub length_unit: Option<String>,
     pub surveys: Vec<CompassSurveySummary>,
     pub warnings: Vec<String>,
 }
@@ -340,6 +345,30 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         .surveys
         .iter()
         .any(|s| s.survey.parameters.format_parameters.has_backsights());
+    // Collapse per-survey length units to a single project-wide label.
+    // Compass `D` (decimal feet) → "feet"; `M` → "meters".  Multi-survey
+    // files where the unit isn't uniform get "mixed" so the dialog can
+    // surface the discrepancy instead of silently picking one.
+    let length_unit = {
+        let mut iter = parsed
+            .surveys
+            .iter()
+            .map(|s| s.survey.parameters.format_parameters.length_units());
+        match iter.next() {
+            None => None,
+            Some(first) => {
+                let uniform = iter.all(|u| u == first);
+                if !uniform {
+                    Some("mixed".to_string())
+                } else {
+                    Some(match first {
+                        Some(LengthUnits::Meters) => "meters".to_string(),
+                        _ => "feet".to_string(),
+                    })
+                }
+            }
+        }
+    };
     let surveys = parsed
         .surveys
         .iter()
@@ -360,6 +389,7 @@ pub fn build_preview(parsed: &ParsedCompass) -> CompassFile {
         utm_zone: parsed.utm_zone.map(i32::from),
         has_georeference: !parsed.fixed_stations.is_empty() && parsed.utm_zone.is_some(),
         declination_mode: format!("{:?}", parsed.declination_mode),
+        length_unit,
         surveys,
         warnings: parsed.warnings.clone(),
     }
@@ -1268,10 +1298,20 @@ pub fn convert_compass_to_import_configs(
 }
 
 fn section_label(survey: &Survey, multi: bool, chain_idx: usize) -> String {
-    let base = if survey.name.trim().is_empty() {
-        survey.cave_name.clone()
+    // Prefer the survey name; fall back to the cave name; and if both
+    // are blank, label as "Unnamed section" so the SectionsPanel never
+    // renders an empty row (Compass files with empty header lines do
+    // happen — partial exports, hand-edited DATs, etc.).
+    let trimmed_name = survey.name.trim();
+    let base = if !trimmed_name.is_empty() {
+        trimmed_name.to_string()
     } else {
-        survey.name.clone()
+        let trimmed_cave = survey.cave_name.trim();
+        if !trimmed_cave.is_empty() {
+            trimmed_cave.to_string()
+        } else {
+            "Unnamed section".to_string()
+        }
     };
     if multi {
         format!("{base} (branch {})", chain_idx + 1)
