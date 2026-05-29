@@ -1245,20 +1245,29 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool, comm
             tml.geo_coding.as_ref(),
         );
 
-        // When comments_on_stations is true, promote shot comments to the
-        // "to" station (station_index = shot_index + 1) and clear them from shots.
-        let mut station_comments = Vec::new();
-        if comments_on_stations {
-            for (shot_idx, shot) in shot_data.iter().enumerate() {
-                if let Some(ref comment) = shot.comment {
-                    if !comment.is_empty() {
-                        station_comments.push((shot_idx as u32 + 1, comment.clone()));
+        // When comments_on_stations is true, peel station-portion lines out
+        // of each shot's Comment field via the ZWSP marker convention
+        // (see `core::comment_split`): unmarked lines go to the "to" station
+        // (shot_index + 1), marked lines stay on the shot. This handles both
+        // Stalagmight-authored .tml files (which mark shot lines) and bare
+        // Ariane-authored ones (no markers → everything routes to the
+        // station, matching how Ariane visually centers Comment text on
+        // the station).
+        let mut station_comments: Vec<(u32, String)> = Vec::new();
+        let shots: Vec<ShotData> = if comments_on_stations {
+            shot_data
+                .into_iter()
+                .enumerate()
+                .map(|(shot_idx, mut shot)| {
+                    let (shot_part, station_part) =
+                        crate::core::comment_split::split(shot.comment.as_deref());
+                    shot.comment = shot_part;
+                    if let Some(text) = station_part.filter(|s| !s.is_empty()) {
+                        station_comments.push((shot_idx as u32 + 1, text));
                     }
-                }
-            }
-        }
-        let shots = if comments_on_stations && !station_comments.is_empty() {
-            shot_data.into_iter().map(|mut s| { s.comment = None; s }).collect()
+                    shot
+                })
+                .collect()
         } else {
             shot_data
         };
