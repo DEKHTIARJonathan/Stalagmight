@@ -499,6 +499,7 @@ mod tests {
             after_shot_id: after,
             uuid: None,
             data: shot(az, 6.5),
+            station_comment: None,
         }
     }
 
@@ -625,6 +626,7 @@ mod tests {
                 pitch_in: Some(1.0),
                 ..Default::default()
             },
+            new_station_comment: None,
         });
         apply_changeset(&mut p, &cs);
 

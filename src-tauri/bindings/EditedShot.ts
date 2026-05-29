@@ -2,4 +2,4 @@
 import type { CollabFieldChange } from "./CollabFieldChange";
 import type { ShotData } from "./ShotData";
 
-export interface EditedShot { section_id: number, shot_index: number, section_name: string, changes: Array<CollabFieldChange>, new_data: ShotData, }
+export interface EditedShot { section_id: number, shot_index: number, section_name: string, changes: Array<CollabFieldChange>, new_data: ShotData, new_station_comment?: string, }

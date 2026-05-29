@@ -73,6 +73,14 @@ pub struct AddedShot {
     #[ts(optional)]
     pub uuid: Option<String>,
     pub data: ShotData,
+    /// Station-comment text for this shot's `to` station, peeled out of the
+    /// returned TML Comment field by [`crate::core::comment_split::split`].
+    /// `None` when the returned Comment had no station-portion lines (i.e.
+    /// every line was ZWSP-marked, or the Comment was empty). Written to
+    /// `project.station_comments` at apply time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub station_comment: Option<String>,
 }
 
 /// A shot matched to the baseline whose representable fields changed.
@@ -86,6 +94,13 @@ pub struct EditedShot {
     /// New (normalized) shot data to apply; Stalagmight-only fields are merged
     /// from the existing shot at apply time, not taken from here.
     pub new_data: ShotData,
+    /// Station-comment text for the shot's `to` station after the split.
+    /// `None` clears the existing station comment at apply; `Some(_)` sets it.
+    /// Only meaningful when `changes` includes a `station_comment` field entry,
+    /// but always populated so apply can be idempotent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub new_station_comment: Option<String>,
 }
 
 /// A baseline shot with no match in the returned file (deleted in Ariane).
@@ -116,6 +131,12 @@ pub struct AddedSection {
     /// collaborator UUIDs preserved.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shot_uuids: Vec<Option<String>>,
+    /// Per-shot station-comment text peeled out of the returned Comment
+    /// fields by the ZWSP split, parallel to `shots`. Apply writes each
+    /// `Some(_)` entry to `project.station_comments` keyed by the new
+    /// section's id + shot's to-station-index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shot_station_comments: Vec<Option<String>>,
 }
 
 /// A section matched by name whose metadata (name/color/surveyor/date) changed.
@@ -188,6 +209,10 @@ struct ReturnedShot {
     ariane_id: i64,
     geo_key: String,
     data: ShotData,
+    /// Station portion of the Comment field (unmarked lines), peeled out by
+    /// [`crate::core::comment_split::split`]. `data.comment` carries only the
+    /// shot portion (ZWSP-marked lines, with the marker stripped).
+    station_comment: Option<String>,
 }
 
 /// Build the normalized real shots of a returned TML section, in order.
@@ -206,13 +231,21 @@ fn returned_section_shots(section: &TmlSection) -> Vec<ReturnedShot> {
     for (i, shot) in real.iter().enumerate() {
         let prev_depth = if i > 0 { Some(real[i - 1].depth) } else { None };
         let depth_in = resolve_tml_depth_in(shot, prev_depth, section.start_depth);
-        let data = normalize_tml_shot(shot, depth_in);
+        let mut data = normalize_tml_shot(shot, depth_in);
+        // Split shot vs station portions of the Comment field. An Ariane-
+        // authored Comment carries no marker, so the whole text routes to
+        // the station — matching Ariane's visual convention where Comment
+        // text is centered on the station, not along the shot.
+        let (shot_part, station_part) =
+            crate::core::comment_split::split(data.comment.as_deref());
+        data.comment = shot_part;
         let gk = geo_key(shot.azimuth, shot.length, depth_in, shot.depth);
         out.push(ReturnedShot {
             uuid: shot.uuid.clone(),
             ariane_id: shot.id,
             geo_key: gk,
             data,
+            station_comment: station_part,
         });
     }
     out
@@ -426,9 +459,11 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
                             date: section.date,
                             shots: Vec::new(),
                             shot_uuids: Vec::new(),
+                            shot_station_comments: Vec::new(),
                         }
                     });
                     entry.shot_uuids.push(r.uuid.filter(|u| !u.is_empty()));
+                    entry.shot_station_comments.push(r.station_comment);
                     entry.shots.push(r.data);
                 }
             }
@@ -683,6 +718,7 @@ fn align_section(
                 .clone()
                 .filter(|u| !u.is_empty()),
             data: returned[r_idx].data.clone(),
+            station_comment: returned[r_idx].station_comment.clone(),
         });
     }
 
@@ -693,8 +729,10 @@ fn align_section(
         let Some(existing) = proj_section.shots.get(shot_index as usize) else {
             continue;
         };
-        let new = &returned[r_idx].data;
-        let changes = field_changes(existing, new);
+        let r = &returned[r_idx];
+        let new = &r.data;
+        let baseline_station = entry.station_comment.as_deref();
+        let changes = field_changes(existing, new, baseline_station, r.station_comment.as_deref());
         if !changes.is_empty() {
             cs.shots_edited.push(EditedShot {
                 section_id: sid,
@@ -702,6 +740,7 @@ fn align_section(
                 section_name: section_name.to_string(),
                 changes,
                 new_data: new.clone(),
+                new_station_comment: r.station_comment.clone(),
             });
         }
     }
@@ -774,7 +813,17 @@ fn empty_impact(sid: SectionId, shot_index: u32) -> DeleteShotImpact {
 /// Representable-field comparison (TML-expressible fields only). Stalagmight-only
 /// fields (azimuth_out, pitch_out, marker_index, temperature) are preserved and
 /// never reported as changes.
-fn field_changes(old: &crate::models::Shot, new: &ShotData) -> Vec<CollabFieldChange> {
+///
+/// `baseline_station_comment` is what we wrote to the .tml at last export
+/// (captured in `ShotBaselineEntry.station_comment`); `returned_station_comment`
+/// is what we just parsed back out of the Comment field. Comparing both keeps
+/// a station-portion-only edit visible without flagging a clean round-trip.
+fn field_changes(
+    old: &crate::models::Shot,
+    new: &ShotData,
+    baseline_station_comment: Option<&str>,
+    returned_station_comment: Option<&str>,
+) -> Vec<CollabFieldChange> {
     let mut c = Vec::new();
     let num = |field: &str, a: f64, b: f64, out: &mut Vec<CollabFieldChange>| {
         if (a - b).abs() > F_EPS {
@@ -799,6 +848,15 @@ fn field_changes(old: &crate::models::Shot, new: &ShotData) -> Vec<CollabFieldCh
             field: "comment".into(),
             old: opt_str(&old.comment),
             new: opt_str(&new.comment),
+        });
+    }
+    let baseline_station = baseline_station_comment.unwrap_or("");
+    let returned_station = returned_station_comment.unwrap_or("");
+    if baseline_station != returned_station {
+        c.push(CollabFieldChange {
+            field: "station_comment".into(),
+            old: baseline_station.to_string(),
+            new: returned_station.to_string(),
         });
     }
     if old.is_reference != new.is_reference {
