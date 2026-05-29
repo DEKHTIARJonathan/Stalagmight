@@ -714,6 +714,7 @@ export default function SettingsDialog() {
       >
         <div className="space-y-2">
           <p className="font-medium">{t('dialogs.about.version', { version: __APP_VERSION__ })}</p>
+          <p className="text-xs text-text-secondary font-mono" data-testid="about-build">{t('dialogs.about.build', { hash: __GIT_HASH__ })}</p>
           <p className="text-sm text-text-secondary">{t('dialogs.about.description')}</p>
           <p>
             <a

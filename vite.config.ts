@@ -1,7 +1,19 @@
+import { execSync } from 'node:child_process';
 import { defineConfig, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
 import istanbul from 'vite-plugin-istanbul';
 import pkg from './package.json';
+
+function gitHash(): string {
+  try {
+    const opts = { stdio: ['ignore', 'pipe', 'ignore'] as const };
+    const hash = execSync('git rev-parse --short HEAD', opts).toString().trim();
+    const dirty = execSync('git status --porcelain --untracked-files=no', opts).toString().trim().length > 0;
+    return dirty ? `${hash}-dirty` : hash;
+  } catch {
+    return 'unknown';
+  }
+}
 
 const coverageEnabled = process.env.VITE_COVERAGE === '1';
 const plugins: PluginOption[] = [
@@ -31,6 +43,7 @@ const plugins: PluginOption[] = [
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __GIT_HASH__: JSON.stringify(gitHash()),
   },
   plugins,
   clearScreen: false,

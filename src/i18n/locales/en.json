@@ -1085,6 +1085,7 @@
     "about": {
       "title": "About Stalagmight",
       "version": "Version {{version}}",
+      "build": "Build {{hash}}",
       "description": "Desktop application for processing underwater cave survey data.",
       "website": "stalagmight.com",
       "close": "Close"
