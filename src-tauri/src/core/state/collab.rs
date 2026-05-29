@@ -317,6 +317,19 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         shot.is_reference = d.is_reference;
         // Preserved (no TML equivalent): azimuth_out, pitch_out,
         // marker_index, temperature.
+
+        // The shot's `to` station picks up the station-portion of the
+        // returned Comment. `None` clears any prior entry so a round-trip
+        // that deletes the unmarked lines also clears the station comment.
+        let to = crate::models::StationRef::new(e.section_id, e.shot_index + 1);
+        match e.new_station_comment.as_deref().filter(|s| !s.is_empty()) {
+            Some(text) => {
+                project.station_comments.insert(to, text.to_string());
+            }
+            None => {
+                project.station_comments.remove(&to);
+            }
+        }
     }
 
     // Removes — descending shot index so earlier indices stay valid.
@@ -376,11 +389,21 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             // the Project insert/add path because those methods do
             // significant offset / station-ref bookkeeping we don't
             // want to fork.
-            if let Some(uuid) = a.uuid.as_ref() {
-                if let Some(section) = project.get_section_mut(sid) {
-                    if let Some(shot) = section.shots.iter_mut().find(|s| s.id == nid) {
+            let mut shot_pos: Option<u32> = None;
+            if let Some(section) = project.get_section_mut(sid) {
+                if let Some((idx, shot)) = section.shots.iter_mut().enumerate().find(|(_, s)| s.id == nid) {
+                    if let Some(uuid) = a.uuid.as_ref() {
                         shot.uuid = Some(uuid.clone());
                     }
+                    shot_pos = Some(idx as u32);
+                }
+            }
+            // Attach the inserted shot's station-portion of Comment to its
+            // `to` station — the same shot+1 convention used at export time.
+            if let Some(idx) = shot_pos {
+                if let Some(text) = a.station_comment.as_deref().filter(|s| !s.is_empty()) {
+                    let to = crate::models::StationRef::new(sid, idx + 1);
+                    project.station_comments.insert(to, text.to_string());
                 }
             }
             last_add = Some((sid, a.after_shot_id, nid));
@@ -409,6 +432,14 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                         shot.uuid = Some(u.clone());
                     }
                 }
+            }
+        }
+        // Station-portion comments parallel to s.shots — each entry, if
+        // present, attaches to the new shot's `to` station (shot_index + 1).
+        for (shot_idx, sc_opt) in s.shot_station_comments.iter().enumerate() {
+            if let Some(text) = sc_opt.as_deref().filter(|s| !s.is_empty()) {
+                let to = crate::models::StationRef::new(new_sid, shot_idx as u32 + 1);
+                project.station_comments.insert(to, text.to_string());
             }
         }
     }
