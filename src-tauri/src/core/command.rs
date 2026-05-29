@@ -42,6 +42,16 @@ pub enum Command {
     },
     SaveProject {
         path: Option<PathBuf>,
+        /// When `true`, treats this as an autosave (debounced background
+        /// save) rather than a user-driven save.  Autosaves honour the
+        /// project's `CollabState.write_tml_on_autosave` flag: when that
+        /// flag is `false`, the sibling `.tml` is NOT rewritten on this
+        /// save, so the user doesn't get .tml churn every 30 seconds.
+        /// Defaults to `false` for backward compatibility — older
+        /// frontends that don't pass the field get the manual-save
+        /// behaviour (always rewrite the .tml).
+        #[serde(default)]
+        is_autosave: bool,
     },
     CloseProject,
 
@@ -162,6 +172,9 @@ pub enum Command {
         /// Whether to archive (rename) the original files
         archive_originals: bool,
     },
+    /// Apply a collaborator's reconciled `.tml` changes into the project
+    /// (single undoable operation via snapshot pair).
+    ApplyCollabChanges,
 }
 
 /// Result of command execution
@@ -274,7 +287,7 @@ impl Command {
             Command::OpenProject { path } => {
                 format!("Open project '{}'", path.display())
             }
-            Command::SaveProject { path } => match path {
+            Command::SaveProject { path, .. } => match path {
                 Some(p) => format!("Save project to '{}'", p.display()),
                 None => "Save project".to_string(),
             },
@@ -380,6 +393,7 @@ impl Command {
                     output_name
                 )
             }
+            Command::ApplyCollabChanges => "Apply collaborator changes".to_string(),
         }
     }
 }
@@ -514,12 +528,13 @@ mod tests {
                 "Open project 'alpha.stalx'",
             ),
             (
-                Command::SaveProject { path: None },
+                Command::SaveProject { path: None, is_autosave: false },
                 "Save project",
             ),
             (
                 Command::SaveProject {
                     path: Some(PathBuf::from("alpha.stalx")),
+                    is_autosave: false,
                 },
                 "Save project to 'alpha.stalx'",
             ),

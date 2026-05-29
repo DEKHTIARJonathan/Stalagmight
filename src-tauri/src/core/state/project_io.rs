@@ -282,7 +282,7 @@ impl AppState {
         CommandResult::success()
     }
 
-    pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
+    pub(super) fn save_project(&self, path: Option<PathBuf>, is_autosave: bool) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -290,6 +290,16 @@ impl AppState {
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
         };
+
+        // Mint UUIDs for any shot still missing one (pre-v6 .stalx
+        // files loaded today come back with NULL uuid columns).
+        // Doing this BEFORE the SQLite write and BEFORE the sibling
+        // .tml export guarantees both sides receive the same UUIDs —
+        // without it, db.save_project's INSERT path would mint one set
+        // of fresh UUIDs and `write_collab_sibling`'s export would mint
+        // a different set, leaving the .stalx and the .tml disagreeing
+        // about every shot's identity until the next reload.
+        project.ensure_shot_uuids();
 
         // Determine save path and ensure .stalx extension
         let is_implicit_save = path.is_none();
@@ -464,6 +474,27 @@ impl AppState {
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
 
+        // Collaboration mode: also write the sibling .tml and refresh the
+        // baseline. Best-effort — never fail the .stalx save if this
+        // fails.  Autosaves honour `CollabState.write_tml_on_autosave`
+        // — when that flag is `false` we skip the .tml rewrite on
+        // background saves so the file Ariane is editing doesn't churn
+        // every 30 seconds; manual / explicit saves always rewrite.
+        let collab_writes_tml = project.collab.as_ref().is_some_and(|c| {
+            c.enabled && (!is_autosave || c.write_tml_on_autosave)
+        });
+        let mut collab_sibling_error: Option<String> = None;
+        if collab_writes_tml {
+            if let Err(e) = Self::write_collab_sibling(project, &save_path, &db) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "write collaborator .tml on save",
+                    "Saved .stalx but failed to write sibling .tml"
+                );
+                collab_sibling_error = Some(e.to_string());
+            }
+        }
+
         // Update database handle
         drop(proj_guard);
         if let Ok(mut database) = self.database.lock() {
@@ -496,7 +527,73 @@ impl AppState {
             purpose = "persist edits safely",
             "Project saved successfully"
         );
-        CommandResult::success().with_path(save_path_str)
+        let mut result = CommandResult::success().with_path(save_path_str);
+        // Surface a partial-save warning when the .stalx persisted but the
+        // sibling .tml didn't.  Without this the UI shows a green checkmark
+        // even though the collaborator's copy is now stale, so they keep
+        // editing data the Stalagmight user already replaced.
+        if let Some(err) = collab_sibling_error {
+            result.warnings.push(crate::core::ValidationWarning {
+                code: "COLLAB_SIBLING_WRITE_FAILED".to_string(),
+                message: format!(
+                    "Saved the .stalx but the companion .tml could not be written ({err}); the file Ariane is editing is now out of date.",
+                ),
+                severity: crate::core::WarningSeverity::Warning,
+            });
+        }
+        result
+    }
+
+    /// Write the sibling `.tml` for collaboration mode and refresh the stored
+    /// baseline + content hash on the (already-open) project database.
+    fn write_collab_sibling(
+        project: &mut Project,
+        save_path: &std::path::Path,
+        db: &Database,
+    ) -> Result<()> {
+        // Always derive the sibling name from the current .stalx stem so the
+        // companion .tml tracks the project file even if collaboration was
+        // enabled before the project had a path (or the file was renamed).
+        let sibling_name = save_path
+            .file_stem()
+            .map(|s| format!("{}.tml", s.to_string_lossy()))
+            .unwrap_or_else(|| "collaboration.tml".to_string());
+        let sibling = match save_path.parent() {
+            Some(dir) => dir.join(&sibling_name),
+            None => PathBuf::from(&sibling_name),
+        };
+
+        let (baseline, sha, synthetic_section_names) =
+            crate::export::tml::export_tml_with_baseline(project, &sibling)?;
+
+        // One (section_name -> id) entry per project section.  Includes
+        // sections with NO baseline shots (e.g. an empty root section that
+        // only had a START before any real measurements) so that if a
+        // collaborator adds the first shots to such a section in Ariane,
+        // the returned shots' section_name still matches the existing
+        // SectionId via the name-map fallback, and reconcile fills the
+        // existing section instead of creating a duplicate.  The exporter's
+        // section_name string (used in the baseline) follows the same
+        // fallback so the empty-section entries here use a matching key.
+        let mut section_name_map = Vec::new();
+        for section in &project.sections {
+            let name = section
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Section {}", section.id));
+            section_name_map.push((name, section.id));
+        }
+
+        if let Some(c) = project.collab.as_mut() {
+            c.sibling_tml_relative = sibling_name;
+            c.last_export_tml_sha256 = Some(sha);
+            c.shot_baseline = baseline;
+            c.section_name_map = section_name_map;
+            c.synthetic_section_names = synthetic_section_names;
+        }
+
+        db.save_collab_state(project.collab.as_ref())?;
+        Ok(())
     }
 
     pub(super) fn close_project(&self) -> CommandResult {

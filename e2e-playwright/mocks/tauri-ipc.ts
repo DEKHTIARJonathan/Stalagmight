@@ -876,7 +876,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             });
 
             const envelope = {
-              version: 1,
+              // Bumped to 2 to match collab-mode's
+              // `core/load_binary.rs::BINARY_FORMAT_VERSION` which
+              // grew the `collab` field on the project header.  Keep
+              // this in lockstep with `EXPECTED_VERSION` in
+              // `src/utils/loadProjectBinary.ts`.
+              version: 2,
               loading_id: jsonResult.loadingId,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
@@ -897,6 +902,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_comments_map: [],
                 imported_file_hashes: [],
                 imported_section_hashes: [],
+                // Collab is off for the test fixture; loadProjectBinary
+                // writes this through to `project.collab` and the
+                // load-time detect path short-circuits on
+                // `result.project.collab?.enabled`.
+                collab: null,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
@@ -2507,6 +2517,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   east: -87.4568,
                   west: -87.4694,
                 },
+                collab_enabled: true,
               },
               {
                 name: 'Underwater Cave Beta',
@@ -2522,6 +2533,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   east: -82.4521,
                   west: -82.4647,
                 },
+                collab_enabled: false,
               },
               {
                 name: 'Deep Cave Gamma',
@@ -2532,6 +2544,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 total_length: 2100.3,
                 gps_center: [-77.3963, 25.0343],
                 gps_bounds: null,
+                collab_enabled: false,
               },
               {
                 name: 'Local Survey (No GPS)',
@@ -2542,6 +2555,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 total_length: 350.0,
                 gps_center: null,
                 gps_bounds: null,
+                collab_enabled: false,
               },
             ];
 
@@ -2938,6 +2952,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
             return mockGeometry;
           }
+
+          // Collaboration mode
+          case 'set_collab_enabled':
+            console.log('[Mock IPC] set_collab_enabled called with:', args);
+            return { success: true };
+          case 'set_collab_enabled_for_path':
+            console.log('[Mock IPC] set_collab_enabled_for_path called with:', args);
+            return { success: true };
+          case 'get_collab_state':
+            return null;
+          case 'detect_collab_changes':
+            return null;
+          case 'collab_sibling_when_disabled':
+            return null;
+          case 'apply_collab_changes':
+            console.log('[Mock IPC] apply_collab_changes called with:', args);
+            return { success: true };
 
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':

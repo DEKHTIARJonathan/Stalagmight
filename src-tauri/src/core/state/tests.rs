@@ -43,6 +43,50 @@ fn poison_mutex<T>(mutex: &Mutex<T>) {
 // === Project Operations Tests ===
 
 #[test]
+fn test_collab_sibling_warning_requires_export_provenance() {
+    let temp = TempDir::new().unwrap();
+    let stalx = temp.path().join("cave.stalx");
+    // An unrelated .tml sharing the basename (e.g. the source of a TML import).
+    std::fs::write(temp.path().join("cave.tml"), b"<x/>").unwrap();
+
+    let state = AppState::new().unwrap();
+
+    // Case 1: never had collaboration (collab = None) → no warning.
+    let mut project = Project::new("Cave".to_string(), None);
+    project.file_path = Some(stalx.clone());
+    *state.project.lock().unwrap() = Some(project);
+    assert_eq!(state.collab_sibling_when_disabled(), None);
+
+    // Case 2: collab toggled on then off but no successful export ever happened
+    // (`last_export_tml_sha256` is None) → still no warning, because the
+    // `cave.tml` sitting next to us could be unrelated (e.g. a TML the user
+    // dropped in to import).  This is the gap Codex flagged: prior behaviour
+    // warned for ANY same-basename .tml on the disabled toggle, including
+    // import sources.
+    let mut project = Project::new("Cave".to_string(), None);
+    project.file_path = Some(stalx.clone());
+    let mut collab = crate::models::CollabState::new("cave.tml".to_string());
+    collab.enabled = false;
+    project.collab = Some(collab);
+    *state.project.lock().unwrap() = Some(project);
+    assert_eq!(state.collab_sibling_when_disabled(), None);
+
+    // Case 3: collab off AND a recorded export sha exists → warn.  This is the
+    // genuine "we wrote this .tml, then collaboration was turned off" path.
+    let mut project = Project::new("Cave".to_string(), None);
+    project.file_path = Some(stalx.clone());
+    let mut collab = crate::models::CollabState::new("cave.tml".to_string());
+    collab.enabled = false;
+    collab.last_export_tml_sha256 = Some("deadbeef".to_string());
+    project.collab = Some(collab);
+    *state.project.lock().unwrap() = Some(project);
+    assert_eq!(
+        state.collab_sibling_when_disabled(),
+        Some("cave.tml".to_string())
+    );
+}
+
+#[test]
 fn test_create_project() {
     let state = AppState::new().unwrap();
 
@@ -416,7 +460,7 @@ fn test_save_project_persists_display_settings_cache() {
         .unwrap();
 
     let save_path = temp_dir.path().join("cache-save");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     let saved_path = save_path.with_extension("stalx");
@@ -1422,7 +1466,7 @@ fn test_is_undoable_commands() {
     assert!(!AppState::is_undoable(&Command::OpenProject {
         path: PathBuf::from("/test.stalx"),
     }));
-    assert!(!AppState::is_undoable(&Command::SaveProject { path: None }));
+    assert!(!AppState::is_undoable(&Command::SaveProject { path: None, is_autosave: false }));
     assert!(!AppState::is_undoable(&Command::CloseProject));
     assert!(!AppState::is_undoable(&Command::CreateProject {
         name: "Test".to_string(),
@@ -1508,7 +1552,7 @@ fn test_save_project_prefers_database_display_settings_over_cache() {
     }
 
     let save_path = temp_dir.path().join("dest");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     let saved_path = save_path.with_extension("stalx");
@@ -1540,7 +1584,7 @@ fn test_save_project_failure_does_not_change_existing_file() {
     let blocked_path = temp_dir.path().join("blocked.stalx");
     std::fs::create_dir_all(&blocked_path).unwrap();
 
-    let result = state.save_project(Some(blocked_path.clone()));
+    let result = state.save_project(Some(blocked_path.clone()), false);
     assert!(!result.success);
 
     let reloaded = Database::open_existing(&original_path)
@@ -7981,7 +8025,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
 #[test]
 fn test_save_project_no_project_open() {
     let state = AppState::new().unwrap();
-    let result = state.save_project(Some(PathBuf::from("/tmp/test.stalx")));
+    let result = state.save_project(Some(PathBuf::from("/tmp/test.stalx")), false);
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No project open"));
 }
@@ -7994,7 +8038,7 @@ fn test_save_project_no_path_specified() {
         location: None,
     });
     // No file_path on project and no path argument
-    let result = state.save_project(None);
+    let result = state.save_project(None, false);
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No save path"));
 }
@@ -8023,7 +8067,7 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
         *db_guard = None;
     }
 
-    let result = state.save_project(None);
+    let result = state.save_project(None, false);
     assert!(result.success, "unexpected save failure: {:?}", result.error);
 
     // Existing file must remain untouched.
@@ -8046,7 +8090,7 @@ fn test_save_project_adds_stalx_extension() {
     });
     // Save without .stalx extension
     let save_path = temp_dir.path().join("myproject");
-    let result = state.save_project(Some(save_path));
+    let result = state.save_project(Some(save_path), false);
     assert!(result.success);
     assert!(temp_dir.path().join("myproject.stalx").exists());
 }
@@ -8070,7 +8114,7 @@ fn test_save_project_cleans_up_temp_on_reopen_failure() {
     });
 
     let save_path = temp_dir.path().join("project.stalx");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Verify temp file was cleaned up
@@ -8101,7 +8145,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
 
     // First save
     let save_path = temp_dir.path().join("atomic.stalx");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Modify project
@@ -8115,7 +8159,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
     });
 
     // Save again — should succeed and update the file
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Reload and verify both sections are there
@@ -8155,7 +8199,7 @@ fn test_save_project_persists_undo_redo_stacks() {
     state.undo();
 
     let save_path = temp_dir.path().join("undo-persist.stalx");
-    let result = state.save_project(Some(save_path.clone()));
+    let result = state.save_project(Some(save_path.clone()), false);
     assert!(result.success);
 
     // Reload and verify undo/redo stacks are persisted
@@ -8193,7 +8237,7 @@ fn test_open_project_clears_previous_state() {
         shots: vec![test_shot_data(5.0)],
     });
     let path_a = temp_dir.path().join("a.stalx");
-    state.save_project(Some(path_a.clone()));
+    state.save_project(Some(path_a.clone()), false);
 
     // Create and save project B
     state.execute(Command::CreateProject {
@@ -8217,7 +8261,7 @@ fn test_open_project_clears_previous_state() {
         shots: vec![test_shot_data(4.0)],
     });
     let path_b = temp_dir.path().join("b.stalx");
-    state.save_project(Some(path_b.clone()));
+    state.save_project(Some(path_b.clone()), false);
 
     // Open project A — should replace B's state
     let result = state.open_project(path_a);
@@ -8962,6 +9006,7 @@ fn test_batch_disallowed_command_save_project() {
     let result = state.execute(Command::Batch {
         commands: vec![Command::SaveProject {
             path: Some(PathBuf::from("/tmp/test.stalx")),
+            is_autosave: false,
         }],
     });
     assert!(!result.success);
@@ -10190,7 +10235,7 @@ fn test_station_comment_persists_across_save_open() {
     }).section_id.unwrap();
     let station = StationRef::new(sec, 1);
     state.execute(Command::SetStationComment { station_ref: station, comment: Some("persisted note".to_string()) });
-    assert!(state.save_project(Some(save_path.clone())).success);
+    assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
     assert_eq!(state2.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("persisted note"),
@@ -10312,7 +10357,7 @@ fn test_undo_actually_works_after_project_reopen() {
     });
     assert!(create_result.success);
     let section_id = create_result.section_id.unwrap();
-    assert!(state1.save_project(Some(save_path.clone())).success);
+    assert!(state1.save_project(Some(save_path.clone()), false).success);
     // Session 2: reopen and undo
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
@@ -10469,7 +10514,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
     assert_eq!(project_before.zero_datums.len(), 1);
 
     // Save and reopen
-    assert!(state.save_project(Some(save_path.clone())).success);
+    assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
     let project_after = state2.get_project_state().unwrap();
@@ -11119,7 +11164,7 @@ fn test_merge_chain_survives_save_reopen() {
     let c1_before = project_before.compute_station_raw_coords(StationRef::new(sec_c, 1));
 
     // Save and reopen
-    assert!(state.save_project(Some(save_path.clone())).success);
+    assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
 
@@ -11226,6 +11271,170 @@ fn test_triangle_topology_with_loop_closure() {
         s.id == lc.station_b.section_id &&
         (lc.station_b.station_index as usize) <= s.shots.len()
     ), "closure station_b should be valid");
+}
+
+// === Collaboration mode: empty-section name mapping ===
+#[test]
+fn test_collab_section_name_map_includes_empty_sections() {
+    // Regression for Codex's "preserve empty sections in the collab name map"
+    // finding: section_name_map used to be derived from per-shot baseline
+    // entries, so a section with no shots (e.g. an empty root section or
+    // one whose first shot hasn't been measured yet) was omitted from the
+    // map.  When a collaborator added the first shot to such a section in
+    // Ariane and round-tripped, the returned shot's section name had no
+    // baseline entry — reconcile classified it as a brand-new section and
+    // apply created a duplicate next to the empty original.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Collab".to_string(), None);
+    // Two sections: one with shots, one EMPTY (no shots at all).
+    project.add_section(SectionData {
+        name: Some("Filled".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 10.0,
+            azimuth_out: 10.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
+    });
+    let empty_id = project.add_section(SectionData {
+        name: Some("EmptyRoot".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![],
+    }).id;
+    project.collab = Some(crate::models::CollabState::new("empty.tml".to_string()));
+    state.set_project_for_tests(project);
+
+    let stalx = temp_dir.path().join("empty.stalx");
+    assert!(state.execute(Command::SaveProject {
+        path: Some(stalx.clone()),
+        is_autosave: false,
+    }).success);
+
+    let loaded = Database::open(&stalx).unwrap().load_project().unwrap();
+    let collab = loaded.collab.expect("collab persisted");
+    assert!(
+        collab
+            .section_name_map
+            .iter()
+            .any(|(name, id)| name == "EmptyRoot" && *id == empty_id),
+        "empty section must appear in section_name_map so reconcile can route \
+         later Ariane additions to it instead of creating a duplicate; got {:?}",
+        collab.section_name_map,
+    );
+}
+
+// === Collaboration mode: save-both hook ===
+#[test]
+fn test_collab_save_writes_sibling_tml_and_baseline() {
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Collab Cave".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![
+            ShotData { azimuth_in: 10.0, azimuth_out: 10.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() },
+            ShotData { azimuth_in: 20.0, azimuth_out: 20.0, length: 6.0, depth_in: 1.0, depth_out: 2.0, ..Default::default() },
+        ],
+    });
+    project.collab = Some(crate::models::CollabState::new("collab-cave.tml".to_string()));
+    state.set_project_for_tests(project);
+
+    let stalx = temp_dir.path().join("collab-cave.stalx");
+    let r = state.execute(Command::SaveProject { path: Some(stalx.clone()), is_autosave: false });
+    assert!(r.success, "save failed: {:?}", r.error);
+
+    // Sibling .tml written next to the .stalx.
+    let tml = temp_dir.path().join("collab-cave.tml");
+    assert!(tml.exists(), "sibling .tml should be written");
+
+    // Baseline + hash persisted in the .stalx.
+    let loaded = Database::open(&stalx).unwrap().load_project().unwrap();
+    let collab = loaded.collab.expect("collab persisted");
+    assert!(collab.enabled);
+    let sha1 = collab.last_export_tml_sha256.clone().expect("hash stored");
+    assert_eq!(collab.shot_baseline.len(), 2, "baseline has both shots");
+
+    // A second save with no edits is idempotent (UUIDs reused -> same hash).
+    let r2 = state.execute(Command::SaveProject { path: None, is_autosave: false });
+    assert!(r2.success);
+    let loaded2 = Database::open(&stalx).unwrap().load_project().unwrap();
+    let sha2 = loaded2.collab.unwrap().last_export_tml_sha256.unwrap();
+    assert_eq!(sha1, sha2, "no-edit re-save should produce identical .tml");
+}
+
+// === Collaboration mode: apply changes (preserve native data + undo) ===
+#[test]
+fn test_apply_collab_changes_preserves_native_data_and_is_undoable() {
+    let dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mk = |len1: f64, az_out1: f64| SectionData {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![
+            ShotData { azimuth_in: 10.0, azimuth_out: 10.0, length: 5.0, depth_in: 0.0, depth_out: 1.0, ..Default::default() },
+            ShotData { azimuth_in: 20.0, azimuth_out: az_out1, length: len1, depth_in: 1.0, depth_out: 2.0, ..Default::default() },
+            ShotData { azimuth_in: 30.0, azimuth_out: 30.0, length: 7.0, depth_in: 2.0, depth_out: 3.0, ..Default::default() },
+        ],
+    };
+
+    let mut project = Project::new("Collab".to_string(), None);
+    project.add_section(mk(6.0, 200.0)); // shot[1] has a distinct backsight (no TML equivalent)
+    project.collab = Some(crate::models::CollabState::new("c.tml".to_string()));
+    state.set_project_for_tests(project);
+
+    let stalx = dir.path().join("c.stalx");
+    assert!(state.execute(Command::SaveProject { path: Some(stalx), is_autosave: false }).success);
+    let sibling = dir.path().join("c.tml");
+    assert!(sibling.exists());
+
+    // Simulate Ariane editing the .tml: re-export an edited project (shot[1].length = 99).
+    let mut edited = Project::new("Collab".to_string(), None);
+    edited.add_section(mk(99.0, 20.0));
+    crate::export::tml::export_tml(&edited, &sibling).unwrap();
+
+    let cs = state.detect_collab_changes().unwrap().expect("changes detected");
+    assert_eq!(cs.shots_edited.len(), 1, "exactly one edit");
+    assert!(state.execute(Command::ApplyCollabChanges).success);
+
+    {
+        let g = state.project.lock().unwrap();
+        let shot = &g.as_ref().unwrap().sections[0].shots[1];
+        assert_eq!(shot.length, 99.0, "length applied from .tml");
+        assert_eq!(shot.azimuth_out, 200.0, "distinct backsight preserved (no TML field)");
+    }
+
+    // Undo restores the original geometry; preserved field stays intact.
+    assert!(state.undo().success);
+    {
+        let g = state.project.lock().unwrap();
+        let shot = &g.as_ref().unwrap().sections[0].shots[1];
+        assert_eq!(shot.length, 6.0, "undo restored length");
+        assert_eq!(shot.azimuth_out, 200.0);
+    }
 }
 
 // ============================================================================

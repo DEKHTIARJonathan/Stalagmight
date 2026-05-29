@@ -2220,3 +2220,75 @@ fn test_migrate_undo_redo_to_blob_on_fresh_db() {
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].1, "cmd");
 }
+
+// === Collaboration mode persistence (schema v5) ===
+#[test]
+fn test_collab_state_roundtrip() {
+    use crate::models::{CollabState, ShotBaselineEntry};
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Collab Cave".to_string(), None);
+    let mut collab = CollabState::new("collab-cave.tml".to_string());
+    collab.last_export_tml_sha256 = Some("deadbeef".to_string());
+    collab.shot_baseline = vec![ShotBaselineEntry {
+        section_id: 0,
+        shot_index: 3,
+        ariane_id: 42,
+        uuid: "11111111-2222-3333-4444-555555555555".to_string(),
+        geo_key: "351.5|2.27|0.10".to_string(),
+        section_name: "Mainline 2".to_string(),
+        station_comment: None,
+    }];
+    collab.section_name_map = vec![("Mainline 2".to_string(), 0)];
+    project.collab = Some(collab);
+
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+
+    let c = loaded.collab.expect("collab state should round-trip");
+    assert!(c.enabled);
+    assert_eq!(c.sibling_tml_relative, "collab-cave.tml");
+    assert_eq!(c.last_export_tml_sha256.as_deref(), Some("deadbeef"));
+    assert_eq!(c.shot_baseline.len(), 1);
+    assert_eq!(c.shot_baseline[0].ariane_id, 42);
+    assert_eq!(c.shot_baseline[0].shot_index, 3);
+    assert_eq!(c.section_name_map, vec![("Mainline 2".to_string(), 0)]);
+    assert!(c.write_tml_on_autosave);
+}
+
+#[test]
+fn test_collab_none_when_absent() {
+    // A normal (non-collab) project must load with collab == None,
+    // proving collaboration persistence doesn't affect existing projects.
+    let mut db = Database::in_memory().unwrap();
+    let project = Project::new("Plain Cave".to_string(), None);
+    assert!(project.collab.is_none());
+    db.save_project(&project).unwrap();
+    let loaded = db.load_project().unwrap();
+    assert!(loaded.collab.is_none());
+}
+
+#[test]
+fn test_save_collab_state_upsert() {
+    use crate::models::CollabState;
+    let mut db = Database::in_memory().unwrap();
+    let project = Project::new("Upsert Cave".to_string(), None);
+    db.save_project(&project).unwrap();
+
+    // Upsert a state without rewriting the whole project.
+    db.save_collab_state(Some(&CollabState::new("up.tml".to_string()))).unwrap();
+    assert_eq!(
+        db.load_project().unwrap().collab.unwrap().sibling_tml_relative,
+        "up.tml"
+    );
+    // Upsert again (ON CONFLICT path).
+    let mut c2 = CollabState::new("up.tml".to_string());
+    c2.last_export_tml_sha256 = Some("abc".to_string());
+    db.save_collab_state(Some(&c2)).unwrap();
+    assert_eq!(
+        db.load_project().unwrap().collab.unwrap().last_export_tml_sha256.as_deref(),
+        Some("abc")
+    );
+    // Clearing removes the row.
+    db.save_collab_state(None).unwrap();
+    assert!(db.load_project().unwrap().collab.is_none());
+}

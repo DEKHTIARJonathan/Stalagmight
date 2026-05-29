@@ -1,4 +1,5 @@
 mod app_state;
+mod collab;
 mod commands;
 mod config;
 mod display_settings;
@@ -15,3 +16,5 @@ mod tests;
 mod tests_support;
 
 pub use app_state::AppState;
+#[cfg(test)]
+pub(crate) use collab::apply_changeset;

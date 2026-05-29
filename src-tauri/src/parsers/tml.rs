@@ -100,6 +100,9 @@ pub struct TmlShot {
     pub longitude: f64,
     pub closure_to_id: i64,
     pub section: String,
+    /// Ariane 26+ per-shot UUID (`<UUID>`/`<UU>`); `None` for older files.
+    #[serde(default)]
+    pub uuid: Option<String>,
 }
 
 /// Shot type in Ariane.
@@ -149,6 +152,7 @@ struct RawShot {
     excluded: bool,
     latitude: f64,
     longitude: f64,
+    uuid: Option<String>,
 }
 
 // ============================================================================
@@ -188,6 +192,8 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
         b"Latitude" | b"LT" => Some("latitude"),
         b"Longitude" | b"LGT" => Some("longitude"),
         b"Name" | b"NM" => Some("name"),
+        // Ariane 26+ per-shot UUID — collab-mode round-trip identity.
+        b"UUID" | b"UU" => Some("uuid"),
         _ => None,
     }
 }
@@ -195,6 +201,16 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
 // ============================================================================
 // XML loading
 // ============================================================================
+
+/// Hex sha256 of a TML/TMLU file's inner XML content (independent of zip
+/// framing), for detecting external edits to a collaboration sibling file.
+pub fn tml_content_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let xml = load_xml(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(xml.as_bytes());
+    Ok(format!("{:x}", hasher.finalize()))
+}
 
 /// Load XML content from a `.tml` (ZIP) or `.tmlu` (plain XML) file.
 fn load_xml(path: &Path) -> Result<String> {
@@ -457,6 +473,7 @@ fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
         excluded: fields.get("excluded").map(String::as_str) == Some("true"),
         latitude: parse_f64(fields, "latitude"),
         longitude: parse_f64(fields, "longitude"),
+        uuid: fields.get("uuid").filter(|u| !u.is_empty()).cloned(),
     })
 }
 
@@ -913,6 +930,7 @@ fn linearize_section(
                 longitude: s.longitude,
                 closure_to_id: s.closure_to_id,
                 section: s.section.clone(),
+                uuid: s.uuid.clone(),
             })
             .collect();
 
@@ -1227,20 +1245,29 @@ pub fn convert_tml_to_import_configs(tml: &TmlFile, include_excluded: bool, comm
             tml.geo_coding.as_ref(),
         );
 
-        // When comments_on_stations is true, promote shot comments to the
-        // "to" station (station_index = shot_index + 1) and clear them from shots.
-        let mut station_comments = Vec::new();
-        if comments_on_stations {
-            for (shot_idx, shot) in shot_data.iter().enumerate() {
-                if let Some(ref comment) = shot.comment {
-                    if !comment.is_empty() {
-                        station_comments.push((shot_idx as u32 + 1, comment.clone()));
+        // When comments_on_stations is true, peel station-portion lines out
+        // of each shot's Comment field via the ZWSP marker convention
+        // (see `core::comment_split`): unmarked lines go to the "to" station
+        // (shot_index + 1), marked lines stay on the shot. This handles both
+        // Stalagmight-authored .tml files (which mark shot lines) and bare
+        // Ariane-authored ones (no markers → everything routes to the
+        // station, matching how Ariane visually centers Comment text on
+        // the station).
+        let mut station_comments: Vec<(u32, String)> = Vec::new();
+        let shots: Vec<ShotData> = if comments_on_stations {
+            shot_data
+                .into_iter()
+                .enumerate()
+                .map(|(shot_idx, mut shot)| {
+                    let (shot_part, station_part) =
+                        crate::core::comment_split::split(shot.comment.as_deref());
+                    shot.comment = shot_part;
+                    if let Some(text) = station_part.filter(|s| !s.is_empty()) {
+                        station_comments.push((shot_idx as u32 + 1, text));
                     }
-                }
-            }
-        }
-        let shots = if comments_on_stations && !station_comments.is_empty() {
-            shot_data.into_iter().map(|mut s| { s.comment = None; s }).collect()
+                    shot
+                })
+                .collect()
         } else {
             shot_data
         };
@@ -1423,6 +1450,51 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 /// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
 /// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
 /// Depths are stored as absolute values — no rebasing is applied.
+/// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
+/// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
+/// shot in a section), `start_depth` the parent station's cumulative depth.
+pub(crate) fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f64) -> f64 {
+    if shot.depth_in != -1.0 {
+        shot.depth_in
+    } else {
+        prev_depth.unwrap_or(start_depth)
+    }
+}
+
+/// Canonical mapping of a single Ariane TML shot to Stalagmight's `ShotData`.
+///
+/// This is the SINGLE source of truth for the TML→Stalagmight field mapping
+/// (azimuth `rem_euclid(360)`, depth in/out, inclination→pitch_in, LRUD 0→None,
+/// VIRTUAL→is_reference). Both DMP/TML import and the collaboration reconcile
+/// engine call it, so a clean round-trip never appears as a phantom edit.
+/// `depth_in` must already be resolved via [`resolve_tml_depth_in`].
+pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
+    // LRUD: pass through, using None for zero values
+    let lrud_opt = |v: f64| if v.abs() < f64::EPSILON { None } else { Some(v) };
+
+    // Ariane stores azimuths as arbitrary angles (can be negative or >360).
+    // Normalize to 0..360 range for Stalagmight's data model.
+    let az = shot.azimuth.rem_euclid(360.0);
+
+    ShotData {
+        azimuth_in: az,
+        azimuth_out: az, // No backsight in Ariane
+        length: shot.length,
+        depth_in,
+        depth_out: shot.depth,
+        pitch_in: Some(shot.inclination),
+        pitch_out: None, // No backsight inclination
+        left: lrud_opt(shot.left),
+        right: lrud_opt(shot.right),
+        up: lrud_opt(shot.up),
+        down: lrud_opt(shot.down),
+        comment: shot.comment.clone(),
+        is_reference: shot.shot_type == TmlShotType::Virtual,
+        marker_index: None,
+        temperature: None,
+    }
+}
+
 fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_excluded: bool) -> Vec<ShotData> {
     if shots.is_empty() {
         return Vec::new();
@@ -1444,42 +1516,9 @@ fn convert_shots_to_shot_data(shots: &[TmlShot], start_depth: f64, include_exclu
     let mut result = Vec::with_capacity(real_shots.len());
 
     for (i, shot) in real_shots.iter().enumerate() {
-        // depth_in: use DPI if available, otherwise depth_out of previous shot,
-        // or start_depth (parent shot's cumulative depth) for the first shot.
-        let depth_in = if shot.depth_in != -1.0 {
-            shot.depth_in
-        } else if i > 0 {
-            real_shots[i - 1].depth
-        } else {
-            start_depth
-        };
-
-        let depth_out = shot.depth;
-
-        // LRUD: pass through, using None for zero values
-        let lrud_opt = |v: f64| if v.abs() < f64::EPSILON { None } else { Some(v) };
-
-        // Ariane stores azimuths as arbitrary angles (can be negative or >360).
-        // Normalize to 0..360 range for Stalagmight's data model.
-        let az = shot.azimuth.rem_euclid(360.0);
-
-        result.push(ShotData {
-            azimuth_in: az,
-            azimuth_out: az, // No backsight in Ariane
-            length: shot.length,
-            depth_in,
-            depth_out,
-            pitch_in: Some(shot.inclination),
-            pitch_out: None, // No backsight inclination
-            left: lrud_opt(shot.left),
-            right: lrud_opt(shot.right),
-            up: lrud_opt(shot.up),
-            down: lrud_opt(shot.down),
-            comment: shot.comment.clone(),
-            is_reference: shot.shot_type == TmlShotType::Virtual,
-            marker_index: None,
-            temperature: None,
-        });
+        let prev_depth = if i > 0 { Some(real_shots[i - 1].depth) } else { None };
+        let depth_in = resolve_tml_depth_in(shot, prev_depth, start_depth);
+        result.push(normalize_tml_shot(shot, depth_in));
     }
 
     result
@@ -2044,6 +2083,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             }],
             surveyor: None,
@@ -2091,6 +2131,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             }],
             surveyor: None,
@@ -2485,6 +2526,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "Test".to_string(),
         }];
 
@@ -2515,6 +2557,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "Test".to_string(),
         }];
 
@@ -2550,6 +2593,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "Test".to_string(),
         };
 
@@ -2602,6 +2646,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             },
             TmlShot {
@@ -2625,6 +2670,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             },
             TmlShot {
@@ -2648,6 +2694,7 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
+                uuid: None,
                 section: "Test".to_string(),
             },
         ];
@@ -2690,6 +2737,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "S".to_string(),
         };
 
@@ -2761,6 +2809,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "S".to_string(),
         };
 
@@ -2842,6 +2891,7 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
+            uuid: None,
             section: "S".to_string(),
         };
 

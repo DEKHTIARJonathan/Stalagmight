@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
@@ -23,7 +24,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
@@ -188,7 +189,14 @@ interface ProjectStore {
    * @deprecated Use loadProject() instead for progress UI support.
    */
   openProject: (path: string) => Promise<CommandResult>;
-  saveProject: (path?: string) => Promise<CommandResult>;
+  /**
+   * Save the project.  `isAutosave` should be set to `true` from the
+   * autosave hook so the Rust side can honour
+   * `CollabState.write_tml_on_autosave` and skip the sibling `.tml`
+   * write when the user has disabled it.  Manual / Save-As flows
+   * leave it `false` (the default) so the .tml is always written.
+   */
+  saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /** Check if a shot (by section_id + shot index) is frozen */
@@ -254,6 +262,13 @@ interface ProjectStore {
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  // Collaboration mode
+  setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
+  setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
+  getCollabState: () => Promise<CollabState | null>;
+  detectCollabChanges: () => Promise<CollabChangeSet | null>;
+  applyCollabChanges: () => Promise<CommandResult>;
+  checkCollabSibling: () => Promise<string | null>;
   parseGpx: (path: string) => Promise<GpxFile>;
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -529,6 +544,64 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         get().resetLoading();
         await get().refreshUndoState();
         recordPerfTiming('loadProject total', performance.now() - tStart);
+
+        // Collaboration mode (non-blocking, best-effort): if the project
+        // has collab on AND the sibling .tml was edited externally
+        // (Ariane), offer to reconcile.  When collab is off but a
+        // companion .tml exists, warn the user that Ariane edits won't
+        // flow in and saves won't update it.  Both paths fire
+        // asynchronously so the load returns immediately, and both
+        // re-check `clientOpId` / `loading` state inside `.then` so a
+        // user who navigated away (closeProject, switched projects)
+        // before the IPC resolved doesn't get a dialog or toast for a
+        // project that's no longer open.
+        const detectOpId = clientOpId;
+        const isStillCurrentLoad = (): boolean => {
+          const state = get();
+          return (
+            state.project !== null &&
+            state.loading.clientOpId === detectOpId
+          );
+        };
+        if (result.project.collab?.enabled) {
+          void get()
+            .detectCollabChanges()
+            .then((cs) => {
+              if (!isStillCurrentLoad()) return;
+              if (
+                cs &&
+                cs.shots_added.length +
+                  cs.shots_edited.length +
+                  cs.shots_removed.length +
+                  cs.sections_added.length +
+                  cs.section_meta_changed.length >
+                  0
+              ) {
+                useUIStore.getState().openDialog('collab-review', { changeSet: cs });
+              }
+            })
+            .catch(() => {
+              /* detection is best-effort; ignore errors */
+            });
+        } else {
+          void get()
+            .checkCollabSibling()
+            .then((siblingName) => {
+              if (!isStillCurrentLoad()) return;
+              if (siblingName) {
+                useUIStore
+                  .getState()
+                  .showToast(
+                    i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
+                    'collab-sibling-warning'
+                  );
+              }
+            })
+            .catch(() => {
+              /* best-effort; ignore errors */
+            });
+        }
+
         return { success: true };
       } catch (e) {
         const error = parseLoadError(e);
@@ -665,10 +738,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  saveProject: async (path?: string) => {
+  saveProject: async (path?: string, isAutosave?: boolean) => {
     const result = await invokeIpc<CommandResult>(
       'save_project',
-      { path },
+      { path, isAutosave: isAutosave ?? false },
       { purpose: 'persist project changes', fields: { path } }
     );
     if (result.success) {
@@ -677,6 +750,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const project = get().project;
         if (project) {
           set({ project: { ...project, file_path: result.saved_path } });
+          // On the first save / Save As the backend derives the sibling
+          // name from the final .stalx stem (e.g. `cave.stalx` →
+          // `cave.tml`).  The in-memory `project.collab.sibling_tml_relative`
+          // is still the pre-save placeholder (e.g. `collaboration.tml`)
+          // until we refresh — the Project Details panel would otherwise
+          // mislead the user about which companion file was actually
+          // written.  Refresh the collab state when collab is on.
+          if (project.collab?.enabled) {
+            try {
+              const fresh = await get().getCollabState();
+              const current = get().project;
+              if (fresh && current) {
+                set({ project: { ...current, collab: fresh } });
+              }
+            } catch {
+              /* best-effort refresh; ignore IPC errors */
+            }
+          }
         }
       }
       // Lightweight: just refresh undo/redo availability
@@ -1201,6 +1292,48 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       { purpose: 'import Compass', fields: { path } }
     );
   },
+
+  // Collaboration mode
+  setCollabEnabled: async (enabled: boolean) => {
+    return executeCommand(
+      'set_collab_enabled',
+      { enabled },
+      { purpose: 'toggle collaboration mode' }
+    );
+  },
+
+  setCollabEnabledForPath: async (path: string, enabled: boolean) => {
+    return executeCommand(
+      'set_collab_enabled_for_path',
+      { path, enabled },
+      { purpose: 'toggle collaboration mode for a recent project', fields: { path } }
+    );
+  },
+
+  getCollabState: async () => {
+    return await invokeIpc<CollabState | null>('get_collab_state', undefined, {
+      purpose: 'read collaboration state',
+    });
+  },
+
+  detectCollabChanges: async () => {
+    return await invokeIpc<CollabChangeSet | null>('detect_collab_changes', undefined, {
+      purpose: 'detect collaborator .tml changes',
+    });
+  },
+
+  applyCollabChanges: async () => {
+    return executeCommand('apply_collab_changes', {}, {
+      purpose: 'apply collaborator changes',
+    });
+  },
+
+  checkCollabSibling: async () => {
+    return await invokeIpc<string | null>('collab_sibling_when_disabled', undefined, {
+      purpose: 'warn about an unsynced Ariane sibling file',
+    });
+  },
+
 
   parseGpx: async (path: string) => {
     return await invokeIpc<GpxFile>('parse_gpx', { path }, {

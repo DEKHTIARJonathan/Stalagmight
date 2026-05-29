@@ -38,6 +38,7 @@ svg2pdf = "0.12"
 usvg = "0.43"
 resvg = "0.43"
 sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
 ureq = "3"
 http = "1"
 nalgebra = "0.33"

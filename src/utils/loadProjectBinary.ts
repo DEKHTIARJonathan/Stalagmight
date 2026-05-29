@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { decode as msgpackDecode } from '@msgpack/msgpack';
 import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
+import type { CollabState } from '../types/ipc/CollabState';
 import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
 import type { Station } from '../types/ipc/Station';
@@ -52,7 +53,7 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
 }
 
 /** Wire format version expected from the Rust encoder. */
-const EXPECTED_VERSION = 1;
+const EXPECTED_VERSION = 2;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -103,6 +104,7 @@ interface ProjectHeaderBinary {
   station_comments_map: Array<[StationRef, string]>;
   imported_file_hashes: string[];
   imported_section_hashes: string[];
+  collab: CollabState | null;
 }
 
 interface SectionHeaderBinary {
@@ -291,6 +293,7 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
     imported_file_hashes: env.project_header.imported_file_hashes,
     imported_section_hashes: env.project_header.imported_section_hashes,
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
+    collab: env.project_header.collab,
   };
 
   // Stations: typed-array views over the binary buffers.

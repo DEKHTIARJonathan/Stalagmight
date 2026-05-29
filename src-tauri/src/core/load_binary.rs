@@ -66,7 +66,10 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 
 /// Wire-format version. Bumped if the byte layout changes. The JS decoder
 /// rejects mismatches so a stale frontend can't silently misread.
-pub const BINARY_FORMAT_VERSION: u32 = 1;
+/// Bumped from 1 → 2 to include `ProjectHeaderBinary.collab` so the
+/// frontend's load-time collaboration detection has the project's
+/// CollabState available without a separate round-trip.
+pub const BINARY_FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -134,6 +137,11 @@ pub struct ProjectHeaderBinary {
     pub station_comments_map: Vec<(StationRef, String)>,
     pub imported_file_hashes: Vec<String>,
     pub imported_section_hashes: Vec<String>,
+    /// Collaboration state — preserves `Project.collab` across the
+    /// binary IPC envelope.  Without this the frontend's
+    /// `result.project.collab` is undefined and the load-time collab
+    /// detection (collab-mode `loadProject` hook) silently never runs.
+    pub collab: Option<crate::models::CollabState>,
 }
 
 #[derive(Serialize)]
@@ -309,6 +317,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_comments_map: hashmap_to_pairs(project.station_comments),
         imported_file_hashes: project.imported_file_hashes,
         imported_section_hashes: project.imported_section_hashes,
+        collab: project.collab,
     };
 
     let result = LoadProjectFullBinaryResult {
@@ -433,6 +442,7 @@ mod tests {
     fn shot(id: u32, azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> Shot {
         Shot {
             id,
+            uuid: None,
             azimuth_in: azimuth,
             azimuth_out: azimuth,
             length,
@@ -524,6 +534,7 @@ mod tests {
         let mut sec = new_section(1, "S", "#abcdef");
         sec.shots.push(Shot {
             id: 1,
+            uuid: None,
             azimuth_in: 0.0,
             azimuth_out: 0.0,
             length: 1.0,

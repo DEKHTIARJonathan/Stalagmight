@@ -9,9 +9,10 @@ use ts_rs::TS;
 use crate::config::ClosureAdjustmentConfig;
 
 use super::{
-    gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, Coordinates, FrozenShotRef,
-    GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData, SectionId, SectionUpdates, Shot,
-    ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef, ZeroDatum, FEATURE_ID_STRIDE,
+    gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, CollabState, Coordinates,
+    FrozenShotRef, GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData, SectionId,
+    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef,
+    ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
@@ -176,6 +177,9 @@ pub struct Project {
     /// Monotonic counter for closure IDs. Never reused, even after deletions.
     #[serde(default)]
     pub next_closure_id: u64,
+    /// Collaboration mode state (sibling .tml linkage + baseline). None when off.
+    #[serde(default)]
+    pub collab: Option<CollabState>,
 
     /// Transient flag (NOT persisted) — when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
@@ -231,6 +235,9 @@ pub struct ProjectMetadata {
     pub gps_center: Option<(f64, f64)>,
     /// GPS bounds including all zero datums
     pub gps_bounds: Option<GpsBounds>,
+    /// Whether Ariane collaboration mode is enabled for this project. Lets the
+    /// recent-projects panel show/toggle the state without opening the project.
+    pub collab_enabled: bool,
 }
 
 /// Overall project statistics
@@ -303,6 +310,7 @@ impl Project {
             imported_file_hashes: Vec::new(),
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
+            collab: None,
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             merge_adjacency_cache: HashMap::new(),
@@ -398,6 +406,30 @@ impl Project {
         self.section_index_cache.clear();
         self.touch();
         Some(self.sections.remove(pos))
+    }
+
+    /// Mint v4 UUIDs for any shot whose `uuid` field is `None` and write
+    /// them back into the in-memory project.
+    ///
+    /// The save flow needs this before either the SQLite INSERT or the
+    /// TML export runs.  Without it, pre-v6 .stalx files loaded today
+    /// have `Shot::uuid = None` everywhere; the SQLite INSERT path
+    /// mints fresh UUIDs at write time but does NOT update the in-memory
+    /// shot, so a subsequent `export_tml_with_baseline` call in the
+    /// SAME save sees the shots still as `uuid: None` and mints a
+    /// SECOND, different set of UUIDs for the .tml.  The DB and the
+    /// sibling .tml then disagree on every shot's identity until the
+    /// next reload, breaking the collaboration round-trip.  Calling
+    /// this once at the top of `save_project` guarantees both sides
+    /// receive the same UUIDs.
+    pub fn ensure_shot_uuids(&mut self) {
+        for section in &mut self.sections {
+            for shot in &mut section.shots {
+                if shot.uuid.as_deref().map_or(true, str::is_empty) {
+                    shot.uuid = Some(uuid::Uuid::new_v4().to_string());
+                }
+            }
+        }
     }
 
     /// Rebuild the section-id → index cache from the current `sections`
@@ -5347,6 +5379,7 @@ impl Project {
             station_count: stats.station_count,
             gps_center,
             gps_bounds,
+            collab_enabled: self.collab.as_ref().is_some_and(|c| c.enabled),
         })
     }
 

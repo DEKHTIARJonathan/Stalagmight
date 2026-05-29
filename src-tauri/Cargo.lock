@@ -4218,6 +4218,7 @@ dependencies = [
  "ts-rs",
  "ureq",
  "usvg",
+ "uuid",
  "zip",
 ]
 

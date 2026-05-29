@@ -94,7 +94,9 @@ impl AppState {
                 self.create_project(name.clone(), location.clone())
             }
             Command::OpenProject { path } => self.open_project(path.clone()),
-            Command::SaveProject { path } => self.save_project(path.clone()),
+            Command::SaveProject { path, is_autosave } => {
+                self.save_project(path.clone(), *is_autosave)
+            }
             Command::CloseProject => self.close_project(),
             Command::CreateSection {
                 name,
@@ -194,6 +196,7 @@ impl AppState {
                 output_name.clone(),
                 *archive_originals,
             ),
+            Command::ApplyCollabChanges => self.apply_collab_changes(),
         };
 
         // Push to undo stack if successful and undoable.

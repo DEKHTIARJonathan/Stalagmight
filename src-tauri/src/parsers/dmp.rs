@@ -1806,6 +1806,7 @@ mod tests {
                 is_reference: false,
                 marker_index: Some(u32::from(s.marker_index)),
                 temperature: Some(s.temperature),
+                uuid: None,
             })
             .collect();
 
@@ -1965,6 +1966,7 @@ mod tests {
                 comment: s.comment.clone(), is_reference: false,
                 marker_index: Some(u32::from(s.marker_index)),
                 temperature: Some(s.temperature),
+                uuid: None,
             })
             .collect();
         let existing_sections = vec![ExistingSection {

@@ -4,6 +4,9 @@ import { invokeIpc } from '../../utils/ipc';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { Button } from '../common/Button';
+import { Toggle } from '../common/Toggle';
+import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
 import { formatDate, formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 
@@ -35,8 +38,12 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   onCollapseChange,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(collapsed);
+  const [collabBusy, setCollabBusy] = useState(false);
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
+  const setCollabEnabledForPath = useProjectStore((s) => s.setCollabEnabledForPath);
+  const loadRecentProjects = useProjectStore((s) => s.loadRecentProjects);
+  const showToast = useUIStore((s) => s.showToast);
 
   // Normalize selection: prefer selectedProjects if non-empty, fallback to project
   const projects = selectedProjects?.length ? selectedProjects : (project ? [project] : []);
@@ -86,6 +93,32 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
       onRemoveFromRecent(singleProject.file_path);
     }
   }, [singleProject?.file_path, onRemoveFromRecent]);
+
+  // Toggle Ariane collaboration for the selected (not-necessarily-open) project.
+  // Mutates the `.stalx` on disk by path, then refreshes the list so the panel
+  // reflects the new state.
+  const handleCollabToggle = useCallback(
+    async (next: boolean) => {
+      if (!singleProject?.file_path) return;
+      setCollabBusy(true);
+      try {
+        const result = await setCollabEnabledForPath(singleProject.file_path, next);
+        if (!result.success) {
+          showToast(
+            result.error ?? t('detailPanel.collaboration.toggleFailed', 'Failed to change collaboration mode'),
+            'collab-toggle'
+          );
+        } else {
+          await loadRecentProjects();
+        }
+      } catch (e) {
+        showToast(String(e), 'collab-toggle');
+      } finally {
+        setCollabBusy(false);
+      }
+    },
+    [singleProject?.file_path, setCollabEnabledForPath, loadRecentProjects, showToast, t]
+  );
 
   // Format date for display
   const formatProjectDate = (isoDate: string | null | undefined): string => {
@@ -311,6 +344,42 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
               )}
             </div>
 
+            {/* Collaboration toggle (per-project Ariane .tml round-trip) */}
+            <div
+              className="p-3 border-t border-border space-y-2"
+              data-testid="metadata-collaboration"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-text-primary">
+                    {t('detailPanel.collaboration.enable', 'Ariane collaboration')}
+                  </div>
+                  <div className="text-xs text-text-secondary mt-0.5">
+                    {t(
+                      'detailPanel.collaboration.help',
+                      'Saves a companion Ariane file (.tml) on every save and merges external Ariane edits when you reopen the project.'
+                    )}
+                  </div>
+                </div>
+                <Toggle
+                  checked={singleProject.collab_enabled}
+                  onChange={handleCollabToggle}
+                  disabled={collabBusy}
+                  aria-label={t('detailPanel.collaboration.aria', 'Toggle Ariane collaboration mode')}
+                  data-testid="metadata-toggle-collaboration"
+                />
+              </div>
+              {singleProject.collab_enabled && (
+                <div
+                  className="text-xs text-text-tertiary"
+                  data-testid="metadata-collaboration-sibling"
+                >
+                  {t('detailPanel.collaboration.companion', 'Companion file')}:{' '}
+                  <code className="break-all">{deriveSiblingName(singleProject.file_path)}</code>
+                </div>
+              )}
+            </div>
+
             {/* Actions */}
             <div className="p-3 border-t border-border space-y-2">
               <Button
@@ -355,6 +424,15 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     </ResizablePanel>
   );
 };
+
+/** Derive `<stem>.tml` from a project's `.stalx` path for display. */
+function deriveSiblingName(filePath: string | null | undefined): string | null {
+  if (!filePath) return null;
+  const base = filePath.replace(/^.*[\\/]/, '');
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return `${stem}.tml`;
+}
 
 interface MetadataFieldProps {
   label: string;

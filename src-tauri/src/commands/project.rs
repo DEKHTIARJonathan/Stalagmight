@@ -43,14 +43,29 @@ pub(crate) fn open_project_impl(state: &AppState, path: PathBuf) -> CommandResul
     state.execute(Command::OpenProject { path })
 }
 
-/// Save the current project
+/// Save the current project.
+///
+/// `is_autosave` is honoured by the collab-sibling write path: when
+/// `true` and the project's `CollabState.write_tml_on_autosave` is
+/// `false`, the sibling `.tml` is skipped so autosave doesn't churn
+/// the file Ariane is editing.  Defaults to `false` so existing
+/// frontend callers that don't supply the field get manual-save
+/// semantics (always write the `.tml`).
 #[tauri::command]
-pub fn save_project(state: State<AppState>, path: Option<PathBuf>) -> CommandResult {
-    save_project_impl(state.inner(), path)
+pub fn save_project(
+    state: State<AppState>,
+    path: Option<PathBuf>,
+    is_autosave: Option<bool>,
+) -> CommandResult {
+    save_project_impl(state.inner(), path, is_autosave.unwrap_or(false))
 }
 
-pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> CommandResult {
-    state.execute(Command::SaveProject { path })
+pub(crate) fn save_project_impl(
+    state: &AppState,
+    path: Option<PathBuf>,
+    is_autosave: bool,
+) -> CommandResult {
+    state.execute(Command::SaveProject { path, is_autosave })
 }
 
 /// Close the current project

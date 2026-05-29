@@ -15,7 +15,7 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 6;
 
 fn compress_json(json: &str) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -415,6 +415,37 @@ impl Database {
             [],
         )?;
 
+        // Ensure collab_state table exists (schema v5: collaboration mode).
+        // Single-row JSON blob holding the project's CollabState.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS collab_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                state_json TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Add uuid column to shots table (schema v5→v6: per-shot UUIDs
+        // for collaboration round-trip identity).  We don't backfill
+        // existing rows here — `load_project` lazily mints a UUID for
+        // any row that comes back with NULL, and the next save persists
+        // it.  That keeps the migration cost a single ALTER TABLE for
+        // even very large pre-v6 databases.
+        let has_shot_uuid_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('shots') WHERE name='uuid'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_shot_uuid_column {
+            self.conn
+                .execute("ALTER TABLE shots ADD COLUMN uuid TEXT", [])?;
+            tracing::info!("Added uuid column to shots table (schema v6)");
+        }
+
         tracing::debug!("Schema migration complete");
         Ok(())
     }
@@ -692,6 +723,7 @@ impl Database {
                 is_reference INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
+                uuid TEXT,
                 UNIQUE(section_id, sequence_order),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -1032,6 +1064,7 @@ impl Database {
                 is_reference INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
+                uuid TEXT,
                 UNIQUE(section_id, sequence_order),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -1086,6 +1119,12 @@ impl Database {
                 comment TEXT NOT NULL,
                 PRIMARY KEY (section_id, station_index),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+            );
+
+            -- Collaboration mode state (single-row JSON blob; schema v5)
+            CREATE TABLE IF NOT EXISTS collab_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                state_json TEXT NOT NULL
             );
 
             -- Undo/redo stack (BLOB columns hold gzip-compressed JSON)
@@ -1187,6 +1226,7 @@ impl Database {
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
+            DELETE FROM collab_state;
             DELETE FROM project;
             ",
         )?;
@@ -1224,14 +1264,23 @@ impl Database {
 
             for (seq, shot) in section.shots.iter().enumerate() {
                 // Note: We don't store shot.id - it's regenerated on load based on sequence_order
-                // The database uses auto-increment for the id column
+                // The database uses auto-increment for the id column.
+                // `shot.uuid` IS persisted — it's the only stable identity
+                // a shot has across save/load and the basis for the
+                // collaboration round-trip with Ariane.  Mint one lazily
+                // here for any shot that arrived without (e.g. loaded
+                // from a pre-v6 .stalx) so we never write NULL twice.
+                let uuid = shot
+                    .uuid
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 tx.execute(
                     r"INSERT INTO shots (
                         section_id, sequence_order,
                         azimuth_in, azimuth_out, length, depth_in, depth_out,
                         pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                        comment, is_reference, marker_index, temperature
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                        comment, is_reference, marker_index, temperature, uuid
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                     params![
                         section.id,
                         seq as i64,
@@ -1249,7 +1298,8 @@ impl Database {
                         shot.comment,
                         i32::from(shot.is_reference),
                         shot.marker_index,
-                        shot.temperature
+                        shot.temperature,
+                        uuid,
                     ],
                 )?;
             }
@@ -1304,6 +1354,16 @@ impl Database {
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
                 params![station_ref.section_id, station_ref.station_index, comment],
+            )?;
+        }
+
+        // Save collaboration state (single-row JSON blob)
+        if let Some(collab) = &project.collab {
+            let json = serde_json::to_string(collab)
+                .context("Failed to serialize collab state")?;
+            tx.execute(
+                "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)",
+                params![json],
             )?;
         }
 
@@ -1528,6 +1588,22 @@ impl Database {
             "load_metadata timings"
         );
 
+        // Fast collab-on check: the recent-projects panel surfaces this
+        // without opening the project, so we can't call the full
+        // `load_collab_state` here (it deserialises the whole baseline).
+        // Just probe the `enabled` flag from the JSON blob.
+        let collab_enabled: bool = self
+            .conn
+            .query_row(
+                "SELECT json_extract(state_json, '$.enabled') FROM collab_state WHERE id = 1",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .map(|v| v != 0)
+            .unwrap_or(false);
+
         Ok(ProjectMetadata {
             name,
             location,
@@ -1538,6 +1614,7 @@ impl Database {
             station_count,
             gps_center,
             gps_bounds,
+            collab_enabled,
         })
     }
 
@@ -1686,7 +1763,7 @@ impl Database {
                 let mut shot_stmt = self.conn.prepare(
                     r"SELECT section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                              comment, is_reference, marker_index, temperature
+                              comment, is_reference, marker_index, temperature, uuid
                        FROM shots ORDER BY section_id, sequence_order",
                 )?;
                 let shot_rows = shot_stmt.query_map([], |row| {
@@ -1711,6 +1788,13 @@ impl Database {
                             is_reference: row.get::<_, i32>(14)? != 0,
                             marker_index: row.get(15)?,
                             temperature: row.get(16)?,
+                            // `uuid` column was added in schema v6; pre-v6
+                            // rows return NULL here.  Treat NULL and empty
+                            // string the same — the next save mints a
+                            // fresh UUID and persists it.
+                            uuid: row
+                                .get::<_, Option<String>>(17)?
+                                .filter(|s| !s.is_empty()),
                         },
                     ))
                 })?;
@@ -1834,6 +1918,9 @@ impl Database {
         // Load station comments
         let station_comments = self.load_station_comments()?;
 
+        // Load collaboration state (None for pre-v5 projects or when off)
+        let collab = self.load_collab_state()?;
+
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
         let mut section_index_cache = HashMap::with_capacity(sections.len());
@@ -1871,6 +1958,7 @@ impl Database {
             imported_file_hashes,
             imported_section_hashes,
             next_closure_id,
+            collab,
             cascade_deferred: false,
             section_index_cache,
             merge_adjacency_cache,
@@ -2252,6 +2340,61 @@ impl Database {
         }
 
         Ok(comments)
+    }
+
+    /// Load collaboration state from the single-row `collab_state` table.
+    /// Returns `None` for pre-v5 projects (table absent) or when no row is present.
+    fn load_collab_state(&self) -> Result<Option<crate::models::CollabState>> {
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='collab_state'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ).map(|c| c > 0).unwrap_or(false);
+
+        if !table_exists {
+            return Ok(None);
+        }
+
+        let json: Option<String> = self.conn.query_row(
+            "SELECT state_json FROM collab_state WHERE id = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        ).ok();
+
+        match json {
+            Some(j) => Ok(Some(
+                serde_json::from_str(&j).context("Failed to deserialize collab state")?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    /// Upsert the collaboration state without rewriting the whole project.
+    /// Used by the save-both hook to persist a refreshed baseline after exporting
+    /// the sibling `.tml`. `None` clears the row (collaboration disabled).
+    pub fn save_collab_state(&self, collab: Option<&crate::models::CollabState>) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS collab_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                state_json TEXT NOT NULL
+            )",
+            [],
+        )?;
+        match collab {
+            Some(state) => {
+                let json = serde_json::to_string(state)
+                    .context("Failed to serialize collab state")?;
+                self.conn.execute(
+                    "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json",
+                    params![json],
+                )?;
+            }
+            None => {
+                self.conn.execute("DELETE FROM collab_state", [])?;
+            }
+        }
+        Ok(())
     }
 
     /// Load imported file hashes from database
