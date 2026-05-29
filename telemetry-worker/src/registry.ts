@@ -340,4 +340,15 @@ export const EVENT_NAMES: readonly string[] = [
   'action.dialog.compass-import',
   'dialog-cancel.compass-import',
   'dwell.dialog.compass-import',
+  // Collaboration-mode IPC commands (Ariane sibling .tml workflow).
+  'command.set_collab_enabled',
+  'command.set_collab_enabled_for_path',
+  'command.get_collab_state',
+  'command.detect_collab_changes',
+  'command.apply_collab_changes',
+  'command.collab_sibling_when_disabled',
+  // collab-review dialog (action/cancel/dwell trio).
+  'action.dialog.collab-review',
+  'dialog-cancel.collab-review',
+  'dwell.dialog.collab-review',
 ];
