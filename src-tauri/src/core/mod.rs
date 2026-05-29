@@ -1,4 +1,5 @@
 pub mod command;
+pub mod comment_split;
 pub mod load_binary;
 pub mod loading;
 pub mod reconcile;
