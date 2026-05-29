@@ -34,7 +34,17 @@ export default function ExportPreview({ options }: ExportPreviewProps) {
 
   useEffect(() => {
     if (!project) {
+      // Project closed (or never opened). Bump the seq so any earlier
+      // in-flight `preview_svg_export` call's response is treated as
+      // stale and discarded — otherwise it'd repopulate the preview
+      // with SVG from a project that's no longer open.
+      ++requestSeqRef.current;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
       setSvg(null);
+      setError(null);
       setIsLoading(false);
       return;
     }

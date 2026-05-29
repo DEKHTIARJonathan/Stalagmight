@@ -186,6 +186,11 @@ const THICK_PX: f64 = 2.5;
 /// even after the rounded line cap eats back ~half a stroke.
 const JUNCTION_TRIM_PX: f64 = THICK_PX * 2.0;
 
+/// Minimum visible polyline length, in *pixels*, that junction trimming
+/// will never eat below. Keeps short tied passages from disappearing
+/// entirely when both ends want a trim wider than the run itself.
+const MIN_VISIBLE_SHOT_PX: f64 = THICK_PX;
+
 /// Zero-datum star sizing, in *pixels*.
 const STAR_OUTER_PX: f64 = 7.0;
 const STAR_INNER_PX: f64 = 3.0;
@@ -651,16 +656,29 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
             }
             // Trim either end that lands on a multi-segment junction so
             // distinct segments don't blend into one continuous line.
-            if let Some(si) = first_si {
-                let d = station_trim_dist[si];
-                if d > 0.0 {
-                    trim_polyline_end(&mut points, true, d);
+            // Cap the combined trim at `total_len - MIN_VISIBLE_SHOT_PX`
+            // so a short tied passage doesn't get its vertices eaten
+            // entirely and silently disappear from the export — scale
+            // both ends proportionally when the budget is tight.
+            let want_start = first_si.map_or(0.0, |si| station_trim_dist[si]);
+            let want_end = last_si.map_or(0.0, |si| station_trim_dist[si]);
+            if want_start > 0.0 || want_end > 0.0 {
+                let total_len = polyline_length(&points);
+                let min_visible = px(MIN_VISIBLE_SHOT_PX);
+                let max_total = (total_len - min_visible).max(0.0);
+                let (use_start, use_end) = if want_start + want_end <= max_total {
+                    (want_start, want_end)
+                } else if want_start + want_end > 0.0 {
+                    let s = max_total / (want_start + want_end);
+                    (want_start * s, want_end * s)
+                } else {
+                    (0.0, 0.0)
+                };
+                if use_start > 0.0 {
+                    trim_polyline_end(&mut points, true, use_start);
                 }
-            }
-            if let Some(si) = last_si {
-                let d = station_trim_dist[si];
-                if d > 0.0 {
-                    trim_polyline_end(&mut points, false, d);
+                if use_end > 0.0 {
+                    trim_polyline_end(&mut points, false, use_end);
                 }
             }
             if points.len() >= 2 {
@@ -841,6 +859,18 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
 
     svg.push_str("</svg>\n");
     Ok(svg)
+}
+
+/// Sum of edge lengths along the polyline.
+fn polyline_length(points: &[(f64, f64)]) -> f64 {
+    points
+        .windows(2)
+        .map(|w| {
+            let dx = w[1].0 - w[0].0;
+            let dy = w[1].1 - w[0].1;
+            (dx * dx + dy * dy).sqrt()
+        })
+        .sum()
 }
 
 /// Trim a polyline at one end by `dist` along the existing edges, walking
@@ -1276,6 +1306,98 @@ mod tests {
             ..Default::default()
         });
         project
+    }
+
+    #[test]
+    fn short_passage_survives_when_both_ends_qualify_for_trim() {
+        // Pathological case codex flagged: a tied non-reference run
+        // shorter than 2 × JUNCTION_TRIM_PX at the current scale would
+        // have its outer vertices both eaten by the trim and the
+        // polyline silently dropped from the export. The clamp now
+        // keeps at least one stroke-width of visible polyline.
+        //
+        // Build a parent (100 m east) and a 1 m side that's tied to
+        // the parent at *both* ends via short stubs — so both side
+        // endpoints qualify for trim and would, without the clamp,
+        // consume the entire side polyline.
+        let mut project = Project::new("ShortSide".to_string(), None);
+        let parent_id = project
+            .add_section(SectionData {
+                name: Some("Parent".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(100.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let side_id = project
+            .add_section(SectionData {
+                name: Some("ShortSide".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(1.0, 0.0, false)], // 1 m only
+                ..Default::default()
+            })
+            .id;
+        let merged_at = chrono::Utc::now();
+        for (parent_station, side_station) in [(0u32, 0u32), (1, 1)] {
+            let stub = project
+                .add_section(SectionData {
+                    name: Some("Stub".to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(1.0, 0.0, true)],
+                    ..Default::default()
+                })
+                .id;
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 0),
+                station_b: StationRef::new(parent_id, parent_station),
+                merged_at,
+            });
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 1),
+                station_b: StationRef::new(side_id, side_station),
+                merged_at,
+            });
+        }
+        project.rebuild_merge_adjacency();
+
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 1,
+            },
+        )
+        .unwrap();
+        let polylines = parse_polyline_points(&svg);
+        // Two polylines must survive: the parent and the (clamped) side.
+        assert_eq!(polylines.len(), 2, "{svg}");
+        // The side polyline is the short one. Its remaining length must
+        // be positive (at least the minimum visible budget) — proves
+        // the clamp kept it alive.
+        let side_poly = polylines
+            .iter()
+            .min_by(|a, b| {
+                let la = polyline_geom_len(a);
+                let lb = polyline_geom_len(b);
+                la.partial_cmp(&lb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap();
+        let side_len = polyline_geom_len(side_poly);
+        assert!(
+            side_len > 0.0,
+            "short side polyline should retain a visible remainder; got len={side_len}: {svg}",
+        );
+    }
+
+    fn polyline_geom_len(pts: &[(f64, f64)]) -> f64 {
+        pts.windows(2)
+            .map(|w| {
+                let dx = w[1].0 - w[0].0;
+                let dy = w[1].1 - w[0].1;
+                (dx * dx + dy * dy).sqrt()
+            })
+            .sum()
     }
 
     #[test]
