@@ -250,6 +250,15 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     let Some(collab) = project.collab.as_ref() else {
         return CollabChangeSet::empty();
     };
+    // Guard against empty baselines: claude review wanted this removed so
+    // "enable collab, save empty project, Ariane adds first shots" would
+    // reconcile.  Removing it breaks the real-Ariane corpus replay
+    // (`reconcile_fuzz::corpus_replay_real_ariane_history`) somewhere
+    // mid-iteration — exact root cause not yet pinned without local data
+    // access.  Tracked as a known limitation: the "Ariane adds first
+    // shots" workflow requires the Stalagmight user to save at least one
+    // real shot before handing the .tml off.  See the #[ignore]'d
+    // regression test below.
     if collab.shot_baseline.is_empty() {
         return CollabChangeSet::empty();
     }
@@ -803,6 +812,15 @@ fn field_changes(old: &crate::models::Shot, new: &ShotData) -> Vec<CollabFieldCh
 }
 
 fn opt_num(field: &str, a: Option<f64>, b: Option<f64>, out: &mut Vec<CollabFieldChange>) {
+    // `None` is treated as 0.0 here on the assumption that Ariane writes
+    // 0.0 for "unmeasured" (which `parsers::tml::lrud_opt` then collapses
+    // back to None on parse).  This means `Some(0.0)` and `None` compare
+    // equal — semantically distinct ("wall flush against the survey line"
+    // vs "wall not measured") but identical on the TML wire, so reconcile
+    // can't distinguish them without a richer Ariane convention.  If
+    // Ariane ever ships a separate sentinel for unmeasured the lrud_opt
+    // normalisation needs updating first, then this should switch to a
+    // proper Option-aware comparison.
     let av = a.unwrap_or(0.0);
     let bv = b.unwrap_or(0.0);
     if (av - bv).abs() > F_EPS {
@@ -1278,5 +1296,45 @@ mod tests {
         let cs_a = diff(&base, &ret);
         let cs_b = diff(&base, &ret);
         assert_eq!(format!("{cs_a:#?}"), format!("{cs_b:#?}"));
+    }
+
+    #[test]
+    #[ignore = "regresses corpus_replay; needs deeper investigation before the empty-baseline guard can be removed"]
+    fn test_empty_baseline_still_detects_first_ariane_additions() {
+        // Regression for Claude's review finding: an empty baseline used to
+        // make `diff()` early-return an empty change set, silently dropping
+        // every shot a collaborator added to a previously-empty project.
+        // The corresponding guard in `compute_collab` was removed earlier
+        // but the duplicate in `diff` itself was missed.
+        let dir = tempfile::TempDir::new().unwrap();
+        // Baseline project has the collab record but ZERO shots (sections
+        // empty), matching the "enable collab, save, then Ariane adds the
+        // first shots" workflow.
+        let mut base = Project::new("Cave".into(), None);
+        let mut collab = CollabState::new("cave.tml".into());
+        collab.enabled = true;
+        // Pretend an export happened (sha presence is what compute_collab
+        // gates on, not the baseline contents).
+        collab.last_export_tml_sha256 = Some("placeholder-sha".into());
+        base.collab = Some(collab);
+        assert!(base.sections.is_empty(), "fixture must be a zero-shot project");
+
+        // Simulate Ariane adding the first section + shots by exporting a
+        // populated project at the same sibling path.
+        let populated = project_with(three());
+        let ret = returned(&populated, dir.path());
+
+        let cs = diff(&base, &ret);
+        assert!(
+            !cs.sections_added.is_empty(),
+            "diff against an empty baseline must surface Ariane's additions \
+             as `sections_added`, not silently return empty: got {cs:#?}"
+        );
+        let total_shots: usize =
+            cs.sections_added.iter().map(|s| s.shots.len()).sum();
+        assert_eq!(
+            total_shots, 3,
+            "every returned shot must be classified as added"
+        );
     }
 }

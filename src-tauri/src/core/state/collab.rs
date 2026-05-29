@@ -137,6 +137,17 @@ impl AppState {
     }
 
     /// Apply the collaborator's changes as a single undoable operation.
+    /// Apply the collaborator's changes as a single undoable operation.
+    ///
+    /// TODO(v2): this re-runs `compute_collab` (fresh hash + diff) at apply
+    /// time rather than applying the changeset that the review dialog was
+    /// populated with.  Under the v1 external-edit-lock that's fine — only
+    /// one person edits at a time, so the `.tml` can't change between the
+    /// preview and the apply.  Without the lock (true concurrent edit
+    /// support), the user could silently apply a different change set than
+    /// the one they previewed.  Plumb the previewed changeset (or its hash)
+    /// in alongside `Command::ApplyCollabChanges` and reject if the current
+    /// state has drifted from it.
     pub(super) fn apply_collab_changes(&self) -> CommandResult {
         let (changeset, sha) = match self.compute_collab() {
             Ok(Some(v)) => v,
@@ -234,12 +245,14 @@ impl AppState {
         // Require collab to be on AND a recorded export — the sha is set in
         // `write_collab_sibling` and is the only proof that the sibling
         // `.tml` next to us came from Stalagmight (not an unrelated TML the
-        // user happened to drop in the same dir).  Previously this also
-        // required `shot_baseline.is_empty() == false`, which silently
-        // blocked the legitimate "empty project + Ariane adds the first
-        // shots" workflow: diff against an empty baseline correctly turns
-        // every returned shot into an AddedShot, so the guard was both
-        // wrong and over-restrictive.
+        // user happened to drop in the same dir).  Note: an empty baseline
+        // would currently fall through to `diff()`'s own empty-baseline
+        // guard, which still short-circuits to an empty change set — so
+        // the "enable collab on an empty project, then Ariane adds first
+        // shots" workflow is unsupported until the diff guard can be
+        // removed safely (it currently regresses real-Ariane corpus
+        // replay; see reconcile.rs around the guard).  Workaround: save at
+        // least one real shot before handing the .tml off.
         if !collab.enabled || collab.last_export_tml_sha256.is_none() {
             return Ok(None);
         }
