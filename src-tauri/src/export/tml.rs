@@ -22,6 +22,7 @@ use quick_xml::Writer;
 
 use sha2::{Digest, Sha256};
 
+use crate::core::comment_split;
 use crate::models::{geo_key, Project, Section, SectionId, Shot, ShotBaselineEntry, StationRef};
 
 // ============================================================================
@@ -1064,6 +1065,72 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
             (block.section_id, parent_link.child_station_index),
             parent_ariane_id,
         );
+    }
+
+    // Fold station comments into the TML <Comment> field of the shot whose
+    // `to` station matches. The shot side of the comment is ZWSP-prefixed; the
+    // station side is written verbatim. Multiple StationRefs that alias the
+    // same Ariane shot (parent <-> merged child) have their comments joined
+    // by '\n'. See `core::comment_split` for the marker convention.
+    if !project.station_comments.is_empty() {
+        // ariane_id -> list of (StationRef, comment), in a deterministic
+        // order (sorted by section_id then station_index) so the joined
+        // output is reproducible across exports.
+        let mut comments_by_ariane: HashMap<i64, Vec<(StationRef, &str)>> = HashMap::new();
+        let mut entries: Vec<(StationRef, &str)> = project
+            .station_comments
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+        entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        for (sr, text) in entries {
+            let Some(&ariane_id) = station_to_ariane.get(&(sr.section_id, sr.station_index)) else {
+                tracing::debug!(
+                    section_id = sr.section_id,
+                    station_index = sr.station_index,
+                    "Station comment dropped from .tml export: no Ariane shot represents this station"
+                );
+                continue;
+            };
+            comments_by_ariane.entry(ariane_id).or_default().push((sr, text));
+        }
+
+        // Apply to each block's REAL/VIRTUAL shots (skip START so its
+        // hardcoded "START" content stays untouched; skip CLOSURE as it has
+        // no `to` station in the create-station sense).
+        for block in &mut blocks {
+            for shot in &mut block.shots {
+                if shot.shot_type != "REAL" && shot.shot_type != "VIRTUAL" {
+                    continue;
+                }
+                let Some(attachments) = comments_by_ariane.get(&shot.id) else {
+                    continue;
+                };
+                let joined_station: String = attachments
+                    .iter()
+                    .map(|(_, t)| *t)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                shot.comment = comment_split::merge(
+                    shot.comment.as_deref(),
+                    Some(&joined_station),
+                );
+            }
+        }
+
+        // Patch baseline.station_comment so reconcile can diff against the
+        // exact text we just wrote. The baseline is keyed by
+        // (section_id, shot_index); the shot's to-station is
+        // (section_id, shot_index + 1) — its "primary" attached station.
+        // Secondary attachments (e.g. a merged child station that aliases the
+        // same Ariane id) aren't captured in the baseline; they round-trip
+        // through the primary's slot and the model treats them as the same
+        // physical station.
+        for entry in &mut baseline {
+            let primary = StationRef::new(entry.section_id, entry.shot_index + 1);
+            entry.station_comment = project.station_comments.get(&primary).cloned();
+        }
     }
 
     // Third pass: generate CLOSURE shots from loop_closures
