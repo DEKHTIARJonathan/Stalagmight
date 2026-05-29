@@ -218,6 +218,20 @@ pub(crate) fn export_image_impl(
     }
 }
 
+/// Generate the SVG markup that `export_image` would write, without
+/// touching the filesystem. Used by the export dialog so the preview is
+/// pixel-for-pixel identical to what export will produce.
+#[tauri::command]
+pub fn preview_svg_export(
+    state: State<AppState>,
+    options: ExportImageOptions,
+) -> Result<String, String> {
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
+    crate::export::generate_svg_string(&project, &options).map_err(|e| e.to_string())
+}
+
 /// Get depth color preset colors
 #[tauri::command]
 pub fn get_depth_preset_colors(preset: DepthPreset) -> DepthPresetColors {

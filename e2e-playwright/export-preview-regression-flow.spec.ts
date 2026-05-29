@@ -6,7 +6,7 @@ import {
 } from './helpers/app';
 
 test.describe('Export Preview Regression Flow', () => {
-  test('renders and updates image preview using a seeded real project state', async ({ page }) => {
+  test('renders and updates stick-map preview using a seeded real project state', async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Export Regression Scenario');
 
@@ -33,21 +33,18 @@ test.describe('Export Preview Regression Flow', () => {
     await page.getByTestId('export-type-image').click();
     await expect(page.getByTestId('export-preview')).toBeVisible({ timeout: 10000 });
 
-    await page.getByTestId('option-include-grid').check();
-    await page.getByTestId('option-include-section-names').uncheck();
-
-    const themeToggle = page.getByTestId('export-theme-toggle');
-    await themeToggle.click();
-    await expect(themeToggle).toContainText('Light');
-    await themeToggle.click();
-    await expect(themeToggle).toContainText('Dark');
+    // Drag the threshold slider. The mock preview encodes the threshold in a
+    // `data-threshold` attribute so we can observe the re-fetch from the UI.
+    await page.locator('[data-testid="branching-threshold-slider"]').fill('4');
+    await expect(page.locator('[data-testid="export-preview"] svg'))
+      .toHaveAttribute('data-threshold', '4', { timeout: 5000 });
 
     await page.getByTestId('export-button').click();
 
     await page.waitForFunction(() => {
       const mocks = (window as unknown as {
         __E2E_MOCKS__?: {
-          getLastExportImageArgs: () => { options?: { include_grid?: boolean; include_section_names?: boolean } } | null;
+          getLastExportImageArgs: () => { options?: { branching_threshold?: number; format?: string } } | null;
         };
       }).__E2E_MOCKS__;
 
@@ -58,14 +55,14 @@ test.describe('Export Preview Regression Flow', () => {
     const exportArgs = await page.evaluate(() => {
       const mocks = (window as unknown as {
         __E2E_MOCKS__?: {
-          getLastExportImageArgs: () => { options?: { include_grid?: boolean; include_section_names?: boolean } } | null;
+          getLastExportImageArgs: () => { options?: { branching_threshold?: number; format?: string } } | null;
         };
       }).__E2E_MOCKS__;
       return mocks?.getLastExportImageArgs?.() ?? null;
     });
 
     expect(exportArgs).not.toBeNull();
-    expect(exportArgs?.options?.include_grid).toBe(true);
-    expect(exportArgs?.options?.include_section_names).toBe(false);
+    expect(exportArgs?.options?.branching_threshold).toBe(4);
+    expect(exportArgs?.options?.format).toBe('png');
   });
 });

@@ -1,78 +1,50 @@
+//! Minimal black-on-white stick-map SVG export.
+//!
+//! Renders a survey as a stick map with two stroke widths chosen per-segment
+//! by a user-controlled branching threshold. Reference/temporary shots are
+//! the segmentation boundary and are not drawn. Zero-datum stations are
+//! rendered as filled 5-pointed stars. Thick (trunk) segments are annotated
+//! at their deepest reachable station with a penetration-distance label
+//! (`p. 560`), where distance is the shortest-path length from any zero
+//! datum through the survey graph.
+//!
+//! ## Segment / branching model
+//!
+//! A **segment** is a maximal chain of non-reference shots whose endpoint
+//! stations are connected directly, via station merges, or via aligned loop
+//! closures.
+//!
+//! A **tie** links two segments through a sequence of reference shots,
+//! possibly passing through reference-only intermediate stations. A chain
+//! `seg₁ —ref— · —ref— · —ref— seg₂` (with the dots in stations that
+//! belong to no real segment) counts as one tie, because reference-shot
+//! chains are an artifact of how the survey was taken — they have nothing
+//! to do with the cave's topology. Implementation: every station whose
+//! segment owns ≥1 non-reference shot is an *anchor*; everything else is
+//! *free*. We compute connected components in the ref-shot subgraph of
+//! free stations; each such *free cluster*, together with the anchors
+//! linked to it by a single ref shot, forms one tie hub — every pair of
+//! distinct segments attached to that hub becomes mutual neighbors. Direct
+//! anchor↔anchor reference shots add a tie of length one.
+//!
+//! A segment's **branching factor** is `|neighbors|` — the number of
+//! *distinct other segments* tied to it.
+//!
+//! With `branching_threshold = T`, segments with `branching_factor >= T` are
+//! drawn at `THICK_PX`, all others at `THIN_PX`.
+
 use anyhow::{Context, Result};
 use resvg::tiny_skia;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
-use usvg::{Options, Tree};
 use ts_rs::TS;
+use usvg::{Options, Tree};
 
-use super::depth_colors::{get_depth_color, DepthPreset};
-use crate::models::Project;
+use crate::models::{Project, StationRef};
 
-/// Meters to feet conversion factor.
-const METERS_TO_FEET: f64 = 3.28084;
-
-/// Color mode for export visualization.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(rename_all = "lowercase")]
-pub enum ColorMode {
-    /// Use section colors (default behavior)
-    #[default]
-    Section,
-    /// Use depth gradient colors
-    Depth,
-}
-
-/// Default depth unit (meters).
-fn default_depth_unit() -> String {
-    "m".to_string()
-}
-
-/// Default decimal precision for depth labels.
-fn default_precision() -> u8 {
-    1
-}
-
-/// Default value for include_legend (true).
-fn default_true() -> bool {
-    true
-}
-
-/// Options for image export
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct ExportImageOptions {
-    /// Image format (png, svg, pdf)
-    pub format: ImageFormat,
-    /// DPI for raster formats
-    pub dpi: u32,
-    /// Include satellite imagery background
-    pub include_satellite: bool,
-    /// Include grid overlay
-    pub include_grid: bool,
-    /// Include station labels
-    pub include_labels: bool,
-    /// Include section names
-    pub include_section_names: bool,
-    /// Include shot data (azimuth, length, depth)
-    pub include_shot_data: bool,
-    /// Color mode for visualization
-    #[serde(default)]
-    pub color_mode: ColorMode,
-    /// Depth color preset (only used when color_mode is Depth)
-    #[serde(default)]
-    pub depth_preset: DepthPreset,
-    /// Include depth legend (only used when color_mode is Depth)
-    #[serde(default = "default_true")]
-    pub include_legend: bool,
-    /// Depth unit from frontend config ("m" or "ft")
-    #[serde(default = "default_depth_unit")]
-    pub depth_unit: String,
-    /// Decimal precision for depth labels
-    #[serde(default = "default_precision")]
-    pub decimal_precision: u8,
-}
-
+/// Output image format.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
@@ -82,33 +54,33 @@ pub enum ImageFormat {
     Pdf,
 }
 
+/// Options for SVG / PNG / PDF map image export.
+///
+/// The export is a minimal black-on-white stick map; the only knobs are the
+/// output format, the PNG DPI, and the branching-factor threshold that
+/// decides where to split between the two stroke widths.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+pub struct ExportImageOptions {
+    /// Image format (png, svg, pdf).
+    pub format: ImageFormat,
+    /// DPI for PNG rasterization. Ignored for SVG and PDF.
+    pub dpi: u32,
+    /// Branching-factor threshold. Segments whose branching factor is
+    /// `>= branching_threshold` are drawn thick; the rest are drawn thin.
+    pub branching_threshold: u32,
+}
+
 impl Default for ExportImageOptions {
     fn default() -> Self {
         Self {
             format: ImageFormat::Png,
             dpi: 300,
-            include_satellite: true,
-            include_grid: false,
-            include_labels: true,
-            include_section_names: true,
-            include_shot_data: false,
-            color_mode: ColorMode::Section,
-            depth_preset: DepthPreset::Thermal,
-            include_legend: true,
-            depth_unit: default_depth_unit(),
-            decimal_precision: default_precision(),
+            branching_threshold: 2,
         }
     }
 }
 
-/// Export project as an image
-///
-/// This is a simplified implementation. Full image export would require
-/// rendering the map view, which is done in the frontend. This function
-/// generates a basic SVG representation.
-///
-/// Progress is tracked externally via ProgressEmitter in the command layer
-/// using the shared loading-progress event infrastructure.
+/// Top-level entry point. Dispatches on `format`.
 pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
     match options.format {
         ImageFormat::Svg => export_svg(project, path, options),
@@ -117,1893 +89,1664 @@ pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions
     }
 }
 
-/// Export project as PDF using svg2pdf
-fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
-    // Generate SVG content
-    let svg_content = generate_svg_string(project, options)?;
-
-    // Parse SVG using usvg with fonts loaded for text rendering
-    let mut opt = Options::default();
-    opt.fontdb_mut().load_system_fonts();
-    let tree = Tree::from_str(&svg_content, &opt)
-        .context("Failed to parse SVG")?;
-
-    // Convert to PDF
-    let pdf = svg2pdf::to_pdf(
-        &tree,
-        svg2pdf::ConversionOptions::default(),
-        svg2pdf::PageOptions::default(),
-    ).map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {e:?}"))?;
-
-    // Write file
-    std::fs::write(path, pdf).context("Failed to write PDF file")?;
-
-    tracing::info!(path = ?path, "Exported PDF");
+/// Export project as SVG (writes file).
+fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    let svg = generate_svg_string(project, options)?;
+    std::fs::write(path, svg).context("Failed to write SVG file")?;
+    tracing::info!(path = ?path, "Exported SVG");
     Ok(())
 }
 
 /// Maximum dimension for PNG export to prevent out-of-memory errors.
 const MAX_PNG_DIMENSION: u32 = 16_384;
 
-/// Export project as PNG using resvg rasterization
+/// Export project as PNG via resvg rasterization.
 fn export_png(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
-    // Validate DPI before processing
     if options.dpi == 0 {
         anyhow::bail!("DPI must be at least 1");
     }
 
-    // Generate SVG content
     let svg_content = generate_svg_string(project, options)?;
 
-    // Parse SVG using usvg with fonts loaded for text rendering
     let mut opt = Options::default();
     opt.fontdb_mut().load_system_fonts();
-    let tree = Tree::from_str(&svg_content, &opt).context("Failed to parse SVG for PNG conversion")?;
+    let tree =
+        Tree::from_str(&svg_content, &opt).context("Failed to parse SVG for PNG conversion")?;
 
-    // Calculate size with DPI scaling, using ceil to avoid clipping edges
     let size = tree.size();
     let scale = options.dpi as f32 / 72.0;
     let width = ((size.width() * scale).ceil() as u32).max(1);
     let height = ((size.height() * scale).ceil() as u32).max(1);
 
-    // Validate size to prevent OOM
     if width > MAX_PNG_DIMENSION || height > MAX_PNG_DIMENSION {
         anyhow::bail!(
             "Export size {width}x{height} exceeds maximum {MAX_PNG_DIMENSION}px. Reduce DPI or use SVG/PDF format."
         );
     }
 
-    // Create pixmap using resvg's re-exported tiny_skia
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| anyhow::anyhow!("Failed to create pixmap for {width}x{height} image"))?;
 
-    // Render SVG to pixmap with scaling transform
-    // Note: resvg 0.43's render() returns () and always succeeds if the tree was parsed.
-    // Rendering failures (e.g., out-of-bounds) silently produce empty regions.
     let transform = tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    // Write file
     pixmap.save_png(path).context("Failed to save PNG file")?;
 
     tracing::info!(path = ?path, dpi = options.dpi, width = width, height = height, "Exported PNG");
     Ok(())
 }
 
-/// Export project as SVG
-fn export_svg(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
-    // Generate SVG content
-    let svg = generate_svg_string(project, options)?;
+/// Export project as PDF via svg2pdf.
+fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> Result<()> {
+    let svg_content = generate_svg_string(project, options)?;
 
-    // Write file
-    std::fs::write(path, svg).context("Failed to write SVG file")?;
+    let mut opt = Options::default();
+    opt.fontdb_mut().load_system_fonts();
+    let tree = Tree::from_str(&svg_content, &opt).context("Failed to parse SVG")?;
 
-    tracing::info!(path = ?path, "Exported SVG");
+    let pdf = svg2pdf::to_pdf(
+        &tree,
+        svg2pdf::ConversionOptions::default(),
+        svg2pdf::PageOptions::default(),
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to convert SVG to PDF: {e:?}"))?;
+
+    std::fs::write(path, pdf).context("Failed to write PDF file")?;
+
+    tracing::info!(path = ?path, "Exported PDF");
     Ok(())
 }
 
-/// Generate SVG content as string
-#[expect(clippy::unnecessary_wraps)]
-fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
+// ---------------------------------------------------------------------------
+// SVG generation
+// ---------------------------------------------------------------------------
+
+/// Target longer-dimension of the output SVG in pixels. World coordinates are
+/// scaled to fit within this size so that `viewBox` and pixel sizes line up
+/// cleanly for downstream raster/PDF conversion.
+const TARGET_SIZE: f64 = 800.0;
+
+/// World-space padding around the survey bounds, in meters.
+const PADDING_METERS: f64 = 20.0;
+
+/// Stroke widths, in *pixels* (then converted to viewBox units by `px()`).
+const THIN_PX: f64 = 1.0;
+const THICK_PX: f64 = 2.5;
+
+/// Zero-datum star sizing, in *pixels*.
+const STAR_OUTER_PX: f64 = 7.0;
+const STAR_INNER_PX: f64 = 3.0;
+
+/// Penetration-distance label font size, in *pixels*.
+const PEN_LABEL_PX: f64 = 11.0;
+/// Halo (white outline) thickness for labels, in *pixels*. Wide enough to
+/// keep digits legible when they fall on top of a shot line.
+const PEN_LABEL_HALO_PX: f64 = 3.0;
+/// Distance from the labelled station to the label centre, in *pixels*.
+const PEN_LABEL_OFFSET_PX: f64 = 9.0;
+/// Approximate per-glyph width as a fraction of `font-size`. Used to derive
+/// the bounding box for placement-collision tests — we don't need pixel
+/// accuracy, just enough to avoid label overlap.
+const PEN_LABEL_CHAR_WIDTH_RATIO: f64 = 0.55;
+
+/// Generate SVG content as a string. Pure: never touches the filesystem.
+pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
     let stations = project.compute_station_coordinates();
 
-    // Calculate bounds
+    // ---- Bounds and scale ---------------------------------------------------
     let mut min_x = f64::MAX;
     let mut max_x = f64::MIN;
     let mut min_y = f64::MAX;
     let mut max_y = f64::MIN;
-
     for station in &stations {
         min_x = min_x.min(station.coordinates.x);
         max_x = max_x.max(station.coordinates.x);
         min_y = min_y.min(station.coordinates.y);
         max_y = max_y.max(station.coordinates.y);
     }
-
-    // Handle empty project (MUST be before depth range calculation)
     if min_x >= f64::MAX {
+        // Empty project: pick an arbitrary 100x100 box so the SVG is still valid.
         min_x = 0.0;
         max_x = 100.0;
         min_y = 0.0;
         max_y = 100.0;
     }
 
-    // Calculate depth range for gradient (only needed for Depth mode)
-    // Done after empty check to avoid infinity values
-    let (min_depth, max_depth) = if options.color_mode == ColorMode::Depth && !stations.is_empty() {
-        // Single-pass min/max without allocation
-        let mut min = f64::INFINITY;
-        let mut max = f64::NEG_INFINITY;
-        for station in &stations {
-            let z = station.coordinates.z;
-            if z < min {
-                min = z;
-            }
-            if z > max {
-                max = z;
-            }
-        }
-        (min, max)
-    } else {
-        (0.0, 0.0) // Empty project or section mode - treat as flat
-    };
-
-    // Add padding
-    let padding = 20.0;
-    let width = (max_x - min_x) + padding * 2.0;
-    let height = (max_y - min_y) + padding * 2.0;
-
-    // Scale to target size (allows both scale-up and scale-down)
-    const TARGET_SIZE: f64 = 800.0;
+    let width = (max_x - min_x) + PADDING_METERS * 2.0;
+    let height = (max_y - min_y) + PADDING_METERS * 2.0;
     let scale = TARGET_SIZE / width.max(height);
-    // Ensure minimum dimension of 1.0 to produce valid SVG
     let svg_width = (width * scale).max(1.0);
     let svg_height = (height * scale).max(1.0);
 
-    // Pixel-to-world conversion helper: viewBox_size = pixel_size / scale
-    // This ensures elements appear at consistent pixel sizes regardless of survey extent.
-    // Example: For a 100m survey with 20m padding (140m total), scale = 800/140 ≈ 5.714
-    //   - Station radius: px(3.0) = 3.0/5.714 ≈ 0.525 viewBox units
-    //   - When rendered: 0.525 * 5.714 ≈ 3.0 pixels
-    // See SPEC.md section 17.3 for complete element size specifications.
+    // Pixel-to-viewBox-units helper. Same trick as the legacy export: viewBox
+    // units are world meters, so a `pixels`-worth of any element shrinks by
+    // `1/scale` when emitted. The downstream raster preserves pixel sizes.
     let px = |pixels: f64| -> f64 { pixels / scale };
 
+    // ---- Build segment graph -----------------------------------------------
+    // Stations indexed; union-find over them.
+    let mut station_index: HashMap<StationRef, usize> = HashMap::with_capacity(stations.len());
+    for (i, s) in stations.iter().enumerate() {
+        station_index.insert(s.station_ref, i);
+    }
+
+    let mut uf = UnionFind::new(stations.len());
+
+    // Merges and aligned closures collapse colocated stations into one node.
+    for merge in &project.station_merges {
+        if let (Some(&a), Some(&b)) = (
+            station_index.get(&merge.station_a),
+            station_index.get(&merge.station_b),
+        ) {
+            uf.union(a, b);
+        }
+    }
+    for closure in &project.loop_closures {
+        if !closure.is_aligned {
+            continue;
+        }
+        if let (Some(&a), Some(&b)) = (
+            station_index.get(&closure.station_a),
+            station_index.get(&closure.station_b),
+        ) {
+            uf.union(a, b);
+        }
+    }
+
+    // Non-reference shots inside each section connect their two endpoint
+    // stations into the same segment.
+    let mut has_non_ref_shot: HashSet<usize> = HashSet::new();
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            let from = StationRef::new(section.id, i as u32);
+            let to = StationRef::new(section.id, (i + 1) as u32);
+            let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
+                continue;
+            };
+            if !shot.is_reference {
+                uf.union(fi, ti);
+                // Mark both roots as "has at least one real shot" after we
+                // settle roots below. For now, store the indices.
+                has_non_ref_shot.insert(fi);
+                has_non_ref_shot.insert(ti);
+            }
+        }
+    }
+
+    // Collapse `has_non_ref_shot` to roots so we can distinguish real segments
+    // (>=1 non-reference shot) from stray reference-only stations.
+    let mut real_segments: HashSet<usize> = HashSet::with_capacity(has_non_ref_shot.len());
+    for &i in &has_non_ref_shot {
+        real_segments.insert(uf.find(i));
+    }
+
+    // ---- Branching factor per segment --------------------------------------
+    // Tie semantics: reference-shot chains through reference-only stations
+    // count as a single tie. See the module-level docs.
+    //
+    // 1. Mark each station as anchor (its segment is real) or free (otherwise).
+    // 2. Compute free clusters: connected components in the ref-shot subgraph
+    //    restricted to free stations.
+    // 3. Walk the ref shots. anchor↔anchor refs add a direct tie. anchor↔free
+    //    refs record "this segment is attached to that free cluster".
+    // 4. Each free cluster's attached segments form a clique of mutual ties.
+
+    let n = stations.len();
+    let mut anchor_segment: Vec<Option<usize>> = vec![None; n];
+    for i in 0..n {
+        let root = uf.find(i);
+        if real_segments.contains(&root) {
+            anchor_segment[i] = Some(root);
+        }
+    }
+
+    // `free_uf` clusters free stations. Two free stations are in the same
+    // cluster if either (a) they're the same physical point — i.e. their
+    // segment_uf roots already match, which encodes station_merges and
+    // aligned closures — or (b) they're connected by a reference shot. The
+    // first rule keeps merged "hub" stations across separate stub sections
+    // from being split into multiple sibling clusters.
+    let mut free_uf = UnionFind::new(n);
+    let mut first_free_per_seg: HashMap<usize, usize> = HashMap::new();
+    for i in 0..n {
+        if anchor_segment[i].is_some() {
+            continue;
+        }
+        let seg_root = uf.find(i);
+        match first_free_per_seg.entry(seg_root) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(i);
+            }
+            std::collections::hash_map::Entry::Occupied(e) => {
+                free_uf.union(*e.get(), i);
+            }
+        }
+    }
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            if !shot.is_reference {
+                continue;
+            }
+            let from = StationRef::new(section.id, i as u32);
+            let to = StationRef::new(section.id, (i + 1) as u32);
+            let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
+                continue;
+            };
+            if anchor_segment[fi].is_none() && anchor_segment[ti].is_none() {
+                free_uf.union(fi, ti);
+            }
+        }
+    }
+
+    // Walk ref shots; bucket attached segments per free cluster, and add
+    // direct anchor-anchor ties straight away.
+    let mut neighbors: HashMap<usize, HashSet<usize>> = HashMap::new();
+    let mut cluster_segments: HashMap<usize, HashSet<usize>> = HashMap::new();
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            if !shot.is_reference {
+                continue;
+            }
+            let from = StationRef::new(section.id, i as u32);
+            let to = StationRef::new(section.id, (i + 1) as u32);
+            let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
+                continue;
+            };
+            match (anchor_segment[fi], anchor_segment[ti]) {
+                (Some(ra), Some(rb)) => {
+                    // Direct tie; ignore self-loops within one segment.
+                    if ra != rb {
+                        neighbors.entry(ra).or_default().insert(rb);
+                        neighbors.entry(rb).or_default().insert(ra);
+                    }
+                }
+                (Some(ra), None) => {
+                    let cid = free_uf.find(ti);
+                    cluster_segments.entry(cid).or_default().insert(ra);
+                }
+                (None, Some(rb)) => {
+                    let cid = free_uf.find(fi);
+                    cluster_segments.entry(cid).or_default().insert(rb);
+                }
+                (None, None) => {
+                    // Both free; cluster membership already in free_uf.
+                }
+            }
+        }
+    }
+
+    // For every free cluster, the attached segments all meet at one tie
+    // hub and become mutual neighbors.
+    for segs in cluster_segments.values() {
+        if segs.len() < 2 {
+            continue;
+        }
+        let v: Vec<usize> = segs.iter().copied().collect();
+        for a in 0..v.len() {
+            for b in (a + 1)..v.len() {
+                neighbors.entry(v[a]).or_default().insert(v[b]);
+                neighbors.entry(v[b]).or_default().insert(v[a]);
+            }
+        }
+    }
+
+    // ---- Emit SVG ----------------------------------------------------------
     let mut svg = String::new();
-    // CSS: station and zero-datum classes only define stroke (fill is inline)
-    // All stroke-widths and font-sizes are scaled to achieve consistent pixel sizes
     let _ = write!(
         svg,
         r##"<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{svg_width:.2}" height="{svg_height:.2}" viewBox="{vb_x:.1} {vb_y:.1} {vb_w:.1} {vb_h:.1}">
-<style>
-  .shot {{ stroke-width: {shot_sw}; fill: none; }}
-  .station {{ stroke: #000000; stroke-width: {station_sw}; }}
-  .zero-datum {{ stroke: #000000; stroke-width: {station_sw}; }}
-  .label {{ font-family: sans-serif; font-size: {label_fs}; fill: #333333; }}
-  .section-name {{ font-family: sans-serif; font-size: {section_fs}; font-weight: bold; fill: #333333; }}
-</style>
-<rect x="{vb_x:.1}" y="{vb_y:.1}" width="{vb_w:.1}" height="{vb_h:.1}" fill="#1a1a2e"/>
+<rect x="{vb_x:.1}" y="{vb_y:.1}" width="{vb_w:.1}" height="{vb_h:.1}" fill="#ffffff"/>
 "##,
         svg_width = svg_width,
         svg_height = svg_height,
-        vb_x = min_x - padding,
-        vb_y = -(max_y + padding), // Flip Y
-        vb_w = width,
-        vb_h = height,
-        shot_sw = px(2.0),        // 2px shot stroke-width
-        station_sw = px(1.0),     // 1px station stroke-width
-        label_fs = px(10.0),      // 10px label font-size
-        section_fs = px(12.0),    // 12px section-name font-size
+        vb_x = min_x - PADDING_METERS,
+        vb_y = -(max_y + PADDING_METERS), // Flip Y (SVG y is down).
+    vb_w = width,
+    vb_h = height,
     );
 
-    // Draw grid if enabled
-    if options.include_grid {
-        let _ = writeln!(
-            svg,
-            r##"<g class="grid" stroke="#333366" stroke-width="{}">"##,
-            px(0.5) // 0.5px grid stroke-width
-        );
-        let grid_step = 10.0; // 10 meter grid
-        let grid_min_x = (min_x / grid_step).floor() * grid_step;
-        let grid_max_x = (max_x / grid_step).ceil() * grid_step;
-        let grid_min_y = (min_y / grid_step).floor() * grid_step;
-        let grid_max_y = (max_y / grid_step).ceil() * grid_step;
+    // Index stations by StationRef for fast lookup at draw time.
+    let station_by_ref: HashMap<StationRef, &crate::models::Station> =
+        stations.iter().map(|s| (s.station_ref, s)).collect();
 
-        let mut x = grid_min_x;
-        while x <= grid_max_x {
-            let _ = write!(
-                svg,
-                r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}"/>"#,
-                x,
-                -grid_min_y,
-                x,
-                -grid_max_y
-            );
-            x += grid_step;
-        }
+    let thin_sw = px(THIN_PX);
+    let thick_sw = px(THICK_PX);
+    let threshold = options.branching_threshold;
 
-        let mut y = grid_min_y;
-        while y <= grid_max_y {
-            let _ = write!(
-                svg,
-                r#"<line x1="{:.1}" y1="{:.1}" x2="{:.1}" y2="{:.1}"/>"#,
-                grid_min_x, -y, grid_max_x, -y
-            );
-            y += grid_step;
-        }
-        svg.push_str("</g>\n");
-    }
-
-    // Draw shots
+    // Pass 1: shots. One polyline per maximal contiguous run of
+    // non-reference shots in a section. Drawing per-run rather than
+    // per-shot lets `stroke-linejoin="round"` smooth interior corners and
+    // `stroke-linecap="round"` cover the cross-section/cross-run joins
+    // (e.g. at merged stations), eliminating the butt-cap notches that
+    // showed up at angled joins between consecutive `<line>` elements.
+    //
+    // Every shot in a single run shares the same segment_uf root (the run
+    // is unioned by its own non-ref shots), so the run's stroke width is
+    // well-defined by looking at any one shot's segment.
+    let _ = writeln!(
+        svg,
+        r##"<g class="shots" stroke="#000000" fill="none" stroke-linejoin="round" stroke-linecap="round">"##,
+    );
     for section in &project.sections {
-        let _ = writeln!(
-            svg,
-            r#"<g class="section" id="section-{}">"#,
-            section.id
-        );
-
-        // Find stations for this section
-        let section_stations: Vec<_> = stations
-            .iter()
-            .filter(|s| s.station_ref.section_id == section.id)
-            .collect();
-
-        // Draw lines between consecutive stations
-        for i in 0..section_stations.len().saturating_sub(1) {
-            let from = &section_stations[i];
-            let to = &section_stations[i + 1];
-
-            let shot = section.shots.get(i);
-            let is_reference = shot.is_some_and(|s| s.is_reference);
-
-            // Reference shots: 4px dash, 2px gap (scaled to viewBox units)
-            let stroke_style = if is_reference {
-                format!(
-                    "stroke-dasharray=\"{},{}\" opacity=\"0.5\"",
-                    px(4.0),
-                    px(2.0)
-                )
-            } else {
-                String::new()
-            };
-
-            // Shot stroke color: section color or depth-based (average of endpoints)
-            // Sanitize user-controlled colors to prevent SVG injection
-            let stroke_color = match options.color_mode {
-                ColorMode::Section => sanitize_color(&section.color).to_string(),
-                ColorMode::Depth => {
-                    let avg_depth = f64::midpoint(from.coordinates.z, to.coordinates.z);
-                    get_depth_color(avg_depth, min_depth, max_depth, options.depth_preset)
+        let mut i = 0;
+        while i < section.shots.len() {
+            if section.shots[i].is_reference {
+                i += 1;
+                continue;
+            }
+            // Walk the maximal contiguous run of non-ref shots from `i`,
+            // collecting station positions into a single polyline.
+            let mut points: Vec<(f64, f64)> = Vec::new();
+            let mut stroke_width = thin_sw;
+            let mut j = i;
+            while j < section.shots.len() && !section.shots[j].is_reference {
+                let from_ref = StationRef::new(section.id, j as u32);
+                let to_ref = StationRef::new(section.id, (j + 1) as u32);
+                let (Some(from), Some(to)) =
+                    (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
+                else {
+                    break;
+                };
+                if points.is_empty() {
+                    let Some(&fi) = station_index.get(&from_ref) else {
+                        break;
+                    };
+                    let root = uf.find(fi);
+                    let branching = neighbors.get(&root).map_or(0u32, |s| s.len() as u32);
+                    stroke_width = if branching >= threshold {
+                        thick_sw
+                    } else {
+                        thin_sw
+                    };
+                    points.push((from.coordinates.x, -from.coordinates.y));
                 }
-            };
-
-            let _ = writeln!(
-                svg,
-                r#"<line class="shot" x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" {}/>"#,
-                from.coordinates.x,
-                -from.coordinates.y, // Flip Y
-                to.coordinates.x,
-                -to.coordinates.y,
-                stroke_color,
-                stroke_style
-            );
-
-            // Add shot depth label if enabled
-            if options.include_shot_data {
-                let avg_depth = f64::midpoint(from.coordinates.z, to.coordinates.z);
-                let depth_label =
-                    format_depth_label(avg_depth, &options.depth_unit, options.decimal_precision);
-                // Position label at midpoint of shot
-                let mid_x = f64::midpoint(from.coordinates.x, to.coordinates.x);
-                let mid_y = -(from.coordinates.y + to.coordinates.y) / 2.0;
+                points.push((to.coordinates.x, -to.coordinates.y));
+                j += 1;
+            }
+            if points.len() >= 2 {
+                let mut pts_str = String::with_capacity(points.len() * 14);
+                for (idx, (x, y)) in points.iter().enumerate() {
+                    if idx > 0 {
+                        pts_str.push(' ');
+                    }
+                    let _ = write!(pts_str, "{x:.2},{y:.2}");
+                }
                 let _ = writeln!(
                     svg,
-                    r##"<text class="shot-label" x="{mid_x:.2}" y="{mid_y:.2}" dx="{dx}" dy="{dy}" font-size="{fs}" fill="#aaa">{label}</text>"##,
-                    mid_x = mid_x,
-                    mid_y = mid_y,
-                    dx = px(2.0),   // 2px offset
-                    dy = px(-2.0),  // -2px offset (negative for upward)
-                    fs = px(8.0),   // 8px font-size
-                    label = depth_label
+                    r#"<polyline points="{pts_str}" stroke-width="{stroke_width}"/>"#,
                 );
             }
+            // Advance past the run, but never less than one — protects
+            // against a station-lookup failure on the run's first shot
+            // (which would leave `j == i`).
+            i = if j > i { j } else { i + 1 };
         }
-
-        svg.push_str("</g>\n");
-    }
-
-    // Draw stations with inline fill color
-    svg.push_str("<g class=\"stations\">\n");
-    for station in &stations {
-        let class = if station.is_zero_datum {
-            "zero-datum"
-        } else {
-            "station"
-        };
-        // 3px radius for regular stations, 6px for zero-datum (scaled to viewBox units)
-        let radius = if station.is_zero_datum { px(6.0) } else { px(3.0) };
-
-        // Fill color: gold for zero-datum, otherwise section or depth color
-        // Sanitize user-controlled colors to prevent SVG injection
-        let fill_color = if station.is_zero_datum {
-            "#ffd700".to_string() // Gold for zero datum, always
-        } else {
-            match options.color_mode {
-                ColorMode::Section => {
-                    // Find the section color for this station
-                    project
-                        .sections
-                        .iter()
-                        .find(|s| s.id == station.station_ref.section_id).map_or_else(|| DEFAULT_COLOR.to_string(), |s| sanitize_color(&s.color).to_string())
-                }
-                ColorMode::Depth => {
-                    get_depth_color(
-                        station.coordinates.z,
-                        min_depth,
-                        max_depth,
-                        options.depth_preset,
-                    )
-                }
-            }
-        };
-
-        // All stations use inline style="fill:..." for consistency
-        let _ = writeln!(
-            svg,
-            r#"<circle class="{}" cx="{:.2}" cy="{:.2}" r="{}" style="fill:{}"/>"#,
-            class,
-            station.coordinates.x,
-            -station.coordinates.y,
-            radius,
-            fill_color
-        );
     }
     svg.push_str("</g>\n");
 
-    // Draw labels if enabled
-    if options.include_labels {
-        svg.push_str("<g class=\"labels\">\n");
-        for station in &stations {
-            if station.is_zero_datum {
-                let _ = writeln!(
-                    svg,
-                    r#"<text class="label" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">ZD</text>"#,
-                    x = station.coordinates.x,
-                    y = -station.coordinates.y,
-                    dx = px(8.0),  // 8px offset
-                    dy = px(4.0),  // 4px offset
-                );
-            }
+    // Pass 2: zero-datum stars.
+    let mut had_zero_datum = false;
+    let star_outer = px(STAR_OUTER_PX);
+    let star_inner = px(STAR_INNER_PX);
+    for station in &stations {
+        if !station.is_zero_datum {
+            continue;
         }
+        if !had_zero_datum {
+            svg.push_str("<g class=\"zero-datums\" fill=\"#000000\">\n");
+            had_zero_datum = true;
+        }
+        let points =
+            star_polygon_points(station.coordinates.x, -station.coordinates.y, star_outer, star_inner);
+        let _ = writeln!(svg, r#"<polygon points="{points}"/>"#);
+    }
+    if had_zero_datum {
         svg.push_str("</g>\n");
     }
 
-    // Draw section names if enabled
-    if options.include_section_names {
-        svg.push_str("<g class=\"section-names\">\n");
-        for section in &project.sections {
-            if let Some(name) = &section.name {
-                // Find midpoint of section
-                let section_stations: Vec<_> = stations
-                    .iter()
-                    .filter(|s| s.station_ref.section_id == section.id)
-                    .collect();
+    // Pass 3: penetration-distance labels at each thick segment's deepest
+    // station. Only attempted when the project has at least one zero datum
+    // (otherwise penetration distance is undefined). Labels carry a white
+    // halo for readability and dodge collisions by trying eight placement
+    // offsets before giving up.
+    let zero_datum_indices: Vec<usize> = stations
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_zero_datum)
+        .map(|(i, _)| i)
+        .collect();
+    if !zero_datum_indices.is_empty() {
+        let pen_dist = compute_pen_distances(&stations, &station_index, project, &zero_datum_indices);
 
-                if !section_stations.is_empty() {
-                    let mid = section_stations.len() / 2;
-                    if let Some(station) = section_stations.get(mid) {
-                        let _ = writeln!(
-                            svg,
-                            r#"<text class="section-name" x="{x:.2}" y="{y:.2}" dx="{dx}" dy="{dy}">{name}</text>"#,
-                            x = station.coordinates.x,
-                            y = -station.coordinates.y,
-                            dx = px(5.0),   // 5px offset
-                            dy = px(-5.0),  // -5px offset (upward)
-                            name = escape_xml(name)
-                        );
-                    }
+        // Group stations by their segment root so we can find each
+        // segment's deepest member in one pass.
+        let mut segment_stations: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..stations.len() {
+            let r = uf.find(i);
+            if real_segments.contains(&r) {
+                segment_stations.entry(r).or_default().push(i);
+            }
+        }
+
+        // For each thick segment, pick the reachable station with the
+        // greatest pen distance. Skip segments with nothing reachable.
+        let mut deepest_per_thick: Vec<(usize, f64)> = Vec::new(); // (station_idx, dist)
+        for (&root, members) in &segment_stations {
+            let branching = neighbors.get(&root).map_or(0u32, |s| s.len() as u32);
+            if branching < threshold {
+                continue;
+            }
+            let mut best: Option<(usize, f64)> = None;
+            for &i in members {
+                let d = pen_dist[i];
+                if !d.is_finite() {
+                    continue;
+                }
+                if best.map_or(true, |(_, bd)| d > bd) {
+                    best = Some((i, d));
                 }
             }
+            if let Some(b) = best {
+                deepest_per_thick.push(b);
+            }
         }
-        svg.push_str("</g>\n");
-    }
 
-    // Draw depth legend if enabled and in depth mode
-    if options.include_legend && options.color_mode == ColorMode::Depth {
-        // Use viewBox bounds (with padding) for correct legend positioning
-        let viewbox_bounds = Bounds {
-            min_x: min_x - padding,
-            max_x: max_x + padding,
-            min_y: min_y - padding,
-            max_y: max_y + padding,
-        };
-        let legend = generate_depth_legend(
-            min_depth,
-            max_depth,
-            options.depth_preset,
-            &options.depth_unit,
-            options.decimal_precision,
-            &viewbox_bounds,
-            scale, // Pass scale factor for pixel-stable sizing
-        );
-        svg.push_str(&legend);
+        if !deepest_per_thick.is_empty() {
+            // Deterministic emission order (by station index) so SVG diffs
+            // cleanly.
+            deepest_per_thick.sort_by_key(|(i, _)| *i);
+
+            let label_size = px(PEN_LABEL_PX);
+            let halo = px(PEN_LABEL_HALO_PX);
+            let offset = px(PEN_LABEL_OFFSET_PX);
+            let char_w = label_size * PEN_LABEL_CHAR_WIDTH_RATIO;
+            let star_r = px(STAR_OUTER_PX);
+
+            // Already-occupied boxes that pen labels must not overlap with.
+            // Pre-seed with zero-datum star bounding boxes; appended as we
+            // place each label.
+            let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new(); // (x, y, w, h) in viewBox units
+            for &i in &zero_datum_indices {
+                let s = &stations[i];
+                placed.push((
+                    s.coordinates.x - star_r,
+                    -s.coordinates.y - star_r,
+                    star_r * 2.0,
+                    star_r * 2.0,
+                ));
+            }
+
+            let _ = writeln!(
+                svg,
+                r##"<g class="pen-distance" font-family="sans-serif" font-size="{size:.2}" fill="#000000" stroke="#ffffff" stroke-width="{halo:.2}" paint-order="stroke fill" text-anchor="middle" dominant-baseline="central">"##,
+                size = label_size,
+                halo = halo,
+            );
+            let quarter_turn = std::f64::consts::FRAC_PI_4;
+            for (si, dist) in deepest_per_thick {
+                let sx = stations[si].coordinates.x;
+                let sy = -stations[si].coordinates.y;
+                let text = format!("p. {}", dist.round() as i64);
+                let text_w = char_w * text.chars().count() as f64;
+                let text_h = label_size;
+
+                // Primary placement: along the bisector of the largest
+                // angular gap between drawn shot directions at this
+                // station. That puts the label in the *empty* wedge —
+                // guaranteed not to overlap the line at the station
+                // itself. Fallback placements rotate around the primary
+                // in 45° steps and are only reached when another label
+                // (or the zero-datum star) is already occupying the spot.
+                let primary = label_open_space_angle(si, &stations, project, &station_index);
+                let mut chosen: Option<(f64, f64, (f64, f64, f64, f64))> = None;
+                let mut candidate_angles: Vec<f64> = Vec::with_capacity(9);
+                candidate_angles.push(primary);
+                for k in 1..=4 {
+                    candidate_angles.push(primary + (k as f64) * quarter_turn);
+                    candidate_angles.push(primary - (k as f64) * quarter_turn);
+                }
+                for angle in candidate_angles {
+                    let lx = sx + offset * angle.cos();
+                    let ly = sy + offset * angle.sin();
+                    let bb = (lx - text_w * 0.5, ly - text_h * 0.5, text_w, text_h);
+                    let overlap = placed.iter().any(|p| {
+                        bb.0 < p.0 + p.2
+                            && bb.0 + bb.2 > p.0
+                            && bb.1 < p.1 + p.3
+                            && bb.1 + bb.3 > p.1
+                    });
+                    if !overlap {
+                        chosen = Some((lx, ly, bb));
+                        break;
+                    }
+                }
+                if let Some((lx, ly, bb)) = chosen {
+                    let _ = writeln!(
+                        svg,
+                        r#"<text x="{lx:.2}" y="{ly:.2}">{text}</text>"#,
+                    );
+                    placed.push(bb);
+                }
+                // If every candidate collided, drop the label rather
+                // than stack it on top of another — better to lose one
+                // number than to render an unreadable smudge.
+            }
+            svg.push_str("</g>\n");
+        }
     }
 
     svg.push_str("</svg>\n");
-
     Ok(svg)
 }
 
-/// Escape special XML characters
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+/// Return the angle (in screen coordinates — y axis flipped, same frame the
+/// SVG itself uses) that points into the largest empty wedge between the
+/// *drawn* (non-reference) shot directions incident to `station_idx`.
+///
+/// Used to pick a label-placement direction that is guaranteed not to
+/// overlap any line at the labelled station, no matter how the
+/// surrounding passages bend. Stations physically colocated with
+/// `station_idx` (via station_merges or aligned closures, detected here
+/// by coordinate equality) contribute their incident shots too — merged
+/// stations are the same point, so a shot leaving the merged twin still
+/// leaves *this* station.
+///
+/// If no drawn shot touches the station, returns `FRAC_PI_2` (screen
+/// down) as an arbitrary but deterministic fallback.
+fn label_open_space_angle(
+    station_idx: usize,
+    stations: &[crate::models::Station],
+    project: &Project,
+    station_index: &HashMap<StationRef, usize>,
+) -> f64 {
+    let si_pos = stations[station_idx].coordinates;
+    let eps = 1e-6_f64;
+    let mut dirs: Vec<f64> = Vec::new();
+    let push_dir =
+        |dirs: &mut Vec<f64>, sx: f64, sy: f64, ox: f64, oy: f64| {
+            let dx = ox - sx;
+            // Screen y is flipped relative to world y.
+            let dy = -(oy - sy);
+            if dx.abs() > eps || dy.abs() > eps {
+                dirs.push(dy.atan2(dx));
+            }
+        };
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            if shot.is_reference {
+                continue;
+            }
+            let from_ref = StationRef::new(section.id, i as u32);
+            let to_ref = StationRef::new(section.id, (i + 1) as u32);
+            let (Some(&fi), Some(&ti)) =
+                (station_index.get(&from_ref), station_index.get(&to_ref))
+            else {
+                continue;
+            };
+            let from_pos = stations[fi].coordinates;
+            let to_pos = stations[ti].coordinates;
+            if (from_pos.x - si_pos.x).abs() < eps && (from_pos.y - si_pos.y).abs() < eps {
+                push_dir(&mut dirs, si_pos.x, si_pos.y, to_pos.x, to_pos.y);
+            }
+            if (to_pos.x - si_pos.x).abs() < eps && (to_pos.y - si_pos.y).abs() < eps {
+                push_dir(&mut dirs, si_pos.x, si_pos.y, from_pos.x, from_pos.y);
+            }
+        }
+    }
+    if dirs.is_empty() {
+        return std::f64::consts::FRAC_PI_2;
+    }
+    dirs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let two_pi = std::f64::consts::TAU;
+    let n = dirs.len();
+    let mut best_gap = -1.0_f64;
+    let mut best_mid = 0.0_f64;
+    for i in 0..n {
+        let a = dirs[i];
+        let b = if i + 1 < n { dirs[i + 1] } else { dirs[0] + two_pi };
+        let gap = b - a;
+        if gap > best_gap {
+            best_gap = gap;
+            best_mid = a + gap * 0.5;
+        }
+    }
+    best_mid
 }
 
-/// Default fallback color when user-provided color is invalid.
-const DEFAULT_COLOR: &str = "#808080";
+/// Multi-source Dijkstra from the zero-datum stations, returning the
+/// shortest-path distance (sum of shot lengths) from any zero datum to each
+/// station. Edges are *all* shots (reference and non-reference, since refs
+/// represent real measured distance) plus zero-cost edges for
+/// `station_merges` and aligned `loop_closures` (those collapse two
+/// stations into the same physical point). Unreachable stations get
+/// `f64::INFINITY`.
+fn compute_pen_distances(
+    stations: &[crate::models::Station],
+    station_index: &HashMap<StationRef, usize>,
+    project: &Project,
+    zero_datum_indices: &[usize],
+) -> Vec<f64> {
+    use std::cmp::{Ordering, Reverse};
+    use std::collections::BinaryHeap;
 
-/// Validate and sanitize a color string for safe SVG injection.
-///
-/// Accepts only valid hex colors (#RGB, #RRGGBB, #RRGGBBAA).
-/// Returns the color unchanged if valid, or DEFAULT_COLOR if invalid.
-fn sanitize_color(color: &str) -> &str {
-    // Must start with #
-    if !color.starts_with('#') {
-        return DEFAULT_COLOR;
+    // f64 wrapper so we can stick it in a BinaryHeap. Non-finite weights
+    // never enter the heap (we clamp at insertion), so the partial_cmp
+    // unwrap is safe.
+    #[derive(Copy, Clone, PartialEq)]
+    struct Node(f64, usize);
+    impl Eq for Node {}
+    impl PartialOrd for Node {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for Node {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.0
+                .partial_cmp(&other.0)
+                .unwrap_or(Ordering::Equal)
+                .then(self.1.cmp(&other.1))
+        }
     }
 
-    let hex_part = &color[1..];
-
-    // Must be 3, 6, or 8 hex characters
-    let valid_length = hex_part.len() == 3 || hex_part.len() == 6 || hex_part.len() == 8;
-    if !valid_length {
-        return DEFAULT_COLOR;
+    let n = stations.len();
+    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            let from = StationRef::new(section.id, i as u32);
+            let to = StationRef::new(section.id, (i + 1) as u32);
+            if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
+                let w = shot.length.max(0.0);
+                adj[fi].push((ti, w));
+                adj[ti].push((fi, w));
+            }
+        }
+    }
+    for merge in &project.station_merges {
+        if let (Some(&a), Some(&b)) = (
+            station_index.get(&merge.station_a),
+            station_index.get(&merge.station_b),
+        ) {
+            adj[a].push((b, 0.0));
+            adj[b].push((a, 0.0));
+        }
+    }
+    for closure in &project.loop_closures {
+        if !closure.is_aligned {
+            continue;
+        }
+        if let (Some(&a), Some(&b)) = (
+            station_index.get(&closure.station_a),
+            station_index.get(&closure.station_b),
+        ) {
+            adj[a].push((b, 0.0));
+            adj[b].push((a, 0.0));
+        }
     }
 
-    // Must contain only hex digits
-    if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
-        return DEFAULT_COLOR;
+    let mut dist = vec![f64::INFINITY; n];
+    let mut heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
+    for &i in zero_datum_indices {
+        dist[i] = 0.0;
+        heap.push(Reverse(Node(0.0, i)));
+    }
+    while let Some(Reverse(Node(d, u))) = heap.pop() {
+        if d > dist[u] {
+            continue;
+        }
+        for &(v, w) in &adj[u] {
+            let nd = d + w;
+            if nd < dist[v] {
+                dist[v] = nd;
+                heap.push(Reverse(Node(nd, v)));
+            }
+        }
+    }
+    dist
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Build the "points" attribute value for a filled 5-pointed star centered at
+/// `(cx, cy)`. `r_outer` is the radius to the tips; `r_inner` is the radius
+/// to the inner concave vertices.
+///
+/// The first point sits straight "up" in SVG coordinates (i.e. at angle
+/// `-π/2`). Subsequent points alternate outer/inner and rotate clockwise.
+fn star_polygon_points(cx: f64, cy: f64, r_outer: f64, r_inner: f64) -> String {
+    let mut out = String::with_capacity(10 * 12);
+    let start_angle = -std::f64::consts::FRAC_PI_2;
+    let step = std::f64::consts::TAU / 10.0;
+    for i in 0..10 {
+        let r = if i % 2 == 0 { r_outer } else { r_inner };
+        let angle = start_angle + (i as f64) * step;
+        let x = cx + r * angle.cos();
+        let y = cy + r * angle.sin();
+        if i > 0 {
+            out.push(' ');
+        }
+        let _ = write!(out, "{x:.2},{y:.2}");
+    }
+    out
+}
+
+/// Tiny union-find with path compression + union by rank.
+struct UnionFind {
+    parent: Vec<usize>,
+    rank: Vec<u8>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+        }
     }
 
-    color
+    fn find(&mut self, x: usize) -> usize {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        // Path compression.
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent[cur] = root;
+            cur = next;
+        }
+        root
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let ra = self.find(a);
+        let rb = self.find(b);
+        if ra == rb {
+            return;
+        }
+        match self.rank[ra].cmp(&self.rank[rb]) {
+            std::cmp::Ordering::Less => self.parent[ra] = rb,
+            std::cmp::Ordering::Greater => self.parent[rb] = ra,
+            std::cmp::Ordering::Equal => {
+                self.parent[rb] = ra;
+                self.rank[ra] += 1;
+            }
+        }
+    }
 }
 
-/// Bounds of the survey data in world coordinates.
-struct Bounds {
-    #[expect(dead_code)]
-    min_x: f64,
-    max_x: f64,
-    #[expect(dead_code)]
-    min_y: f64,
-    max_y: f64,
-}
-
-/// Maximum allowed decimal precision to prevent DoS via huge strings.
-const MAX_DECIMAL_PRECISION: u8 = 6;
-
-/// Format a depth label with unit conversion and XML escaping.
-///
-/// Converts meters to feet when unit is "ft". Applies decimal precision formatting.
-/// The result is XML-escaped to prevent markup injection in SVG output.
-///
-/// # Arguments
-/// * `depth_meters` - Depth value in meters
-/// * `unit` - Unit string ("m" or "ft")
-/// * `precision` - Decimal places for formatting (clamped to 0-6)
-fn format_depth_label(depth_meters: f64, unit: &str, precision: u8) -> String {
-    let value = if unit == "ft" {
-        depth_meters * METERS_TO_FEET
-    } else {
-        depth_meters
-    };
-    // Clamp precision to prevent DoS via huge strings
-    let clamped_precision = precision.min(MAX_DECIMAL_PRECISION) as usize;
-    // XML-escape the unit to prevent markup injection
-    let safe_unit = escape_xml(unit);
-    format!("{value:.clamped_precision$}{safe_unit}")
-}
-
-/// Number of gradient samples for legend to match backend HSL interpolation exactly.
-const LEGEND_GRADIENT_SAMPLES: usize = 64;
-
-/// Generate depth legend SVG element with pixel-stable sizing.
-///
-/// Legend is positioned in the top-right corner with dimensions in pixel units (scaled to viewBox).
-/// Gradient is generated by sampling the backend's HSL interpolation to ensure exact color match.
-///
-/// # Arguments
-/// * `min_depth` - Minimum depth in meters
-/// * `max_depth` - Maximum depth in meters
-/// * `preset` - Depth color preset
-/// * `depth_unit` - Unit string for labels ("m" or "ft")
-/// * `precision` - Decimal precision for labels
-/// * `bounds` - Project bounds for relative positioning
-/// * `scale` - Scale factor (pixels per world unit) for pixel-to-viewBox conversion
-///
-/// The px() helper converts pixel dimensions to viewBox units: viewBox_size = pixel_size / scale.
-/// This ensures legend elements maintain consistent pixel sizes at any DPI.
-fn generate_depth_legend(
-    min_depth: f64,
-    max_depth: f64,
-    preset: DepthPreset,
-    depth_unit: &str,
-    precision: u8,
-    bounds: &Bounds,
-    scale: f64,
-) -> String {
-    // Pixel-to-world conversion helper
-    let px = |pixels: f64| -> f64 { pixels / scale };
-
-    // Legend dimensions in pixels (then scaled to viewBox units)
-    let legend_width = px(16.0);   // 16px bar width
-    let legend_height = px(100.0); // 100px bar height
-    let font_size = px(10.0);      // 10px font size
-    let stroke_width = px(0.5);    // 0.5px stroke
-
-    // Position: top-right corner with padding (in pixels, scaled to viewBox)
-    let padding = px(10.0); // 10px padding from edge
-    let x = bounds.max_x - legend_width - padding;
-    let y = -(bounds.max_y - padding); // Note: Y is flipped in SVG
-
-    // Generate gradient by sampling backend's HSL interpolation to ensure exact color match
-    // This avoids visual divergence from SVG's sRGB interpolation
-    let gradient_stops: String = (0..=LEGEND_GRADIENT_SAMPLES)
-        .map(|i| {
-            let t = i as f64 / LEGEND_GRADIENT_SAMPLES as f64;
-            let depth = min_depth + t * (max_depth - min_depth);
-            let color = get_depth_color(depth, min_depth, max_depth, preset);
-            format!(
-                r#"<stop offset="{:.2}%" stop-color="{}"/>"#,
-                t * 100.0,
-                color
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n    ");
-
-    let is_flat = (max_depth - min_depth).abs() < 0.1;
-    let flat_suffix = if is_flat { " (Flat)" } else { "" };
-
-    // Use format_depth_label for unit conversion
-    let min_label = format_depth_label(min_depth, depth_unit, precision);
-    let max_label = format_depth_label(max_depth, depth_unit, precision);
-
-    // Use unique gradient ID with preset name to avoid collisions
-    let gradient_id = format!("depth-gradient-{preset:?}").to_lowercase();
-
-    // Text offsets (in viewBox units, derived from pixel values)
-    let text_y_offset = px(3.0); // 3px above the bar for min label
-    let max_text_y = legend_height + font_size + px(2.0); // Below bar + padding
-
-    format!(
-        r##"
-<defs>
-  <linearGradient id="{gradient_id}" x1="0%" y1="0%" x2="0%" y2="100%">
-    {gradient_stops}
-  </linearGradient>
-</defs>
-<g class="depth-legend" transform="translate({x:.2}, {y:.2})">
-  <rect width="{legend_width:.2}" height="{legend_height:.2}" fill="url(#{gradient_id})" stroke="#333" stroke-width="{stroke_width}"/>
-  <text x="{text_x:.2}" y="-{text_y_offset}" text-anchor="middle" font-size="{font_size:.2}" fill="#fff">{min_label}{flat_suffix}</text>
-  <text x="{text_x:.2}" y="{max_y:.2}" text-anchor="middle" font-size="{font_size:.2}" fill="#fff">{max_label}</text>
-</g>"##,
-        gradient_id = gradient_id,
-        gradient_stops = gradient_stops,
-        x = x,
-        y = y,
-        legend_width = legend_width,
-        legend_height = legend_height,
-        stroke_width = stroke_width,
-        text_x = legend_width / 2.0,
-        text_y_offset = text_y_offset,
-        font_size = font_size,
-        min_label = min_label,
-        flat_suffix = flat_suffix,
-        max_y = max_text_y,
-        max_label = max_label
-    )
-}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::models::{GpsCoordinates, SectionData, ShotData, StationRef};
+    use crate::models::{GpsCoordinates, SectionData, ShotData, StationMerge};
     use tempfile::NamedTempFile;
 
-    fn create_test_project() -> Project {
+    fn make_shot(length: f64, azimuth: f64, is_reference: bool) -> ShotData {
+        ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            is_reference,
+            ..Default::default()
+        }
+    }
+
+    fn simple_project() -> Project {
         let mut project = Project::new("Test".to_string(), None);
         project.add_section(SectionData {
             name: Some("Main".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 180.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 5.0,
-                ..Default::default()
-            }],
+            color: "#000000".to_string(),
+            shots: vec![make_shot(10.0, 0.0, false)],
+            ..Default::default()
         });
         project
     }
 
+    // ---- Output shape ------------------------------------------------------
+
     #[test]
-    fn test_export_svg() {
-        let project = create_test_project();
+    fn svg_has_white_background() {
+        let svg = generate_svg_string(&simple_project(), &ExportImageOptions::default()).unwrap();
+        assert!(svg.contains(r##"fill="#ffffff""##), "background should be white: {svg}");
+    }
+
+    #[test]
+    fn empty_project_still_valid_svg() {
+        let svg = generate_svg_string(
+            &Project::new("Empty".to_string(), None),
+            &ExportImageOptions::default(),
+        )
+        .unwrap();
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("viewBox"));
+        assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
+    fn export_svg_writes_file() {
+        let project = simple_project();
         let file = NamedTempFile::new().unwrap();
         let path = file.path().with_extension("svg");
-
-        let result = export_svg(&project, &path, &ExportImageOptions::default());
-        assert!(result.is_ok());
-
+        export_svg(&project, &path, &ExportImageOptions::default()).unwrap();
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("<svg"));
-        assert!(contents.contains("Main"));
-
+        assert!(contents.starts_with("<?xml"));
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn test_escape_xml_replaces_special_chars() {
-        let escaped = escape_xml(r#"<tag attr="a&b">'quote'</tag>"#);
-        assert_eq!(
-            escaped,
-            "&lt;tag attr=&quot;a&amp;b&quot;&gt;&apos;quote&apos;&lt;/tag&gt;"
-        );
-    }
-
-    #[test]
-    fn test_generate_svg_string_includes_grid_and_labels() {
-        let project = create_test_project();
-        let mut options = ExportImageOptions::default();
-        options.include_grid = true;
-        options.include_labels = true;
-        options.include_section_names = true;
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-        assert!(svg.contains("class=\"grid\""));
-        assert!(svg.contains("class=\"labels\""));
-        assert!(svg.contains("class=\"section-names\""));
-    }
-
-    #[test]
-    fn test_generate_svg_string_excludes_labels_when_disabled() {
-        let project = create_test_project();
-        let mut options = ExportImageOptions::default();
-        options.include_labels = false;
-        options.include_section_names = false;
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-        assert!(!svg.contains("class=\"labels\""));
-        assert!(!svg.contains("class=\"section-names\""));
-    }
-
-    #[test]
-    fn test_export_png_72_dpi() {
-        let project = create_test_project();
+    fn export_png_writes_valid_file() {
+        let project = simple_project();
         let file = NamedTempFile::new().unwrap();
         let path = file.path().with_extension("png");
-
         let options = ExportImageOptions {
             format: ImageFormat::Png,
             dpi: 72,
-            ..Default::default()
+            branching_threshold: 2,
         };
-
-        let result = export_png(&project, &path, &options);
-        assert!(result.is_ok(), "PNG export at 72 DPI failed: {:?}", result.err());
-        assert!(path.exists(), "PNG file should exist");
-
-        // Verify it's a valid PNG by checking magic bytes
+        export_png(&project, &path, &options).unwrap();
         let contents = std::fs::read(&path).unwrap();
-        assert!(contents.len() > 8, "PNG file too small");
-        assert_eq!(&contents[0..8], &[137, 80, 78, 71, 13, 10, 26, 10], "Invalid PNG magic bytes");
-
+        assert!(contents.len() > 8);
+        assert_eq!(&contents[0..8], &[137, 80, 78, 71, 13, 10, 26, 10]);
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn test_export_png_150_dpi() {
-        let project = create_test_project();
+    fn export_pdf_writes_nonempty_file() {
+        let project = simple_project();
         let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("png");
-
+        let path = file.path().with_extension("pdf");
         let options = ExportImageOptions {
-            format: ImageFormat::Png,
-            dpi: 150,
+            format: ImageFormat::Pdf,
             ..Default::default()
         };
-
-        let result = export_png(&project, &path, &options);
-        assert!(result.is_ok(), "PNG export at 150 DPI failed: {:?}", result.err());
-        assert!(path.exists());
-
+        export_image(&project, &path, &options).unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        assert!(len > 0);
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn test_export_png_300_dpi() {
-        let project = create_test_project();
+    fn png_oversized_dpi_errors() {
+        let project = simple_project();
         let file = NamedTempFile::new().unwrap();
         let path = file.path().with_extension("png");
-
-        let options = ExportImageOptions {
-            format: ImageFormat::Png,
-            dpi: 300,
-            ..Default::default()
-        };
-
-        let result = export_png(&project, &path, &options);
-        assert!(result.is_ok(), "PNG export at 300 DPI failed: {:?}", result.err());
-        assert!(path.exists());
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_export_png_600_dpi() {
-        let project = create_test_project();
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("png");
-
-        let options = ExportImageOptions {
-            format: ImageFormat::Png,
-            dpi: 600,
-            ..Default::default()
-        };
-
-        let result = export_png(&project, &path, &options);
-        assert!(result.is_ok(), "PNG export at 600 DPI failed: {:?}", result.err());
-        assert!(path.exists());
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_export_png_size_limit_error() {
-        let project = create_test_project();
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("png");
-
-        // Use an extremely high DPI to exceed the 16384px limit
-        // With our 800px target SVG size, DPI of 2000 would give ~22,222px
         let options = ExportImageOptions {
             format: ImageFormat::Png,
             dpi: 2000,
-            ..Default::default()
+            branching_threshold: 2,
         };
-
-        let result = export_png(&project, &path, &options);
-        assert!(result.is_err(), "PNG export should fail for oversized image");
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("16384"), "Error should mention size limit: {err}");
-        assert!(err.contains("Reduce DPI"), "Error should suggest reducing DPI: {err}");
+        let err = export_png(&project, &path, &options).unwrap_err().to_string();
+        assert!(err.contains("16384"), "{err}");
     }
 
     #[test]
-    fn test_export_image_dispatches_to_png() {
-        let project = create_test_project();
+    fn png_dpi_zero_errors() {
+        let project = simple_project();
         let file = NamedTempFile::new().unwrap();
         let path = file.path().with_extension("png");
-
-        let options = ExportImageOptions {
-            format: ImageFormat::Png,
-            dpi: 72,
-            ..Default::default()
-        };
-
-        let result = export_image(&project, &path, &options);
-        assert!(result.is_ok(), "export_image should dispatch to PNG: {:?}", result.err());
-        assert!(path.exists());
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_export_png_dpi_zero_error() {
-        let project = create_test_project();
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("png");
-
         let options = ExportImageOptions {
             format: ImageFormat::Png,
             dpi: 0,
-            ..Default::default()
+            branching_threshold: 2,
         };
-
-        let result = export_png(&project, &path, &options);
-        assert!(result.is_err(), "PNG export should fail for DPI=0");
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("DPI must be at least 1"), "Error should mention DPI requirement: {err}");
+        let err = export_png(&project, &path, &options).unwrap_err().to_string();
+        assert!(err.contains("DPI"), "{err}");
     }
 
-    // === Depth coloring tests ===
+    // ---- Segmentation / branching -----------------------------------------
 
-    fn create_test_project_with_depths() -> Project {
-        let mut project = Project::new("DepthTest".to_string(), None);
+    /// Build a project: one section with five shots; shot index 2 is a
+    /// reference shot. That splits the chain into two segments:
+    ///   segment A = shots 0,1 (between stations 0..=2)
+    ///   segment B = shots 3,4 (between stations 3..=5)
+    fn project_with_one_ref_separator() -> Project {
+        let mut project = Project::new("RefSplit".to_string(), None);
         project.add_section(SectionData {
-            name: Some("Section1".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
+            name: Some("S".to_string()),
+            color: "#000000".to_string(),
             shots: vec![
-                ShotData {
-                    azimuth_in: 0.0,
-                    azimuth_out: 180.0,
-                    length: 10.0,
-                    depth_in: 0.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 0.0,
-                    azimuth_out: 180.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 10.0,
-                    ..Default::default()
-                },
+                make_shot(10.0, 0.0, false),   // 0 -> 1
+                make_shot(10.0, 90.0, false),  // 1 -> 2
+                make_shot(10.0, 90.0, true),   // 2 -> 3  (reference)
+                make_shot(10.0, 0.0, false),   // 3 -> 4
+                make_shot(10.0, 90.0, false),  // 4 -> 5
             ],
+            ..Default::default()
         });
         project
     }
 
     #[test]
-    fn test_svg_section_mode_uses_section_color() {
-        let project = create_test_project();
-        let options = ExportImageOptions {
-            color_mode: ColorMode::Section,
-            ..Default::default()
-        };
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Stations should have inline style with section color
-        assert!(svg.contains("style=\"fill:#4ecdc4\""), "Station should have section color: {svg}");
-        // Shots should use section color
-        assert!(svg.contains("stroke=\"#4ecdc4\""), "Shot should have section color stroke: {svg}");
+    fn reference_shots_not_drawn() {
+        let project = project_with_one_ref_separator();
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+        // Layout: real, real, REF, real, real → two runs of two shots
+        // each, one polyline per run.
+        let polyline_count = svg.matches("<polyline").count();
+        assert_eq!(polyline_count, 2, "expected one polyline per non-ref run: {svg}");
+        // 5 shots total minus 1 ref = 4 non-ref shots → 4 "segment edges",
+        // i.e. (3 vertices) + (3 vertices) = 6 commas in points strings.
+        let comma_count = svg.matches(',').count();
+        assert_eq!(comma_count, 6, "expected 6 polyline vertices in total: {svg}");
+        // And the ref shot itself MUST NOT appear as its own polyline or
+        // line element.
+        assert!(!svg.contains("<line "), "no <line> elements expected: {svg}");
     }
 
     #[test]
-    fn test_svg_depth_mode_uses_depth_colors() {
-        let project = create_test_project_with_depths();
-        let options = ExportImageOptions {
-            color_mode: ColorMode::Depth,
-            depth_preset: DepthPreset::Grayscale,
-            ..Default::default()
-        };
+    fn threshold_yields_two_distinct_widths_when_both_classes_present() {
+        // Two segments separated by one ref shot. Each segment has branching
+        // factor 1 (each "knows about" the other via the ref shot).
+        let project = project_with_one_ref_separator();
 
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Should not contain the section color as fill or stroke
-        assert!(!svg.contains("stroke=\"#ff0000\""), "Should not use section color for shots in depth mode");
-        // Stations should have inline style="fill:..." (not CSS class fill)
-        assert!(svg.contains("style=\"fill:#"), "Stations should have inline fill style: {svg}");
-    }
-
-    #[test]
-    fn test_svg_css_station_class_no_fill() {
-        let project = create_test_project();
-        let options = ExportImageOptions::default();
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // CSS .station class should NOT have fill property (stroke-width is dynamic)
-        assert!(svg.contains(".station { stroke: #000000; stroke-width:"),
-            "CSS .station should have stroke properties: {svg}");
-        assert!(!svg.contains(".station { fill:"),
-            "CSS .station should NOT have fill property: {svg}");
-        // CSS .zero-datum class should NOT have fill property
-        assert!(svg.contains(".zero-datum { stroke: #000000; stroke-width:"),
-            "CSS .zero-datum should have stroke properties: {svg}");
-        assert!(!svg.contains(".zero-datum { fill:"),
-            "CSS .zero-datum should NOT have fill property: {svg}");
-    }
-
-    #[test]
-    fn test_svg_all_stations_have_inline_fill() {
-        let project = create_test_project();
-        let options = ExportImageOptions::default();
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Count circles - all should have style="fill:..."
-        let circle_count = svg.matches("<circle").count();
-        let inline_fill_count = svg.matches("style=\"fill:").count();
-        assert_eq!(circle_count, inline_fill_count,
-            "All {circle_count} circles should have inline fill style, but only {inline_fill_count} have it");
-    }
-
-    #[test]
-    fn test_svg_zero_datum_always_gold() {
-        let mut project = create_test_project();
-        // Set a zero datum
-        let section_id = project.sections[0].id;
-        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
-        project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
-
-        // Test in section mode
-        let options_section = ExportImageOptions {
-            color_mode: ColorMode::Section,
-            ..Default::default()
-        };
-        let svg_section = generate_svg_string(&project, &options_section).unwrap();
-        assert!(svg_section.contains("style=\"fill:#ffd700\""),
-            "Zero datum should be gold in section mode: {svg_section}");
-
-        // Test in depth mode
-        let options_depth = ExportImageOptions {
-            color_mode: ColorMode::Depth,
-            ..Default::default()
-        };
-        let svg_depth = generate_svg_string(&project, &options_depth).unwrap();
-        assert!(svg_depth.contains("style=\"fill:#ffd700\""),
-            "Zero datum should be gold in depth mode: {svg_depth}");
-    }
-
-    #[test]
-    fn test_svg_depth_mode_shot_uses_avg_depth() {
-        let project = create_test_project_with_depths();
-        let options = ExportImageOptions {
-            color_mode: ColorMode::Depth,
-            depth_preset: DepthPreset::Grayscale,
-            ..Default::default()
-        };
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // The project has shots with varying depths, so we should have different stroke colors
-        // Just verify that we don't use the section color
-        assert!(!svg.contains("stroke=\"#ff0000\""),
-            "Shot strokes should not use section color in depth mode");
-        // Verify shots have strokes (grayscale colors will be #NNNNNN format)
-        assert!(svg.contains("stroke=\"#"), "Shots should have stroke colors");
-    }
-
-    // === Depth legend tests ===
-
-    #[test]
-    fn test_format_depth_label_meters() {
-        let label = format_depth_label(10.0, "m", 1);
-        assert_eq!(label, "10.0m");
-    }
-
-    #[test]
-    fn test_format_depth_label_feet_conversion() {
-        // 10 meters = 32.8084 feet
-        let label = format_depth_label(10.0, "ft", 1);
-        assert_eq!(label, "32.8ft");
-    }
-
-    #[test]
-    fn test_format_depth_label_precision() {
-        let label = format_depth_label(10.123, "m", 2);
-        assert_eq!(label, "10.12m");
-
-        let label = format_depth_label(10.123, "m", 0);
-        assert_eq!(label, "10m");
-    }
-
-    #[test]
-    fn test_format_depth_label_feet_with_precision() {
-        // 3 meters = 9.84252 feet
-        let label = format_depth_label(3.0, "ft", 2);
-        assert_eq!(label, "9.84ft");
-    }
-
-    #[test]
-    fn test_depth_legend_contains_gradient() {
-        let bounds = Bounds {
-            min_x: 0.0,
-            max_x: 100.0,
-            min_y: 0.0,
-            max_y: 100.0,
-        };
-        // Scale factor for 100m bounds -> 800px target = 8.0
-        let scale = 8.0;
-        let legend = generate_depth_legend(
-            0.0,
-            10.0,
-            DepthPreset::Thermal,
-            "m",
+        // threshold = 1: both segments are thick. Only one stroke-width should
+        // appear in the output.
+        let svg_thick = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 1,
+            },
+        )
+        .unwrap();
+        let unique_widths = extract_unique_stroke_widths(&svg_thick);
+        assert_eq!(
+            unique_widths.len(),
             1,
-            &bounds,
-            scale,
+            "threshold=1 should give one width, got {unique_widths:?}: {svg_thick}"
         );
 
-        assert!(legend.contains("linearGradient"), "Legend should contain gradient definition");
-        // Gradient ID includes preset name for uniqueness
-        assert!(legend.contains("id=\"depth-gradient-thermal\""), "Gradient should have preset-specific id");
-    }
-
-    #[test]
-    fn test_depth_legend_sampled_gradient() {
-        let bounds = Bounds {
-            min_x: 0.0,
-            max_x: 100.0,
-            min_y: 0.0,
-            max_y: 100.0,
-        };
-        let scale = 8.0;
-        let legend = generate_depth_legend(
-            0.0,
-            10.0,
-            DepthPreset::Thermal,
-            "m",
+        // threshold = 2: both segments are thin (their branching=1 < 2).
+        let svg_thin = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 2,
+            },
+        )
+        .unwrap();
+        let unique_widths_thin = extract_unique_stroke_widths(&svg_thin);
+        assert_eq!(
+            unique_widths_thin.len(),
             1,
-            &bounds,
-            scale,
+            "threshold=2 should give one width, got {unique_widths_thin:?}"
         );
-
-        // Gradient now has LEGEND_GRADIENT_SAMPLES+1 stops (65 samples from 0 to 64)
-        // Check for first and last stops
-        assert!(legend.contains("offset=\"0.00%\""), "Should have 0% stop");
-        assert!(legend.contains("offset=\"100.00%\""), "Should have 100% stop");
-        // Should have many intermediate stops (64 samples = 65 stops total)
-        let stop_count = legend.matches("<stop offset=").count();
-        assert_eq!(stop_count, 65, "Should have 65 gradient stops (LEGEND_GRADIENT_SAMPLES+1)");
+        // And the two outputs should use *different* widths.
+        assert_ne!(unique_widths, unique_widths_thin);
     }
 
-    #[test]
-    fn test_depth_legend_labels_with_unit_conversion() {
-        let bounds = Bounds {
-            min_x: 0.0,
-            max_x: 100.0,
-            min_y: 0.0,
-            max_y: 100.0,
-        };
-        let scale = 8.0;
-        let legend = generate_depth_legend(0.0, 10.0, DepthPreset::Ocean, "ft", 1, &bounds, scale);
-
-        // 0m = 0ft, 10m = 32.8ft
-        assert!(legend.contains("0.0ft"), "Legend should show min depth in feet");
-        assert!(legend.contains("32.8ft"), "Legend should show max depth converted to feet");
-    }
-
-    #[test]
-    fn test_depth_legend_flat_indicator() {
-        let bounds = Bounds {
-            min_x: 0.0,
-            max_x: 100.0,
-            min_y: 0.0,
-            max_y: 100.0,
-        };
-        let scale = 8.0;
-        let legend = generate_depth_legend(5.0, 5.0, DepthPreset::Ocean, "m", 1, &bounds, scale);
-
-        assert!(legend.contains("(Flat)"), "Legend should show flat indicator when min ≈ max");
-    }
-
-    #[test]
-    fn test_svg_legend_only_in_depth_mode() {
-        let project = create_test_project_with_depths();
-
-        // Section mode - no legend
-        let options_section = ExportImageOptions {
-            color_mode: ColorMode::Section,
-            include_legend: true,
-            ..Default::default()
-        };
-        let svg_section = generate_svg_string(&project, &options_section).unwrap();
-        assert!(!svg_section.contains("depth-legend"), "Section mode should not have depth legend");
-
-        // Depth mode - has legend
-        let options_depth = ExportImageOptions {
-            color_mode: ColorMode::Depth,
-            include_legend: true,
-            ..Default::default()
-        };
-        let svg_depth = generate_svg_string(&project, &options_depth).unwrap();
-        assert!(svg_depth.contains("depth-legend"), "Depth mode with include_legend should have legend");
-    }
-
-    #[test]
-    fn test_svg_legend_can_be_disabled() {
-        let project = create_test_project_with_depths();
-        let options = ExportImageOptions {
-            color_mode: ColorMode::Depth,
-            include_legend: false,
-            ..Default::default()
-        };
-        let svg = generate_svg_string(&project, &options).unwrap();
-        assert!(!svg.contains("depth-legend"), "Legend should not appear when include_legend=false");
-    }
-
-    #[test]
-    fn test_shot_depth_labels_with_include_shot_data() {
-        let project = create_test_project_with_depths();
-        let options = ExportImageOptions {
-            include_shot_data: true,
-            depth_unit: "m".to_string(),
-            decimal_precision: 1,
-            ..Default::default()
-        };
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Should contain shot-label elements
-        assert!(svg.contains("shot-label"), "SVG should contain shot labels when include_shot_data=true");
-    }
-
-    #[test]
-    fn test_shot_depth_labels_unit_conversion() {
-        let project = create_test_project_with_depths();
-        let options = ExportImageOptions {
-            include_shot_data: true,
-            depth_unit: "ft".to_string(),
-            decimal_precision: 1,
-            ..Default::default()
-        };
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Shot labels should contain "ft" suffix AND converted numeric values
-        // The test project has shots with depths: 0->5m (avg 2.5m) and 5->10m (avg 7.5m)
-        // 2.5m * 3.28084 = 8.2ft, 7.5m * 3.28084 = 24.6ft
-        assert!(svg.contains("ft</text>"), "Shot labels should show feet when depth_unit=ft");
-        assert!(svg.contains("8.2ft"), "Shot label should show 2.5m converted to 8.2ft: {svg}");
-        assert!(svg.contains("24.6ft"), "Shot label should show 7.5m converted to 24.6ft: {svg}");
-    }
-
-    #[test]
-    fn test_no_shot_depth_labels_by_default() {
-        let project = create_test_project_with_depths();
-        let options = ExportImageOptions::default();
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Should NOT contain shot-label elements by default
-        assert!(!svg.contains("shot-label"), "SVG should not contain shot labels by default");
-    }
-
-    // === Safety tests ===
-
-    #[test]
-    fn test_format_depth_label_precision_clamped() {
-        // Large precision should be clamped to MAX_DECIMAL_PRECISION (6)
-        let label = format_depth_label(1.123_456_789, "m", 255);
-        assert_eq!(label, "1.123457m", "Precision should be clamped to 6");
-    }
-
-    #[test]
-    fn test_format_depth_label_xml_escaping() {
-        // Malicious unit string should be escaped
-        let label = format_depth_label(10.0, "</text><script>alert('xss')</script>", 1);
-        assert!(!label.contains("<script>"), "Script tag should be escaped");
-        assert!(label.contains("&lt;"), "< should be escaped to &lt;");
-        assert!(label.contains("&gt;"), "> should be escaped to &gt;");
-    }
-
-    #[test]
-    fn test_sanitize_color_valid_hex6() {
-        assert_eq!(sanitize_color("#4ecdc4"), "#4ecdc4");
-        assert_eq!(sanitize_color("#FFFFFF"), "#FFFFFF");
-        assert_eq!(sanitize_color("#000000"), "#000000");
-    }
-
-    #[test]
-    fn test_sanitize_color_valid_hex3() {
-        assert_eq!(sanitize_color("#fff"), "#fff");
-        assert_eq!(sanitize_color("#ABC"), "#ABC");
-    }
-
-    #[test]
-    fn test_sanitize_color_valid_hex8() {
-        assert_eq!(sanitize_color("#4ecdc4ff"), "#4ecdc4ff");
-        assert_eq!(sanitize_color("#00000080"), "#00000080");
-    }
-
-    #[test]
-    fn test_sanitize_color_invalid_returns_default() {
-        // Missing hash
-        assert_eq!(sanitize_color("4ecdc4"), DEFAULT_COLOR);
-        // Wrong length
-        assert_eq!(sanitize_color("#4ecd"), DEFAULT_COLOR);
-        assert_eq!(sanitize_color("#4ecdc4f"), DEFAULT_COLOR);
-        // Non-hex characters
-        assert_eq!(sanitize_color("#gggggg"), DEFAULT_COLOR);
-        // Empty
-        assert_eq!(sanitize_color(""), DEFAULT_COLOR);
-        // Injection attempt
-        assert_eq!(sanitize_color("#fff\" onclick=\"alert(1)"), DEFAULT_COLOR);
-        assert_eq!(sanitize_color("red"), DEFAULT_COLOR);
-        assert_eq!(sanitize_color("url(#gradient)"), DEFAULT_COLOR);
-    }
-
-    #[test]
-    fn test_svg_uses_sanitized_colors() {
-        // Create project with invalid color
-        let mut project = Project::new("ColorTest".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Bad".to_string()),
-            surveyor: None,
-            date: None,
-            color: "red\" onclick=\"alert(1)".to_string(), // Injection attempt
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 180.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 5.0,
-                ..Default::default()
-            }],
-        });
-
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        // Should not contain the injection
-        assert!(!svg.contains("onclick"), "SVG should not contain onclick");
-        assert!(!svg.contains("alert"), "SVG should not contain alert");
-        // Should use default color instead
-        assert!(svg.contains(DEFAULT_COLOR), "SVG should use default color for invalid input");
-    }
-
-    #[test]
-    fn test_empty_project_depth_mode_no_infinity() {
-        let project = Project::new("Empty".to_string(), None);
-        let options = ExportImageOptions {
-            color_mode: ColorMode::Depth,
-            include_legend: true,
-            ..Default::default()
-        };
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Should not contain infinity or NaN in legend
-        assert!(!svg.contains("inf"), "Empty project should not have infinity in legend: {svg}");
-        assert!(!svg.contains("NaN"), "Empty project should not have NaN in legend");
-        // Should show flat (0.0m to 0.0m)
-        assert!(svg.contains("(Flat)"), "Empty project should show flat indicator");
-    }
-
-    #[test]
-    fn test_empty_project_section_mode_valid() {
-        let project = Project::new("Empty".to_string(), None);
-        let options = ExportImageOptions {
-            color_mode: ColorMode::Section,
-            ..Default::default()
-        };
-        let result = generate_svg_string(&project, &options);
-        assert!(result.is_ok(), "Empty project in section mode should generate valid SVG");
-    }
-
-    #[test]
-    fn test_export_image_pdf_writes_file() {
-        let project = create_test_project();
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("pdf");
-
-        let mut options = ExportImageOptions::default();
-        options.format = ImageFormat::Pdf;
-
-        let result = export_image(&project, &path, &options);
-        assert!(result.is_ok());
-
-        let metadata = std::fs::metadata(&path).unwrap();
-        assert!(metadata.len() > 0);
-
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn test_generate_svg_string_empty_project_defaults_bounds() {
-        let project = Project::new("Empty".to_string(), None);
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        assert!(svg.contains("<svg"));
-        assert!(svg.contains("<rect"));
-        assert!(svg.contains("viewBox"));
-    }
-
-    // === Element size scaling tests ===
-
-    /// Helper to extract a numeric attribute value from SVG
-    fn extract_attr_value(svg: &str, pattern: &str) -> Option<f64> {
-        svg.find(pattern).and_then(|start| {
-            let rest = &svg[start + pattern.len()..];
-            let end = rest.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')?;
-            rest[..end].parse().ok()
-        })
-    }
-
-    #[test]
-    fn test_station_radius_scaling() {
-        let project = create_test_project();
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        // For the test project (10m shot), dimensions are ~50m x 50m with padding
-        // Scale = 800 / 50 = 16.0, so r=3px should become r=0.1875
-        // Check that station circles have small radius values (scaled from 3px)
-        if let Some(r) = extract_attr_value(&svg, "r=\"") {
-            // Scale factor for test project is approximately 800 / (10 + 40) = 16
-            // r = 3px / 16 ≈ 0.1875
-            assert!(r > 0.0 && r < 1.0, "Station radius should be scaled to viewBox units: {r}");
-        } else {
-            panic!("Could not find station radius in SVG");
-        }
-    }
-
-    #[test]
-    fn test_shot_stroke_width_scaling() {
-        let project = create_test_project();
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        // CSS .shot stroke-width should be scaled
-        if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
-            // stroke-width = 2px / 16 ≈ 0.125 (for test project scale)
-            assert!(sw > 0.0 && sw < 1.0, "Shot stroke-width should be scaled: {sw}");
-        } else {
-            panic!("Could not find shot stroke-width in SVG CSS");
-        }
-    }
-
-    #[test]
-    fn test_grid_stroke_width_scaling() {
-        let project = create_test_project();
-        let mut options = ExportImageOptions::default();
-        options.include_grid = true;
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        // Grid stroke-width should be scaled (0.5px target)
-        if let Some(sw) = extract_attr_value(&svg, "class=\"grid\" stroke=\"#333366\" stroke-width=\"") {
-            // stroke-width = 0.5px / 16 ≈ 0.03125
-            assert!(sw > 0.0 && sw < 0.5, "Grid stroke-width should be scaled: {sw}");
-        } else {
-            panic!("Could not find grid stroke-width in SVG");
-        }
-    }
-
-    #[test]
-    fn test_reference_shot_dasharray_scaling() {
-        // Create project with reference shot
-        let mut project = Project::new("ReferenceTest".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 180.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 5.0,
-                is_reference: true, // Mark as reference
-                ..Default::default()
-            }],
-        });
-
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        // Reference shots should have stroke-dasharray with scaled values
-        assert!(svg.contains("stroke-dasharray=\""), "Reference shot should have dasharray");
-        // The dasharray values should be small (scaled from 4,2 pixels)
-        if let Some(dash) = extract_attr_value(&svg, "stroke-dasharray=\"") {
-            assert!(dash > 0.0 && dash < 1.0, "Dash value should be scaled: {dash}");
-        }
-    }
-
-    #[test]
-    fn test_label_font_size_scaling() {
-        let project = create_test_project();
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        // CSS .label font-size should be scaled
-        if let Some(fs) = extract_attr_value(&svg, ".label { font-family: sans-serif; font-size: ") {
-            // font-size = 10px / 16 ≈ 0.625
-            assert!(fs > 0.0 && fs < 2.0, "Label font-size should be scaled: {fs}");
-        } else {
-            panic!("Could not find label font-size in SVG CSS");
-        }
-    }
-
-    #[test]
-    fn test_scaling_produces_correct_pixel_values() {
-        // This test verifies that viewBox_value * scale ≈ target_pixels
-        // For a 100m x 100m survey (with 20m padding on each side = 140m)
-        // scale = 800 / 140 ≈ 5.714
-        // r = 3px / 5.714 ≈ 0.525, and 0.525 * 5.714 ≈ 3px (verified)
-
-        let mut project = Project::new("ScaleTest".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![
-                // Create a 100m x 100m survey
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 270.0,
-                    length: 100.0,
-                    depth_in: 0.0,
-                    depth_out: 0.0,
-                    ..Default::default()
-                },
-            ],
-        });
-
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        // Extract scale from viewBox: scale = 800 / max(width, height)
-        // For 100m shot + 40m padding = 140m, scale ≈ 5.714
-        let expected_scale = 800.0 / 140.0;
-        let tolerance = 0.1;
-
-        // Verify station radius: r * scale ≈ 3px
-        if let Some(r) = extract_attr_value(&svg, "r=\"") {
-            let pixel_r = r * expected_scale;
-            assert!((pixel_r - 3.0).abs() < tolerance,
-                "Station radius * scale should be ~3px, got {pixel_r}px (r={r}, scale={expected_scale})");
-        } else {
-            panic!("Could not find station radius in SVG");
-        }
-
-        // Verify shot stroke-width: sw * scale ≈ 2px
-        if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
-            let pixel_sw = sw * expected_scale;
-            assert!((pixel_sw - 2.0).abs() < tolerance,
-                "Shot stroke-width * scale should be ~2px, got {pixel_sw}px");
-        } else {
-            panic!("Could not find shot stroke-width in SVG CSS");
-        }
-    }
-
-    // === Visual regression tests for export scaling (fn-17-ygu.3) ===
-    // These tests verify that SVG element sizes scale correctly to achieve
-    // consistent pixel sizes regardless of survey extent. They would catch
-    // the original 3-4x scaling bug if reverted.
-
-    /// Helper to create a test project with known dimensions for scaling tests
-    fn create_scaling_test_project(extent_meters: f64) -> Project {
-        let mut project = Project::new("ScalingTest".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("TestSection".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#ff6b6b".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 90.0,
-                azimuth_out: 270.0,
-                length: extent_meters,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                is_reference: true, // Test reference shot dasharray
-                ..Default::default()
-            }],
-        });
-        project
-    }
-
-    /// Calculate the expected scale factor for a survey
-    fn calculate_scale(extent_meters: f64) -> f64 {
-        let padding = 20.0;
-        let total_extent = extent_meters + padding * 2.0;
-        const TARGET_SIZE: f64 = 800.0;
-        TARGET_SIZE / total_extent
-    }
-
-    #[test]
-    fn test_scaling_regression_station_radius() {
-        // Test with known dimensions: 100m extent
-        // This catches the original bug where radius was 3.0 instead of px(3.0)
-        let project = create_scaling_test_project(100.0);
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        let scale = calculate_scale(100.0);
-        let tolerance = 0.1; // ±0.1px tolerance
-
-        // Station radius should be 3px when multiplied by scale
-        if let Some(r) = extract_attr_value(&svg, "r=\"") {
-            let pixel_value = r * scale;
-            assert!(
-                (pixel_value - 3.0).abs() < tolerance,
-                "Station radius should be 3px (±{tolerance}px), got {pixel_value}px (r={r}, scale={scale})"
-            );
-        } else {
-            panic!("Could not find station radius in SVG");
-        }
-    }
-
-    #[test]
-    fn test_scaling_regression_shot_stroke_width() {
-        let project = create_scaling_test_project(100.0);
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        let scale = calculate_scale(100.0);
-        let tolerance = 0.1;
-
-        // Shot stroke-width should be 2px when multiplied by scale
-        if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
-            let pixel_value = sw * scale;
-            assert!(
-                (pixel_value - 2.0).abs() < tolerance,
-                "Shot stroke-width should be 2px (±{tolerance}px), got {pixel_value}px"
-            );
-        } else {
-            panic!("Could not find shot stroke-width in SVG CSS");
-        }
-    }
-
-    #[test]
-    fn test_scaling_regression_grid_stroke_width() {
-        let project = create_scaling_test_project(100.0);
-        let mut options = ExportImageOptions::default();
-        options.include_grid = true;
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-
-        let scale = calculate_scale(100.0);
-        let tolerance = 0.1;
-
-        // Grid stroke-width should be 0.5px when multiplied by scale
-        if let Some(sw) = extract_attr_value(&svg, "class=\"grid\" stroke=\"#333366\" stroke-width=\"") {
-            let pixel_value = sw * scale;
-            assert!(
-                (pixel_value - 0.5).abs() < tolerance,
-                "Grid stroke-width should be 0.5px (±{tolerance}px), got {pixel_value}px"
-            );
-        } else {
-            panic!("Could not find grid stroke-width in SVG");
-        }
-    }
-
-    /// Helper to parse stroke-dasharray="X,Y" and return (dash, gap) values
-    fn parse_dasharray(svg: &str) -> Option<(f64, f64)> {
-        let marker = "stroke-dasharray=\"";
-        let start = svg.find(marker)? + marker.len();
-        let end = svg[start..].find('"')? + start;
-        let value = &svg[start..end];
-        let parts: Vec<&str> = value.split(',').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-        let dash = parts[0].parse().ok()?;
-        let gap = parts[1].parse().ok()?;
-        Some((dash, gap))
-    }
-
-    #[test]
-    fn test_scaling_regression_reference_shot_dasharray() {
-        let project = create_scaling_test_project(100.0);
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        let scale = calculate_scale(100.0);
-        let tolerance = 0.1;
-
-        // Reference shot dasharray should have 4px dash, 2px gap
-        let (dash, gap) = parse_dasharray(&svg)
-            .expect("Could not find/parse stroke-dasharray in SVG (is reference shot present?)");
-
-        let pixel_dash = dash * scale;
-        assert!(
-            (pixel_dash - 4.0).abs() < tolerance,
-            "Reference shot dash should be 4px (±{tolerance}px), got {pixel_dash}px"
-        );
-
-        let pixel_gap = gap * scale;
-        assert!(
-            (pixel_gap - 2.0).abs() < tolerance,
-            "Reference shot gap should be 2px (±{tolerance}px), got {pixel_gap}px"
-        );
-    }
-
-    #[test]
-    fn test_scaling_regression_label_font_size() {
-        let project = create_scaling_test_project(100.0);
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        let scale = calculate_scale(100.0);
-        let tolerance = 0.1;
-
-        // Label font-size should be 10px when multiplied by scale
-        if let Some(fs) = extract_attr_value(&svg, ".label { font-family: sans-serif; font-size: ") {
-            let pixel_value = fs * scale;
-            assert!(
-                (pixel_value - 10.0).abs() < tolerance,
-                "Label font-size should be 10px (±{tolerance}px), got {pixel_value}px"
-            );
-        } else {
-            panic!("Could not find label font-size in SVG CSS");
-        }
-    }
-
-    #[test]
-    fn test_scaling_regression_section_name_font_size() {
-        let project = create_scaling_test_project(100.0);
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-
-        let scale = calculate_scale(100.0);
-        let tolerance = 0.1;
-
-        // Section-name font-size should be 12px when multiplied by scale
-        if let Some(fs) = extract_attr_value(&svg, ".section-name { font-family: sans-serif; font-size: ") {
-            let pixel_value = fs * scale;
-            assert!(
-                (pixel_value - 12.0).abs() < tolerance,
-                "Section-name font-size should be 12px (±{tolerance}px), got {pixel_value}px"
-            );
-        } else {
-            panic!("Could not find section-name font-size in SVG CSS");
-        }
-    }
-
-    #[test]
-    fn test_scaling_consistent_across_different_survey_sizes() {
-        // Test that pixel sizes remain consistent regardless of survey extent
-        // This is the key property that the px() helper provides
-        let tolerance = 0.1;
-
-        for extent in [10.0, 50.0, 100.0, 500.0, 1000.0] {
-            let project = create_scaling_test_project(extent);
-            let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-            let scale = calculate_scale(extent);
-
-            // Station radius should always be 3px
-            if let Some(r) = extract_attr_value(&svg, "r=\"") {
-                let pixel_r = r * scale;
-                assert!(
-                    (pixel_r - 3.0).abs() < tolerance,
-                    "Station radius at {extent}m extent should be 3px (±{tolerance}px), got {pixel_r}px"
-                );
+    fn extract_unique_stroke_widths(svg: &str) -> Vec<String> {
+        // Only consider stroke widths emitted on shot <polyline> elements.
+        // The pen-distance label group also carries its own (halo)
+        // stroke-width on its <text> wrapper — that's unrelated to line
+        // weights.
+        let mut found: HashSet<String> = HashSet::new();
+        for line in svg.lines() {
+            let line = line.trim_start();
+            if !line.starts_with("<polyline ") {
+                continue;
             }
-
-            // Shot stroke-width should always be 2px
-            if let Some(sw) = extract_attr_value(&svg, ".shot { stroke-width: ") {
-                let pixel_sw = sw * scale;
-                assert!(
-                    (pixel_sw - 2.0).abs() < tolerance,
-                    "Shot stroke-width at {extent}m extent should be 2px (±{tolerance}px), got {pixel_sw}px"
-                );
+            if let Some(start) = line.find(r#"stroke-width=""#) {
+                let after = &line[start + r#"stroke-width=""#.len()..];
+                if let Some(end) = after.find('"') {
+                    found.insert(after[..end].to_string());
+                }
             }
         }
+        let mut v: Vec<String> = found.into_iter().collect();
+        v.sort();
+        v
     }
 
     #[test]
-    fn test_scaling_zero_datum_larger_radius() {
-        // Zero datum stations should have 6px radius (double the normal 3px)
-        let mut project = create_scaling_test_project(100.0);
-        let section_id = project.sections[0].id;
-        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
-        project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
+    fn branching_thick_and_thin_mix() {
+        // Trunk segment connected by reference shots to three leaf segments.
+        // Trunk's branching factor = 3, each leaf's branching factor = 1.
+        //
+        // Layout: each piece is its own section. The three ref shots each
+        // live in their own one-shot "stub" section, with station 0 merged
+        // into the trunk's tip station and station 1 merged into the
+        // leaf's start station. Putting refs in separate sections is the
+        // only way to make them genuinely fan out from a single trunk
+        // station — within a section, shots form a linear chain.
+        let mut project = Project::new("Trunk".to_string(), None);
 
-        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-        let scale = calculate_scale(100.0);
-        let tolerance = 0.1;
-
-        // Find zero-datum circle (has class="zero-datum")
-        if let Some(pos) = svg.find("class=\"zero-datum\"") {
-            let rest = &svg[pos..];
-            if let Some(r) = extract_attr_value(rest, "r=\"") {
-                let pixel_r = r * scale;
-                assert!(
-                    (pixel_r - 6.0).abs() < tolerance,
-                    "Zero-datum radius should be 6px (±{tolerance}px), got {pixel_r}px"
-                );
-            } else {
-                panic!("Could not find radius for zero-datum circle");
-            }
-        } else {
-            panic!("Could not find zero-datum circle in SVG");
-        }
-    }
-
-    #[test]
-    fn test_png_dimensions_scale_with_dpi() {
-        // Test that PNG dimensions scale correctly with DPI
-        // This validates the DPI scaling formula: dim = svg_dim * (dpi / 72)
-        let project = create_test_project();
-
-        for (dpi, expected_scale) in [(72u32, 1.0f64), (150, 150.0/72.0), (300, 300.0/72.0), (600, 600.0/72.0)] {
-            let file = NamedTempFile::new().unwrap();
-            let path = file.path().with_extension("png");
-
-            let options = ExportImageOptions {
-                format: ImageFormat::Png,
-                dpi,
+        let trunk_id = project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    make_shot(10.0, 0.0, false),
+                    make_shot(10.0, 0.0, false),
+                ],
                 ..Default::default()
-            };
+            })
+            .id;
 
-            let result = export_png(&project, &path, &options);
-            assert!(result.is_ok(), "PNG export at {} DPI failed: {:?}", dpi, result.err());
-
-            // Read PNG and check dimensions via header (bytes 16-23 contain width/height)
-            let contents = std::fs::read(&path).unwrap();
-
-            // Assert valid PNG: must have at least 24 bytes for header + IHDR chunk
-            assert!(contents.len() >= 24, "PNG file too small at {} DPI: {} bytes", dpi, contents.len());
-
-            // Verify PNG magic bytes
-            let magic = &contents[0..8];
-            assert_eq!(magic, &[137, 80, 78, 71, 13, 10, 26, 10], "Invalid PNG magic at {dpi} DPI");
-
-            // PNG IHDR chunk: width at bytes 16-19, height at 20-23 (big-endian)
-            let width = u32::from_be_bytes([contents[16], contents[17], contents[18], contents[19]]);
-            let height = u32::from_be_bytes([contents[20], contents[21], contents[22], contents[23]]);
-
-            // Base dimensions at 72 DPI
-            let base_dim = 800.0; // TARGET_SIZE from generate_svg_string
-            let expected_dim = (base_dim * expected_scale).ceil() as u32;
-
-            // Allow small tolerance for rounding
-            let dim_tolerance = 2;
-            let larger_dim = width.max(height);
-            assert!(
-                larger_dim >= expected_dim.saturating_sub(dim_tolerance) &&
-                larger_dim <= expected_dim + dim_tolerance,
-                "PNG at {dpi} DPI: expected ~{expected_dim}px, got {width}x{height}"
-            );
-
-            std::fs::remove_file(&path).ok();
-        }
-    }
-
-    // === Pathological input tests ===
-
-    #[test]
-    fn test_svg_unicode_section_names() {
-        let mut project = Project::new("Unicode".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Grotte de l'Ours <>&\"".to_string()),
-            color: "#4ecdc4".to_string(),
-            shots: vec![ShotData {
-                azimuth_in: 90.0,
-                azimuth_out: 270.0,
-                length: 10.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-
-        let mut options = ExportImageOptions::default();
-        options.include_section_names = true;
-
-        let svg = generate_svg_string(&project, &options).unwrap();
-        // XML special chars should be escaped
-        assert!(svg.contains("&amp;"), "& should be escaped in SVG: {svg}");
-        assert!(svg.contains("&lt;"), "< should be escaped in SVG");
-        assert!(!svg.contains("<>&\""), "raw special chars should not appear");
-    }
-
-    #[test]
-    fn test_svg_depth_mode_single_depth_no_gradient_crash() {
-        // All shots at same depth — depth range is 0
-        let mut project = Project::new("FlatDepth".to_string(), None);
-        project.add_section(SectionData {
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    azimuth_in: 0.0,
-                    azimuth_out: 180.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
+        let mut leaf_id = |name: &str| -> crate::models::SectionId {
+            project
+                .add_section(SectionData {
+                    name: Some(name.to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(5.0, 90.0, false)],
                     ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 270.0,
-                    length: 10.0,
-                    depth_in: 5.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-
-        let options = ExportImageOptions {
-            color_mode: ColorMode::Depth,
-            depth_preset: DepthPreset::Thermal,
-            include_legend: true,
-            ..Default::default()
+                })
+                .id
         };
-        let svg = generate_svg_string(&project, &options).unwrap();
-        assert!(svg.contains("(Flat)"), "zero depth range should show flat indicator");
-        assert!(!svg.contains("NaN"), "should not have NaN");
-        assert!(!svg.contains("inf"), "should not have infinity");
-    }
+        let a_id = leaf_id("LeafA");
+        let b_id = leaf_id("LeafB");
+        let c_id = leaf_id("LeafC");
 
-    #[test]
-    fn test_svg_export_with_very_long_comment() {
-        let mut project = Project::new("LongComment".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Test".to_string()),
-            color: "#4ecdc4".to_string(),
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 180.0,
-                length: 10.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                comment: Some("A".repeat(10000)),
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-
-        let options = ExportImageOptions {
-            include_labels: true,
-            ..Default::default()
-        };
-        // Should not panic or produce invalid SVG
-        let result = generate_svg_string(&project, &options);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_svg_many_sections_doesnt_panic() {
-        let mut project = Project::new("ManySections".to_string(), None);
-        for i in 0..50 {
-            project.add_section(SectionData {
-                name: Some(format!("Sec{i}")),
-                color: "#ff0000".to_string(),
-                shots: vec![ShotData {
-                    azimuth_in: f64::from(i * 7 % 360),
-                    azimuth_out: f64::from((i * 7 + 180) % 360),
-                    length: 5.0,
-                    depth_in: 0.0,
-                    depth_out: 1.0,
+        let mut stub_id = || -> crate::models::SectionId {
+            project
+                .add_section(SectionData {
+                    name: Some("Stub".to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(1.0, 90.0, true)],
                     ..Default::default()
-                }],
-                ..Default::default()
+                })
+                .id
+        };
+        let stub_a = stub_id();
+        let stub_b = stub_id();
+        let stub_c = stub_id();
+
+        // Wire each stub: station 0 → trunk tip (station 2), station 1 → leaf start.
+        let merged_at = chrono::Utc::now();
+        let trunk_tip = StationRef::new(trunk_id, 2);
+        for (stub, leaf) in [(stub_a, a_id), (stub_b, b_id), (stub_c, c_id)] {
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 0),
+                station_b: trunk_tip,
+                merged_at,
+            });
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 1),
+                station_b: StationRef::new(leaf, 0),
+                merged_at,
             });
         }
+        project.rebuild_merge_adjacency();
+
+        // threshold = 3: only the trunk (branching=3) is thick; leaves
+        // (branching=1) are thin. So we should see TWO distinct stroke widths.
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 3,
+            },
+        )
+        .unwrap();
+        let widths = extract_unique_stroke_widths(&svg);
+        assert_eq!(
+            widths.len(),
+            2,
+            "expected thick+thin, got {widths:?}: {svg}"
+        );
+    }
+
+    #[test]
+    fn isolated_segment_has_zero_branching() {
+        // No reference shots at all → branching = 0 everywhere → only one
+        // stroke width is emitted (thin, for default threshold 2).
+        let svg = generate_svg_string(&simple_project(), &ExportImageOptions::default()).unwrap();
+        let widths = extract_unique_stroke_widths(&svg);
+        assert_eq!(widths.len(), 1, "{widths:?}");
+    }
+
+    #[test]
+    fn ref_chain_through_free_stations_counts_as_one_tie() {
+        // Two real segments connected by *two* reference shots in series,
+        // routed through a reference-only intermediate section. Old behaviour
+        // would have ignored the chain (neither hop touches two real
+        // segments); the new tie semantics should give each segment
+        // branching factor = 1.
+        let mut project = Project::new("Chain".to_string(), None);
+
+        let left_id = project
+            .add_section(SectionData {
+                name: Some("Left".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let right_id = project
+            .add_section(SectionData {
+                name: Some("Right".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        // Two-hop reference chain. Stations 0,1,2 — only ref shots in this
+        // section, so all three are "free" w.r.t. real segments.
+        let chain_id = project
+            .add_section(SectionData {
+                name: Some("Chain".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    make_shot(1.0, 90.0, true),
+                    make_shot(1.0, 90.0, true),
+                ],
+                ..Default::default()
+            })
+            .id;
+        // Hook the chain's two outer stations onto the real segments via
+        // merges. Chain station 1 stays free in the middle.
+        let merged_at = chrono::Utc::now();
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(chain_id, 0),
+            station_b: StationRef::new(left_id, 1),
+            merged_at,
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(chain_id, 2),
+            station_b: StationRef::new(right_id, 1),
+            merged_at,
+        });
+        project.rebuild_merge_adjacency();
+
+        // threshold = 1 → both segments are thick (branching = 1 ≥ 1).
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 1,
+            },
+        )
+        .unwrap();
+        let widths = extract_unique_stroke_widths(&svg);
+        assert_eq!(
+            widths.len(),
+            1,
+            "chain should tie both segments at branching=1; got widths {widths:?}: {svg}"
+        );
+
+        // And threshold = 2 → both segments are thin (branching = 1 < 2). A
+        // different single width than the previous run.
+        let svg_thin = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 2,
+            },
+        )
+        .unwrap();
+        let widths_thin = extract_unique_stroke_widths(&svg_thin);
+        assert_eq!(widths_thin.len(), 1, "{widths_thin:?}");
+        assert_ne!(widths, widths_thin);
+    }
+
+    #[test]
+    fn anchor_y_junction_does_not_cross_tie_siblings() {
+        // Trunk segment with two independent direct ref shots, each leading
+        // out to a different leaf segment. Topologically the two leaves are
+        // *not* directly tied to one another — they only share the trunk.
+        // Branching: trunk = 2, each leaf = 1. The trunk's role as the
+        // shared station must not promote leaves into mutual neighbors.
+        let mut project = Project::new("YAtAnchor".to_string(), None);
+
+        let trunk_id = project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let mut leaf_id = |name: &str| -> crate::models::SectionId {
+            project
+                .add_section(SectionData {
+                    name: Some(name.to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(5.0, 90.0, false)],
+                    ..Default::default()
+                })
+                .id
+        };
+        let left_id = leaf_id("Left");
+        let right_id = leaf_id("Right");
+
+        // Each stub is a one-ref-shot section. Station 0 → trunk tip
+        // (anchor), station 1 → leaf start (anchor). Both endpoints are
+        // anchors, so the tie is the direct anchor-anchor variety. No
+        // free station is shared, so the two stubs do NOT cross-tie the
+        // leaves.
+        let merged_at = chrono::Utc::now();
+        let trunk_tip = StationRef::new(trunk_id, 1);
+        for leaf in [left_id, right_id] {
+            let stub = project
+                .add_section(SectionData {
+                    name: Some("Stub".to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(1.0, 90.0, true)],
+                    ..Default::default()
+                })
+                .id;
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 0),
+                station_b: trunk_tip,
+                merged_at,
+            });
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 1),
+                station_b: StationRef::new(leaf, 0),
+                merged_at,
+            });
+        }
+        project.rebuild_merge_adjacency();
+
+        // At threshold = 2 only the trunk (branching 2) is thick; the two
+        // leaves (branching 1) are thin → two distinct stroke widths.
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 2,
+            },
+        )
+        .unwrap();
+        let widths = extract_unique_stroke_widths(&svg);
+        assert_eq!(
+            widths.len(),
+            2,
+            "leaves must not become mutual neighbors via the shared trunk anchor; widths {widths:?}: {svg}"
+        );
+    }
+
+    #[test]
+    fn free_cluster_with_three_anchors_cross_ties_all_pairs() {
+        // One physical free station shared by three independent spoke ref
+        // shots, each terminating at a different real segment. The shared
+        // free hub should turn the three segments into a clique of mutual
+        // ties → branching factor 2 for every segment.
+        //
+        // Topology:
+        //   spokeA.0 ─ref─ spokeA.1 ── merged with ──> A.0
+        //   spokeB.0 ─ref─ spokeB.1 ── merged with ──> B.0
+        //   spokeC.0 ─ref─ spokeC.1 ── merged with ──> C.0
+        //   spokeA.0 ── merged ── spokeB.0 ── merged ── spokeC.0   (the hub)
+        // Each spokeX.0 is free (its segment owns only ref shots). They
+        // share a segment_uf root via merges, so free_uf groups them into
+        // one cluster, and the three attached anchors form a 3-clique.
+        let mut project = Project::new("FreeHub".to_string(), None);
+        let mut real_seg = |name: &str| -> crate::models::SectionId {
+            project
+                .add_section(SectionData {
+                    name: Some(name.to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(5.0, 0.0, false)],
+                    ..Default::default()
+                })
+                .id
+        };
+        let a_id = real_seg("A");
+        let b_id = real_seg("B");
+        let c_id = real_seg("C");
+
+        let merged_at = chrono::Utc::now();
+        let mut spoke_ids: Vec<crate::models::SectionId> = Vec::new();
+        for (label, leaf) in [("SpokeA", a_id), ("SpokeB", b_id), ("SpokeC", c_id)] {
+            let spoke = project
+                .add_section(SectionData {
+                    name: Some(label.to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(1.0, 0.0, true)],
+                    ..Default::default()
+                })
+                .id;
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(spoke, 1),
+                station_b: StationRef::new(leaf, 0),
+                merged_at,
+            });
+            spoke_ids.push(spoke);
+        }
+        // Tie all three spoke-tail stations together → the shared free hub.
+        for win in spoke_ids.windows(2) {
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(win[0], 0),
+                station_b: StationRef::new(win[1], 0),
+                merged_at,
+            });
+        }
+        project.rebuild_merge_adjacency();
+
+        // threshold = 2: every segment (branching = 2) ≥ threshold → all
+        // shots thick. One stroke width.
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 2,
+            },
+        )
+        .unwrap();
+        let widths = extract_unique_stroke_widths(&svg);
+        assert_eq!(widths.len(), 1, "all branching=2 → single width: {svg}");
+    }
+
+    // ---- Zero-datum stars --------------------------------------------------
+
+    #[test]
+    fn zero_datum_renders_as_star_polygon() {
+        let mut project = simple_project();
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project.set_zero_datum(StationRef::new(section_id, 0), gps).unwrap();
 
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
-        assert!(svg.contains("<svg"));
-        // Should have rendered all 50 sections
-        let section_count = svg.matches("class=\"shot\"").count()
-            + svg.matches("stroke-dasharray").count(); // reference shots
-        assert!(section_count >= 50, "should have at least 50 shot lines, got {section_count}");
+        // Exactly one polygon (the zero datum).
+        assert_eq!(svg.matches("<polygon").count(), 1, "{svg}");
+        // Black fill on the star group.
+        assert!(svg.contains(r##"fill="#000000""##));
+        // No <circle> elements emitted at all.
+        assert!(!svg.contains("<circle"));
     }
 
     #[test]
-    fn test_empty_project_svg_export_produces_valid_svg_file() {
-        let project = Project::new("Empty".to_string(), None);
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("svg");
-
-        let result = export_svg(&project, &path, &ExportImageOptions::default());
-        assert!(result.is_ok(), "empty project SVG file export should succeed");
-
-        let contents = std::fs::read_to_string(&path).unwrap();
-        assert!(contents.starts_with("<?xml") || contents.starts_with("<svg"));
-        std::fs::remove_file(&path).ok();
+    fn non_zero_datum_stations_emit_no_marker() {
+        let svg = generate_svg_string(&simple_project(), &ExportImageOptions::default()).unwrap();
+        assert!(!svg.contains("<circle"), "should not draw station circles");
+        assert!(!svg.contains("<polygon"), "no zero datum, no stars: {svg}");
     }
 
     #[test]
-    fn test_empty_project_png_export() {
-        let project = Project::new("Empty".to_string(), None);
-        let file = NamedTempFile::new().unwrap();
-        let path = file.path().with_extension("png");
+    fn star_polygon_has_ten_points() {
+        let pts = star_polygon_points(0.0, 0.0, 10.0, 4.0);
+        // Ten "x,y" tokens separated by single spaces.
+        assert_eq!(pts.split(' ').count(), 10, "{pts}");
+        // First point is straight up (angle -π/2 → y = -r_outer).
+        let first = pts.split(' ').next().unwrap();
+        let (x, y) = first.split_once(',').unwrap();
+        assert!(x.parse::<f64>().unwrap().abs() < 1e-6);
+        assert!((y.parse::<f64>().unwrap() + 10.0).abs() < 1e-6);
+    }
 
-        let options = ExportImageOptions {
-            format: ImageFormat::Png,
-            dpi: 72,
+    // ---- Penetration distance labels --------------------------------------
+
+    #[test]
+    fn pen_distance_label_only_when_zero_datum_present() {
+        // Without a zero datum, penetration distance is undefined → no
+        // labels even though a thick segment exists.
+        let mut project = project_with_one_ref_separator();
+        // threshold = 1 makes both segments thick.
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 1,
+            },
+        )
+        .unwrap();
+        assert!(
+            !svg.contains("pen-distance"),
+            "no zero datum should mean no pen-distance group: {svg}"
+        );
+        assert!(!svg.contains("p. "), "{svg}");
+
+        // Add a zero datum at station 0 → labels appear.
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 1,
+            },
+        )
+        .unwrap();
+        assert!(svg.contains(r#"class="pen-distance""#), "{svg}");
+        assert!(svg.contains("p. "), "{svg}");
+    }
+
+    #[test]
+    fn pen_distance_label_uses_shot_length_sum_to_deepest_station() {
+        // One trunk segment, two real shots: 100 m then 150 m. Zero datum at
+        // station 0. Branching = 0, so threshold = 0 makes the trunk thick
+        // and triggers a label at the deepest station (250 m).
+        let mut project = Project::new("PenDist".to_string(), None);
+        let trunk_id = project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    make_shot(100.0, 0.0, false),
+                    make_shot(150.0, 0.0, false),
+                ],
+                ..Default::default()
+            })
+            .id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(trunk_id, 0), gps)
+            .unwrap();
+
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 0,
+            },
+        )
+        .unwrap();
+        assert!(svg.contains("p. 250"), "expected p. 250 label: {svg}");
+        // Exactly one label — the trunk has only one deepest station.
+        let count = svg.matches(">p. ").count();
+        assert_eq!(count, 1, "{svg}");
+    }
+
+    #[test]
+    fn pen_distance_label_skipped_for_thin_segments() {
+        // Thin segments (below threshold) should NOT get labelled, even when
+        // a zero datum exists.
+        let mut project = simple_project();
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
+        // Default threshold = 2; simple_project has branching = 0 (no ref
+        // shots), so the lone segment is thin → no label.
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+        assert!(!svg.contains("pen-distance"), "{svg}");
+        assert!(!svg.contains("p. "), "{svg}");
+    }
+
+    /// Helper: extract every `<text x="..." y="...">…</text>` from the SVG
+    /// so directional-placement tests can inspect where labels landed.
+    fn parse_text_labels(svg: &str) -> Vec<(f64, f64, String)> {
+        let mut out = Vec::new();
+        let mut rest = svg;
+        while let Some(start) = rest.find("<text ") {
+            let after = &rest[start + 6..];
+            let Some(close_tag) = after.find('>') else { break };
+            let attrs = &after[..close_tag];
+            let body_start = close_tag + 1;
+            let Some(end) = after[body_start..].find("</text>") else { break };
+            let body = &after[body_start..body_start + end];
+            let parse_attr = |name: &str| -> Option<f64> {
+                let needle = format!("{name}=\"");
+                let s = attrs.find(&needle)? + needle.len();
+                let e = attrs[s..].find('"')? + s;
+                attrs[s..e].parse().ok()
+            };
+            if let (Some(x), Some(y)) = (parse_attr("x"), parse_attr("y")) {
+                out.push((x, y, body.to_string()));
+            }
+            rest = &after[body_start + end..];
+        }
+        out
+    }
+
+    #[test]
+    fn pen_distance_label_placed_in_open_space_away_from_line() {
+        // Single shot heading east (azimuth 90°, length 100). Zero datum at
+        // station 0 — the deepest reachable station is station 1 at world
+        // (≈100, 0). The only line direction *at station 1* points west,
+        // so the open-space wedge is the entire half-plane to the east.
+        // The label must therefore land east of station 1.
+        let mut project = Project::new("EastShot".to_string(), None);
+        let trunk_id = project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(100.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(trunk_id, 0), gps)
+            .unwrap();
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 0,
+            },
+        )
+        .unwrap();
+        let labels = parse_text_labels(&svg);
+        let label = labels
+            .iter()
+            .find(|(_, _, t)| t == "p. 100")
+            .unwrap_or_else(|| panic!("missing p. 100 label: {svg}"));
+        // Station 1 sits at world x = 100 (azimuth 90° = east, length 100).
+        // The label's x-centre must be strictly east of that, otherwise it
+        // would overlap the shot line running back to station 0.
+        assert!(
+            label.0 > 100.0,
+            "label should be east of station 1 (x=100); got x={}: {svg}",
+            label.0,
+        );
+        // And vertically aligned with the station (|dy| < offset).
+        assert!(
+            label.1.abs() < 5.0,
+            "label should sit on the horizontal line through the station; got y={}: {svg}",
+            label.1,
+        );
+    }
+
+    #[test]
+    fn pen_distance_label_handles_ref_chain_to_deepest() {
+        // Two real segments tied via a chain of refs through a free middle.
+        // From zero datum at trunk.0, going through the chain reaches the
+        // far side. Pen distance to far side = trunk shots + ref length(s).
+        //   trunk: 100 m (1 shot)
+        //   ref chain: 2 hops × 1 m = 2 m
+        //   far: 50 m (1 shot)
+        // → far side's deepest station = 100 + 2 + 50 = 152.
+        let mut project = Project::new("Chain".to_string(), None);
+        let trunk_id = project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(100.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let far_id = project
+            .add_section(SectionData {
+                name: Some("Far".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(50.0, 0.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let chain_id = project
+            .add_section(SectionData {
+                name: Some("Chain".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    make_shot(1.0, 90.0, true),
+                    make_shot(1.0, 90.0, true),
+                ],
+                ..Default::default()
+            })
+            .id;
+        let merged_at = chrono::Utc::now();
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(chain_id, 0),
+            station_b: StationRef::new(trunk_id, 1),
+            merged_at,
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(chain_id, 2),
+            station_b: StationRef::new(far_id, 0),
+            merged_at,
+        });
+        project.rebuild_merge_adjacency();
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(trunk_id, 0), gps)
+            .unwrap();
+
+        // threshold = 1: both segments thick (branching = 1 via chain tie).
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 1,
+            },
+        )
+        .unwrap();
+        assert!(svg.contains("p. 100"), "expected p. 100 for trunk: {svg}");
+        assert!(svg.contains("p. 152"), "expected p. 152 for far: {svg}");
+    }
+
+    // ---- Removed features ARE gone ----------------------------------------
+
+    #[test]
+    fn no_section_color_in_output() {
+        let mut project = Project::new("Colored".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Red".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![make_shot(10.0, 0.0, false)],
             ..Default::default()
-        };
-        let result = export_png(&project, &path, &options);
-        assert!(result.is_ok(), "empty project PNG export should succeed: {:?}", result.err());
-        assert!(path.exists());
-        std::fs::remove_file(&path).ok();
+        });
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+        assert!(!svg.contains("#ff0000"), "section color must not bleed in: {svg}");
+    }
+
+    #[test]
+    fn no_labels_no_grid_no_legend() {
+        // `simple_project` has no zero datum (so penetration distance is
+        // undefined and no labels are emitted) and no thick segments. The
+        // SVG should be pure shape geometry.
+        let svg = generate_svg_string(&simple_project(), &ExportImageOptions::default()).unwrap();
+        assert!(!svg.contains("<text"), "no text labels: {svg}");
+        assert!(!svg.contains("class=\"grid\""));
+        assert!(!svg.contains("depth-legend"));
+        assert!(!svg.contains("linearGradient"));
     }
 }

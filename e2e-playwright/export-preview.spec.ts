@@ -71,150 +71,30 @@ test.describe('Export Preview', () => {
     await expect(preview).not.toBeVisible();
   });
 
-  test('should show loading state during render', async ({ page }) => {
+  test('should render inline SVG from preview_svg_export', async ({ page }) => {
     await openExportDialog(page);
-
-    // Switch to image export
     await page.click('[data-testid="export-type-image"]');
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden({ timeout: 5000 });
 
-    // Loading indicator may be visible briefly or already done
-    // Just verify the preview container exists
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
+    // The preview component injects the backend SVG into the DOM. Mock returns
+    // a 1-line stick map with a known viewBox.
+    const svg = page.locator('[data-testid="export-preview"] svg');
+    await expect(svg).toBeVisible();
+    await expect(svg).toHaveAttribute('viewBox', '0 0 100 100');
   });
 
-  test('should update preview when toggling station labels option', async ({ page }) => {
+  test('should re-render preview when threshold slider changes', async ({ page }) => {
     await openExportDialog(page);
-
-    // Switch to image export
     await page.click('[data-testid="export-type-image"]');
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
+    await expect(page.getByTestId('export-preview-loading')).toBeHidden({ timeout: 5000 });
 
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
+    // Mock encodes the threshold as a data attribute on the root <svg>. So we
+    // can observe that the preview re-fetches when the slider moves.
+    const svg = page.locator('[data-testid="export-preview"] svg');
+    await expect(svg).toHaveAttribute('data-threshold', '2');
 
-    // Toggle station labels off
-    const labelsCheckbox = page.locator('[data-testid="option-include-labels"]');
-    await expect(labelsCheckbox).toBeChecked();
-    await labelsCheckbox.uncheck();
-
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    // Preview should still be visible and functional
-    await expect(preview).toBeVisible();
-  });
-
-  test('should update preview when toggling section names option', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Toggle section names off
-    const sectionNamesCheckbox = page.locator('[data-testid="option-include-section-names"]');
-    await expect(sectionNamesCheckbox).toBeChecked();
-    await sectionNamesCheckbox.uncheck();
-
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    // Preview should still be visible and functional
-    await expect(preview).toBeVisible();
-  });
-
-  test('should update preview when toggling grid option', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Toggle grid on (it's off by default)
-    const gridCheckbox = page.locator('[data-testid="option-include-grid"]');
-    await expect(gridCheckbox).not.toBeChecked();
-    await gridCheckbox.check();
-
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    // Preview should still be visible and functional
-    await expect(preview).toBeVisible();
-  });
-
-  test('should update preview when toggling shot data option', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Toggle shot data on (it's off by default)
-    const shotDataCheckbox = page.locator('[data-testid="option-include-shot-data"]');
-    await expect(shotDataCheckbox).not.toBeChecked();
-    await shotDataCheckbox.check();
-
-    await expect(page.getByTestId('export-preview-loading')).toBeHidden();
-
-    // Preview should still be visible and functional
-    await expect(preview).toBeVisible();
-  });
-
-  test('should have theme toggle button visible', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    const themeToggle = page.locator('[data-testid="export-theme-toggle"]');
-    await expect(themeToggle).toBeVisible({ timeout: 5000 });
-
-    // Should show "Dark" by default
-    await expect(themeToggle).toContainText('Dark');
-  });
-
-  test('should toggle theme from dark to light', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    const themeToggle = page.locator('[data-testid="export-theme-toggle"]');
-    await expect(themeToggle).toBeVisible({ timeout: 5000 });
-
-    // Initially dark
-    await expect(themeToggle).toContainText('Dark');
-
-    // Click to toggle to light
-    await themeToggle.click();
-
-    // Should now show "Light"
-    await expect(themeToggle).toContainText('Light');
-  });
-
-  test('should toggle theme back from light to dark', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    const themeToggle = page.locator('[data-testid="export-theme-toggle"]');
-    await expect(themeToggle).toBeVisible({ timeout: 5000 });
-
-    // Toggle to light
-    await themeToggle.click();
-    await expect(themeToggle).toContainText('Light');
-
-    // Toggle back to dark
-    await themeToggle.click();
-    await expect(themeToggle).toContainText('Dark');
+    await page.locator('[data-testid="branching-threshold-slider"]').fill('7');
+    await expect(svg).toHaveAttribute('data-threshold', '7', { timeout: 5000 });
   });
 
   test('should have correct preview dimensions (300x300)', async ({ page }) => {
@@ -257,77 +137,5 @@ test.describe('Export Preview', () => {
     await page.keyboard.press('Escape');
 
     await expect(dialog).not.toBeVisible({ timeout: 3000 });
-  });
-
-  test('should update preview when switching to depth color mode', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    await page.waitForTimeout(500);
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Switch to depth color mode
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Wait for debounced update and preset color fetch
-    await page.waitForTimeout(600);
-
-    // Preview should still be visible and functional
-    await expect(preview).toBeVisible();
-  });
-
-  test('should update preview when changing depth preset', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    await page.waitForTimeout(500);
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Switch to depth color mode
-    await page.click('[data-testid="color-mode-depth"]');
-    await page.waitForTimeout(600);
-
-    // Change depth preset using custom Select component
-    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
-    await expect(depthPresetSelect).toBeVisible();
-
-    // Open dropdown and select a different preset (portaled listbox)
-    await depthPresetSelect.locator('button').first().click();
-    const dropdown = page.getByRole('listbox');
-    await dropdown.locator('[role="option"]:has-text("Ocean")').click();
-
-    // Wait for preset colors to be fetched and preview to update
-    await page.waitForTimeout(600);
-
-    // Preview should still be visible and functional
-    await expect(preview).toBeVisible();
-  });
-
-  test('should revert preview when switching back to section color mode', async ({ page }) => {
-    await openExportDialog(page);
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-    await page.waitForTimeout(500);
-
-    const preview = page.locator('[data-testid="export-preview"]');
-    await expect(preview).toBeVisible({ timeout: 5000 });
-
-    // Switch to depth color mode
-    await page.click('[data-testid="color-mode-depth"]');
-    await page.waitForTimeout(600);
-
-    // Switch back to section color mode
-    await page.click('[data-testid="color-mode-section"]');
-    await page.waitForTimeout(500);
-
-    // Preview should still be visible and functional
-    await expect(preview).toBeVisible();
   });
 });
