@@ -750,6 +750,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const project = get().project;
         if (project) {
           set({ project: { ...project, file_path: result.saved_path } });
+          // On the first save / Save As the backend derives the sibling
+          // name from the final .stalx stem (e.g. `cave.stalx` →
+          // `cave.tml`).  The in-memory `project.collab.sibling_tml_relative`
+          // is still the pre-save placeholder (e.g. `collaboration.tml`)
+          // until we refresh — the Project Details panel would otherwise
+          // mislead the user about which companion file was actually
+          // written.  Refresh the collab state when collab is on.
+          if (project.collab?.enabled) {
+            try {
+              const fresh = await get().getCollabState();
+              const current = get().project;
+              if (fresh && current) {
+                set({ project: { ...current, collab: fresh } });
+              }
+            } catch {
+              /* best-effort refresh; ignore IPC errors */
+            }
+          }
         }
       }
       // Lightweight: just refresh undo/redo availability

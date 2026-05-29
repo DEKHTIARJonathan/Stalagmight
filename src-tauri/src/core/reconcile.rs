@@ -472,7 +472,16 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         }
         // Export writes 2000-01-01 for a null date; treat that re-imported
         // sentinel as "unset" so a clean round-trip isn't a phantom change.
-        let returned_date = source.date.filter(|d| *d != null_date_sentinel());
+        // BUT — if the section's actual date IS 2000-01-01, the round-trip
+        // looks identical and the user's legitimate date must survive.  Only
+        // collapse the sentinel to None when the project side ALSO had no
+        // date; otherwise pass the returned value through verbatim so the
+        // diff classifies a true 2000-01-01 as "no change" instead of a
+        // spurious date wipe.
+        let returned_date = match (proj_section.date, source.date) {
+            (None, Some(d)) if d == null_date_sentinel() => None,
+            _ => source.date,
+        };
         if proj_section.date != returned_date {
             meta.push(CollabFieldChange {
                 field: "date".into(),

@@ -119,6 +119,14 @@ impl AppState {
         if collab.enabled {
             return None;
         }
+        // Provenance guard: only warn when a baseline sha exists,
+        // meaning Stalagmight actually exported the sibling at some
+        // point.  Without this, a user who toggled collaboration on
+        // then off before any successful export — or whose first
+        // sibling write failed — would still get warned about any
+        // same-basename `.tml` the user dropped next to the project
+        // (e.g. an Ariane import source).
+        collab.last_export_tml_sha256.as_ref()?;
         let file_path = project.file_path.as_ref()?;
         let sibling_name = collab.sibling_tml_relative.clone();
         let sibling = match file_path.parent() {
@@ -223,7 +231,16 @@ impl AppState {
         let Some(collab) = project.collab.as_ref() else {
             return Ok(None);
         };
-        if !collab.enabled || collab.shot_baseline.is_empty() {
+        // Require collab to be on AND a recorded export — the sha is set in
+        // `write_collab_sibling` and is the only proof that the sibling
+        // `.tml` next to us came from Stalagmight (not an unrelated TML the
+        // user happened to drop in the same dir).  Previously this also
+        // required `shot_baseline.is_empty() == false`, which silently
+        // blocked the legitimate "empty project + Ariane adds the first
+        // shots" workflow: diff against an empty baseline correctly turns
+        // every returned shot into an AddedShot, so the guard was both
+        // wrong and over-restrictive.
+        if !collab.enabled || collab.last_export_tml_sha256.is_none() {
             return Ok(None);
         }
         let Some(path) = Self::sibling_path(project) else {

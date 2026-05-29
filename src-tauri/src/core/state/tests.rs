@@ -43,7 +43,7 @@ fn poison_mutex<T>(mutex: &Mutex<T>) {
 // === Project Operations Tests ===
 
 #[test]
-fn test_collab_sibling_warning_requires_prior_collaboration() {
+fn test_collab_sibling_warning_requires_export_provenance() {
     let temp = TempDir::new().unwrap();
     let stalx = temp.path().join("cave.stalx");
     // An unrelated .tml sharing the basename (e.g. the source of a TML import).
@@ -51,17 +51,33 @@ fn test_collab_sibling_warning_requires_prior_collaboration() {
 
     let state = AppState::new().unwrap();
 
-    // Never had collaboration (collab = None) → no warning despite cave.tml.
+    // Case 1: never had collaboration (collab = None) → no warning.
     let mut project = Project::new("Cave".to_string(), None);
     project.file_path = Some(stalx.clone());
     *state.project.lock().unwrap() = Some(project);
     assert_eq!(state.collab_sibling_when_disabled(), None);
 
-    // Had collaboration, now off → warn about the stale companion file.
+    // Case 2: collab toggled on then off but no successful export ever happened
+    // (`last_export_tml_sha256` is None) → still no warning, because the
+    // `cave.tml` sitting next to us could be unrelated (e.g. a TML the user
+    // dropped in to import).  This is the gap Codex flagged: prior behaviour
+    // warned for ANY same-basename .tml on the disabled toggle, including
+    // import sources.
     let mut project = Project::new("Cave".to_string(), None);
     project.file_path = Some(stalx.clone());
     let mut collab = crate::models::CollabState::new("cave.tml".to_string());
     collab.enabled = false;
+    project.collab = Some(collab);
+    *state.project.lock().unwrap() = Some(project);
+    assert_eq!(state.collab_sibling_when_disabled(), None);
+
+    // Case 3: collab off AND a recorded export sha exists → warn.  This is the
+    // genuine "we wrote this .tml, then collaboration was turned off" path.
+    let mut project = Project::new("Cave".to_string(), None);
+    project.file_path = Some(stalx.clone());
+    let mut collab = crate::models::CollabState::new("cave.tml".to_string());
+    collab.enabled = false;
+    collab.last_export_tml_sha256 = Some("deadbeef".to_string());
     project.collab = Some(collab);
     *state.project.lock().unwrap() = Some(project);
     assert_eq!(

@@ -483,6 +483,7 @@ impl AppState {
         let collab_writes_tml = project.collab.as_ref().is_some_and(|c| {
             c.enabled && (!is_autosave || c.write_tml_on_autosave)
         });
+        let mut collab_sibling_error: Option<String> = None;
         if collab_writes_tml {
             if let Err(e) = Self::write_collab_sibling(project, &save_path, &db) {
                 tracing::warn!(
@@ -490,6 +491,7 @@ impl AppState {
                     purpose = "write collaborator .tml on save",
                     "Saved .stalx but failed to write sibling .tml"
                 );
+                collab_sibling_error = Some(e.to_string());
             }
         }
 
@@ -525,7 +527,21 @@ impl AppState {
             purpose = "persist edits safely",
             "Project saved successfully"
         );
-        CommandResult::success().with_path(save_path_str)
+        let mut result = CommandResult::success().with_path(save_path_str);
+        // Surface a partial-save warning when the .stalx persisted but the
+        // sibling .tml didn't.  Without this the UI shows a green checkmark
+        // even though the collaborator's copy is now stale, so they keep
+        // editing data the Stalagmight user already replaced.
+        if let Some(err) = collab_sibling_error {
+            result.warnings.push(crate::core::ValidationWarning {
+                code: "COLLAB_SIBLING_WRITE_FAILED".to_string(),
+                message: format!(
+                    "Saved the .stalx but the companion .tml could not be written ({err}); the file Ariane is editing is now out of date.",
+                ),
+                severity: crate::core::WarningSeverity::Warning,
+            });
+        }
+        result
     }
 
     /// Write the sibling `.tml` for collaboration mode and refresh the stored
