@@ -20,6 +20,7 @@
     "coverage:e2e": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:e2e",
     "coverage:merge": "node scripts/merge-coverage.mjs",
     "gen:ipc-types": "cargo run --manifest-path src-tauri/Cargo.toml --bin gen_ipc_types",
+    "gen:plist": "node scripts/gen-info-plist.mjs",
     "test:all": "pnpm test && pnpm test:ui",
     "release": "./scripts/release.sh"
   },

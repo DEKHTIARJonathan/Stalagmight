@@ -5,6 +5,9 @@ node_modules/
 dist/
 src-tauri/target/
 
+# Generated at build time by scripts/gen-info-plist.mjs
+src-tauri/Info.plist
+
 # IDE
 .idea/
 .vscode/
