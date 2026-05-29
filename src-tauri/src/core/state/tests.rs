@@ -11273,6 +11273,69 @@ fn test_triangle_topology_with_loop_closure() {
     ), "closure station_b should be valid");
 }
 
+// === Collaboration mode: empty-section name mapping ===
+#[test]
+fn test_collab_section_name_map_includes_empty_sections() {
+    // Regression for Codex's "preserve empty sections in the collab name map"
+    // finding: section_name_map used to be derived from per-shot baseline
+    // entries, so a section with no shots (e.g. an empty root section or
+    // one whose first shot hasn't been measured yet) was omitted from the
+    // map.  When a collaborator added the first shot to such a section in
+    // Ariane and round-tripped, the returned shot's section name had no
+    // baseline entry — reconcile classified it as a brand-new section and
+    // apply created a duplicate next to the empty original.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Collab".to_string(), None);
+    // Two sections: one with shots, one EMPTY (no shots at all).
+    project.add_section(SectionData {
+        name: Some("Filled".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![ShotData {
+            azimuth_in: 10.0,
+            azimuth_out: 10.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
+    });
+    let empty_id = project.add_section(SectionData {
+        name: Some("EmptyRoot".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![],
+    }).id;
+    project.collab = Some(crate::models::CollabState::new("empty.tml".to_string()));
+    state.set_project_for_tests(project);
+
+    let stalx = temp_dir.path().join("empty.stalx");
+    assert!(state.execute(Command::SaveProject {
+        path: Some(stalx.clone()),
+        is_autosave: false,
+    }).success);
+
+    let loaded = Database::open(&stalx).unwrap().load_project().unwrap();
+    let collab = loaded.collab.expect("collab persisted");
+    assert!(
+        collab
+            .section_name_map
+            .iter()
+            .any(|(name, id)| name == "EmptyRoot" && *id == empty_id),
+        "empty section must appear in section_name_map so reconcile can route \
+         later Ariane additions to it instead of creating a duplicate; got {:?}",
+        collab.section_name_map,
+    );
+}
+
 // === Collaboration mode: save-both hook ===
 #[test]
 fn test_collab_save_writes_sibling_tml_and_baseline() {

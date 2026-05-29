@@ -566,13 +566,22 @@ impl AppState {
         let (baseline, sha, synthetic_section_names) =
             crate::export::tml::export_tml_with_baseline(project, &sibling)?;
 
-        // One (section_name -> id) entry per section, from the exported baseline.
+        // One (section_name -> id) entry per project section.  Includes
+        // sections with NO baseline shots (e.g. an empty root section that
+        // only had a START before any real measurements) so that if a
+        // collaborator adds the first shots to such a section in Ariane,
+        // the returned shots' section_name still matches the existing
+        // SectionId via the name-map fallback, and reconcile fills the
+        // existing section instead of creating a duplicate.  The exporter's
+        // section_name string (used in the baseline) follows the same
+        // fallback so the empty-section entries here use a matching key.
         let mut section_name_map = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for e in &baseline {
-            if seen.insert(e.section_id) {
-                section_name_map.push((e.section_name.clone(), e.section_id));
-            }
+        for section in &project.sections {
+            let name = section
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("Section {}", section.id));
+            section_name_map.push((name, section.id));
         }
 
         if let Some(c) = project.collab.as_mut() {
