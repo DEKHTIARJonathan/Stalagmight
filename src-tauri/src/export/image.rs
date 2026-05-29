@@ -5,8 +5,11 @@
 //! the segmentation boundary and are not drawn. Zero-datum stations are
 //! rendered as filled 5-pointed stars. Thick (trunk) segments are annotated
 //! at their deepest reachable station with a penetration-distance label
-//! (`p. 560`), where distance is the shortest-path length from any zero
-//! datum through the survey graph.
+//! (`p. 560`), where distance is the **along-cave** shortest path from
+//! the nearest zero datum (sum of shot lengths through the survey graph,
+//! with `station_merges` / aligned closures as zero-cost edges) — the
+//! same metric the Survey overview panel reports via
+//! [`Project::calculate_penetration`], so the two agree.
 //!
 //! ## Segment / branching model
 //!
@@ -166,12 +169,22 @@ fn export_pdf(project: &Project, path: &Path, options: &ExportImageOptions) -> R
 /// cleanly for downstream raster/PDF conversion.
 const TARGET_SIZE: f64 = 800.0;
 
-/// World-space padding around the survey bounds, in meters.
-const PADDING_METERS: f64 = 20.0;
+/// World-space padding around the survey bounds, expressed as a fraction
+/// of the larger bounding-box dimension. 0.05 = 5 % margin on every side.
+/// Using the *larger* extent for both axes keeps the absolute margin
+/// uniform on all four sides even when the survey is long-and-skinny.
+const PADDING_RATIO: f64 = 0.05;
 
 /// Stroke widths, in *pixels* (then converted to viewBox units by `px()`).
 const THIN_PX: f64 = 1.0;
 const THICK_PX: f64 = 2.5;
+
+/// Junction trim distance, in *pixels*. Applied uniformly to every child
+/// polyline endpoint that ties (via reference shots) to a parent or peer
+/// segment, regardless of either side's stroke width. Sized at 2 × the
+/// thick stroke so the visible gap stays roughly one parent-stroke wide
+/// even after the rounded line cap eats back ~half a stroke.
+const JUNCTION_TRIM_PX: f64 = THICK_PX * 2.0;
 
 /// Zero-datum star sizing, in *pixels*.
 const STAR_OUTER_PX: f64 = 7.0;
@@ -212,8 +225,11 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
         max_y = 100.0;
     }
 
-    let width = (max_x - min_x) + PADDING_METERS * 2.0;
-    let height = (max_y - min_y) + PADDING_METERS * 2.0;
+    let extent_x = max_x - min_x;
+    let extent_y = max_y - min_y;
+    let pad = extent_x.max(extent_y) * PADDING_RATIO;
+    let width = extent_x + pad * 2.0;
+    let height = extent_y + pad * 2.0;
     let scale = TARGET_SIZE / width.max(height);
     let svg_width = (width * scale).max(1.0);
     let svg_height = (height * scale).max(1.0);
@@ -400,10 +416,10 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
 "##,
         svg_width = svg_width,
         svg_height = svg_height,
-        vb_x = min_x - PADDING_METERS,
-        vb_y = -(max_y + PADDING_METERS), // Flip Y (SVG y is down).
-    vb_w = width,
-    vb_h = height,
+        vb_x = min_x - pad,
+        vb_y = -(max_y + pad), // Flip Y (SVG y is down).
+        vb_w = width,
+        vb_h = height,
     );
 
     // Index stations by StationRef for fast lookup at draw time.
@@ -413,6 +429,110 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
     let thin_sw = px(THIN_PX);
     let thick_sw = px(THICK_PX);
     let threshold = options.branching_threshold;
+
+    // ---- Junction trimming ----------------------------------------------
+    // A "child" segment that ties into a "parent" segment via reference
+    // shots (possibly a short stub section, possibly a direct anchor↔
+    // anchor ref) ends visually right next to the parent line, blending
+    // into it. The parent's polyline typically passes *through* the
+    // connection as a middle vertex, so it shouldn't be touched — only
+    // the child should retract.
+    //
+    // Rule: for each polyline endpoint, look at the segments tied to its
+    // physical point via reference shots. If any tied segment has a
+    // branching factor ≥ this endpoint's own segment's, pull the
+    // endpoint back by `JUNCTION_TRIM_PX` (a single uniform distance,
+    // independent of either side's stroke width). Strictly-larger
+    // parents stay intact (their tied siblings have smaller branching,
+    // never satisfy ≥); equal-width siblings both retract (each sees
+    // the other as ≥), giving a visible gap.
+    //
+    // Build a "physical-point" UF using ONLY station_merges and aligned
+    // closures so colocated stations share a root, then collect, per
+    // physical point, the other-segment(s) reachable across each
+    // incident reference shot.
+    let mut physical_uf = UnionFind::new(stations.len());
+    for merge in &project.station_merges {
+        if let (Some(&a), Some(&b)) = (
+            station_index.get(&merge.station_a),
+            station_index.get(&merge.station_b),
+        ) {
+            physical_uf.union(a, b);
+        }
+    }
+    for closure in &project.loop_closures {
+        if !closure.is_aligned {
+            continue;
+        }
+        if let (Some(&a), Some(&b)) = (
+            station_index.get(&closure.station_a),
+            station_index.get(&closure.station_b),
+        ) {
+            physical_uf.union(a, b);
+        }
+    }
+    let mut ref_tied_segs_per_phys: HashMap<usize, HashSet<usize>> = HashMap::new();
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            if !shot.is_reference {
+                continue;
+            }
+            let from = StationRef::new(section.id, i as u32);
+            let to = StationRef::new(section.id, (i + 1) as u32);
+            let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to))
+            else {
+                continue;
+            };
+            let f_phys = physical_uf.find(fi);
+            let t_phys = physical_uf.find(ti);
+            if f_phys == t_phys {
+                continue; // self-loop within one physical point
+            }
+            // Other-side segments are determined by the same rule we use
+            // in the branching pass: an anchor contributes its own
+            // segment; a free station contributes its free cluster's
+            // attached anchor segments.
+            let mut segs_from = |idx: usize| -> Vec<usize> {
+                match anchor_segment[idx] {
+                    Some(s) => vec![s],
+                    None => cluster_segments
+                        .get(&free_uf.find(idx))
+                        .map(|set| set.iter().copied().collect())
+                        .unwrap_or_default(),
+                }
+            };
+            for s in segs_from(ti) {
+                ref_tied_segs_per_phys.entry(f_phys).or_default().insert(s);
+            }
+            for s in segs_from(fi) {
+                ref_tied_segs_per_phys.entry(t_phys).or_default().insert(s);
+            }
+        }
+    }
+    // station_trim_dist[i] = how far the polyline endpoint at station i
+    // should retract; 0 if no qualifying ref-shot tie exists. The trim
+    // amount itself is the same uniform `JUNCTION_TRIM_PX` for every
+    // qualifying endpoint — what varies per-station is *whether* to
+    // trim, governed by the parent-vs-child branching rule.
+    let trim_dist = px(JUNCTION_TRIM_PX);
+    let mut station_trim_dist = vec![0.0_f64; stations.len()];
+    for i in 0..stations.len() {
+        let phys = physical_uf.find(i);
+        let Some(tied) = ref_tied_segs_per_phys.get(&phys) else {
+            continue;
+        };
+        let own_seg = uf.find(i);
+        let own_branching = neighbors.get(&own_seg).map_or(0u32, |s| s.len() as u32);
+        // If any tied segment has branching ≥ this endpoint's own, the
+        // endpoint is a child or peer (not the strict parent) — retract.
+        let qualifies = tied
+            .iter()
+            .filter(|&&s| s != own_seg)
+            .any(|&s| neighbors.get(&s).map_or(0u32, |n| n.len() as u32) >= own_branching);
+        if qualifies {
+            station_trim_dist[i] = trim_dist;
+        }
+    }
 
     // Pass 1: shots. One polyline per maximal contiguous run of
     // non-reference shots in a section. Drawing per-run rather than
@@ -439,6 +559,8 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
             // collecting station positions into a single polyline.
             let mut points: Vec<(f64, f64)> = Vec::new();
             let mut stroke_width = thin_sw;
+            let mut first_si: Option<usize> = None;
+            let mut last_si: Option<usize> = None;
             let mut j = i;
             while j < section.shots.len() && !section.shots[j].is_reference {
                 let from_ref = StationRef::new(section.id, j as u32);
@@ -448,10 +570,13 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
                 else {
                     break;
                 };
+                let Some(&fi) = station_index.get(&from_ref) else {
+                    break;
+                };
+                let Some(&ti) = station_index.get(&to_ref) else {
+                    break;
+                };
                 if points.is_empty() {
-                    let Some(&fi) = station_index.get(&from_ref) else {
-                        break;
-                    };
                     let root = uf.find(fi);
                     let branching = neighbors.get(&root).map_or(0u32, |s| s.len() as u32);
                     stroke_width = if branching >= threshold {
@@ -459,10 +584,26 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
                     } else {
                         thin_sw
                     };
+                    first_si = Some(fi);
                     points.push((from.coordinates.x, -from.coordinates.y));
                 }
+                last_si = Some(ti);
                 points.push((to.coordinates.x, -to.coordinates.y));
                 j += 1;
+            }
+            // Trim either end that lands on a multi-segment junction so
+            // distinct segments don't blend into one continuous line.
+            if let Some(si) = first_si {
+                let d = station_trim_dist[si];
+                if d > 0.0 {
+                    trim_polyline_end(&mut points, true, d);
+                }
+            }
+            if let Some(si) = last_si {
+                let d = station_trim_dist[si];
+                if d > 0.0 {
+                    trim_polyline_end(&mut points, false, d);
+                }
             }
             if points.len() >= 2 {
                 let mut pts_str = String::with_capacity(points.len() * 14);
@@ -517,7 +658,11 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
         .map(|(i, _)| i)
         .collect();
     if !zero_datum_indices.is_empty() {
-        let pen_dist = compute_pen_distances(&stations, &station_index, project, &zero_datum_indices);
+        // Use the project's shared along-cave penetration computation —
+        // same metric as `Project::calculate_penetration` (and therefore
+        // the Survey overview panel), so the map labels and the panel
+        // value agree.
+        let pen_dist = project.compute_penetration_distances(&stations);
 
         // Group stations by their segment root so we can find each
         // segment's deepest member in one pass.
@@ -640,6 +785,55 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
     Ok(svg)
 }
 
+/// Trim a polyline at one end by `dist` along the existing edges, walking
+/// inward until the budget runs out. If a full edge is shorter than the
+/// remaining trim, the edge's outer vertex is dropped entirely and we
+/// continue with the leftover distance on the next edge. The polyline is
+/// left potentially shorter (fewer vertices) than the caller passed in,
+/// possibly degenerate (< 2 vertices) — the caller must check before
+/// emitting.
+fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f64) {
+    while points.len() >= 2 && dist > 0.0 {
+        let (outer, inner) = if from_start {
+            (points[0], points[1])
+        } else {
+            let last = points.len() - 1;
+            (points[last], points[last - 1])
+        };
+        let dx = inner.0 - outer.0;
+        let dy = inner.1 - outer.1;
+        let edge_len = (dx * dx + dy * dy).sqrt();
+        if edge_len < 1e-9 {
+            // Degenerate edge; drop the outer vertex and keep going.
+            if from_start {
+                points.remove(0);
+            } else {
+                points.pop();
+            }
+            continue;
+        }
+        if dist >= edge_len {
+            if from_start {
+                points.remove(0);
+            } else {
+                points.pop();
+            }
+            dist -= edge_len;
+        } else {
+            let t = dist / edge_len;
+            let new_x = outer.0 + dx * t;
+            let new_y = outer.1 + dy * t;
+            if from_start {
+                points[0] = (new_x, new_y);
+            } else {
+                let last = points.len() - 1;
+                points[last] = (new_x, new_y);
+            }
+            dist = 0.0;
+        }
+    }
+}
+
 /// Return the angle (in screen coordinates — y axis flipped, same frame the
 /// SVG itself uses) that points into the largest empty wedge between the
 /// *drawn* (non-reference) shot directions incident to `station_idx`.
@@ -714,97 +908,6 @@ fn label_open_space_angle(
     best_mid
 }
 
-/// Multi-source Dijkstra from the zero-datum stations, returning the
-/// shortest-path distance (sum of shot lengths) from any zero datum to each
-/// station. Edges are *all* shots (reference and non-reference, since refs
-/// represent real measured distance) plus zero-cost edges for
-/// `station_merges` and aligned `loop_closures` (those collapse two
-/// stations into the same physical point). Unreachable stations get
-/// `f64::INFINITY`.
-fn compute_pen_distances(
-    stations: &[crate::models::Station],
-    station_index: &HashMap<StationRef, usize>,
-    project: &Project,
-    zero_datum_indices: &[usize],
-) -> Vec<f64> {
-    use std::cmp::{Ordering, Reverse};
-    use std::collections::BinaryHeap;
-
-    // f64 wrapper so we can stick it in a BinaryHeap. Non-finite weights
-    // never enter the heap (we clamp at insertion), so the partial_cmp
-    // unwrap is safe.
-    #[derive(Copy, Clone, PartialEq)]
-    struct Node(f64, usize);
-    impl Eq for Node {}
-    impl PartialOrd for Node {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-    impl Ord for Node {
-        fn cmp(&self, other: &Self) -> Ordering {
-            self.0
-                .partial_cmp(&other.0)
-                .unwrap_or(Ordering::Equal)
-                .then(self.1.cmp(&other.1))
-        }
-    }
-
-    let n = stations.len();
-    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-    for section in &project.sections {
-        for (i, shot) in section.shots.iter().enumerate() {
-            let from = StationRef::new(section.id, i as u32);
-            let to = StationRef::new(section.id, (i + 1) as u32);
-            if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
-                let w = shot.length.max(0.0);
-                adj[fi].push((ti, w));
-                adj[ti].push((fi, w));
-            }
-        }
-    }
-    for merge in &project.station_merges {
-        if let (Some(&a), Some(&b)) = (
-            station_index.get(&merge.station_a),
-            station_index.get(&merge.station_b),
-        ) {
-            adj[a].push((b, 0.0));
-            adj[b].push((a, 0.0));
-        }
-    }
-    for closure in &project.loop_closures {
-        if !closure.is_aligned {
-            continue;
-        }
-        if let (Some(&a), Some(&b)) = (
-            station_index.get(&closure.station_a),
-            station_index.get(&closure.station_b),
-        ) {
-            adj[a].push((b, 0.0));
-            adj[b].push((a, 0.0));
-        }
-    }
-
-    let mut dist = vec![f64::INFINITY; n];
-    let mut heap: BinaryHeap<Reverse<Node>> = BinaryHeap::new();
-    for &i in zero_datum_indices {
-        dist[i] = 0.0;
-        heap.push(Reverse(Node(0.0, i)));
-    }
-    while let Some(Reverse(Node(d, u))) = heap.pop() {
-        if d > dist[u] {
-            continue;
-        }
-        for &(v, w) in &adj[u] {
-            let nd = d + w;
-            if nd < dist[v] {
-                dist[v] = nd;
-                heap.push(Reverse(Node(nd, v)));
-            }
-        }
-    }
-    dist
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1025,6 +1128,242 @@ mod tests {
             ..Default::default()
         });
         project
+    }
+
+    #[test]
+    fn child_segment_is_trimmed_at_ref_shot_tie_to_larger_parent() {
+        // A "trunk" parent runs east and is tied at its middle station to
+        // *three* child segments via short stub ref shots, giving the
+        // parent branching factor 3 and each child branching factor 1.
+        //
+        // After trimming the children should retract from the parent (so
+        // they don't visually merge into one big shape) while the parent
+        // is left untouched.
+        let mut project = Project::new("ParentChild".to_string(), None);
+        let trunk_id = project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    make_shot(50.0, 90.0, false),
+                    make_shot(50.0, 90.0, false),
+                ],
+                ..Default::default()
+            })
+            .id;
+        let child_x = project
+            .add_section(SectionData {
+                name: Some("ChildX".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(40.0, 0.0, false)], // north
+                ..Default::default()
+            })
+            .id;
+        let child_y = project
+            .add_section(SectionData {
+                name: Some("ChildY".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(40.0, 180.0, false)], // south
+                ..Default::default()
+            })
+            .id;
+        let child_z = project
+            .add_section(SectionData {
+                name: Some("ChildZ".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(40.0, 45.0, false)], // NE
+                ..Default::default()
+            })
+            .id;
+
+        // Stub section per child: one ref shot whose two ends merge into
+        // the trunk's middle station and the child's start.
+        let trunk_mid = StationRef::new(trunk_id, 1);
+        let merged_at = chrono::Utc::now();
+        for child in [child_x, child_y, child_z] {
+            let stub = project
+                .add_section(SectionData {
+                    name: Some("Stub".to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(1.0, 0.0, true)], // short ref
+                    ..Default::default()
+                })
+                .id;
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 0),
+                station_b: trunk_mid,
+                merged_at,
+            });
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 1),
+                station_b: StationRef::new(child, 0),
+                merged_at,
+            });
+        }
+        project.rebuild_merge_adjacency();
+
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 3, // trunk thick, children thin
+            },
+        )
+        .unwrap();
+        let polylines = parse_polyline_points(&svg);
+        assert_eq!(polylines.len(), 4, "{svg}"); // trunk + 3 children
+
+        // The trunk polyline: only one polyline has 3 vertices (the two
+        // shots of the trunk). Find it and assert its endpoints are
+        // exactly at the original station positions (no trim).
+        let trunk_poly = polylines
+            .iter()
+            .find(|pts| pts.len() == 3)
+            .unwrap_or_else(|| panic!("missing 3-vertex trunk polyline: {svg}"));
+        assert!(
+            (trunk_poly[0].0 - 0.0).abs() < 1e-3 && (trunk_poly[0].1).abs() < 1e-3,
+            "trunk west endpoint should be untouched: {trunk_poly:?}",
+        );
+        assert!(
+            (trunk_poly[2].0 - 100.0).abs() < 1e-3 && (trunk_poly[2].1).abs() < 1e-3,
+            "trunk east endpoint should be untouched: {trunk_poly:?}",
+        );
+
+        // Each child polyline has 2 vertices: a "start" vertex (merged
+        // onto the trunk via the stub) and an "end" vertex 40 m away in
+        // the shot direction. The world coordinates the children live
+        // in depend on how compute_station_coordinates resolves the
+        // merge graph (and don't necessarily centre on the trunk-mid
+        // position); the right invariant to check is the polyline's
+        // straight-line *length*. Each child's untrimmed length is 40
+        // m; after trimming the start by ~thin_sw the length must drop
+        // slightly below 40 m, but not by much.
+        let child_polys: Vec<_> = polylines.iter().filter(|pts| pts.len() == 2).collect();
+        assert_eq!(child_polys.len(), 3, "{svg}");
+        for pts in &child_polys {
+            let dx = pts[1].0 - pts[0].0;
+            let dy = pts[1].1 - pts[0].1;
+            let length = (dx * dx + dy * dy).sqrt();
+            assert!(
+                length < 40.0 - 1e-3,
+                "child polyline should be shorter than 40 after trim; got {length}: {svg}",
+            );
+            assert!(
+                length > 38.0,
+                "child should only be trimmed slightly; got {length}: {svg}",
+            );
+        }
+    }
+
+    #[test]
+    fn parent_is_not_trimmed_when_branching_strictly_higher_than_child() {
+        // Sanity-check the asymmetric trim rule: when a parent has
+        // strictly greater branching than the tied child, the parent's
+        // polyline endpoint (even if it lands at the connection) does
+        // NOT get pulled back.
+        //
+        // Topology: trunk (3 children) with a fourth child that is itself
+        // a tiny parent of two grandchildren — so it has branching > 1
+        // (it's tied to the trunk AND to 2 grandchildren) but still less
+        // than the trunk. The trunk should stay full length.
+        let mut project = Project::new("Asymm".to_string(), None);
+        let trunk_id = project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(100.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let merged_at = chrono::Utc::now();
+        // Three single-shot children dangling off the trunk's east end.
+        let trunk_east = StationRef::new(trunk_id, 1);
+        for az in [0.0, 90.0, 180.0] {
+            let child = project
+                .add_section(SectionData {
+                    name: Some("Child".to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(20.0, az, false)],
+                    ..Default::default()
+                })
+                .id;
+            let stub = project
+                .add_section(SectionData {
+                    name: Some("Stub".to_string()),
+                    color: "#000000".to_string(),
+                    shots: vec![make_shot(1.0, 0.0, true)],
+                    ..Default::default()
+                })
+                .id;
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 0),
+                station_b: trunk_east,
+                merged_at,
+            });
+            project.station_merges.push(StationMerge {
+                station_a: StationRef::new(stub, 1),
+                station_b: StationRef::new(child, 0),
+                merged_at,
+            });
+        }
+        project.rebuild_merge_adjacency();
+
+        let svg = generate_svg_string(
+            &project,
+            &ExportImageOptions {
+                format: ImageFormat::Svg,
+                dpi: 72,
+                branching_threshold: 3,
+            },
+        )
+        .unwrap();
+        // Trunk has branching 3 (tied to three children); each child
+        // branching 1. The trunk's polyline ends at the connection (it's
+        // a one-shot trunk). With strict-larger rule the trunk endpoint
+        // should NOT be trimmed.
+        let polylines = parse_polyline_points(&svg);
+        let trunk_poly = polylines
+            .iter()
+            .find(|pts| {
+                // Horizontal: both y ≈ 0.
+                pts.iter().all(|(_, y)| y.abs() < 1e-3)
+            })
+            .unwrap_or_else(|| panic!("missing horizontal trunk polyline: {svg}"));
+        assert_eq!(trunk_poly.len(), 2, "{svg}");
+        assert!(
+            (trunk_poly[1].0 - 100.0).abs() < 1e-3,
+            "trunk east end should not be trimmed; got x={}: {svg}",
+            trunk_poly[1].0,
+        );
+    }
+
+    /// Helper: parse every `<polyline points="x,y x,y ..."/>` into a list
+    /// of vertex lists.
+    fn parse_polyline_points(svg: &str) -> Vec<Vec<(f64, f64)>> {
+        let mut out = Vec::new();
+        let mut rest = svg;
+        let needle = "<polyline ";
+        while let Some(start) = rest.find(needle) {
+            let after = &rest[start + needle.len()..];
+            let Some(close) = after.find('>') else { break };
+            let attrs = &after[..close];
+            rest = &after[close..];
+            let Some(p_start) = attrs.find(r#"points=""#) else { continue };
+            let body = &attrs[p_start + 8..];
+            let Some(p_end) = body.find('"') else { continue };
+            let pts: Vec<(f64, f64)> = body[..p_end]
+                .split_whitespace()
+                .filter_map(|tok| {
+                    let (x, y) = tok.split_once(',')?;
+                    Some((x.parse().ok()?, y.parse().ok()?))
+                })
+                .collect();
+            if !pts.is_empty() {
+                out.push(pts);
+            }
+        }
+        out
     }
 
     #[test]
@@ -1658,12 +1997,11 @@ mod tests {
     #[test]
     fn pen_distance_label_handles_ref_chain_to_deepest() {
         // Two real segments tied via a chain of refs through a free middle.
-        // From zero datum at trunk.0, going through the chain reaches the
-        // far side. Pen distance to far side = trunk shots + ref length(s).
-        //   trunk: 100 m (1 shot)
-        //   ref chain: 2 hops × 1 m = 2 m
-        //   far: 50 m (1 shot)
-        // → far side's deepest station = 100 + 2 + 50 = 152.
+        // Labels measure along-cave distance (shot-length Dijkstra), so:
+        //   trunk: 100 m (1 shot)         → trunk.1 deepest at "p. 100"
+        //   chain: 2 × 1 m ref hops       → adds 2 m through the stub
+        //   far: 50 m (1 shot)            → far.1 deepest at "p. 152"
+        // Total path trunk.0 → trunk.1 → chain → far.0 → far.1 = 152.
         let mut project = Project::new("Chain".to_string(), None);
         let trunk_id = project
             .add_section(SectionData {

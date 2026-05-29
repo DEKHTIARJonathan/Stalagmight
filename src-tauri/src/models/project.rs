@@ -5320,45 +5320,111 @@ impl Project {
         }
     }
 
-    /// Calculate penetration distance from zero datum to furthest station
-    pub fn calculate_penetration(&self, stations: &[Station]) -> f64 {
-        // If no zero datums, return 0
+    /// Per-station along-cave distance to the nearest zero datum: the
+    /// shortest path through the survey graph summing each shot's measured
+    /// length. Edges are *all* shots (reference and non-reference, since
+    /// refs are real measured legs) plus zero-cost edges for
+    /// `station_merges` and aligned `loop_closures` (those collapse two
+    /// stations into the same physical point). Unreachable stations get
+    /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
+    pub fn compute_penetration_distances(&self, stations: &[Station]) -> Vec<f64> {
+        let n = stations.len();
+        let mut dist = vec![f64::INFINITY; n];
         if self.zero_datums.is_empty() {
-            return 0.0;
+            return dist;
+        }
+        // Map StationRef -> index in `stations` so the adjacency loop can
+        // resolve shot endpoints without a linear search per shot.
+        let mut station_index: HashMap<StationRef, usize> = HashMap::with_capacity(n);
+        for (i, s) in stations.iter().enumerate() {
+            station_index.insert(s.station_ref, i);
         }
 
-        // Find zero datum station(s)
-        let zero_datum_coords: Vec<_> = self
-            .zero_datums
-            .iter()
-            .filter_map(|zd| {
-                stations
-                    .iter()
-                    .find(|s| {
-                        s.station_ref.section_id == zd.station_ref.section_id
-                            && s.station_ref.station_index == zd.station_ref.station_index
-                    })
-                    .map(|s| &s.coordinates)
-            })
-            .collect();
-
-        if zero_datum_coords.is_empty() {
-            return 0.0;
+        // Build adjacency: shots (weighted by length) + merges + aligned
+        // closures (weight 0).
+        let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+        for section in &self.sections {
+            for (i, shot) in section.shots.iter().enumerate() {
+                let from = StationRef::new(section.id, i as u32);
+                let to = StationRef::new(section.id, (i + 1) as u32);
+                if let (Some(&fi), Some(&ti)) =
+                    (station_index.get(&from), station_index.get(&to))
+                {
+                    let w = shot.length.max(0.0);
+                    adj[fi].push((ti, w));
+                    adj[ti].push((fi, w));
+                }
+            }
         }
-
-        // Calculate max distance from any zero datum to any station
-        let mut max_distance = 0.0f64;
-        for station in stations {
-            for datum_coord in &zero_datum_coords {
-                let dx = station.coordinates.x - datum_coord.x;
-                let dy = station.coordinates.y - datum_coord.y;
-                let dz = station.coordinates.z - datum_coord.z;
-                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
-                max_distance = max_distance.max(distance);
+        for merge in &self.station_merges {
+            if let (Some(&a), Some(&b)) = (
+                station_index.get(&merge.station_a),
+                station_index.get(&merge.station_b),
+            ) {
+                adj[a].push((b, 0.0));
+                adj[b].push((a, 0.0));
+            }
+        }
+        for closure in &self.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
+            if let (Some(&a), Some(&b)) = (
+                station_index.get(&closure.station_a),
+                station_index.get(&closure.station_b),
+            ) {
+                adj[a].push((b, 0.0));
+                adj[b].push((a, 0.0));
             }
         }
 
-        max_distance
+        // Multi-source Dijkstra from all zero-datum stations.
+        #[derive(Copy, Clone, PartialEq)]
+        struct Node(f64, usize);
+        impl Eq for Node {}
+        impl PartialOrd for Node {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for Node {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.0
+                    .partial_cmp(&other.0)
+                    .unwrap_or(Ordering::Equal)
+                    .then(self.1.cmp(&other.1))
+            }
+        }
+        let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
+        for zd in &self.zero_datums {
+            if let Some(&i) = station_index.get(&zd.station_ref) {
+                dist[i] = 0.0;
+                heap.push(std::cmp::Reverse(Node(0.0, i)));
+            }
+        }
+        while let Some(std::cmp::Reverse(Node(d, u))) = heap.pop() {
+            if d > dist[u] {
+                continue;
+            }
+            for &(v, w) in &adj[u] {
+                let nd = d + w;
+                if nd < dist[v] {
+                    dist[v] = nd;
+                    heap.push(std::cmp::Reverse(Node(nd, v)));
+                }
+            }
+        }
+        dist
+    }
+
+    /// Maximum along-cave penetration distance — the longest shortest-path
+    /// distance from any zero datum to any station through the survey
+    /// graph. Zero if there are no zero datums or nothing is reachable.
+    pub fn calculate_penetration(&self, stations: &[Station]) -> f64 {
+        self.compute_penetration_distances(stations)
+            .into_iter()
+            .filter(|d| d.is_finite())
+            .fold(0.0_f64, f64::max)
     }
 
     /// Get metadata for this project
