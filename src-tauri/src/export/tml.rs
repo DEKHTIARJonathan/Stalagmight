@@ -604,6 +604,8 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                     uuid: pick_uuid(shot, &existing_uuids, section.id, shot_idx as u32),
                     geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
                     section_name: section_name.clone(),
+                    // Filled in below after all shots/merges are wired.
+                    station_comment: None,
                 });
             }
 
@@ -750,6 +752,8 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             uuid: pick_uuid(shot, &existing_uuids, section.id, shot_idx as u32),
                             geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
                             section_name: section_name.clone(),
+                            // Filled in below after all shots/merges are wired.
+                            station_comment: None,
                         });
                     }
 
@@ -1004,6 +1008,8 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                 uuid: pick_uuid(shot, &existing_uuids, section.id, i as u32),
                 geo_key: geo_key(shot.azimuth_in, shot.length, shot.depth_in, shot.depth_out),
                 section_name: section_name.clone(),
+                // Filled in below after all shots/merges are wired.
+                station_comment: None,
             });
         }
 

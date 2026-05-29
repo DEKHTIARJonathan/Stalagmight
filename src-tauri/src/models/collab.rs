@@ -26,6 +26,12 @@ pub struct ShotBaselineEntry {
     pub geo_key: String,
     /// Section name as written to the `.tml` at export time (rename disambiguation).
     pub section_name: String,
+    /// Station-comment text attached to this shot's `to` station at export time.
+    /// Captured so a returned `.tml` whose Comment changed only in the station
+    /// portion can be detected as an edit instead of being silently overwritten
+    /// (or silently ignored). `#[serde(default)]` keeps older baselines loadable.
+    #[serde(default)]
+    pub station_comment: Option<String>,
 }
 
 /// Per-project collaboration state, persisted inside the `.stalx`.

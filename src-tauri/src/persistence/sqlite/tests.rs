@@ -2236,6 +2236,7 @@ fn test_collab_state_roundtrip() {
         uuid: "11111111-2222-3333-4444-555555555555".to_string(),
         geo_key: "351.5|2.27|0.10".to_string(),
         section_name: "Mainline 2".to_string(),
+        station_comment: None,
     }];
     collab.section_name_map = vec![("Mainline 2".to_string(), 0)];
     project.collab = Some(collab);
