@@ -221,15 +221,23 @@ pub(crate) fn export_image_impl(
 /// Generate the SVG markup that `export_image` would write, without
 /// touching the filesystem. Used by the export dialog so the preview is
 /// pixel-for-pixel identical to what export will produce.
+///
+/// Runs the (potentially heavy: bounds + Dijkstra + polyline emission)
+/// work in `spawn_blocking` so the slider can drag without stalling the
+/// Tauri main thread on large surveys — mirroring `export_image`.
 #[tauri::command]
-pub fn preview_svg_export(
-    state: State<AppState>,
+pub async fn preview_svg_export(
+    state: State<'_, AppState>,
     options: ExportImageOptions,
 ) -> Result<String, String> {
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-    crate::export::generate_svg_string(&project, &options).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::export::generate_svg_string(&project, &options).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Preview task panicked: {e}"))?
 }
 
 /// Get depth color preset colors

@@ -354,6 +354,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.collab-review",
     "dialog-cancel.collab-review",
     "dwell.dialog.collab-review",
+    // SVG stick-map export preview command.
+    "command.preview_svg_export",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -476,7 +478,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 307);
+        assert_eq!(EVENT_NAMES.len(), 308);
     }
 
     #[test]

@@ -202,31 +202,91 @@ const PEN_LABEL_OFFSET_PX: f64 = 9.0;
 /// accuracy, just enough to avoid label overlap.
 const PEN_LABEL_CHAR_WIDTH_RATIO: f64 = 0.55;
 
+/// Smallest extent (in world meters) we'll accept in either axis before
+/// clamping kicks in. A single-station or all-colocated project would
+/// otherwise produce a zero-size viewBox that usvg rejects on PNG/PDF
+/// rasterization.
+const MIN_BOUNDS_EXTENT_M: f64 = 1.0;
+
 /// Generate SVG content as a string. Pure: never touches the filesystem.
 pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> Result<String> {
     let stations = project.compute_station_coordinates();
 
     // ---- Bounds and scale ---------------------------------------------------
+    // Bounds come from *rendered* geometry only — endpoints of non-reference
+    // shots plus zero-datum stations. Reference shots aren't drawn, so a
+    // long ref connector or ref-only intermediate station should NOT
+    // inflate the viewBox and shrink the visible map.
+    let station_by_ref: HashMap<StationRef, &crate::models::Station> =
+        stations.iter().map(|s| (s.station_ref, s)).collect();
     let mut min_x = f64::MAX;
     let mut max_x = f64::MIN;
     let mut min_y = f64::MAX;
     let mut max_y = f64::MIN;
-    for station in &stations {
-        min_x = min_x.min(station.coordinates.x);
-        max_x = max_x.max(station.coordinates.x);
-        min_y = min_y.min(station.coordinates.y);
-        max_y = max_y.max(station.coordinates.y);
+    let extend = |c: &crate::models::Coordinates,
+                      mnx: &mut f64,
+                      mxx: &mut f64,
+                      mny: &mut f64,
+                      mxy: &mut f64| {
+        *mnx = mnx.min(c.x);
+        *mxx = mxx.max(c.x);
+        *mny = mny.min(c.y);
+        *mxy = mxy.max(c.y);
+    };
+    for section in &project.sections {
+        for (i, shot) in section.shots.iter().enumerate() {
+            if shot.is_reference {
+                continue;
+            }
+            let from = StationRef::new(section.id, i as u32);
+            let to = StationRef::new(section.id, (i + 1) as u32);
+            if let Some(s) = station_by_ref.get(&from) {
+                extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+            }
+            if let Some(s) = station_by_ref.get(&to) {
+                extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+            }
+        }
+    }
+    for s in &stations {
+        if s.is_zero_datum {
+            extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+        }
     }
     if min_x >= f64::MAX {
-        // Empty project: pick an arbitrary 100x100 box so the SVG is still valid.
-        min_x = 0.0;
-        max_x = 100.0;
-        min_y = 0.0;
-        max_y = 100.0;
+        // Nothing rendered (project has only reference shots and no zero
+        // datums, or is genuinely empty). Fall back to every station's
+        // coords so we still emit something locally meaningful; if even
+        // that is empty, use a 100×100 placeholder box.
+        for s in &stations {
+            extend(&s.coordinates, &mut min_x, &mut max_x, &mut min_y, &mut max_y);
+        }
+        if min_x >= f64::MAX {
+            min_x = 0.0;
+            max_x = 100.0;
+            min_y = 0.0;
+            max_y = 100.0;
+        }
     }
 
-    let extent_x = max_x - min_x;
-    let extent_y = max_y - min_y;
+    // Clamp each axis to a minimum extent and re-centre the bounds around
+    // the original midpoint so a single point or tight cluster ends up in
+    // the middle of the viewBox rather than at a corner. Only `min_x` and
+    // `max_y` are read again downstream (in the viewBox origin); the
+    // clamped extents are carried separately so we don't bother updating
+    // `max_x` / `min_y`.
+    let raw_extent_x = max_x - min_x;
+    let raw_extent_y = max_y - min_y;
+    let extent_x = raw_extent_x.max(MIN_BOUNDS_EXTENT_M);
+    let extent_y = raw_extent_y.max(MIN_BOUNDS_EXTENT_M);
+    if extent_x > raw_extent_x {
+        let mid_x = (min_x + max_x) * 0.5;
+        min_x = mid_x - extent_x * 0.5;
+    }
+    if extent_y > raw_extent_y {
+        let mid_y = (min_y + max_y) * 0.5;
+        max_y = mid_y + extent_y * 0.5;
+    }
     let pad = extent_x.max(extent_y) * PADDING_RATIO;
     let width = extent_x + pad * 2.0;
     let height = extent_y + pad * 2.0;
@@ -422,9 +482,7 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
         vb_h = height,
     );
 
-    // Index stations by StationRef for fast lookup at draw time.
-    let station_by_ref: HashMap<StationRef, &crate::models::Station> =
-        stations.iter().map(|s| (s.station_ref, s)).collect();
+    // `station_by_ref` was built earlier (bounds pass); reuse here.
 
     let thin_sw = px(THIN_PX);
     let thick_sw = px(THICK_PX);
@@ -1034,6 +1092,96 @@ mod tests {
         assert!(svg.contains("<svg"));
         assert!(svg.contains("viewBox"));
         assert!(svg.contains("</svg>"));
+    }
+
+    /// Helper: parse `viewBox="x y w h"` out of the SVG header so bounds
+    /// regression tests can assert on the rasterised area.
+    fn parse_viewbox(svg: &str) -> (f64, f64, f64, f64) {
+        let start = svg.find("viewBox=\"").expect("no viewBox") + 9;
+        let end = start + svg[start..].find('"').expect("unterminated viewBox");
+        let parts: Vec<f64> = svg[start..end]
+            .split_whitespace()
+            .map(|s| s.parse().expect("non-numeric viewBox part"))
+            .collect();
+        assert_eq!(parts.len(), 4, "viewBox should have 4 numbers");
+        (parts[0], parts[1], parts[2], parts[3])
+    }
+
+    #[test]
+    fn zero_size_bounds_are_clamped_to_non_degenerate_viewbox() {
+        // A single-station project (one section with no shots) — the
+        // only station sits at the origin, so raw extent_x == extent_y
+        // == 0. Without clamping the viewBox would be 0×0 and usvg
+        // would refuse to rasterise it.
+        let mut project = Project::new("Single".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Just one station".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![],
+            ..Default::default()
+        });
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+        let (_, _, w, h) = parse_viewbox(&svg);
+        assert!(w > 0.0, "width should be positive: viewBox w={w}");
+        assert!(h > 0.0, "height should be positive: viewBox h={h}");
+
+        // PNG rasterisation should succeed (used to fail on zero-size).
+        let file = NamedTempFile::new().unwrap();
+        let path = file.path().with_extension("png");
+        export_png(
+            &project,
+            &path,
+            &ExportImageOptions {
+                format: ImageFormat::Png,
+                dpi: 72,
+                branching_threshold: 2,
+            },
+        )
+        .unwrap();
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn reference_only_stations_do_not_inflate_bounds() {
+        // A small drawn passage (10 m east) with a long invisible
+        // reference shot (1000 m further east). The viewBox should hug
+        // the drawn 10 m line, not the 1010 m total span — otherwise
+        // the actual stick map shrinks to ~1 % of the rendered area.
+        let mut project = Project::new("RefBounds".to_string(), None);
+        let main_id = project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, false)],
+                ..Default::default()
+            })
+            .id;
+        let ref_id = project
+            .add_section(SectionData {
+                name: Some("LongRef".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(1000.0, 90.0, true)], // invisible
+                ..Default::default()
+            })
+            .id;
+        // Connect the long ref shot's start to main's end so it lives in
+        // the same coordinate frame.
+        let merged_at = chrono::Utc::now();
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(ref_id, 0),
+            station_b: StationRef::new(main_id, 1),
+            merged_at,
+        });
+        project.rebuild_merge_adjacency();
+
+        let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
+        let (_, _, w, _) = parse_viewbox(&svg);
+        // Width should reflect just the drawn 10 m extent + padding —
+        // an order of magnitude tighter than the 1000 m raw span.
+        assert!(
+            w < 100.0,
+            "viewBox width {w} should hug the drawn 10 m line, not the 1000 m ref shot",
+        );
     }
 
     #[test]
