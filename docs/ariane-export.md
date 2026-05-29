@@ -52,7 +52,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset |
 | LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
-| `shot.comment` | `Comment` / `CM` | Empty string if unset |
+| `shot.comment` | `Comment` / `CM` | Empty string if unset. In collaboration mode also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker — see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.is_reference` | `Type` / `TY` | `VIRTUAL` vs `REAL` (TML keeps Ariane's naming for compatibility) |
 | — | `Locked` / `LCK` | `false` for normal shots, `true` for START |
 | — | `Name` / `NM` | `"START"` for START shot, empty otherwise |
@@ -87,6 +87,25 @@ IDs are assigned sequentially starting from 0:
 ## Color Format Conversion
 
 Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-digit hex with alpha suffix). On import, the reverse conversion strips the alpha channel.
+
+## Station-comment co-encoding
+
+The TML format has one `<Comment>` field per shot and no per-station comment
+field. To round-trip both `shot.comment` and `project.station_comments` through
+Ariane, the exporter packs both into the shot's `<Comment>`:
+
+- Lines of `shot.comment` are prefixed with a zero-width space (`U+200B`).
+- Lines of the **to-station's** `station_comments` entry (the station at
+  `shot_index + 1`) are appended unmarked.
+- When a child section's station 0 is merged into a parent station, both
+  StationRefs alias the same Ariane shot id and both station comments are
+  concatenated (sorted by `(section_id, station_index)` for reproducibility).
+
+START shots keep their hardcoded `"START"` content untouched (no station-
+comment fold), and CLOSURE shots have no `to` station in the create-station
+sense. The same split is applied in reverse on `.tml` import via
+`core::comment_split::split`. See
+[docs/collaboration.md → Station comments via the ZWSP marker](collaboration.md#station-comments-via-the-zwsp-marker).
 
 ## Implementation
 

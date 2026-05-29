@@ -114,12 +114,51 @@ back to name-based matching (today's behavior).
 
 **Overwritten from the `.tml`** on edited shots: azimuth (→ azimuth_in), length,
 depth_in/out, inclination (→ pitch_in), L/R/U/D, comment, is_reference; and section
-name/color/surveyor/date.
+name/color/surveyor/date. **Station comments** round-trip too — see
+[Station comments via the ZWSP marker](#station-comments-via-the-zwsp-marker).
 
 **Preserved (never overwritten):** azimuth_out, pitch_out, marker_index, temperature,
-and project-level loop closures, station merges, section/station offsets, station
-comments, quality, direction. When a removed shot underpins a closure/merge, the
-review dialog surfaces a `DeleteShotImpact` warning before you apply.
+and project-level loop closures, station merges, section/station offsets,
+quality, direction. When a removed shot underpins a closure/merge, the review
+dialog surfaces a `DeleteShotImpact` warning before you apply.
+
+## Station comments via the ZWSP marker
+
+Ariane's `.tml` format has one `<Comment>` field per shot and no per-station
+comment field, so a Stalagmight station comment otherwise has nowhere to live
+in `.tml`. Each station comment is attached to the shot whose **`to` station**
+matches it (the shot that "creates" that station — i.e. `shot_index + 1`).
+Shot vs station lines inside the resulting Comment are distinguished by a
+zero-width-space (`U+200B`) prefix:
+
+- Lines prefixed with ZWSP are **shot comments**.
+- Lines without the prefix are **station comments**.
+
+The marker is invisible in any editor, including Ariane's, so a collaborator
+sees a single readable Comment block. New text an Ariane user types carries no
+marker and routes back to the **station** on reconcile — matching how Ariane
+visually centers Comment text on the station, not along the shot.
+
+Reconcile captures the station-portion text in `ShotBaselineEntry.station_comment`
+at export, so the diff distinguishes "Ariane edited the station portion" from
+"clean round-trip". Apply writes the returned station-portion to
+`project.station_comments[(section_id, shot_index + 1)]` (insert if non-empty,
+remove otherwise).
+
+**Caveats:**
+- Station 0 of the root section (the START shot's station) has no shot whose
+  `to` station matches, so its comment is dropped from the `.tml` export and
+  is not round-trippable. Add the note one shot downstream if you need it to
+  survive a collaborator edit.
+- When a child section's station 0 is merged into a parent's station, both
+  StationRefs alias to the same Ariane shot; both comments are concatenated
+  into the exported Comment, but only the "primary" `(section_id, shot+1)`
+  receives writes on reconcile. The two halves of a merged station can
+  therefore diverge if both are edited between exports.
+
+The same split logic is applied to **fresh `.tml` imports** when the import
+dialog's "comments on stations" option is on (default). A bare Ariane file
+has no markers, so every Comment line routes to the station.
 
 ## Key files
 
