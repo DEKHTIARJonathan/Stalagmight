@@ -1395,4 +1395,153 @@ mod tests {
             "every returned shot must be classified as added"
         );
     }
+
+    // ========================================================================
+    // Station-comment round-trip via the ZWSP shot/station marker.
+    // ========================================================================
+
+    /// Project with three shots where shot 1 has a shot-comment, station 2 has
+    /// a station-comment, and station 3 has a station-comment too. Exercises
+    /// the merge/split for the common "both halves present" case.
+    fn project_with_comments() -> Project {
+        let mut p = project_with(three());
+        p.sections[0].shots[1].comment = Some("broken tape".into());
+        p.station_comments
+            .insert(StationRef::new(0, 2), "junction with main".into());
+        p.station_comments
+            .insert(StationRef::new(0, 3), "beware silt".into());
+        p
+    }
+
+    #[test]
+    fn station_comments_clean_roundtrip_yields_empty_changeset() {
+        // Export → parse → diff against own baseline ⇒ no edits/adds/removes.
+        // Without the ZWSP marker this would either drop the station comments
+        // (then re-import flagged as "comment cleared") or fold them onto the
+        // shot (then diff flagged a phantom shot-comment edit).
+        let dir = tempfile::TempDir::new().unwrap();
+        let base = baseline_for(project_with_comments(), dir.path());
+        let ret = returned(&base, dir.path());
+
+        let cs = diff(&base, &ret);
+        assert!(cs.shots_edited.is_empty(), "clean roundtrip: {:?}", cs.shots_edited);
+        assert!(cs.shots_added.is_empty());
+        assert!(cs.shots_removed.is_empty());
+    }
+
+    #[test]
+    fn ariane_authored_comment_routes_to_station() {
+        // Simulate an Ariane user typing a new note into the Comment field of
+        // shot 0 (whose to-station is station 1, which had no comment before).
+        // The note carries no ZWSP marker, so reconcile must classify it as a
+        // station_comment — and apply must write it to project.station_comments.
+        let dir = tempfile::TempDir::new().unwrap();
+        let base = baseline_for(project_with_comments(), dir.path());
+
+        // Export, then directly mutate the parsed TML to inject the new line —
+        // bypassing the Stalagmight export so the inserted text is unmarked.
+        let path = dir.path().join("returned.tmlu");
+        export_tml_with_baseline(&base, &path).unwrap();
+        let mut ret = parse_tml(&path).unwrap();
+        // Target the first real shot of the section.
+        for s in &mut ret.sections {
+            for shot in &mut s.shots {
+                if shot.shot_type == TmlShotType::Start || shot.shot_type == TmlShotType::Closure {
+                    continue;
+                }
+                // First real shot: prepend an Ariane-typed (unmarked) note.
+                shot.comment = Some("muddy floor".into());
+                break;
+            }
+            break;
+        }
+
+        let cs = diff(&base, &ret);
+        // Shot 0 had no station comment in the baseline; the Ariane-added
+        // unmarked line should appear as a station_comment edit.
+        let edit = cs
+            .shots_edited
+            .iter()
+            .find(|e| e.shot_index == 0)
+            .expect("shot 0 should have an edit recorded");
+        assert!(edit.changes.iter().any(|c| c.field == "station_comment"),
+            "edit on shot 0 should include a station_comment change: {:?}", edit.changes);
+        assert_eq!(edit.new_station_comment.as_deref(), Some("muddy floor"));
+
+        // Apply and verify project.station_comments is updated.
+        let mut applied = base.clone();
+        crate::core::apply_changeset(&mut applied, &cs);
+        let s1 = StationRef::new(0, 1);
+        assert_eq!(
+            applied.station_comments.get(&s1).map(String::as_str),
+            Some("muddy floor"),
+        );
+    }
+
+    #[test]
+    fn baseline_diff_detects_station_only_edit() {
+        // Edit only a station comment in Stalagmight, export+reparse,
+        // reconcile against the original baseline ⇒ one EditedShot whose
+        // changes vec carries a station_comment field.
+        let dir = tempfile::TempDir::new().unwrap();
+        let base = baseline_for(project_with_comments(), dir.path());
+
+        let mut edited = base.clone();
+        edited
+            .station_comments
+            .insert(StationRef::new(0, 2), "junction widened in 2026".into());
+        let ret = returned(&edited, dir.path());
+
+        let cs = diff(&base, &ret);
+        assert_eq!(cs.shots_edited.len(), 1, "single station-only edit: {:?}", cs.shots_edited);
+        let e = &cs.shots_edited[0];
+        assert_eq!(e.shot_index, 1, "shot whose to-station is station 2");
+        let sc_change = e
+            .changes
+            .iter()
+            .find(|c| c.field == "station_comment")
+            .expect("station_comment change present");
+        assert_eq!(sc_change.old, "junction with main");
+        assert_eq!(sc_change.new, "junction widened in 2026");
+        assert_eq!(e.new_station_comment.as_deref(), Some("junction widened in 2026"));
+        // The shot-portion of the Comment field didn't change, so no shot
+        // comment edit should be emitted.
+        assert!(
+            !e.changes.iter().any(|c| c.field == "comment"),
+            "shot.comment unchanged: {:?}",
+            e.changes
+        );
+    }
+
+    #[test]
+    fn fresh_import_with_split_routes_marked_and_unmarked_correctly() {
+        // Mirrors what an external `.tml` looks like when imported via the
+        // dialog with commentsOnStations=true. Shot 1's Comment carries one
+        // ZWSP-marked line (shot) plus one unmarked line (station).
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut p = project_with(three());
+        p.sections[0].shots[1].comment = Some("broken tape".into());
+        p.station_comments
+            .insert(StationRef::new(0, 2), "junction with main".into());
+
+        let path = dir.path().join("import.tmlu");
+        export_tml_with_baseline(&p, &path).unwrap();
+        let tml = parse_tml(&path).unwrap();
+        let (configs, _) = crate::parsers::tml::convert_tml_to_import_configs(
+            &tml, false, /* comments_on_stations = */ true,
+        )
+        .unwrap();
+        // Shot 1 of the first section: comment kept as "broken tape" (marker
+        // stripped); station 2 of the section's station_comments gets the
+        // unmarked line.
+        let cfg = &configs[0];
+        let shot_one = &cfg.shots[1];
+        assert_eq!(shot_one.comment.as_deref(), Some("broken tape"));
+        let sc = cfg
+            .station_comments
+            .iter()
+            .find(|(idx, _)| *idx == 2)
+            .expect("station 2 should have a comment after split");
+        assert_eq!(sc.1, "junction with main");
+    }
 }
