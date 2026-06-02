@@ -101,6 +101,26 @@ fn test_create_and_save_project() {
     assert_eq!(loaded.sections[0].shots.len(), 1);
 }
 
+#[test]
+fn test_save_project_name_targeted_update() {
+    let mut db = Database::in_memory().unwrap();
+    let project = Project::new("Old Name".to_string(), Some("Loc".to_string()));
+    db.save_project(&project).unwrap();
+
+    db.save_project_name("New Name").unwrap();
+
+    // Only the name changed; the rest of the project is intact.
+    let loaded = db.load_project().unwrap();
+    assert_eq!(loaded.name, "New Name");
+    assert_eq!(loaded.location.as_deref(), Some("Loc"));
+
+    // And it is visible through the lightweight metadata read.
+    let meta = db
+        .load_metadata(std::path::PathBuf::from("/tmp/x.stalx"))
+        .unwrap();
+    assert_eq!(meta.name, "New Name");
+}
+
 // === Test 3.1: Save/Load Multiple Sections ===
 #[test]
 fn test_save_load_multiple_sections() {

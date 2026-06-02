@@ -74,4 +74,38 @@ impl AppState {
         tracing::info!(path = ?path, "Removed project from recent list");
         CommandResult::success()
     }
+
+    /// Rename a project's display name on disk by path, without requiring it to
+    /// be the open project. Used by the recent-projects metadata panel. Mirrors
+    /// [`set_collab_enabled_for_path`](Self::set_collab_enabled_for_path): a
+    /// targeted DB update, plus keeping the open project's in-memory name in
+    /// sync if it happens to be the same file.
+    pub fn set_project_name_for_path(&self, path: PathBuf, name: String) -> CommandResult {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return CommandResult::failure("Project name cannot be empty".to_string());
+        }
+
+        let db = match Database::open_existing(&path) {
+            Ok(db) => db,
+            Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
+        };
+        if let Err(e) = db.save_project_name(trimmed) {
+            return CommandResult::failure(format!("Failed to rename project: {e}"));
+        }
+
+        // Keep the open project's in-memory state consistent if it's the same file.
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(open) = guard.as_mut() {
+            if open.file_path.as_deref() == Some(path.as_path()) {
+                open.name = trimmed.to_string();
+            }
+        }
+
+        tracing::info!(path = ?path, "Renamed project");
+        CommandResult::success()
+    }
 }

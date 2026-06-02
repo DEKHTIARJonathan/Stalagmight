@@ -125,6 +125,16 @@ pub(crate) fn remove_from_recent_projects_impl(
     state.remove_from_recent_projects(path)
 }
 
+/// Rename a recent project's display name by path (project need not be open).
+#[tauri::command]
+pub fn set_project_name_for_path(
+    state: State<AppState>,
+    path: PathBuf,
+    name: String,
+) -> CommandResult {
+    state.set_project_name_for_path(path, name)
+}
+
 /// Merge multiple projects into a new project file
 /// This creates a NEW output file, appends all sections with renumbered IDs,
 /// keeps all zero datums, and optionally archives the original files.
