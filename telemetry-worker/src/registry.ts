@@ -351,4 +351,6 @@ export const EVENT_NAMES: readonly string[] = [
   'action.dialog.collab-review',
   'dialog-cancel.collab-review',
   'dwell.dialog.collab-review',
+  // SVG stick-map export preview command.
+  'command.preview_svg_export',
 ];

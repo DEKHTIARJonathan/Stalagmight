@@ -26,7 +26,7 @@ use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
 };
 use stalagmight_lib::export::{
-    ColorMode, ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
+    ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
 };
 use stalagmight_lib::models::{
     ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
@@ -176,7 +176,6 @@ fn main() {
     // Export/image types
     export::<ExportImageOptions>(&out_dir);
     export::<ImageFormat>(&out_dir);
-    export::<ColorMode>(&out_dir);
     export::<DepthPreset>(&out_dir);
     export::<DepthPresetColors>(&out_dir);
     export::<ColorStop>(&out_dir);
@@ -330,7 +329,6 @@ fn main() {
         "CompassSurveySummary",
         "ExportImageOptions",
         "ImageFormat",
-        "ColorMode",
         "DepthPreset",
         "DepthPresetColors",
         "ColorStop",

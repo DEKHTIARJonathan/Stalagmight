@@ -2660,31 +2660,37 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] export_json called with:', args);
             return { success: true, path: args?.path };
 
+          case 'preview_svg_export': {
+            // Stick-map preview lives in the same backend command pipeline; the
+            // mock returns a tiny but valid SVG so the preview component can
+            // render without hitting Rust during e2e tests.
+            const opts = args?.options as Record<string, unknown> | undefined;
+            const threshold = (opts?.branching_threshold as number | undefined) ?? 0;
+            // Encode the threshold in a data attribute so tests can verify
+            // the preview re-fetches when the slider changes.
+            return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" data-threshold="${threshold}"><rect width="100" height="100" fill="#ffffff"/><line x1="10" y1="50" x2="90" y2="50" stroke="#000000" stroke-width="1"/></svg>`;
+          }
+
           case 'export_image': {
             console.log('[Mock IPC] export_image called with:', args);
             // Store args for test assertions via __E2E_MOCKS__.getLastExportImageArgs()
             const exportOptions = args?.options as Record<string, unknown> | undefined;
 
-            // Validate required new options are present (per spec requirements)
+            // Validate the slimmed ExportImageOptions shape (matches the new
+            // backend struct): format + dpi + branching_threshold only.
             if (exportOptions) {
-              if (exportOptions.color_mode === undefined) {
-                throw new Error('[Mock IPC] export_image: missing required option "color_mode"');
+              if (exportOptions.format === undefined) {
+                throw new Error('[Mock IPC] export_image: missing required option "format"');
               }
-              if (exportOptions.depth_preset === undefined) {
-                throw new Error('[Mock IPC] export_image: missing required option "depth_preset"');
+              if (exportOptions.dpi === undefined) {
+                throw new Error('[Mock IPC] export_image: missing required option "dpi"');
               }
-              if (exportOptions.include_legend === undefined) {
-                throw new Error('[Mock IPC] export_image: missing required option "include_legend"');
+              if (exportOptions.branching_threshold === undefined) {
+                throw new Error('[Mock IPC] export_image: missing required option "branching_threshold"');
               }
-              // Validate color_mode is a valid value
-              const validColorModes = ['section', 'depth'];
-              if (!validColorModes.includes(exportOptions.color_mode as string)) {
-                throw new Error(`[Mock IPC] export_image: invalid color_mode "${exportOptions.color_mode}", must be one of: ${validColorModes.join(', ')}`);
-              }
-              // Validate depth_preset is a valid value
-              const validPresets = ['thermal', 'ocean', 'terrain', 'grayscale', 'accessible'];
-              if (!validPresets.includes(exportOptions.depth_preset as string)) {
-                throw new Error(`[Mock IPC] export_image: invalid depth_preset "${exportOptions.depth_preset}", must be one of: ${validPresets.join(', ')}`);
+              const validFormats = ['png', 'svg', 'pdf'];
+              if (!validFormats.includes(exportOptions.format as string)) {
+                throw new Error(`[Mock IPC] export_image: invalid format "${exportOptions.format}", must be one of: ${validFormats.join(', ')}`);
               }
             }
 

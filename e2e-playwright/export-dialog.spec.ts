@@ -115,29 +115,73 @@ test.describe('Export Dialog', () => {
     // Click PNG to close dropdown (selecting default value)
     await imageDropdown.locator('[role="option"]:has-text("PNG")').click();
 
-    // Image options checkboxes should be visible
-    await expect(page.locator('[data-testid="option-include-labels"]')).toBeVisible();
-    await expect(page.locator('[data-testid="option-include-section-names"]')).toBeVisible();
-    await expect(page.locator('[data-testid="option-include-grid"]')).toBeVisible();
-    await expect(page.locator('[data-testid="option-include-shot-data"]')).toBeVisible();
-
-    // Default checkbox states
-    await expect(page.locator('[data-testid="option-include-labels"]')).toBeChecked();
-    await expect(page.locator('[data-testid="option-include-section-names"]')).toBeChecked();
-    await expect(page.locator('[data-testid="option-include-grid"]')).not.toBeChecked();
-    await expect(page.locator('[data-testid="option-include-shot-data"]')).not.toBeChecked();
-
     // Resolution select (custom Select component) should be visible for PNG format
     const resolutionSelect = page.locator('[data-testid="resolution-select"]');
     await expect(resolutionSelect).toBeVisible();
 
+    // Branching threshold slider should be visible with default value 2
+    const slider = page.locator('[data-testid="branching-threshold-slider"]');
+    await expect(slider).toBeVisible();
+    await expect(slider).toHaveValue('2');
+    await expect(page.locator('[data-testid="branching-threshold-value"]')).toHaveText('2');
+
     // Preview should be visible for image export
     const preview = page.locator('[data-testid="export-preview"]');
     await expect(preview).toBeVisible({ timeout: 5000 });
+  });
 
-    // Theme toggle should be visible
-    const themeToggle = page.locator('[data-testid="export-theme-toggle"]');
-    await expect(themeToggle).toBeVisible();
+  test('should hide DPI select for non-PNG formats', async ({ page }) => {
+    await createProject(page, 'Export Dialog Test Project');
+
+    await page.keyboard.press('Control+e');
+    await expect(page.locator('[data-testid="export-dialog"]')).toBeVisible({ timeout: 5000 });
+
+    await page.click('[data-testid="export-type-image"]');
+
+    // PNG (default): resolution visible
+    await expect(page.locator('[data-testid="resolution-select"]')).toBeVisible();
+
+    // Switch to SVG → resolution should disappear
+    const imageFormatSelect = page.locator('[data-testid="image-format-select"]');
+    await imageFormatSelect.locator('button').first().click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("SVG")').click();
+    await expect(page.locator('[data-testid="resolution-select"]')).not.toBeVisible();
+
+    // Switch to PDF → still hidden
+    await imageFormatSelect.locator('button').first().click();
+    await page.getByRole('listbox').locator('[role="option"]:has-text("PDF")').click();
+    await expect(page.locator('[data-testid="resolution-select"]')).not.toBeVisible();
+  });
+
+  test('threshold slider updates the displayed value and is passed to export', async ({ page }) => {
+    await createProject(page, 'Export Dialog Threshold Project');
+
+    await page.keyboard.press('Control+e');
+    await expect(page.locator('[data-testid="export-dialog"]')).toBeVisible({ timeout: 5000 });
+    await page.click('[data-testid="export-type-image"]');
+
+    const slider = page.locator('[data-testid="branching-threshold-slider"]');
+    await slider.fill('5');
+    await expect(page.locator('[data-testid="branching-threshold-value"]')).toHaveText('5');
+
+    // Clear captured args, then export and confirm the threshold lands in backend args.
+    await page.evaluate(() => {
+      const mocks = (window as unknown as { __E2E_MOCKS__?: { clearLastExportImageArgs?: () => void } }).__E2E_MOCKS__;
+      mocks?.clearLastExportImageArgs?.();
+    });
+
+    await page.getByTestId('export-button').click();
+    await expect(page.locator('[data-testid="export-dialog"]')).not.toBeVisible({ timeout: 10000 });
+
+    const exportArgs = await page.evaluate(() => {
+      const mocks = (window as unknown as {
+        __E2E_MOCKS__?: { getLastExportImageArgs: () => { options?: Record<string, unknown> } | null };
+      }).__E2E_MOCKS__;
+      return mocks?.getLastExportImageArgs?.() ?? null;
+    });
+    expect(exportArgs).not.toBeNull();
+    expect(exportArgs?.options?.branching_threshold).toBe(5);
+    expect(exportArgs?.options?.format).toBe('png');
   });
 
   test('should execute export and show success @smoke', async ({ page }) => {
@@ -319,73 +363,6 @@ test.describe('Export Dialog', () => {
     await expect(exportDialog).not.toBeVisible({ timeout: 3000 });
   });
 
-  test('should show color mode options for image export', async ({ page }) => {
-    await createProject(page, 'Export Dialog Test Project');
-
-    // Open export dialog
-    await page.keyboard.press('Control+e');
-    const exportDialog = page.locator('[data-testid="export-dialog"]');
-    await expect(exportDialog).toBeVisible({ timeout: 5000 });
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    // Color mode radio buttons should be visible
-    const sectionModeRadio = page.locator('[data-testid="color-mode-section"]');
-    const depthModeRadio = page.locator('[data-testid="color-mode-depth"]');
-    await expect(sectionModeRadio).toBeVisible();
-    await expect(depthModeRadio).toBeVisible();
-
-    // Section mode should be selected by default
-    await expect(sectionModeRadio).toBeChecked();
-    await expect(depthModeRadio).not.toBeChecked();
-  });
-
-  test('should show depth preset dropdown when depth mode selected', async ({ page }) => {
-    await createProject(page, 'Export Dialog Test Project');
-
-    // Open export dialog
-    await page.keyboard.press('Control+e');
-    const exportDialog = page.locator('[data-testid="export-dialog"]');
-    await expect(exportDialog).toBeVisible({ timeout: 5000 });
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    // Depth preset should NOT be visible initially (section mode is default)
-    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
-    await expect(depthPresetSelect).not.toBeVisible();
-
-    // Switch to depth mode
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Depth preset dropdown should now be visible
-    await expect(depthPresetSelect).toBeVisible();
-  });
-
-  test('should show include legend checkbox when depth mode selected', async ({ page }) => {
-    await createProject(page, 'Export Dialog Test Project');
-
-    // Open export dialog
-    await page.keyboard.press('Control+e');
-    const exportDialog = page.locator('[data-testid="export-dialog"]');
-    await expect(exportDialog).toBeVisible({ timeout: 5000 });
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    // Include legend should NOT be visible initially (section mode is default)
-    const includeLegendCheckbox = page.locator('[data-testid="option-include-legend"]');
-    await expect(includeLegendCheckbox).not.toBeVisible();
-
-    // Switch to depth mode
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Include legend checkbox should now be visible and checked by default
-    await expect(includeLegendCheckbox).toBeVisible();
-    await expect(includeLegendCheckbox).toBeChecked();
-  });
-
   test('should include 600 DPI option in resolution selector', async ({ page }) => {
     await createProject(page, 'Export Dialog Test Project');
 
@@ -409,34 +386,6 @@ test.describe('Export Dialog', () => {
     await expect(dropdown.locator('[role="option"]:has-text("600")')).toBeVisible();
   });
 
-  test('should hide depth options when switching from depth to section mode', async ({ page }) => {
-    await createProject(page, 'Export Dialog Test Project');
-
-    // Open export dialog
-    await page.keyboard.press('Control+e');
-    const exportDialog = page.locator('[data-testid="export-dialog"]');
-    await expect(exportDialog).toBeVisible({ timeout: 5000 });
-
-    // Switch to image export
-    await page.click('[data-testid="export-type-image"]');
-
-    // Switch to depth mode
-    await page.click('[data-testid="color-mode-depth"]');
-
-    // Depth options should be visible
-    const depthPresetSelect = page.locator('[data-testid="depth-preset-select"]');
-    const includeLegendCheckbox = page.locator('[data-testid="option-include-legend"]');
-    await expect(depthPresetSelect).toBeVisible();
-    await expect(includeLegendCheckbox).toBeVisible();
-
-    // Switch back to section mode
-    await page.click('[data-testid="color-mode-section"]');
-
-    // Depth options should be hidden
-    await expect(depthPresetSelect).not.toBeVisible();
-    await expect(includeLegendCheckbox).not.toBeVisible();
-  });
-
   test('should show progress for image export and disable cancel', async ({ page }) => {
     await createProject(page, 'Export Dialog Progress Project');
 
@@ -445,7 +394,6 @@ test.describe('Export Dialog', () => {
     await expect(exportDialog).toBeVisible({ timeout: 5000 });
 
     await page.click('[data-testid="export-type-image"]');
-    await page.click('[data-testid="color-mode-depth"]');
 
     const exportButton = page.getByTestId('export-button');
     await exportButton.click();

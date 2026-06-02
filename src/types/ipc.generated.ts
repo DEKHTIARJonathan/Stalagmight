@@ -86,7 +86,6 @@ export * from './ipc/CompassFile';
 export * from './ipc/CompassSurveySummary';
 export * from './ipc/ExportImageOptions';
 export * from './ipc/ImageFormat';
-export * from './ipc/ColorMode';
 export * from './ipc/DepthPreset';
 export * from './ipc/DepthPresetColors';
 export * from './ipc/ColorStop';
