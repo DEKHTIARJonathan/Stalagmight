@@ -14,7 +14,7 @@ import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import { RecentSortControl } from './RecentSortControl';
-import { useRecentSort, sortRecentProjects } from './useRecentSort';
+import { useRecentSort, sortRecentProjects, defaultDirectionForField, type RecentSortField } from './useRecentSort';
 import { RecentDensityToggle } from './RecentDensityToggle';
 import { useRecentDensity } from './useRecentDensity';
 import SystemTable from './SystemTable';
@@ -367,6 +367,20 @@ export default function GlobalView() {
   // List view layout density (cards vs compact table), persisted.
   const [density, setDensity] = useRecentDensity();
 
+  // Clicking a table column header sorts by it: toggle direction if already
+  // active, otherwise switch fields with a sensible default direction.
+  const handleHeaderSort = useCallback(
+    (field: RecentSortField) => {
+      if (recentSort.field === field) {
+        recentSort.toggleDirection();
+      } else {
+        recentSort.setField(field);
+        recentSort.setDirection(defaultDirectionForField(field));
+      }
+    },
+    [recentSort]
+  );
+
   // Recent paths the backend kept in config but couldn't load (file moved,
   // deleted, or unreadable) are surfaced as "unavailable" rows so the user can
   // see and remove them, rather than having them silently vanish.
@@ -610,6 +624,9 @@ export default function GlobalView() {
                   items={visibleItems}
                   selectedProjectId={selectedProjectId}
                   multiSelectedIds={multiSelectedIds}
+                  sortField={recentSort.field}
+                  sortDirection={recentSort.direction}
+                  onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
                   onOpen={handleProjectOpen}
                   onContextMenu={handleContextMenu}

@@ -25,6 +25,15 @@ const FIELDS: RecentSortField[] = [
 const DEFAULT_FIELD: RecentSortField = 'last_edited';
 const DEFAULT_DIRECTION: RecentSortDirection = 'desc';
 
+/**
+ * Sensible initial direction when switching to a field: alphabetical fields
+ * ascend (A→Z); numeric/date fields descend (largest/newest first). Used when a
+ * column header is clicked for a not-yet-active column.
+ */
+export function defaultDirectionForField(field: RecentSortField): RecentSortDirection {
+  return field === 'name' ? 'asc' : 'desc';
+}
+
 function readField(): RecentSortField {
   try {
     const stored = localStorage.getItem(FIELD_KEY);

@@ -78,6 +78,39 @@ test.describe('GlobalView Recent Projects — search, table view, missing files'
     await expect(page.getByTestId('globalview-list-table')).toBeVisible();
   });
 
+  test('clicking column headers sorts the table and shows the indicator', async ({ page }) => {
+    const rowOrder = () =>
+      page.locator('[data-testid^="system-row-/"]').evaluateAll((els) =>
+        els.map((e) => e.getAttribute('data-testid'))
+      );
+    const row = (p: string) => `system-row-${p}`;
+
+    await page.getByTestId('recent-density-table').click();
+    await expect(page.getByTestId('globalview-list-table')).toBeVisible();
+
+    // Click Name → ascending alphabetical, with an ascending indicator.
+    await page.getByTestId('recent-col-name').click();
+    expect(await rowOrder()).toEqual([row(ALPHA), row(GAMMA), row(LOCAL), row(BETA)]);
+    await expect(page.locator('th[aria-sort="ascending"]')).toContainText('Name');
+
+    // Click Name again → toggle to descending.
+    await page.getByTestId('recent-col-name').click();
+    expect(await rowOrder()).toEqual([row(BETA), row(LOCAL), row(GAMMA), row(ALPHA)]);
+    await expect(page.locator('th[aria-sort="descending"]')).toContainText('Name');
+
+    // Switch to Sections → defaults to descending (largest first).
+    await page.getByTestId('recent-col-sections').click();
+    expect(await rowOrder()).toEqual([row(GAMMA), row(ALPHA), row(BETA), row(LOCAL)]);
+    await expect(page.locator('th[aria-sort="descending"]')).toContainText('Sections');
+  });
+
+  test('header sorting stays in sync with the sort dropdown', async ({ page }) => {
+    await page.getByTestId('recent-density-table').click();
+    await page.getByTestId('recent-col-name').click();
+    // The dropdown control reflects the header-driven field.
+    await expect(page.getByTestId('recent-sort-field')).toContainText('Name');
+  });
+
   test('double-clicking a table row opens the project', async ({ page }) => {
     await page.getByTestId('recent-density-table').click();
     await page.getByTestId(`system-row-${GAMMA}`).dblclick();

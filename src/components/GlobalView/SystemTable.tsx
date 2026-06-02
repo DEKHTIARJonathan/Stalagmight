@@ -5,19 +5,39 @@ import {
   formatNumber,
   formatRelativeTime,
 } from '../../i18n/format';
-import { ElidedPath, Tooltip } from '../common';
+import { ElidedPath, Tooltip, ChevronUpIcon, ChevronDownIcon } from '../common';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
+import type { RecentSortField, RecentSortDirection } from './useRecentSort';
 
 interface SystemTableProps {
   items: RecentListItem[];
   selectedProjectId: string | null;
   multiSelectedIds: Set<string>;
+  sortField: RecentSortField;
+  sortDirection: RecentSortDirection;
+  /** Toggle/apply sorting when a sortable column header is clicked. */
+  onSort: (field: RecentSortField) => void;
   onSelect: (filePath: string, ctrlKey: boolean) => void;
   onOpen: (filePath: string) => void;
   onContextMenu: (e: MouseEvent, filePath: string) => void;
   onRemoveMissing: (filePath: string) => void;
 }
+
+interface ColumnDef {
+  key: string;
+  /** Sort field this column maps to, or undefined if it isn't sortable. */
+  field?: RecentSortField;
+  align: 'left' | 'right';
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'name', field: 'name', align: 'left' },
+  { key: 'path', align: 'left' },
+  { key: 'sections', field: 'sections', align: 'right' },
+  { key: 'length', field: 'length', align: 'right' },
+  { key: 'edited', field: 'last_edited', align: 'left' },
+];
 
 function relative(dateStr: string): string {
   try {
@@ -55,6 +75,9 @@ export function SystemTable({
   items,
   selectedProjectId,
   multiSelectedIds,
+  sortField,
+  sortDirection,
+  onSort,
   onSelect,
   onOpen,
   onContextMenu,
@@ -63,18 +86,50 @@ export function SystemTable({
   const { t } = useTranslation();
   const { formatLength } = useProjectStatFormatters();
 
-  const headerClass = 'text-left text-xs font-medium text-text-secondary px-3 py-2 sticky top-0 bg-background z-10';
+  const headerClass = 'text-xs font-medium text-text-secondary px-3 py-2 sticky top-0 bg-background z-10';
   const cellClass = 'px-3 py-2 text-sm';
+
+  const renderHeader = (col: ColumnDef) => {
+    const label = t(`globalView.recent.columns.${col.key}`);
+    const alignClass = col.align === 'right' ? 'text-right' : 'text-left';
+    const isActive = col.field !== undefined && sortField === col.field;
+    const ariaSort = isActive ? (sortDirection === 'asc' ? 'ascending' : 'descending') : undefined;
+
+    if (!col.field) {
+      return (
+        <th key={col.key} className={`${headerClass} ${alignClass}`}>{label}</th>
+      );
+    }
+
+    const field = col.field;
+    return (
+      <th key={col.key} className={`${headerClass} ${alignClass}`} aria-sort={ariaSort}>
+        <button
+          type="button"
+          onClick={() => onSort(field)}
+          className={`inline-flex items-center gap-1 hover:text-text ${
+            col.align === 'right' ? 'flex-row-reverse' : ''
+          } ${isActive ? 'text-text' : ''}`}
+          aria-label={t('globalView.recent.sortByColumn', { column: label })}
+          data-testid={`recent-col-${col.key}`}
+        >
+          <span>{label}</span>
+          {isActive &&
+            (sortDirection === 'asc' ? (
+              <ChevronUpIcon size={14} />
+            ) : (
+              <ChevronDownIcon size={14} />
+            ))}
+        </button>
+      </th>
+    );
+  };
 
   return (
     <table className="w-full border-collapse" data-testid="globalview-list-table">
       <thead>
         <tr className="border-b border-border">
-          <th className={headerClass}>{t('globalView.recent.columns.name')}</th>
-          <th className={headerClass}>{t('globalView.recent.columns.path')}</th>
-          <th className={`${headerClass} text-right`}>{t('globalView.recent.columns.sections')}</th>
-          <th className={`${headerClass} text-right`}>{t('globalView.recent.columns.length')}</th>
-          <th className={headerClass}>{t('globalView.recent.columns.edited')}</th>
+          {COLUMNS.map(renderHeader)}
         </tr>
       </thead>
       <tbody>

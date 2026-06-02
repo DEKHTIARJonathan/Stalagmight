@@ -1400,6 +1400,7 @@
         "length": "Length",
         "edited": "Edited"
       },
+      "sortByColumn": "Sort by {{column}}",
       "missing": {
         "notFound": "File not found",
         "remove": "Remove"
