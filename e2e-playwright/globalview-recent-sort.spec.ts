@@ -92,4 +92,16 @@ test.describe('GlobalView Recent Projects — path, relative time, sort', () => 
     // Descending by section_count: Gamma(8), Alpha(5), Beta(3), Local(2).
     expect(await cardOrder(page)).toEqual([GAMMA, ALPHA, BETA, LOCAL]);
   });
+
+  test('sorts by last opened (backend recency order), reversible', async ({ page }) => {
+    // Switch away first so the change back is observable.
+    await selectSortField(page, 'Name');
+    await selectSortField(page, 'Last opened');
+    // Descending = most-recently-opened first = the order the backend returns.
+    expect(await cardOrder(page)).toEqual([ALPHA, BETA, GAMMA, LOCAL]);
+
+    // Ascending = oldest-opened first.
+    await page.getByTestId('recent-sort-direction').click();
+    expect(await cardOrder(page)).toEqual([LOCAL, GAMMA, BETA, ALPHA]);
+  });
 });

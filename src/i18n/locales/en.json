@@ -1388,6 +1388,7 @@
       "hint": "Click to select, double-click to open, right-click for options.",
       "sort": {
         "label": "Sort by",
+        "lastOpened": "Last opened",
         "lastEdited": "Last edited",
         "name": "Name",
         "sections": "Section count",

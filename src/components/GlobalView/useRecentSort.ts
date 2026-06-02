@@ -1,7 +1,12 @@
 import { useCallback, useState } from 'react';
 
 /** Field the recent-projects list is sorted by. */
-export type RecentSortField = 'last_edited' | 'name' | 'sections' | 'length';
+export type RecentSortField =
+  | 'last_opened'
+  | 'last_edited'
+  | 'name'
+  | 'sections'
+  | 'length';
 
 /** Sort direction. */
 export type RecentSortDirection = 'asc' | 'desc';
@@ -9,7 +14,13 @@ export type RecentSortDirection = 'asc' | 'desc';
 const FIELD_KEY = 'recentProjectsSortField';
 const DIRECTION_KEY = 'recentProjectsSortDirection';
 
-const FIELDS: RecentSortField[] = ['last_edited', 'name', 'sections', 'length'];
+const FIELDS: RecentSortField[] = [
+  'last_opened',
+  'last_edited',
+  'name',
+  'sections',
+  'length',
+];
 
 const DEFAULT_FIELD: RecentSortField = 'last_edited';
 const DEFAULT_DIRECTION: RecentSortDirection = 'desc';
@@ -90,21 +101,35 @@ export function useRecentSort(): RecentSort {
 /**
  * Returns a new array of projects sorted by the given field and direction.
  * `last_edited`/`sections`/`length` sort numerically; `name` uses a
- * locale-aware comparison. Direction flips the comparator.
+ * locale-aware comparison; `last_opened` preserves the backend's recency order
+ * (the input array is already most-recently-opened first — there is no
+ * per-project "opened at" timestamp, so the original position is the signal).
+ * Direction flips the comparator: `desc` puts the largest/most-recent first.
  */
 export function sortRecentProjects<
   T extends {
     name: string;
+    file_path: string;
     modified_at: string;
     section_count: number;
     total_length: number;
   }
 >(projects: T[], field: RecentSortField, direction: RecentSortDirection): T[] {
   const sign = direction === 'asc' ? 1 : -1;
+  // Original positions encode last-opened recency (index 0 = most recent).
+  const openedIndex = new Map(projects.map((p, i) => [p.file_path, i]));
   const sorted = [...projects];
   sorted.sort((a, b) => {
     let cmp: number;
     switch (field) {
+      case 'last_opened': {
+        // Treat a more-recent (lower) index as the "larger" value so that
+        // `desc` surfaces the most-recently-opened project first.
+        const ia = openedIndex.get(a.file_path) ?? 0;
+        const ib = openedIndex.get(b.file_path) ?? 0;
+        cmp = ib - ia;
+        break;
+      }
       case 'name':
         cmp = a.name.localeCompare(b.name);
         break;
