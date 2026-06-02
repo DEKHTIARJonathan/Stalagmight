@@ -1488,7 +1488,7 @@
     },
     "systemCard": {
       "length": "Length",
-      "modified": "Modified {{date}}",
+      "modified": "Edited {{relative}}",
       "sections": "Sections"
     },
     "tooltip": {

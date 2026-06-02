@@ -1,8 +1,14 @@
 import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
-import { formatDate as formatDateIntl, formatFixed, formatNumber } from '../../i18n/format';
+import {
+  formatDate as formatDateIntl,
+  formatFixed,
+  formatNumber,
+  formatRelativeTime,
+} from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { ElidedPath, Tooltip } from '../common';
 
 interface SystemCardProps {
   name: string;
@@ -53,21 +59,32 @@ export default function SystemCard({
     }
   };
 
-  const formatDate = (dateStr: string) => {
+  // Relative "edited" label (e.g. "2 hours ago"); the exact timestamp is shown
+  // in the tooltip below. Falls back to the raw string if the date is invalid.
+  const relativeModified = (dateStr: string) => {
     try {
-      return formatDateInternal(dateStr);
+      const date = new Date(dateStr);
+      if (Number.isNaN(date.getTime())) return dateStr;
+      return formatRelativeTime(date);
     } catch {
       return dateStr;
     }
   };
 
-  const formatDateInternal = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return formatDateIntl(date, undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
+  const absoluteModified = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      if (Number.isNaN(date.getTime())) return dateStr;
+      return formatDateIntl(date, undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return dateStr;
+    }
   };
 
   const formatLength = (meters: number) => {
@@ -103,8 +120,13 @@ export default function SystemCard({
     >
       <h3 className="text-lg font-medium mb-1">{name}</h3>
       {location && (
-        <p className="text-sm text-text-secondary mb-3">{location}</p>
+        <p className="text-sm text-text-secondary mb-1">{location}</p>
       )}
+      <ElidedPath
+        path={filePath}
+        className="text-xs text-text-tertiary mb-3"
+        data-testid="system-card-path"
+      />
 
       <div className="grid grid-cols-2 gap-2 text-sm">
         <div>
@@ -118,7 +140,11 @@ export default function SystemCard({
       </div>
 
       <div className="mt-3 pt-3 border-t border-border text-xs text-text-secondary">
-        {t('globalView.systemCard.modified', { date: formatDate(modifiedAt) })}
+        <Tooltip content={absoluteModified(modifiedAt)}>
+          <span data-testid="system-card-modified">
+            {t('globalView.systemCard.modified', { relative: relativeModified(modifiedAt) })}
+          </span>
+        </Tooltip>
       </div>
     </div>
   );
