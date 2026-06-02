@@ -5811,3 +5811,95 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     );
     assert_eq!(merged.len(), 4);
 }
+
+// === Structural integrity check ===
+
+/// A two-section project with one valid merge, zero datum, and loop closure.
+fn integrity_fixture() -> (Project, SectionId, SectionId) {
+    let mut project = Project::new("Integrity".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
+    });
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 1),
+        path_length: 10.0,
+        misclosure_distance: 0.2,
+        error_percentage: 2.0,
+        horizontal_misclosure: 0.15,
+        vertical_misclosure: 0.05,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+    (project, a, b)
+}
+
+#[test]
+fn integrity_clean_project_has_no_violations() {
+    let (project, _, _) = integrity_fixture();
+    assert!(project.check_structural_integrity().is_empty());
+    assert!(!project.has_critical_integrity_violations());
+}
+
+#[test]
+fn integrity_flags_merge_to_missing_section() {
+    let (mut project, a, _) = integrity_fixture();
+    // Point the merge at a section id that doesn't exist.
+    project.station_merges[0].station_b = StationRef::new(9999, 0);
+    let v = project.check_structural_integrity();
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0].severity, ViolationSeverity::Critical);
+    assert_eq!(v[0].category, "dangling_merge_ref");
+    assert!(project.has_critical_integrity_violations());
+    // The valid endpoint (section a) is untouched.
+    assert!(project.get_section(a).is_some());
+}
+
+#[test]
+fn integrity_flags_station_index_out_of_range() {
+    let (mut project, a, _) = integrity_fixture();
+    // Section a has 1 shot → stations 0..=1; index 5 is out of range.
+    project.station_merges[0].station_a = StationRef::new(a, 5);
+    let v = project.check_structural_integrity();
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0].severity, ViolationSeverity::Critical);
+    assert!(v[0].message.contains("out of range"));
+}
+
+#[test]
+fn integrity_flags_dangling_closure_and_zero_datum() {
+    let (mut project, _, _) = integrity_fixture();
+    project.loop_closures[0].station_b = StationRef::new(9999, 0);
+    project.zero_datums[0].station_ref = StationRef::new(9999, 0);
+    let v = project.check_structural_integrity();
+    let categories: Vec<&str> = v.iter().map(|x| x.category.as_str()).collect();
+    assert!(categories.contains(&"dangling_closure_ref"), "{v:?}");
+    assert!(categories.contains(&"dangling_zero_datum_ref"), "{v:?}");
+    assert!(v.iter().all(|x| x.severity == ViolationSeverity::Critical));
+}
+
+#[test]
+fn integrity_orphan_offsets_and_comments_are_warnings_only() {
+    let (mut project, _, _) = integrity_fixture();
+    project.section_offsets.insert(9999, (1.0, 2.0));
+    project.station_offsets.insert(StationRef::new(9999, 0), (1.0, 2.0, 3.0));
+    project.station_comments.insert(StationRef::new(9999, 0), "x".to_string());
+    let v = project.check_structural_integrity();
+    assert_eq!(v.len(), 3, "{v:?}");
+    assert!(v.iter().all(|x| x.severity == ViolationSeverity::Warning));
+    // Warnings alone don't trip the critical gate.
+    assert!(!project.has_critical_integrity_violations());
+}

@@ -6108,6 +6108,137 @@ impl Project {
     }
 }
 
+/// Severity of a structural-integrity violation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViolationSeverity {
+    /// A dangling reference that will cause runtime panics or geometry
+    /// corruption if used (e.g. a merge pointing at a deleted station).
+    Critical,
+    /// A stale/orphaned entry that is ignored by lookups but signals an
+    /// inconsistent project (e.g. an offset keyed by a deleted section).
+    Warning,
+}
+
+/// A single structural-integrity violation found by
+/// [`Project::check_structural_integrity`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegrityViolation {
+    pub severity: ViolationSeverity,
+    /// Stable machine-readable category (e.g. `"dangling_merge_ref"`).
+    pub category: String,
+    /// Human-readable description.
+    pub message: String,
+}
+
+impl Project {
+    /// Reason a [`StationRef`] is invalid — it names a section that no longer
+    /// exists, or a station index past the end of that section — or `None` if it
+    /// points at a real station. A section with `N` shots has `N + 1` stations,
+    /// indices `0..=N`.
+    fn station_ref_violation(&self, sr: &StationRef) -> Option<String> {
+        match self.get_section(sr.section_id) {
+            None => Some(format!("references missing section {}", sr.section_id)),
+            Some(section) => {
+                let max_index = section.shots.len() as u32;
+                if sr.station_index > max_index {
+                    Some(format!(
+                        "station index {} out of range for section {} (0..={})",
+                        sr.station_index, sr.section_id, max_index
+                    ))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Audit every cross-reference in the project and return all structural
+    /// violations (an empty vec means the project is structurally sound). This
+    /// does not mutate the project and does not look at shot geometry — it only
+    /// checks that merges, loop closures, zero datums, and the offset/comment
+    /// maps point at stations and sections that actually exist.
+    ///
+    /// Used to (a) block commands that would introduce corruption and (b) warn
+    /// about — and repair — corruption already present in a loaded project.
+    pub fn check_structural_integrity(&self) -> Vec<IntegrityViolation> {
+        let mut violations = Vec::new();
+
+        for (i, merge) in self.station_merges.iter().enumerate() {
+            for (label, sr) in [("station_a", &merge.station_a), ("station_b", &merge.station_b)] {
+                if let Some(reason) = self.station_ref_violation(sr) {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "dangling_merge_ref".to_string(),
+                        message: format!("Station merge #{i} {label} {reason}"),
+                    });
+                }
+            }
+        }
+
+        for (i, datum) in self.zero_datums.iter().enumerate() {
+            if let Some(reason) = self.station_ref_violation(&datum.station_ref) {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Critical,
+                    category: "dangling_zero_datum_ref".to_string(),
+                    message: format!("Zero datum #{i} {reason}"),
+                });
+            }
+        }
+
+        for closure in &self.loop_closures {
+            for (label, sr) in [("station_a", &closure.station_a), ("station_b", &closure.station_b)] {
+                if let Some(reason) = self.station_ref_violation(sr) {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "dangling_closure_ref".to_string(),
+                        message: format!("Loop closure {} {label} {reason}", closure.id),
+                    });
+                }
+            }
+        }
+
+        for section_id in self.section_offsets.keys() {
+            if self.get_section(*section_id).is_none() {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Warning,
+                    category: "orphan_section_offset".to_string(),
+                    message: format!("Section offset for missing section {section_id}"),
+                });
+            }
+        }
+
+        for sr in self.station_offsets.keys() {
+            if let Some(reason) = self.station_ref_violation(sr) {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Warning,
+                    category: "orphan_station_offset".to_string(),
+                    message: format!("Station offset {reason}"),
+                });
+            }
+        }
+
+        for sr in self.station_comments.keys() {
+            if let Some(reason) = self.station_ref_violation(sr) {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Warning,
+                    category: "orphan_station_comment".to_string(),
+                    message: format!("Station comment {reason}"),
+                });
+            }
+        }
+
+        violations
+    }
+
+    /// True if the project has any [`ViolationSeverity::Critical`] violation —
+    /// the cheap gate used to block corrupting commands.
+    pub fn has_critical_integrity_violations(&self) -> bool {
+        self.check_structural_integrity()
+            .iter()
+            .any(|v| v.severity == ViolationSeverity::Critical)
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests;
