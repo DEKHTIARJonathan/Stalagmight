@@ -1,10 +1,11 @@
-import { type FC, useState, useCallback } from 'react';
+import { type FC, useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { Toggle } from '../common/Toggle';
+import { PencilIcon, CheckIcon, CloseIcon } from '../common/icons';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { formatDate, formatFixed, formatNumber } from '../../i18n/format';
@@ -39,9 +40,13 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(collapsed);
   const [collabBusy, setCollabBusy] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameBusy, setNameBusy] = useState(false);
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
   const setCollabEnabledForPath = useProjectStore((s) => s.setCollabEnabledForPath);
+  const setProjectNameForPath = useProjectStore((s) => s.setProjectNameForPath);
   const loadRecentProjects = useProjectStore((s) => s.loadRecentProjects);
   const showToast = useUIStore((s) => s.showToast);
 
@@ -119,6 +124,47 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     },
     [singleProject?.file_path, setCollabEnabledForPath, loadRecentProjects, showToast, t]
   );
+
+  // Rename the selected (not-necessarily-open) project's display name.
+  const startEditName = useCallback(() => {
+    if (!singleProject) return;
+    setNameDraft(singleProject.name);
+    setEditingName(true);
+  }, [singleProject]);
+
+  const cancelEditName = useCallback(() => {
+    setEditingName(false);
+  }, []);
+
+  // Leave edit mode when the selection changes so a stale draft can't apply to
+  // a different project.
+  useEffect(() => {
+    setEditingName(false);
+  }, [singleProject?.file_path]);
+
+  const commitName = useCallback(async () => {
+    if (!singleProject?.file_path) return;
+    const next = nameDraft.trim();
+    if (!next) return; // also guarded by the disabled Save button
+    if (next === singleProject.name) {
+      setEditingName(false);
+      return;
+    }
+    setNameBusy(true);
+    try {
+      const result = await setProjectNameForPath(singleProject.file_path, next);
+      if (!result.success) {
+        showToast(result.error ?? t('globalView.metadata.rename.failed'), 'rename');
+      } else {
+        setEditingName(false);
+        await loadRecentProjects();
+      }
+    } catch (e) {
+      showToast(String(e), 'rename');
+    } finally {
+      setNameBusy(false);
+    }
+  }, [singleProject, nameDraft, setProjectNameForPath, showToast, loadRecentProjects, t]);
 
   // Format date for display
   const formatProjectDate = (isoDate: string | null | undefined): string => {
@@ -280,12 +326,72 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
           <div className="flex-1 overflow-auto">
             {/* Metadata fields */}
             <div className="p-3 space-y-3" aria-labelledby="metadata-panel-title">
-              {/* Project Name */}
-              <MetadataField
-                label={t('globalView.metadata.fields.name')}
-                value={singleProject.name}
-                testId="metadata-name"
-              />
+              {/* Project Name (inline editable) */}
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-xs text-text-secondary font-medium">
+                  {t('globalView.metadata.fields.name')}
+                </dt>
+                {editingName ? (
+                  <div className="flex items-center gap-1">
+                    <input
+                      autoFocus
+                      value={nameDraft}
+                      onChange={(e) => setNameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          // Stop the global GlobalView shortcut handler from also
+                          // reacting: committing unmounts this input, so its
+                          // "ignore inputs" focus guard would miss the bubbled event.
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void commitName();
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          cancelEditName();
+                        }
+                      }}
+                      disabled={nameBusy}
+                      aria-label={t('globalView.metadata.rename.inputAria')}
+                      data-testid="metadata-name-input"
+                      className="flex-1 min-w-0 bg-background border border-border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                    />
+                    <button
+                      onClick={() => void commitName()}
+                      disabled={nameBusy || nameDraft.trim().length === 0}
+                      aria-label={t('globalView.metadata.rename.save')}
+                      title={t('globalView.metadata.rename.save')}
+                      data-testid="metadata-name-save"
+                      className="p-1 text-text-secondary hover:text-accent disabled:opacity-40"
+                    >
+                      <CheckIcon size={16} />
+                    </button>
+                    <button
+                      onClick={cancelEditName}
+                      disabled={nameBusy}
+                      aria-label={t('globalView.metadata.rename.cancel')}
+                      title={t('globalView.metadata.rename.cancel')}
+                      data-testid="metadata-name-cancel"
+                      className="p-1 text-text-secondary hover:text-text"
+                    >
+                      <CloseIcon size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <dd className="text-sm text-text-primary flex items-center gap-1" data-testid="metadata-name">
+                    <span className="truncate" title={singleProject.name}>{singleProject.name}</span>
+                    <button
+                      onClick={startEditName}
+                      aria-label={t('globalView.metadata.rename.editAria', { name: singleProject.name })}
+                      title={t('globalView.metadata.rename.editAria', { name: singleProject.name })}
+                      data-testid="metadata-name-edit"
+                      className="p-0.5 text-text-secondary hover:text-accent flex-shrink-0"
+                    >
+                      <PencilIcon size={14} />
+                    </button>
+                  </dd>
+                )}
+              </div>
 
               {/* Location */}
               <MetadataField

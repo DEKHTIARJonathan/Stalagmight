@@ -265,6 +265,8 @@ interface ProjectStore {
   // Collaboration mode
   setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
   setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
+  /** Rename a recent project's display name by path (project need not be open). */
+  setProjectNameForPath: (path: string, name: string) => Promise<CommandResult>;
   getCollabState: () => Promise<CollabState | null>;
   detectCollabChanges: () => Promise<CollabChangeSet | null>;
   applyCollabChanges: () => Promise<CommandResult>;
@@ -1307,6 +1309,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'set_collab_enabled_for_path',
       { path, enabled },
       { purpose: 'toggle collaboration mode for a recent project', fields: { path } }
+    );
+  },
+
+  setProjectNameForPath: async (path: string, name: string) => {
+    return executeCommand(
+      'set_project_name_for_path',
+      { path, name },
+      { purpose: 'rename a recent project', fields: { path } }
     );
   },
 

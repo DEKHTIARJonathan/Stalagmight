@@ -285,6 +285,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
 
+      // Per-path project-name overrides applied by set_project_name_for_path,
+      // so list_recent_projects reflects renames within a test.
+      const recentNameOverrides: Record<string, string> = {};
+
       // Expose currentProject setter for E2E tests (allows injecting test fixtures)
       (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
         setCurrentProject: (project: typeof currentProject) => {
@@ -2557,7 +2561,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 gps_bounds: null,
                 collab_enabled: false,
               },
-            ];
+            ].map((p) =>
+              recentNameOverrides[p.file_path]
+                ? { ...p, name: recentNameOverrides[p.file_path] }
+                : p
+            );
 
           case 'get_warnings':
           case 'get_project_warnings':
@@ -2567,6 +2575,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Mock remove from recent - just return success
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
             return { success: true };
+
+          case 'set_project_name_for_path': {
+            const p = String(args?.path ?? '');
+            const name = String(args?.name ?? '').trim();
+            if (!name) return { success: false, error: 'Project name cannot be empty' };
+            recentNameOverrides[p] = name;
+            return { success: true };
+          }
 
           // Display settings (per-project) - uses in-memory storage for persistence testing
           case 'load_display_settings':
