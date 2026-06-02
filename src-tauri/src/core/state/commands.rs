@@ -70,6 +70,23 @@ impl<'a> Drop for CascadeDeferGuard<'a> {
 }
 
 impl AppState {
+    /// Whether a command can change structural cross-references and therefore
+    /// needs the post-command integrity gate. Pure field edits and the project
+    /// lifecycle commands cannot dangle references, so they skip the
+    /// (full-project) snapshot the gate would otherwise take.
+    fn command_can_affect_integrity(cmd: &Command) -> bool {
+        !matches!(
+            cmd,
+            Command::CreateProject { .. }
+                | Command::OpenProject { .. }
+                | Command::SaveProject { .. }
+                | Command::CloseProject
+                | Command::UpdateShot { .. }
+                | Command::UpdateSectionMetadata { .. }
+                | Command::SetShotReference { .. }
+        )
+    }
+
     /// Execute a command and return the result
     pub fn execute(&self, cmd: Command) -> CommandResult {
         // Serialize all command execution to prevent concurrent interleaving
@@ -87,6 +104,16 @@ impl AppState {
             self.generate_undo_data(&cmd)
         } else {
             UndoData::None
+        };
+
+        // Snapshot before any structural command so a result that introduces
+        // dangling references can be rejected and rolled back — corruption must
+        // not enter the project through the command path (#17). Pure field edits
+        // and lifecycle commands can't dangle refs, so they skip the snapshot.
+        let integrity_snapshot = if Self::command_can_affect_integrity(&cmd) {
+            self.capture_project_snapshot().ok()
+        } else {
+            None
         };
 
         let result = match &cmd {
@@ -198,6 +225,34 @@ impl AppState {
             ),
             Command::ApplyCollabChanges => self.apply_collab_changes(),
         };
+
+        // Block corruption at the source: if a structural command left the
+        // project with dangling references, roll back to the pre-command
+        // snapshot and reject it rather than committing (and later persisting)
+        // a corrupt state (#17).
+        if result.success {
+            if let Some(snapshot) = &integrity_snapshot {
+                let introduced_corruption = self
+                    .project
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
+                    .unwrap_or(false);
+                if introduced_corruption {
+                    self.rollback_project(snapshot);
+                    tracing::error!(
+                        command = ?cmd.description(),
+                        purpose = "block corruption at the source",
+                        "Rejected command that would corrupt survey structure; rolled back"
+                    );
+                    return CommandResult::failure(
+                        "Blocked: this action would corrupt the survey structure \
+                         (it leaves dangling references). No changes were made."
+                            .to_string(),
+                    );
+                }
+            }
+        }
 
         // Push to undo stack if successful and undoable.
         // Batch commands handle their own undo push inside execute_batch()
