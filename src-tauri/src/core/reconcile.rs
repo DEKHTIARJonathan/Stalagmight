@@ -803,6 +803,7 @@ fn empty_impact(sid: SectionId, shot_index: u32) -> DeleteShotImpact {
         removed_closures: Vec::new(),
         replacement_merges: Vec::new(),
         replacement_closure_updates: Vec::new(),
+        closure_to_merge: Vec::new(),
         merge_rewire_skipped: false,
         closure_rewire_skipped: false,
         shift_blocked: false,

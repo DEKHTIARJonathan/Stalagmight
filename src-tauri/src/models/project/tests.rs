@@ -5848,6 +5848,63 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
 }
 
 #[test]
+fn deleting_shot_converts_broken_loop_closure_to_merge() {
+    // Section A: A0-A1-A2 (2 shots); Section B: B0-B1 (1 shot).
+    let mut project = Project::new("Loop".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(90.0, 90.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    // A2 is merged with B0 (B hangs off the end of A).
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    // A loop closure ties A0 to A2 (the A0-A1-A2 survey is the loop).
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(a, 2),
+        path_length: 2.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    // Delete A's last shot (A1->A2): removes station A2, a closure endpoint. The
+    // surviving B segment is detached, so the closure must become a merge.
+    let last_shot_id = project.get_section(a).unwrap().shots.last().unwrap().id;
+    let (_, impact) = project.remove_shot_with_rewire(a, last_shot_id).unwrap();
+
+    assert_eq!(impact.closure_to_merge.len(), 1, "impact: {impact:?}");
+    assert!(
+        project.loop_closures.is_empty(),
+        "broken loop should not remain a closure: {:?}",
+        project.loop_closures
+    );
+    assert!(
+        project.station_merges.iter().any(|m| {
+            let pair = (m.station_a, m.station_b);
+            pair == (StationRef::new(b, 0), StationRef::new(a, 0))
+                || pair == (StationRef::new(a, 0), StationRef::new(b, 0))
+        }),
+        "expected a merge between A0 and B0; got {:?}",
+        project.station_merges
+    );
+    // And the result is structurally sound.
+    assert!(!project.has_critical_integrity_violations());
+}
+
+#[test]
 fn integrity_clean_project_has_no_violations() {
     let (project, _, _) = integrity_fixture();
     assert!(project.check_structural_integrity().is_empty());

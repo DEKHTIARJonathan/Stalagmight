@@ -23,6 +23,7 @@ export default function DeleteShotImpactDetails({
     impact.removed_closures.length > 0 ||
     impact.replacement_merges.length > 0 ||
     impact.replacement_closure_updates.length > 0 ||
+    impact.closure_to_merge.length > 0 ||
     impact.merge_rewire_skipped ||
     impact.closure_rewire_skipped;
 
@@ -82,6 +83,17 @@ export default function DeleteShotImpactDetails({
                   </li>
                 );
               })}
+            </ul>
+          </div>
+        )}
+
+        {impact.closure_to_merge.length > 0 && (
+          <div>
+            <p className="font-medium">Closures becoming merges</p>
+            <ul className="list-disc list-inside">
+              {impact.closure_to_merge.map((pair, index) => (
+                <li key={`closure-to-merge-${index}`}>{formatPair(pair.station_a, pair.station_b)}</li>
+              ))}
             </ul>
           </div>
         )}

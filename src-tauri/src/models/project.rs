@@ -120,6 +120,11 @@ pub struct DeleteShotImpact {
     pub removed_closures: Vec<ClosurePair>,
     pub replacement_merges: Vec<StationPair>,
     pub replacement_closure_updates: Vec<ClosureUpdate>,
+    /// Closures broken by the deletion: the surviving endpoints are no longer
+    /// connected through the survey, so the closure is replaced by a plain
+    /// station merge instead of being kept as a (false) loop. See issue #8.
+    #[serde(default)]
+    pub closure_to_merge: Vec<StationPair>,
     pub merge_rewire_skipped: bool,
     pub closure_rewire_skipped: bool,
     #[serde(default)]
@@ -1066,10 +1071,15 @@ impl Project {
         components
     }
 
+    /// Stations adjacent to `station_ref` through shots (skipping `excluded_shot`)
+    /// and merges, plus loop closures when `include_closures` is true. Pass
+    /// `false` to ask "are these connected by the *survey itself*" — used to tell
+    /// a true loop from a detached pair when deciding closure-vs-merge.
     fn station_neighbors_excluding_shot(
         &self,
         station_ref: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
+        include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
         let Some(section) = self.get_section(station_ref.section_id) else {
@@ -1104,11 +1114,13 @@ impl Project {
         }
 
         // Closures (all strategies)
-        for closure in &self.loop_closures {
-            if closure.station_a == station_ref {
-                neighbors.push(closure.station_b);
-            } else if closure.station_b == station_ref {
-                neighbors.push(closure.station_a);
+        if include_closures {
+            for closure in &self.loop_closures {
+                if closure.station_a == station_ref {
+                    neighbors.push(closure.station_b);
+                } else if closure.station_b == station_ref {
+                    neighbors.push(closure.station_a);
+                }
             }
         }
 
@@ -1120,6 +1132,7 @@ impl Project {
         station_a: StationRef,
         station_b: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
+        include_closures: bool,
     ) -> bool {
         if station_a == station_b {
             return true;
@@ -1130,7 +1143,7 @@ impl Project {
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot) {
+            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, include_closures) {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
@@ -1158,7 +1171,7 @@ impl Project {
         queue.push_back(station_ref);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot) {
+            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, true) {
                 if visited.insert(neighbor) {
                     if zero_datum_set.contains(&neighbor) {
                         return true;
@@ -1368,6 +1381,7 @@ impl Project {
             removed_closures: Vec::new(),
             replacement_merges: Vec::new(),
             replacement_closure_updates: Vec::new(),
+            closure_to_merge: Vec::new(),
             merge_rewire_skipped: false,
             closure_rewire_skipped: false,
             shift_blocked: false,
@@ -1457,11 +1471,26 @@ impl Project {
                         || self.are_stations_in_closure(replacement_station, other)
                     {
                         impact.closure_rewire_skipped = true;
-                    } else {
+                    } else if self.are_stations_connected_excluding_shot(
+                        replacement_station,
+                        other,
+                        Some((section_id, pos)),
+                        false,
+                    ) {
+                        // The two ends still reach each other through the survey
+                        // (shots + merges), so it remains a genuine loop — just
+                        // move the closure off the deleted station.
                         impact.replacement_closure_updates.push(ClosureUpdate {
                             closure_id: closure.closure_id,
                             old_station: removed_station,
                             new_station: replacement_station,
+                        });
+                    } else {
+                        // The loop is broken: the surviving segment is detached,
+                        // so the closure becomes a plain merge (issue #8).
+                        impact.closure_to_merge.push(StationPair {
+                            station_a: replacement_station,
+                            station_b: other,
                         });
                     }
                 } else {
@@ -1476,7 +1505,7 @@ impl Project {
             let station_after = StationRef::new(section_id, (pos + 1) as u32);
             let excluded = Some((section_id, pos));
 
-            if self.are_stations_connected_excluding_shot(station_before, station_after, excluded) {
+            if self.are_stations_connected_excluding_shot(station_before, station_after, excluded, true) {
                 impact.shift_blocked_reasons.push(
                     "This shot is part of a loop (the two sides are already connected).".to_string(),
                 );
@@ -1545,6 +1574,18 @@ impl Project {
         self.loop_closures = updated_closures;
 
         for pair in &impact.replacement_merges {
+            if !self.has_direct_merge(pair.station_a, pair.station_b) {
+                self.record_station_merge(StationMerge {
+                    station_a: pair.station_a,
+                    station_b: pair.station_b,
+                    merged_at: Utc::now(),
+                });
+            }
+        }
+
+        // Closures whose loop the deletion broke become plain merges: the
+        // endpoints stay declared-coincident but are no longer a true loop (#8).
+        for pair in &impact.closure_to_merge {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
                 self.record_station_merge(StationMerge {
                     station_a: pair.station_a,
