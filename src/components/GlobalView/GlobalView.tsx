@@ -13,6 +13,8 @@ import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
+import { RecentSortControl } from './RecentSortControl';
+import { useRecentSort, sortRecentProjects } from './useRecentSort';
 import type { ProjectMetadata } from '../../types/project';
 import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
@@ -345,6 +347,14 @@ export default function GlobalView() {
   // Get selected projects count
   const selectedCount = multiSelectedIds.size;
 
+  // Recent-projects sort preference (persisted) and the sorted list for the
+  // list view. The map view is intentionally unaffected by this.
+  const recentSort = useRecentSort();
+  const sortedProjects = useMemo(
+    () => sortRecentProjects(recentProjects, recentSort.field, recentSort.direction),
+    [recentProjects, recentSort.field, recentSort.direction]
+  );
+
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
       {/* Header */}
@@ -510,29 +520,37 @@ export default function GlobalView() {
             />
           ) : (
             <div className="h-full overflow-auto p-6">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between gap-4 mb-4">
                 <h2 className="text-lg font-medium">{t('globalView.recent.title')}</h2>
-                {selectedCount >= 2 && (
-                  <Button
-                    onClick={handleMergeProjects}
-                    data-testid="merge-projects-button"
-                    aria-label={t('globalView.actions.mergeProjectsAria', {
-                      count: selectedCount,
-                      countFormatted: formatNumber(selectedCount),
-                    })}
-                  >
-                    {t('globalView.actions.mergeProjects', {
-                      count: selectedCount,
-                      countFormatted: formatNumber(selectedCount),
-                    })}
-                  </Button>
-                )}
+                <div className="flex items-center gap-3">
+                  {selectedCount >= 2 && (
+                    <Button
+                      onClick={handleMergeProjects}
+                      data-testid="merge-projects-button"
+                      aria-label={t('globalView.actions.mergeProjectsAria', {
+                        count: selectedCount,
+                        countFormatted: formatNumber(selectedCount),
+                      })}
+                    >
+                      {t('globalView.actions.mergeProjects', {
+                        count: selectedCount,
+                        countFormatted: formatNumber(selectedCount),
+                      })}
+                    </Button>
+                  )}
+                  <RecentSortControl
+                    field={recentSort.field}
+                    direction={recentSort.direction}
+                    onFieldChange={recentSort.setField}
+                    onToggleDirection={recentSort.toggleDirection}
+                  />
+                </div>
               </div>
               <p className="text-xs text-text-secondary mb-4">
                 {t('globalView.recent.hint')}
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {recentProjects.map((project) => (
+                {sortedProjects.map((project) => (
                   <SystemCard
                     key={project.file_path}
                     name={project.name}

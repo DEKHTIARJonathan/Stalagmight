@@ -1385,7 +1385,16 @@
     },
     "recent": {
       "title": "Recent projects",
-      "hint": "Click to select, double-click to open, right-click for options."
+      "hint": "Click to select, double-click to open, right-click for options.",
+      "sort": {
+        "label": "Sort by",
+        "lastEdited": "Last edited",
+        "name": "Name",
+        "sections": "Section count",
+        "length": "Total length",
+        "ascending": "Ascending",
+        "descending": "Descending"
+      }
     },
     "status": {
       "systems": "Systems: {{countFormatted}}",
