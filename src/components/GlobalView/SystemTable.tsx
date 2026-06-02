@@ -108,8 +108,8 @@ export function SystemTable({
           type="button"
           onClick={() => onSort(field)}
           className={`inline-flex items-center gap-1 hover:text-text ${
-            col.align === 'right' ? 'flex-row-reverse' : ''
-          } ${isActive ? 'text-text' : ''}`}
+            isActive ? 'text-text' : ''
+          }`}
           aria-label={t('globalView.recent.sortByColumn', { column: label })}
           data-testid={`recent-col-${col.key}`}
         >
