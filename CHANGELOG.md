@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Added
+- **Recent Projects list overhaul** — the global recent-projects screen now shows each project's file path under its name, with pixel-fit elision that abbreviates leading folders to single letters and middle-truncates while always keeping the filename whole (full path on hover) ([#46](https://github.com/Stalagmight/Stalagmight/issues/46)). A persisted **Sort by** control orders the list by last opened, last edited, name, section count, or total length with a toggleable direction; in the new **compact table view** the column headers are clickable to sort, with an active-column indicator that stays in sync with the control ([#47](https://github.com/Stalagmight/Stalagmight/issues/47)). The "last edited" value is shown as a relative time (e.g. "2 hours ago"), with the exact locale-aware date and time on hover ([#48](https://github.com/Stalagmight/Stalagmight/issues/48)). A **search box** on the list tab filters cards/rows by name, location, or path, with a "showing X of Y" count and a no-results state; a **card/table density toggle** switches layouts; and recent entries whose file is missing, moved, or unreadable are surfaced as de-emphasized "File not found" rows with a one-click remove action instead of silently vanishing.
+- **Rename a project from the details panel** — the Project details panel's name field is inline-editable for the selected recent project (Enter or ✓ to save, Esc or ✕ to cancel, empty disallowed). Backed by a new `set_project_name_for_path` command that does a targeted update of a closed `.stalx` by path without opening it, keeping any open copy's name in sync.
+
 ## [0.2.0] - 2026-06-02
 
 ### Added
