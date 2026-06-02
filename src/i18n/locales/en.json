@@ -1386,6 +1386,24 @@
     "recent": {
       "title": "Recent projects",
       "hint": "Click to select, double-click to open, right-click for options.",
+      "countFiltered": "Showing {{shown}} of {{total}}",
+      "noResults": "No projects match \"{{term}}\".",
+      "density": {
+        "label": "View",
+        "cards": "Card view",
+        "table": "Table view"
+      },
+      "columns": {
+        "name": "Name",
+        "path": "Path",
+        "sections": "Sections",
+        "length": "Length",
+        "edited": "Edited"
+      },
+      "missing": {
+        "notFound": "File not found",
+        "remove": "Remove"
+      },
       "sort": {
         "label": "Sort by",
         "lastOpened": "Last opened",

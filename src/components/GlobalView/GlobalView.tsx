@@ -15,6 +15,15 @@ import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import { RecentSortControl } from './RecentSortControl';
 import { useRecentSort, sortRecentProjects } from './useRecentSort';
+import { RecentDensityToggle } from './RecentDensityToggle';
+import { useRecentDensity } from './useRecentDensity';
+import SystemTable from './SystemTable';
+import MissingSystemCard from './MissingSystemCard';
+import {
+  deriveMissingPaths,
+  buildRecentListItems,
+  filterRecentListItems,
+} from './recentListItems';
 import type { ProjectMetadata } from '../../types/project';
 import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
@@ -85,7 +94,7 @@ export default function GlobalView() {
     handleImportCompass,
   } = useProject();
 
-  const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects } = useProjectStore();
+  const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects, config } = useProjectStore();
 
   // Note: useLoadingProgress() is called in App.tsx (always mounted) to avoid duplicate listeners
   const { openDialog } = useUIStore();
@@ -355,6 +364,28 @@ export default function GlobalView() {
     [recentProjects, recentSort.field, recentSort.direction]
   );
 
+  // List view layout density (cards vs compact table), persisted.
+  const [density, setDensity] = useRecentDensity();
+
+  // Recent paths the backend kept in config but couldn't load (file moved,
+  // deleted, or unreadable) are surfaced as "unavailable" rows so the user can
+  // see and remove them, rather than having them silently vanish.
+  const recentPaths = config?.general.recent_projects ?? [];
+  const missingPaths = useMemo(
+    () => deriveMissingPaths(recentPaths, recentProjects),
+    [recentPaths, recentProjects]
+  );
+  // Combined, then filtered by the search term (name / location / path).
+  const listItems = useMemo(
+    () => buildRecentListItems(sortedProjects, missingPaths),
+    [sortedProjects, missingPaths]
+  );
+  const visibleItems = useMemo(
+    () => filterRecentListItems(listItems, searchTerm),
+    [listItems, searchTerm]
+  );
+  const isSearching = searchTerm.trim().length > 0;
+
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
       {/* Header */}
@@ -425,8 +456,9 @@ export default function GlobalView() {
             </button>
           </div>
 
-          {/* Search input - only show when map tab is active */}
-          {activeTab === 'map' && hasGpsProjects && (
+          {/* Search input - on the list tab always, on the map tab when there
+              are GPS projects to filter. */}
+          {(activeTab === 'list' || (activeTab === 'map' && hasGpsProjects)) && (
             <div className="relative py-1">
               <input
                 ref={searchInputRef}
@@ -544,27 +576,72 @@ export default function GlobalView() {
                     onFieldChange={recentSort.setField}
                     onToggleDirection={recentSort.toggleDirection}
                   />
+                  <RecentDensityToggle density={density} onChange={setDensity} />
                 </div>
               </div>
-              <p className="text-xs text-text-secondary mb-4">
-                {t('globalView.recent.hint')}
+              <p className="text-xs text-text-secondary mb-4" data-testid="globalview-list-status">
+                {isSearching
+                  ? t('globalView.recent.countFiltered', {
+                    shown: formatNumber(visibleItems.length),
+                    total: formatNumber(listItems.length),
+                  })
+                  : t('globalView.recent.hint')}
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {sortedProjects.map((project) => (
-                  <SystemCard
-                    key={project.file_path}
-                    name={project.name}
-                    location={project.location}
-                    filePath={project.file_path}
-                    modifiedAt={project.modified_at}
-                    sectionCount={project.section_count}
-                    totalLength={project.total_length}
-                    isSelected={multiSelectedIds.has(project.file_path)}
-                    onSelect={(ctrlKey) => handleProjectSelect(project.file_path, ctrlKey)}
-                    onContextMenu={(e) => handleContextMenu(e, project.file_path)}
-                  />
-                ))}
-              </div>
+
+              {visibleItems.length === 0 ? (
+                <div
+                  className="flex flex-col items-center justify-center text-center py-16 text-text-secondary"
+                  data-testid="globalview-list-empty"
+                >
+                  <p className="text-sm mb-2">
+                    {t('globalView.recent.noResults', { term: searchTerm })}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleClearSearch}
+                    className="text-sm text-accent hover:underline"
+                    data-testid="globalview-list-clear-search"
+                  >
+                    {t('globalView.search.clearTitle')}
+                  </button>
+                </div>
+              ) : density === 'table' ? (
+                <SystemTable
+                  items={visibleItems}
+                  selectedProjectId={selectedProjectId}
+                  multiSelectedIds={multiSelectedIds}
+                  onSelect={handleProjectSelect}
+                  onOpen={handleProjectOpen}
+                  onContextMenu={handleContextMenu}
+                  onRemoveMissing={handleRemoveFromRecent}
+                />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {visibleItems.map((item) =>
+                    item.kind === 'available' ? (
+                      <SystemCard
+                        key={item.filePath}
+                        name={item.project.name}
+                        location={item.project.location}
+                        filePath={item.filePath}
+                        modifiedAt={item.project.modified_at}
+                        sectionCount={item.project.section_count}
+                        totalLength={item.project.total_length}
+                        isSelected={multiSelectedIds.has(item.filePath)}
+                        onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
+                        onContextMenu={(e) => handleContextMenu(e, item.filePath)}
+                      />
+                    ) : (
+                      <MissingSystemCard
+                        key={item.filePath}
+                        name={item.name}
+                        filePath={item.filePath}
+                        onRemove={handleRemoveFromRecent}
+                      />
+                    )
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -3,12 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import {
   formatDate as formatDateIntl,
-  formatFixed,
   formatNumber,
   formatRelativeTime,
 } from '../../i18n/format';
-import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { ElidedPath, Tooltip } from '../common';
+import { useProjectStatFormatters } from './useProjectStatFormatters';
 
 interface SystemCardProps {
   name: string;
@@ -36,7 +35,7 @@ export default function SystemCard({
   onContextMenu,
 }: SystemCardProps) {
   const { t } = useTranslation();
-  const precision = useDecimalPrecision();
+  const { formatLength } = useProjectStatFormatters();
   const { loadProject } = useProjectStore();
 
   const handleClick = (e: MouseEvent) => {
@@ -85,13 +84,6 @@ export default function SystemCard({
     } catch {
       return dateStr;
     }
-  };
-
-  const formatLength = (meters: number) => {
-    if (meters >= 1000) {
-      return `${formatFixed(meters / 1000, undefined, precision.length)} ${t('common.units.kilometers')}`;
-    }
-    return `${formatFixed(meters, undefined, precision.length)} ${t('common.units.meters')}`;
   };
 
   return (
