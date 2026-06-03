@@ -5812,6 +5812,60 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     assert_eq!(merged.len(), 4);
 }
 
+#[test]
+#[ignore = "diagnostic against a real on-disk file; run with --ignored"]
+fn diagnose_naharon_merge_alignment() {
+    use crate::persistence::Database;
+    let path = std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
+    let db = Database::open_existing(path).unwrap();
+    let mut project = db.load_project().unwrap();
+    project.rebuild_section_index();
+    project.rebuild_merge_adjacency();
+
+    let before = project.check_merge_alignment();
+    eprintln!("== misaligned merges BEFORE: {} ==", before.len());
+    for v in &before {
+        eprintln!("  {}", v.message);
+    }
+    assert_eq!(before.len(), 1, "expected the known 1:0<->0:13 drift");
+
+    let fixed = project.realign_merges();
+    eprintln!("== realign_merges fixed {fixed} merge(s) ==");
+    assert_eq!(fixed, 1);
+    assert!(project.check_merge_alignment().is_empty(), "realign should align all merges");
+}
+
+#[test]
+fn check_merge_alignment_detects_and_realign_fixes_drift() {
+    // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
+    let mut project = Project::new("Drift".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    // Anchor A at a zero datum so realign has an authority.
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    // Merge A1 <-> B0 (merge_stations computes the aligning offset).
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    assert!(project.check_merge_alignment().is_empty(), "merge should start aligned");
+
+    // Corrupt section B's offset directly (simulating a missed cascade).
+    project.adjust_section_offset(b, 12.0, -7.0);
+    let drift = project.check_merge_alignment();
+    assert_eq!(drift.len(), 1, "{drift:?}");
+    assert_eq!(drift[0].category, "merge_misaligned");
+    assert!(drift[0].message.contains(" m apart"));
+
+    // Repair realigns it.
+    assert_eq!(project.realign_merges(), 1);
+    assert!(project.check_merge_alignment().is_empty());
+}
+
 // === Structural integrity check ===
 
 /// A two-section project with one valid merge, zero datum, and loop closure.

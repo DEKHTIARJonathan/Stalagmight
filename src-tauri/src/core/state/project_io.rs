@@ -301,6 +301,21 @@ impl AppState {
         // about every shot's identity until the next reload.
         project.ensure_shot_uuids();
 
+        // Don't let geometric corruption persist silently: a release-mode warning
+        // when drifted merges are about to be written. (The frontend re-checks
+        // after save and offers a repair via the integrity banner.)
+        let misaligned = project.check_merge_alignment();
+        if !misaligned.is_empty() {
+            tracing::warn!(
+                count = misaligned.len(),
+                purpose = "flag misaligned merges before persisting",
+                "Saving a project with drifted station merges"
+            );
+            for violation in &misaligned {
+                tracing::warn!(category = %violation.category, "{}", violation.message);
+            }
+        }
+
         // Determine save path and ensure .stalx extension
         let is_implicit_save = path.is_none();
         let save_path = path.or_else(|| project.file_path.clone());
@@ -1088,15 +1103,17 @@ impl AppState {
         progress.start_phase(LoadingPhase::ValidatingData);
         let warnings = self.compute_project_warnings(&project, Some(&db));
 
-        // Surface structural corruption present on disk (older versions /
-        // external edits). The frontend re-checks after load and offers a
-        // repair; here we just record it. (#17)
-        let integrity = project.check_structural_integrity();
+        // Surface corruption present on disk (older versions / external edits /
+        // a missed offset cascade): both dangling references and drifted merges.
+        // The frontend re-checks after load and offers a repair; here we just
+        // record it. (#17, merge-misalignment)
+        let mut integrity = project.check_structural_integrity();
+        integrity.extend(project.check_merge_alignment());
         if !integrity.is_empty() {
             tracing::warn!(
                 count = integrity.len(),
-                purpose = "flag structural corruption on load",
-                "Loaded project has structural-integrity violations"
+                purpose = "flag corruption on load",
+                "Loaded project has integrity violations"
             );
             for violation in &integrity {
                 tracing::warn!(category = %violation.category, "{}", violation.message);

@@ -94,7 +94,9 @@ impl AppState {
         let Some(project) = self.get_project_state() else {
             return Vec::new();
         };
+        // Structural (dangling refs) + geometric (drifted merges).
         let mut violations = project.check_structural_integrity();
+        violations.extend(project.check_merge_alignment());
         violations.sort_by_key(|v| match v.severity {
             ViolationSeverity::Critical => 0,
             ViolationSeverity::Warning => 1,
@@ -102,8 +104,9 @@ impl AppState {
         violations.into_iter().map(|v| v.message).collect()
     }
 
-    /// Repair the open project's structural integrity (drop dangling refs and
-    /// orphans), returning the number of violations fixed.
+    /// Repair the open project's integrity: drop dangling refs/orphans, then
+    /// re-cascade section offsets so drifted merges line up again. Returns the
+    /// number of issues fixed.
     pub fn repair_open_project_integrity(&self) -> usize {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
@@ -112,7 +115,12 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return 0;
         };
-        project.repair_structural_integrity().len()
+        let structural = project.repair_structural_integrity().len();
+        // Dropping refs may have cleared the adjacency cache; rebuild before the
+        // cascade walks the merge graph.
+        project.rebuild_merge_adjacency();
+        let realigned = project.realign_merges();
+        structural + realigned
     }
 
     /// Execute a command and return the result
@@ -143,6 +151,16 @@ impl AppState {
         } else {
             None
         };
+        // If the project is ALREADY corrupt (loaded that way), don't block — the
+        // user repairs via the banner. We only reject commands that newly
+        // introduce corruption into a clean project.
+        let pre_had_critical = integrity_snapshot.is_some()
+            && self
+                .project
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
+                .unwrap_or(false);
 
         let result = match &cmd {
             Command::CreateProject { name, location } => {
@@ -258,7 +276,7 @@ impl AppState {
         // project with dangling references, roll back to the pre-command
         // snapshot and reject it rather than committing (and later persisting)
         // a corrupt state (#17).
-        if result.success {
+        if result.success && !pre_had_critical {
             if let Some(snapshot) = &integrity_snapshot {
                 let introduced_corruption = self
                     .project

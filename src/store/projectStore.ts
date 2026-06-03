@@ -782,6 +782,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Lightweight: just refresh undo/redo availability
       await get().refreshUndoState();
       set({ isDirty: false });
+      // Don't let geometric corruption persist silently: re-check after save so
+      // drifted merges surface in the integrity banner this session, not only on
+      // the next load. (Skip on autosave to avoid churn.)
+      if (!isAutosave) {
+        void get().checkProjectIntegrity();
+      }
     } else {
       set({ error: result.error ?? 'Failed to save project' });
     }

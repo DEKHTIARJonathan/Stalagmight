@@ -6318,6 +6318,90 @@ impl Project {
 
         violations
     }
+
+    /// Tolerance (metres) within which two merged stations are considered the
+    /// same physical point. The old release-mode alignment check used 5cm.
+    pub const MERGE_ALIGNMENT_TOLERANCE_M: f64 = 0.05;
+
+    /// Cross-section merges whose two stations have drifted apart — the
+    /// references are valid but the geometry is wrong (a stale section offset
+    /// from a missed cascade). Distinct from [`Self::check_structural_integrity`];
+    /// repaired by re-cascading offsets via [`Self::realign_merges`] rather than
+    /// by dropping data.
+    pub fn check_merge_alignment(&self) -> Vec<IntegrityViolation> {
+        let mut violations = Vec::new();
+        for merge in &self.station_merges {
+            // Same-section merges are physically meaningless (test-only).
+            if merge.station_a.section_id == merge.station_b.section_id {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (
+                self.compute_station_raw_coords(merge.station_a),
+                self.compute_station_raw_coords(merge.station_b),
+            ) {
+                let dist = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
+                if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "merge_misaligned".to_string(),
+                        message: format!(
+                            "Merged stations {}:{} and {}:{} are {:.2} m apart but should be the same point",
+                            merge.station_a.section_id,
+                            merge.station_a.station_index,
+                            merge.station_b.section_id,
+                            merge.station_b.station_index,
+                            dist
+                        ),
+                    });
+                }
+            }
+        }
+        violations
+    }
+
+    /// One authoritative anchor section per connected merge group, preferring a
+    /// zero-datum section so the realign keeps the group pinned to GPS.
+    fn realign_seeds(&self) -> Vec<SectionId> {
+        let datum_sections: HashSet<SectionId> =
+            self.zero_datums.iter().map(|z| z.station_ref.section_id).collect();
+        let mut seeds = Vec::new();
+        let mut visited: HashSet<SectionId> = HashSet::new();
+        for section in &self.sections {
+            if visited.contains(&section.id) {
+                continue;
+            }
+            let component = self.get_connected_section_ids(section.id);
+            let anchor = component
+                .iter()
+                .copied()
+                .filter(|s| datum_sections.contains(s))
+                .min()
+                .or_else(|| component.iter().copied().min());
+            if let Some(a) = anchor {
+                seeds.push(a);
+            }
+            visited.extend(component);
+        }
+        seeds
+    }
+
+    /// Recompute section offsets so every merge's endpoints coincide again,
+    /// anchoring each connected group at its zero datum (or, failing that, an
+    /// arbitrary section). Returns the number of merges that were misaligned
+    /// before the realign. A no-op when everything is already aligned.
+    pub fn realign_merges(&mut self) -> usize {
+        let before = self.check_merge_alignment().len();
+        if before == 0 {
+            return 0;
+        }
+        let seeds = self.realign_seeds();
+        let was_deferred = self.cascade_deferred;
+        self.cascade_deferred = false;
+        self.cascade_connection_offsets(&seeds);
+        self.cascade_deferred = was_deferred;
+        self.touch();
+        before.saturating_sub(self.check_merge_alignment().len())
+    }
 }
 
 #[cfg(test)]
