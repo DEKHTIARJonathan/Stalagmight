@@ -7,6 +7,12 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+- **Deleting a shot on a loop no longer fabricates a false closure** — when a deleted shot's station was a loop-closure endpoint, the closure was rewired to a neighbouring station and kept even if the surviving segment was no longer connected through the survey, producing a bogus loop and a geometry shift. Deletion now checks survey connectivity (shots + merges, excluding the deleted shot) and, when the loop is genuinely broken, converts the closure into a plain station merge instead. The delete-shot impact dialog lists any closures that will become merges. ([#8](https://github.com/Stalagmight/Stalagmight/issues/8), related [#41](https://github.com/Stalagmight/Stalagmight/issues/41))
+
+### Added
+- **Structural-integrity safety net for survey data** ([#17](https://github.com/Stalagmight/Stalagmight/issues/17)) — a new `Project::check_structural_integrity` audits every cross-reference (station merges, loop closures, zero datums, and the offset/comment maps) for dangling section references and out-of-range station indices. It is used two ways: (1) **corruption is blocked at the source** — any command whose result would leave dangling references is rolled back to a pre-command snapshot and rejected instead of being committed and later persisted; (2) **corruption already on disk is surfaced and repairable** — opening a project re-checks it, and when problems are found a dismissible banner offers a one-click repair that drops the invalid references while leaving valid data untouched.
+
 ## [0.2.0] - 2026-06-02
 
 ### Added
