@@ -297,6 +297,58 @@ fn deserialize_station_comments<'de, D: serde::Deserializer<'de>>(
     Ok(entries.into_iter().collect())
 }
 
+/// IPC serialization view of [`Project`]. The stored `Project` keeps its
+/// `StationKey`-based serde (lossless, required by the undo snapshot path), but
+/// the frontend and the ts-rs `Project` type expect the three cross-reference
+/// collections in positional wire form (`StationRef { section_id, station_index }`).
+/// This wrapper forwards every ts-exported field and re-encodes those three to
+/// wire, dropping dangling refs (the same resolution the binary load path's
+/// `ProjectHeaderBinary` does). `#[ts(skip)]` fields on `Project` — the
+/// `StationKey`-keyed `station_offsets`/`station_comments` and the transient
+/// caches — are intentionally omitted to match the generated `Project` TS type.
+struct ProjectIpc<'a>(&'a Project);
+
+impl Serialize for ProjectIpc<'_> {
+    fn serialize<S: serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let p = self.0;
+        let station_merges: Vec<_> = p.station_merges.iter().filter_map(|m| p.merge_to_wire(m)).collect();
+        let zero_datums: Vec<_> = p.zero_datums.iter().filter_map(|z| p.datum_to_wire(z)).collect();
+        let loop_closures: Vec<_> = p.loop_closures.iter().filter_map(|c| p.closure_to_wire(c)).collect();
+        // Field set + order MUST stay in lockstep with the generated Project.ts
+        // (15 ts-exported fields). Adding a ts-exported field to `Project`
+        // requires adding it here too, or it silently drops off the IPC payload.
+        let mut st = serializer.serialize_struct("Project", 15)?;
+        st.serialize_field("name", &p.name)?;
+        st.serialize_field("location", &p.location)?;
+        st.serialize_field("created_at", &p.created_at)?;
+        st.serialize_field("modified_at", &p.modified_at)?;
+        st.serialize_field("sections", &p.sections)?;
+        st.serialize_field("station_merges", &station_merges)?;
+        st.serialize_field("zero_datums", &zero_datums)?;
+        st.serialize_field("loop_closures", &loop_closures)?;
+        st.serialize_field("file_path", &p.file_path)?;
+        st.serialize_field("next_section_id", &p.next_section_id)?;
+        st.serialize_field("section_offsets", &p.section_offsets)?;
+        st.serialize_field("imported_file_hashes", &p.imported_file_hashes)?;
+        st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
+        st.serialize_field("next_closure_id", &p.next_closure_id)?;
+        st.serialize_field("collab", &p.collab)?;
+        st.end()
+    }
+}
+
+/// `#[serde(serialize_with = "...")]` target for every IPC struct that carries a
+/// `Project` to the frontend (`ProjectState`, `LoadProjectFullResult`,
+/// `CreateProjectFullResult`), so they all emit the positional wire shape the
+/// frontend reads rather than the internal `StationKey` shape derived serde emits.
+pub(crate) fn serialize_project_ipc<S: serde::ser::Serializer>(
+    p: &Project,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    Serialize::serialize(&ProjectIpc(p), s)
+}
+
 impl Project {
     /// Create a new empty project
     pub fn new(name: String, location: Option<String>) -> Self {
