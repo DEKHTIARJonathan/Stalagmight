@@ -5816,6 +5816,38 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
 
 #[test]
 #[ignore = "diagnostic against a real on-disk file; run with --ignored"]
+fn diagnose_naharon_section31_bridge_closure() {
+    use crate::persistence::Database;
+    let path = std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
+    let db = Database::open_existing(path).unwrap();
+    let mut project = db.load_project().unwrap();
+    project.rebuild_section_index();
+    project.rebuild_merge_adjacency();
+
+    let count31 = |p: &Project| {
+        let merges = p
+            .station_merges
+            .iter()
+            .filter(|m| m.station_a.section_id == 31 || m.station_b.section_id == 31)
+            .count();
+        let closures = p
+            .loop_closures
+            .iter()
+            .filter(|c| c.station_a.section_id == 31 || c.station_b.section_id == 31)
+            .count();
+        (merges, closures)
+    };
+    eprintln!("section 31 BEFORE: merges/closures = {:?}", count31(&project));
+    let converted = project.convert_orphan_closures_to_merges();
+    eprintln!("converted {converted} orphan closure(s)");
+    eprintln!("section 31 AFTER:  merges/closures = {:?}", count31(&project));
+    let (merges, closures) = count31(&project);
+    assert_eq!(closures, 0, "section 31's sole-bridge closure should be gone");
+    assert!(merges >= 1, "section 31 should now be attached by a merge");
+}
+
+#[test]
+#[ignore = "diagnostic against a real on-disk file; run with --ignored"]
 fn diagnose_naharon_merge_alignment() {
     use crate::persistence::Database;
     let path = std::path::Path::new("/home/user/Documents/stalagmight/20260601_naharon-final.stalx");
@@ -6102,6 +6134,65 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
         is_aligned: false,
     });
     (project, a, b)
+}
+
+#[test]
+fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
+    // A: A0-A1-A2 (datum A0); B: B0-B1. B hangs off A2 (merge A2=B0), and a
+    // closure A0=B1 closes the loop. Now delete A's last shot (A1->A2): that
+    // removes A2 and the A2=B0 merge, so A and B are connected ONLY through the
+    // closure A0=B1. A closure that is the sole bridge is not a loop — it must
+    // become a merge (issue #8, the section-31 case).
+    let mut project = Project::new("Bridge".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    project.record_station_merge(StationMerge {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+
+    let last = project.get_section(a).unwrap().shots.last().unwrap().id;
+    project.remove_shot_with_rewire(a, last).unwrap();
+
+    // The bridge closure is gone and replaced by a merge between its endpoints.
+    assert!(
+        project.loop_closures.is_empty(),
+        "sole-bridge closure should have become a merge: {:?}",
+        project.loop_closures
+    );
+    assert!(
+        project.station_merges.iter().any(|m| {
+            let pair = (m.station_a, m.station_b);
+            pair == (StationRef::new(a, 0), StationRef::new(b, 1))
+                || pair == (StationRef::new(b, 1), StationRef::new(a, 0))
+        }),
+        "expected a merge A0<->B1; got {:?}",
+        project.station_merges
+    );
 }
 
 #[test]

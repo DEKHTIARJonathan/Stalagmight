@@ -1579,6 +1579,12 @@ impl Project {
 
         self.shift_station_refs(section_id, (pos + 1) as u32, -1);
 
+        // The deletion may have removed the OTHER path of a loop, leaving a
+        // closure as the sole bridge to a section — that is no longer a loop, so
+        // turn any such closure into a merge before the offsets are recomputed
+        // (issue #8, beyond the closure-touched-the-deleted-station case above).
+        self.convert_orphan_closures_to_merges();
+
         // After removing a shot, stations after the deletion point (index > pos)
         // shift by -displacement in section-local coordinates.  We must decide
         // which side to keep at its original absolute position:
@@ -6497,7 +6503,46 @@ impl Project {
     pub fn redrive_offsets_after_load(&mut self) -> usize {
         self.rebuild_section_index();
         self.rebuild_merge_adjacency();
+        // Normalize any closure that is really a sole-bridge attachment into a
+        // merge before solving, so a file persisted in that state (e.g. a section
+        // stranded by an older delete) opens correctly.
+        self.convert_orphan_closures_to_merges();
         self.realign_merges()
+    }
+
+    /// Enforce the invariant that a loop closure exists only for a TRUE loop. If
+    /// a closure's two endpoints are no longer connected through the survey
+    /// (shots + merges) independently of the closure, the closure is the *sole*
+    /// connection between them — that is a merge, not a loop — so convert it.
+    ///
+    /// Iterative: when two closures bridge the same pair, the first becomes the
+    /// merge and the second is then a genuine (redundant) loop and is kept.
+    /// Returns the number converted. (Issue #8 — a shot deletion can strand a
+    /// section so its only attachment is a closure.)
+    pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
+        let mut converted = 0;
+        loop {
+            let orphan = self.loop_closures.iter().position(|c| {
+                c.station_a.section_id != c.station_b.section_id
+                    && !self.are_stations_connected_excluding_shot(
+                        c.station_a,
+                        c.station_b,
+                        None,
+                        false,
+                    )
+            });
+            let Some(idx) = orphan else { break };
+            let closure = self.loop_closures.remove(idx);
+            if !self.has_direct_merge(closure.station_a, closure.station_b) {
+                self.record_station_merge(StationMerge {
+                    station_a: closure.station_a,
+                    station_b: closure.station_b,
+                    merged_at: Utc::now(),
+                });
+            }
+            converted += 1;
+        }
+        converted
     }
 
     /// Recompute section offsets so every merge's endpoints coincide again,
