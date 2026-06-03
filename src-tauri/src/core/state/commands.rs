@@ -72,54 +72,106 @@ impl<'a> Drop for CascadeDeferGuard<'a> {
     }
 }
 
+/// The integrity-relevant capabilities of a [`Command`], declared in ONE place
+/// ([`AppState::command_integrity`]). The `execute()` epilogue reads these flags
+/// instead of three separate hand-maintained allow/deny lists, so a new command
+/// variant can't silently skip an integrity step.
+#[derive(Debug, Clone, Copy)]
+struct CommandIntegrity {
+    /// Can drift section offsets (move merged partners out of alignment) and so
+    /// needs the post-command geometry reconcile. Pure metadata/lifecycle edits
+    /// cannot, so they skip it.
+    affects_geometry: bool,
+    /// Can introduce a dangling/out-of-range cross-reference — by removing a
+    /// referenced entity or renumbering station indices — and so needs the
+    /// (expensive) whole-project rollback snapshot to reject corruption at the
+    /// source. Geometry-only commands add valid refs or shift offsets but cannot
+    /// dangle a reference, so they skip the serialize.
+    can_dangle_refs: bool,
+    /// Can REMOVE connectivity and strand a section so its only attachment is a
+    /// loop closure — which must then be converted to a merge (issue #8). Commands
+    /// that add or keep connectivity are excluded (a move must leave an inert
+    /// closure independent).
+    can_orphan_closures: bool,
+}
+
 impl AppState {
-    /// Whether a command can drift section offsets (move merged partners out of
-    /// alignment) and therefore needs the post-command geometry reconcile. Pure
-    /// metadata edits and lifecycle commands cannot, so they skip it.
-    fn command_can_affect_integrity(cmd: &Command) -> bool {
-        !matches!(
-            cmd,
-            Command::CreateProject { .. }
-                | Command::OpenProject { .. }
-                | Command::SaveProject { .. }
-                | Command::CloseProject
-                | Command::UpdateShot { .. }
-                | Command::UpdateSectionMetadata { .. }
-                | Command::SetShotReference { .. }
-        )
-    }
+    /// Declare every command's integrity-relevant capabilities in one exhaustive
+    /// match, so adding a [`Command`] variant FORCES a decision here (the compiler
+    /// rejects a non-exhaustive match) rather than silently defaulting across three
+    /// separate allow/deny lists — where a miss fails open: a skipped rollback
+    /// snapshot commits corruption, a missing reconcile leaves merges drifted, and
+    /// a missing orphan-closure conversion leaves a phantom loop closure.
+    fn command_integrity(cmd: &Command) -> CommandIntegrity {
+        use Command::*;
+        // Named profiles keep the table readable; every variant maps to exactly one.
+        const INERT: CommandIntegrity = CommandIntegrity {
+            affects_geometry: false,
+            can_dangle_refs: false,
+            can_orphan_closures: false,
+        };
+        const GEOMETRY_ONLY: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: false,
+            can_orphan_closures: false,
+        };
+        const REMOVES: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: true,
+            can_orphan_closures: true,
+        };
+        const CREATE_SHOT: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: true,
+            can_orphan_closures: false,
+        };
+        const UNMERGE: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: false,
+            can_orphan_closures: true,
+        };
+        match cmd {
+            // Lifecycle + pure metadata edits: touch no geometry and no refs.
+            // RepairIntegrity never runs through execute() (it records its own
+            // snapshot-pair undo and returns failure here), so its flags are never
+            // read; grouped here as it disturbs nothing.
+            CreateProject { .. }
+            | OpenProject { .. }
+            | SaveProject { .. }
+            | CloseProject
+            | UpdateShot { .. }
+            | UpdateSectionMetadata { .. }
+            | SetShotReference { .. }
+            | RepairIntegrity => INERT,
 
-    /// Whether a command can introduce a *dangling/out-of-range cross-reference*
-    /// — by removing a referenced entity or renumbering station indices — and so
-    /// needs the (expensive) whole-project rollback snapshot. Geometry-only
-    /// commands (moves, merges, datums, closures) add valid refs or shift
-    /// offsets but cannot dangle a reference, so they get the cheap
-    /// reconcile-only path and skip the serialize.
-    fn command_can_dangle_refs(cmd: &Command) -> bool {
-        matches!(
-            cmd,
-            Command::DeleteSection { .. }
-                | Command::DeleteShot { .. }
-                | Command::CreateShot { .. }
-                | Command::Batch { .. }
-                | Command::MergeProjects { .. }
-        )
-    }
+            // Remove an entity / renumber stations: can dangle refs AND strand a
+            // section behind a sole-bridge closure.
+            DeleteSection { .. } | DeleteShot { .. } | Batch { .. } | MergeProjects { .. } => REMOVES,
 
-    /// Whether a command can REMOVE connectivity and thereby strand a section so
-    /// its only attachment is a loop closure — which must then be converted to a
-    /// merge (issue #8). Moves/merges/closure-creation add or keep connectivity
-    /// and so are excluded (a move must leave an inert closure independent).
-    fn command_can_orphan_closures(cmd: &Command) -> bool {
-        matches!(
-            cmd,
-            Command::DeleteShot { .. }
-                | Command::DeleteSection { .. }
-                | Command::UnmergeStations { .. }
-                | Command::UnmergeStationPair { .. }
-                | Command::Batch { .. }
-                | Command::MergeProjects { .. }
-        )
+            // Inserting a shot renumbers later stations (can dangle a positional
+            // ref) but cannot strand a section.
+            CreateShot { .. } => CREATE_SHOT,
+
+            // Unmerge removes connectivity (can strand a section) but adds no
+            // dangling reference.
+            UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
+
+            // Everything else shifts geometry but keeps refs valid and connectivity
+            // intact, so it needs only the reconcile.
+            CreateSection { .. }
+            | MergeStations { .. }
+            | CreateLoopClosure { .. }
+            | RemoveLoopClosure { .. }
+            | AdjustLoopClosures { .. }
+            | SetZeroDatum { .. }
+            | RemoveZeroDatum { .. }
+            | SetStationComment { .. }
+            | MoveSection { .. }
+            | MoveSegment { .. }
+            | MoveStation { .. }
+            | MoveComment { .. }
+            | ApplyCollabChanges => GEOMETRY_ONLY,
+        }
     }
 
     /// Convert any sole-bridge loop closures in the open project to merges.
@@ -304,6 +356,10 @@ impl AppState {
             UndoData::None
         };
 
+        // The command's integrity capabilities, computed once and read by the
+        // epilogue below (snapshot / orphan-closure conversion / reconcile).
+        let integrity = Self::command_integrity(&cmd);
+
         // Snapshot before a ref-removing/renumbering command so a result that
         // introduces dangling references can be rejected and rolled back —
         // corruption must not enter through the command path (#17). Only those
@@ -314,7 +370,7 @@ impl AppState {
         // is excluded here to avoid a redundant whole-project serialize and a
         // double rollback.
         let integrity_snapshot =
-            if Self::command_can_dangle_refs(&cmd) && !matches!(cmd, Command::Batch { .. }) {
+            if integrity.can_dangle_refs && !matches!(cmd, Command::Batch { .. }) {
                 self.capture_project_snapshot().ok()
             } else {
                 None
@@ -460,14 +516,14 @@ impl AppState {
         // then a merge, not a loop. Convert before reconciling offsets so the new
         // merge is solved immediately (#8). Scoped to removal commands so a move
         // still leaves an inert closure independent.
-        if result.success && Self::command_can_orphan_closures(&cmd) {
+        if result.success && integrity.can_orphan_closures {
             self.convert_orphan_closures_in_open_project();
         }
 
         // Treat section offsets as derived: after any structural command,
         // reconcile geometry so no command path can leave merged stations
         // drifted (a no-op when nothing moved; skipped during bulk import).
-        if result.success && Self::command_can_affect_integrity(&cmd) {
+        if result.success && integrity.affects_geometry {
             self.reconcile_geometry();
         }
 
@@ -2964,5 +3020,64 @@ impl AppState {
             result.sort_unstable();
             Ok(result)
         })
+    }
+}
+
+#[cfg(test)]
+mod integrity_capability_tests {
+    use super::*;
+    use crate::models::{Coordinates, ShotData, StationRef};
+
+    /// Locks the integrity-capability table (one command per profile). The
+    /// exhaustive match in `command_integrity` makes a new variant a *compile*
+    /// error; this guards against an existing variant being moved to the wrong
+    /// profile — especially the REMOVES group, where dropping `can_dangle_refs`
+    /// would skip the rollback snapshot and let corruption be committed.
+    #[test]
+    fn command_integrity_profiles_are_stable() {
+        let caps = |cmd: &Command| {
+            let i = AppState::command_integrity(cmd);
+            (i.affects_geometry, i.can_dangle_refs, i.can_orphan_closures)
+        };
+
+        // INERT (no geometry, no refs).
+        assert_eq!(caps(&Command::CloseProject), (false, false, false));
+        assert_eq!(
+            caps(&Command::SaveProject { path: None, is_autosave: false }),
+            (false, false, false)
+        );
+        // RepairIntegrity never runs through execute(); it is classified INERT.
+        assert_eq!(caps(&Command::RepairIntegrity), (false, false, false));
+
+        // REMOVES (can dangle refs AND orphan a closure → needs rollback snapshot
+        // + reconcile + orphan-closure conversion).
+        assert_eq!(caps(&Command::DeleteSection { section_id: 1 }), (true, true, true));
+        assert_eq!(caps(&Command::Batch { commands: vec![] }), (true, true, true));
+
+        // CREATE_SHOT (renumbers stations → can dangle, but cannot orphan).
+        assert_eq!(
+            caps(&Command::CreateShot {
+                section_id: 1,
+                shot: ShotData::default(),
+                after_shot_id: None,
+                before_shot_id: None,
+            }),
+            (true, true, false)
+        );
+
+        // UNMERGE (removes connectivity → can orphan, but adds no dangling ref).
+        assert_eq!(
+            caps(&Command::UnmergeStations { station_ref: StationRef::new(1, 0) }),
+            (true, false, true)
+        );
+
+        // GEOMETRY_ONLY (shifts offsets only).
+        assert_eq!(
+            caps(&Command::MoveSection {
+                section_id: 1,
+                offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+            (true, false, false)
+        );
     }
 }
