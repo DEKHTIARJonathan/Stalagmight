@@ -1829,7 +1829,13 @@ impl Project {
                     let dy = fixed_pos.y - free_pos.y;
                     if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
                         self.adjust_section_offset(free_ref.section_id, dx, dy);
-                        authoritative.insert(free_ref.section_id);
+                    }
+                    // Anchor the free side to the authoritative network whether or
+                    // not it needed moving. Gating this on "needed adjustment" used
+                    // to stop propagation at the first already-aligned merge, so
+                    // sections past it (reachable only through it) were never
+                    // anchored and their later, misaligned merges never got fixed.
+                    if authoritative.insert(free_ref.section_id) {
                         any_adjustment = true;
                     }
                 }
@@ -1860,7 +1866,8 @@ impl Project {
                     let dy = fixed_pos.y - free_pos.y;
                     if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
                         self.adjust_section_offset(free_ref.section_id, dx, dy);
-                        authoritative.insert(free_ref.section_id);
+                    }
+                    if authoritative.insert(free_ref.section_id) {
                         any_adjustment = true;
                     }
                 }

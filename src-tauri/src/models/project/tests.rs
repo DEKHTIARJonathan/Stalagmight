@@ -5837,10 +5837,9 @@ fn diagnose_naharon_merge_alignment() {
     for v in &after {
         eprintln!("  {}", v.message);
     }
-    // NOTE: informational only. The greedy cascade cannot resolve a merge that
-    // closes a loop in the merge graph (both ends already reachable from the
-    // datum), so a loop-misclosure left by an edit survives realign — that needs
-    // a least-squares / loop-closure solver, not the cascade.
+    // The cascade propagates through already-aligned merges, so realign anchors
+    // every section to the datum network and fixes the drift fully.
+    assert!(after.is_empty(), "realign must align ALL merges");
 }
 
 #[test]
