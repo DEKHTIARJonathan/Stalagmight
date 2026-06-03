@@ -6466,6 +6466,41 @@ impl Project {
         violations
     }
 
+    /// Closures that are not true loops: their two endpoints are connected ONLY
+    /// through the closure itself (a sole bridge), which is a merge, not a loop.
+    /// [`Self::convert_orphan_closures_to_merges`] normally fixes these the
+    /// moment they appear (on delete/split and on load), so this is a safety-net
+    /// detector for any path that bypassed that (e.g. a collaborator's reconciled
+    /// edit) — it lets the integrity banner surface the condition.
+    pub fn check_orphan_closures(&self) -> Vec<IntegrityViolation> {
+        let mut violations = Vec::new();
+        for closure in &self.loop_closures {
+            if closure.station_a.section_id == closure.station_b.section_id {
+                continue;
+            }
+            if !self.are_stations_connected_excluding_shot(
+                closure.station_a,
+                closure.station_b,
+                None,
+                false,
+            ) {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Warning,
+                    category: "orphan_closure".to_string(),
+                    message: format!(
+                        "Loop closure {} ({}:{} ↔ {}:{}) is the only connection between its sections — it should be a merge, not a loop",
+                        closure.id,
+                        closure.station_a.section_id,
+                        closure.station_a.station_index,
+                        closure.station_b.section_id,
+                        closure.station_b.station_index
+                    ),
+                });
+            }
+        }
+        violations
+    }
+
     /// One authoritative anchor section per connected merge group, preferring a
     /// zero-datum section so the realign keeps the group pinned to GPS.
     fn realign_seeds(&self) -> Vec<SectionId> {

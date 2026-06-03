@@ -640,6 +640,68 @@ fn test_create_section() {
 }
 
 #[test]
+fn split_converts_orphaned_bridge_closure_immediately() {
+    // The split path bypasses execute()'s reconcile; confirm it still converts a
+    // closure that the split strands as a section's sole bridge (the reported
+    // "not transformed immediately on split" bug).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    // Section A: 3 shots → stations 0..3 (so we can split at the middle shot).
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    // B hangs off A's last station; a closure A0=B1 closes the loop.
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 3),
+        station_b: StationRef::new(b, 0),
+    });
+    let closure = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(closure.success, "{:?}", closure.error);
+    assert_eq!(state.get_project_state().unwrap().loop_closures.len(), 1);
+
+    // Split A at its MIDDLE shot — the loop's path through A breaks, leaving the
+    // closure as the only connection between A's first half and B.
+    let mid = state.get_project_state().unwrap().sections[0].shots[1].id;
+    let r = state.execute_delete_shot_and_split(a, mid, "A-1".to_string(), "A-2".to_string());
+    assert!(r.success, "{:?}", r.error);
+
+    let p = state.get_project_state().unwrap();
+    assert!(
+        p.loop_closures.is_empty(),
+        "split should immediately convert the orphaned closure to a merge: {:?}",
+        p.loop_closures
+    );
+    assert!(p.check_orphan_closures().is_empty());
+}
+
+#[test]
 fn create_section_rejects_non_finite_geometry() {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject { name: "X".to_string(), location: None });
@@ -6611,14 +6673,25 @@ fn test_split_remaps_closures() {
     assert!(result.success);
     let new_section_id = result.section_id.unwrap();
 
-    // Closure should be remapped: station_a was (sec_a_id, 4) -> (new_section_id, 1)
-    // (split_station = 3, so 4 - 3 = 1)
+    // The closure's A-side is remapped: (sec_a_id, 4) -> (new_section_id, 1)
+    // (split_station = 3, so 4 - 3 = 1). But the split detaches new_section so
+    // that closure is now its ONLY connection to B — a sole bridge is a merge,
+    // not a loop (#8), so it is converted. Assert it was remapped AND merged.
     let proj = state.get_project_state().unwrap();
-    let has_remapped_closure = proj.loop_closures.iter().any(|lc| {
-        (lc.station_a.section_id == new_section_id && lc.station_a.station_index == 1)
-        || (lc.station_b.section_id == new_section_id && lc.station_b.station_index == 1)
+    assert!(
+        proj.loop_closures.is_empty(),
+        "the orphaned (sole-bridge) closure should have been converted to a merge: {:?}",
+        proj.loop_closures
+    );
+    let has_remapped_merge = proj.station_merges.iter().any(|m| {
+        (m.station_a.section_id == new_section_id && m.station_a.station_index == 1)
+            || (m.station_b.section_id == new_section_id && m.station_b.station_index == 1)
     });
-    assert!(has_remapped_closure, "Closure should be remapped to new section with adjusted index");
+    assert!(
+        has_remapped_merge,
+        "the remapped closure should have become a merge on the new section: {:?}",
+        proj.station_merges
+    );
 }
 
 #[test]

@@ -6137,6 +6137,42 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
 }
 
 #[test]
+fn check_orphan_closures_detects_sole_bridge_closure() {
+    let mut p = Project::new("Orphan".to_string(), None);
+    let a = p
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = p
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    // A closure between A and B with NO merge connecting them: a sole bridge.
+    p.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 0),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+    let v = p.check_orphan_closures();
+    assert_eq!(v.len(), 1, "{v:?}");
+    assert_eq!(v[0].category, "orphan_closure");
+
+    // Once a merge connects the two sections, the closure is a genuine
+    // (redundant) loop and is no longer flagged.
+    p.record_station_merge(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 1),
+        merged_at: Utc::now(),
+    });
+    assert!(p.check_orphan_closures().is_empty());
+}
+
+#[test]
 fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
     // A: A0-A1-A2 (datum A0); B: B0-B1. B hangs off A2 (merge A2=B0), and a
     // closure A0=B1 closes the loop. Now delete A's last shot (A1->A2): that

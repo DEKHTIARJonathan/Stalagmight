@@ -111,10 +111,12 @@ impl AppState {
             return Vec::new();
         };
         // Structural (dangling refs) + geometric (drifted merges + stale,
-        // still-marked-closed loop closures).
+        // still-marked-closed loop closures) + topological (a closure that is
+        // really a sole-bridge merge).
         let mut violations = project.check_structural_integrity();
         violations.extend(project.check_merge_alignment());
         violations.extend(project.check_closure_alignment());
+        violations.extend(project.check_orphan_closures());
         violations.sort_by_key(|v| match v.severity {
             ViolationSeverity::Critical => 0,
             ViolationSeverity::Warning => 1,
@@ -137,8 +139,11 @@ impl AppState {
         // Dropping refs may have cleared the adjacency cache; rebuild before the
         // cascade walks the merge graph.
         project.rebuild_merge_adjacency();
+        // Turn any sole-bridge closure into a merge (a closure is only a loop),
+        // then re-derive offsets.
+        let converted = project.convert_orphan_closures_to_merges();
         let realigned = project.realign_merges();
-        structural + realigned
+        structural + converted + realigned
     }
 
     /// Execute a command and return the result
@@ -2349,9 +2354,19 @@ impl AppState {
                 }
             }
 
+            // The split can strand a section so its only attachment is a loop
+            // closure — that is a merge, not a loop. Convert it now (issue #8)
+            // so it's fixed immediately, not only on the next reload.
+            project.convert_orphan_closures_to_merges();
+
             project.touch();
             new_id
         };
+
+        // This custom path bypasses execute()'s reconcile; re-derive offsets here
+        // (after the orphan-closure conversion above) and before the after-snapshot
+        // so undo/redo and the saved file reflect the normalized topology.
+        self.reconcile_geometry();
 
         // Step 7: Take AFTER snapshot
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
