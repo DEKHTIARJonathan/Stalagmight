@@ -5843,6 +5843,48 @@ fn diagnose_naharon_merge_alignment() {
 }
 
 #[test]
+fn cascade_solves_deep_chain_past_old_iteration_cap() {
+    // A 40-section chain merged end-to-end, anchored at the datum on the FAR
+    // end so propagation must traverse all 40 hops in the worst (backward) edge
+    // order. The old 20-iteration fixpoint could silently stop halfway; the
+    // single-pass BFS solver must align every merge regardless of depth.
+    let mut project = Project::new("DeepChain".to_string(), None);
+    let mut ids = Vec::new();
+    for _ in 0..40 {
+        let id = project
+            .add_section(SectionData {
+                shots: vec![shot(90.0, 90.0, 3.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        ids.push(id);
+    }
+    // Chain: section[i] station 1 merged to section[i+1] station 0.
+    for w in ids.windows(2) {
+        project.record_station_merge(StationMerge {
+            station_a: StationRef::new(w[0], 1),
+            station_b: StationRef::new(w[1], 0),
+            merged_at: Utc::now(),
+        });
+    }
+    // Datum on the LAST section (far end from section[0]).
+    let last = *ids.last().unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(last, 0),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    // Knock every section out of alignment, then re-solve from scratch.
+    for &id in &ids {
+        project.adjust_section_offset(id, 7.0, -3.0);
+    }
+    project.realign_merges();
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "single-pass solver must align all 40 hops regardless of depth/order"
+    );
+}
+
+#[test]
 fn insert_before_and_after_agree_on_boundary_merge_ref() {
     // insert_before(s1) and insert_after(s0) are the SAME physical insertion
     // (a new shot in the array slot between s0 and s1), so a merge anchored

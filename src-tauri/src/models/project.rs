@@ -1760,6 +1760,39 @@ impl Project {
             return;
         }
 
+        // Coincidence edges: every merge, plus every ALIGNED loop closure
+        // (unaligned closures are inert). Each says its two StationRefs occupy
+        // the same point. Merges form a forest (loop-forming merges are rejected
+        // in merge_stations), so for a well-formed project this graph is a tree
+        // per component with at most one extra edge per aligned closure.
+        let mut adjacency: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
+        let push_edge = |adj: &mut HashMap<SectionId, Vec<(StationRef, StationRef)>>,
+                         a: StationRef,
+                         b: StationRef| {
+            adj.entry(a.section_id).or_default().push((a, b));
+            adj.entry(b.section_id).or_default().push((b, a));
+        };
+        for m in &self.station_merges {
+            push_edge(&mut adjacency, m.station_a, m.station_b);
+        }
+        for c in &self.loop_closures {
+            if c.is_aligned {
+                push_edge(&mut adjacency, c.station_a, c.station_b);
+            }
+        }
+        if adjacency.is_empty() {
+            return;
+        }
+
+        // O(1) station coordinates via the per-section local-coord precompute,
+        // so each visit is constant work instead of re-walking the section's
+        // shots (the old cascade's per-node O(depth) cost). Local coords are
+        // offset-independent, so this stays valid as offsets are mutated below.
+        let local = self.section_local_coords();
+
+        // Authoritative anchors: the seeds + every datum-bearing section.
+        // Deterministic (sorted) frontier so a drifted, cyclic graph resolves
+        // identically every run.
         let mut authoritative: HashSet<SectionId> = HashSet::new();
         for &sid in seeds {
             authoritative.insert(sid);
@@ -1767,81 +1800,37 @@ impl Project {
         for zd in &self.zero_datums {
             authoritative.insert(zd.station_ref.section_id);
         }
+        let mut queue: VecDeque<SectionId> = authoritative.iter().copied().collect();
+        queue.make_contiguous().sort_unstable();
 
-        let merges: Vec<_> = self.station_merges.clone();
-        let closures: Vec<_> = self.loop_closures.clone();
-
-        for _iteration in 0..20 {
-            let mut any_adjustment = false;
-
-            for m in &merges {
-                let (fixed_ref, free_ref) =
-                    if authoritative.contains(&m.station_a.section_id)
-                        && !authoritative.contains(&m.station_b.section_id)
-                    {
-                        (m.station_a, m.station_b)
-                    } else if authoritative.contains(&m.station_b.section_id)
-                        && !authoritative.contains(&m.station_a.section_id)
-                    {
-                        (m.station_b, m.station_a)
-                    } else {
-                        continue;
-                    };
-
-                if let (Some(fixed_pos), Some(free_pos)) = (
-                    self.compute_station_raw_coords(fixed_ref),
-                    self.compute_station_raw_coords(free_ref),
-                ) {
-                    let dx = fixed_pos.x - free_pos.x;
-                    let dy = fixed_pos.y - free_pos.y;
-                    if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                        self.adjust_section_offset(free_ref.section_id, dx, dy);
-                    }
-                    // Anchor the free side to the authoritative network whether or
-                    // not it needed moving. Gating this on "needed adjustment" used
-                    // to stop propagation at the first already-aligned merge, so
-                    // sections past it (reachable only through it) were never
-                    // anchored and their later, misaligned merges never got fixed.
-                    if authoritative.insert(free_ref.section_id) {
-                        any_adjustment = true;
-                    }
-                }
-            }
-
-            for c in &closures {
-                if !c.is_aligned {
+        // Single BFS pass: each free section is reached exactly once and its
+        // offset set so its edge-station coincides with the already-anchored
+        // side. Exact and O(V + E), order-independent, with no iteration cap —
+        // it cannot silently under-converge the way the 20-iteration fixpoint
+        // could on a deep, adversarially-ordered chain. A redundant
+        // (cycle-closing) aligned closure is simply skipped once both ends are
+        // authoritative, leaving its residual — the loop misclosure — intact.
+        while let Some(section) = queue.pop_front() {
+            let Some(neighbors) = adjacency.get(&section).cloned() else {
+                continue;
+            };
+            for (mine, theirs) in neighbors {
+                if authoritative.contains(&theirs.section_id) {
                     continue;
                 }
-                let (fixed_ref, free_ref) =
-                    if authoritative.contains(&c.station_a.section_id)
-                        && !authoritative.contains(&c.station_b.section_id)
-                    {
-                        (c.station_a, c.station_b)
-                    } else if authoritative.contains(&c.station_b.section_id)
-                        && !authoritative.contains(&c.station_a.section_id)
-                    {
-                        (c.station_b, c.station_a)
-                    } else {
-                        continue;
-                    };
-
-                if let (Some(fixed_pos), Some(free_pos)) = (
-                    self.compute_station_raw_coords(fixed_ref),
-                    self.compute_station_raw_coords(free_ref),
-                ) {
-                    let dx = fixed_pos.x - free_pos.x;
-                    let dy = fixed_pos.y - free_pos.y;
-                    if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                        self.adjust_section_offset(free_ref.section_id, dx, dy);
-                    }
-                    if authoritative.insert(free_ref.section_id) {
-                        any_adjustment = true;
+                if let (Some((mx, my)), Some((tx, ty))) =
+                    (self.station_world_xy(mine, &local), self.station_world_xy(theirs, &local))
+                {
+                    let dx = mx - tx;
+                    let dy = my - ty;
+                    // Skip non-finite deltas so a NaN-poisoned section can't drag
+                    // its partners (the alignment check can't see NaN distance).
+                    if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
+                        self.adjust_section_offset(theirs.section_id, dx, dy);
                     }
                 }
-            }
-
-            if !any_adjustment {
-                break;
+                authoritative.insert(theirs.section_id);
+                queue.push_back(theirs.section_id);
             }
         }
     }
