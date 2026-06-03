@@ -352,6 +352,25 @@ test.describe('Section zoom margin', () => {
     assertMargins(result, MIN_MARGIN_PCT);
   });
 
+  test('single-click on section row zooms with margin from viewport edges', async ({ page }) => {
+    // #64: selecting a section in the sidebar focuses the map on it.
+    const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
+
+    // Pan off-target first (memory pitfall: avoid false passes from pre-centered state)
+    await panMapOffTarget(page);
+
+    // Precondition: section must NOT satisfy margins after panning off-target
+    await assertSectionOffScreen(page, sectionId);
+
+    // Single-click the row (fires onMouseDown -> select + zoom).
+    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
+    await expect(sectionRow).toBeVisible();
+    await sectionRow.click();
+
+    const result = await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
+    assertMargins(result, MIN_MARGIN_PCT);
+  });
+
   test('center button zooms with margin from viewport edges', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
 

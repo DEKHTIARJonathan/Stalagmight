@@ -79,7 +79,11 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       type: 'section',
       sectionId: section.id,
     });
-  }, [setSelection]);
+    // #64: selecting a section focuses the map on it (reuses the existing
+    // zoom-to-section machinery; double-click stays as a redundant trigger
+    // until #50 reassigns it to panel-expand).
+    triggerZoomToSection(section.id);
+  }, [setSelection, triggerZoomToSection]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, currentIndex: number) => {
     // Only handle keyboard events when the list item itself is focused,
