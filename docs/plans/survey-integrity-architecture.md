@@ -157,6 +157,37 @@ Tests added: `apply_changeset_skips_non_finite_edit_and_add`,
 | # | Change | Closes | Effort | Risk |
 |---|--------|--------|--------|------|
 | C1 | **Stable station identity.** `StationRef { section_id, anchor: StationAnchor }`, `enum StationAnchor { SectionStart, AfterShot(ShotUuid) }`. Resolve to a positional index only at the geometry/render boundary. **Deletes `shift_station_refs` and its three call sites.** | 1, 2, 4, 6, 7, 21, 30, plus insert/delete off-by-one class | XL | high |
+
+> **C1 status — STEP 1 DONE, swap IN PROGRESS / checkpointed (2026-06-03).** Decisions locked:
+> u32-interned anchor (keep `StationRef` `Copy` for the solver hot paths) and the IPC wire stays
+> positional (`station_index`), Rust resolving anchor↔index at the boundary so the ~228 frontend
+> sites are untouched. **Step 1 shipped:** every shot is now guaranteed a UUID at *load* (not just
+> save), so station identity has a stable spine. **Remaining (the swap) is deliberately not rushed
+> here** — it has no green checkpoint mid-flight (changing `StationRef`/the 5 ref collections'
+> types doesn't compile until every solver/command/IPC site is updated), so it must be done via a
+> *coexistence scaffold* and landed as a focused unit:
+>
+> 1. Add `StationAnchor`/`AnchorRef` (Copy, u32-interned) + a per-`Project` `ShotUuidInterner`
+>    (rebuilt on load and after every snapshot-restore — treat like `section_index_cache`,
+>    route through the A2 `restore_snapshot_into` chokepoint), and the resolve layer
+>    (`shot_uuid_index`, `resolve_anchor`, `anchor_for_index`) next to `section_local_coords`.
+> 2. SQLite **v7**: anchor columns (TEXT, NULL=`SectionStart`) on `station_merges`, `loop_closures`,
+>    `zero_datums`, plus `(section_id, anchor)` PK rebuilds for `station_offsets`/`station_comments`;
+>    one-time data migration = `UPDATE shots SET uuid` for NULLs, then join `shots` on
+>    `sequence_order = station_index-1` to backfill each ref's anchor; keep writing the legacy
+>    `station_index` columns for one release (safe downgrade), stop reading them.
+> 3. Dual-maintain anchors alongside the positional fields wherever refs are created
+>    (`merge_stations`, `set_zero_datum`, `create_loop_closure`, `set_station_comment`,
+>    `move_station`, collab/import, undo restore); migrate the solver/connectivity readers (route
+>    via the B2 `for_each_station_ref`/`map_station_refs` traversal — the single-site lever) to
+>    resolve through the interner; resolve anchor→positional on the binary-IPC **encode**
+>    (`load_binary.rs`) and positional→anchor on command **decode** (`commands.rs`).
+> 4. Delete the positional storage + `shift_station_refs` + its 3 call sites; extend
+>    `check_structural_integrity` to flag a ref whose anchor no longer resolves (the
+>    in-range-displacement win — weakness #2).
+> 5. Tests: `insert_shot_does_not_displace_merge_datum_closure` (+ delete mirror),
+>    `dangling_anchor_flagged_by_integrity`, v6→v7 migration round-trip, and extend
+>    `reconcile_fuzz` to interleave insert/delete between baseline and reconcile.
 | C2 | **Stop trusting persisted offsets.** Recompute `section_offsets` unconditionally on load/commit; **persist only per-floating-component anchors** (free `move_section`/`move_segment` placement via `adjust_section_offset` `project.rs:818` is *not* derivable). Treat any cache/recompute mismatch as "stale," never honor it. | 9, 10, 11, 15, 16 | L | med |
 
 > **C2 status — DONE, scoped (2026-06-03).** Implementation finding: the cascade's
