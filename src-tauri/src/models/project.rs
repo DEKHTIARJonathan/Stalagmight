@@ -6371,6 +6371,47 @@ impl Project {
         violations
     }
 
+    /// Cross-section *aligned* loop closures whose two stations have drifted
+    /// apart. An aligned closure (`is_aligned == true`) asserts its loop is
+    /// closed — its endpoints coincide — and the offset solver enforces it as a
+    /// rigid edge. But `is_aligned` is never set back to false, so a later shot
+    /// edit can leave the closure stale while still marked aligned. The
+    /// merge-only [`Self::check_merge_alignment`] cannot see this; surface it so
+    /// the user can recompute or remove the loop closure (forcing a loop
+    /// misclosure to zero is over-constrained, so this is detect-and-report, not
+    /// auto-heal).
+    pub fn check_closure_alignment(&self) -> Vec<IntegrityViolation> {
+        let local = self.section_local_coords();
+        let mut violations = Vec::new();
+        for closure in &self.loop_closures {
+            if !closure.is_aligned || closure.station_a.section_id == closure.station_b.section_id {
+                continue;
+            }
+            if let (Some((ax, ay)), Some((bx, by))) = (
+                self.station_world_xy(closure.station_a, &local),
+                self.station_world_xy(closure.station_b, &local),
+            ) {
+                let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "closure_misaligned".to_string(),
+                        message: format!(
+                            "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart — recompute or remove it",
+                            closure.id,
+                            closure.station_a.section_id,
+                            closure.station_a.station_index,
+                            closure.station_b.section_id,
+                            closure.station_b.station_index,
+                            dist
+                        ),
+                    });
+                }
+            }
+        }
+        violations
+    }
+
     /// One authoritative anchor section per connected merge group, preferring a
     /// zero-datum section so the realign keeps the group pinned to GPS.
     fn realign_seeds(&self) -> Vec<SectionId> {

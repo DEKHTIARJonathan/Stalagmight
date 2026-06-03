@@ -94,9 +94,11 @@ impl AppState {
         let Some(project) = self.get_project_state() else {
             return Vec::new();
         };
-        // Structural (dangling refs) + geometric (drifted merges).
+        // Structural (dangling refs) + geometric (drifted merges + stale,
+        // still-marked-closed loop closures).
         let mut violations = project.check_structural_integrity();
         violations.extend(project.check_merge_alignment());
+        violations.extend(project.check_closure_alignment());
         violations.sort_by_key(|v| match v.severity {
             ViolationSeverity::Critical => 0,
             ViolationSeverity::Warning => 1,

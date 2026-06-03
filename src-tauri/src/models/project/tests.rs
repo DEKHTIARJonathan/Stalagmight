@@ -5843,6 +5843,57 @@ fn diagnose_naharon_merge_alignment() {
 }
 
 #[test]
+fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
+    // A: A0-A1-A2 north; B: B0-B1-B2 north; merge A2=B0 (chain). A closure
+    // A0=B2 marked aligned, but geometry makes A0 and B2 20m apart — the merge
+    // is fine, only the (redundant) closure is stale.
+    let mut project = Project::new("StaleClosure".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    // Merge A2 <-> B0 and align (B0 lands on A2).
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    assert!(project.check_merge_alignment().is_empty(), "merge should be aligned");
+    // A closure A0 <-> B2, marked aligned — but A0=(0,0) and B2 is 20m north.
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 2),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+
+    // The merge-only check is blind to it; the closure check catches it.
+    assert!(project.check_merge_alignment().is_empty());
+    let closure_violations = project.check_closure_alignment();
+    assert_eq!(closure_violations.len(), 1, "{closure_violations:?}");
+    assert_eq!(closure_violations[0].category, "closure_misaligned");
+    assert!(closure_violations[0].message.contains("20.00 m"));
+
+    // An UNaligned closure is inert and not flagged.
+    project.loop_closures[0].is_aligned = false;
+    assert!(project.check_closure_alignment().is_empty());
+}
+
+#[test]
 fn cascade_solves_deep_chain_past_old_iteration_cap() {
     // A 40-section chain merged end-to-end, anchored at the datum on the FAR
     // end so propagation must traverse all 40 hops in the worst (backward) edge
