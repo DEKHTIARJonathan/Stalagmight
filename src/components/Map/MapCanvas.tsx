@@ -2304,6 +2304,34 @@ export default function MapCanvas() {
         return;
       }
 
+      // Fit to *rendered* geometry only: endpoints of non-reference shots plus
+      // zero-datum stations. Reference shots aren't drawn, so a long ref
+      // connector or ref-only station must not inflate the bounds and shrink
+      // the section on screen (mirrors the export bounds logic in image.rs).
+      // Falls back to all section stations when nothing non-reference renders.
+      const byIndex = new Map<number, (typeof sectionStations)[number]>();
+      for (const s of sectionStations) byIndex.set(s.station_ref.station_index, s);
+      const section = project?.sections.find((s) => s.id === sectionId);
+      const rendered: typeof sectionStations = [];
+      const seenIdx = new Set<number>();
+      const includeIdx = (idx: number) => {
+        if (seenIdx.has(idx)) return;
+        const st = byIndex.get(idx);
+        if (st) {
+          rendered.push(st);
+          seenIdx.add(idx);
+        }
+      };
+      section?.shots.forEach((shot, i) => {
+        if (shot.is_reference) return;
+        includeIdx(i);
+        includeIdx(i + 1);
+      });
+      for (const s of sectionStations) {
+        if (s.is_zero_datum) includeIdx(s.station_ref.station_index);
+      }
+      const fitStations = rendered.length > 0 ? rendered : sectionStations;
+
       // Stop any running animation before starting a new one
       map.current.stop();
 
@@ -2324,8 +2352,8 @@ export default function MapCanvas() {
       });
 
       // Single station: center at point_zoom level
-      if (sectionStations.length === 1) {
-        const station = sectionStations[0]!;
+      if (fitStations.length === 1) {
+        const station = fitStations[0]!;
         const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
 
         map.current.easeTo({
@@ -2338,7 +2366,7 @@ export default function MapCanvas() {
       }
 
       // Multiple stations: calculate bounds and fit
-      const coords = sectionStations.map((s) => s.coordinates);
+      const coords = fitStations.map((s) => s.coordinates);
       const bounds = getBounds(coords);
 
       // Handle zero-area bounds (all stations at same XY) like single-station case
@@ -2390,7 +2418,7 @@ export default function MapCanvas() {
         });
       }
     },
-    [stations, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth, calcPadding]
+    [stations, project?.sections, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
