@@ -25,6 +25,41 @@ impl std::fmt::Display for StationRef {
     }
 }
 
+/// Position-independent identity of a station within a section.
+///
+/// A station is the boundary between two shots; `SectionStart` is the boundary
+/// before the first shot (station index 0) and `AfterShot(uuid)` is the boundary
+/// after the shot with that stable UUID (station index = that shot's position + 1).
+/// Unlike a positional `station_index`, this survives inserting/deleting other
+/// shots in the section, so it is the *stored* form of a station reference
+/// (see [`StationKey`]). It is resolved to a transient positional [`StationRef`]
+/// at the geometry/IPC boundary.
+// Internal identity types — NOT crossing IPC (the wire ref stays positional
+// `StationRef`), so no `TS` derive; serde is for in-memory project (de)serialization.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StationAnchor {
+    SectionStart,
+    AfterShot(String),
+}
+
+/// Stored, position-independent station reference: a section plus a
+/// [`StationAnchor`]. This is what cross-references (merges, closures, datums,
+/// station offsets/comments) persist and hold in memory, so an insert/delete of
+/// an unrelated shot never has to rewrite them and a reference can never silently
+/// point at the wrong in-range station. The solver/IPC use the transient
+/// positional [`StationRef`], obtained via `Project::resolve_key`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StationKey {
+    pub section_id: SectionId,
+    pub anchor: StationAnchor,
+}
+
+impl StationKey {
+    pub fn new(section_id: SectionId, anchor: StationAnchor) -> Self {
+        Self { section_id, anchor }
+    }
+}
+
 /// GPS coordinates in WGS84 format
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct GpsCoordinates {

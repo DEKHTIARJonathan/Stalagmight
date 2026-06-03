@@ -11,8 +11,8 @@ use crate::config::ClosureAdjustmentConfig;
 use super::{
     gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, CollabState, Coordinates,
     FrozenShotRef, GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData, SectionId,
-    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef,
-    ZeroDatum, FEATURE_ID_STRIDE,
+    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationAnchor, StationKey,
+    StationMerge, StationRef, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
@@ -6335,6 +6335,45 @@ impl Project {
     /// offset solver — avoid re-walking a section's shots on every lookup. This
     /// is what keeps those operations `O(shots + merges)` instead of the
     /// `O(merges × depth)` that made the per-mutation alignment check too costly.
+    /// Resolve a stored, position-independent [`StationKey`] to a transient
+    /// positional [`StationRef`] against the CURRENT section structure.
+    /// `None` if the section is gone or the anchoring shot was deleted (which is
+    /// exactly the "dangling reference" an integrity check should surface).
+    ///
+    /// This is the read side of the stable-identity boundary: cross-references are
+    /// stored as `StationKey`, and the solver/IPC resolve them to a positional
+    /// `StationRef` here. `O(shots)` per call — callers that resolve many keys for
+    /// the same section should hoist the lookup.
+    pub fn resolve_key(&self, key: &StationKey) -> Option<StationRef> {
+        let section = self.get_section(key.section_id)?;
+        let index = match &key.anchor {
+            StationAnchor::SectionStart => 0,
+            StationAnchor::AfterShot(uuid) => {
+                let pos = section
+                    .shots
+                    .iter()
+                    .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
+                (pos + 1) as u32
+            }
+        };
+        Some(StationRef::new(key.section_id, index))
+    }
+
+    /// Build the stored [`StationKey`] for a transient positional [`StationRef`].
+    /// `None` if the section is gone, the index is out of range, or the anchoring
+    /// shot has no UUID (shouldn't happen after the load-time mint). Station 0
+    /// anchors to `SectionStart`; station `i` to `AfterShot(uuid of shot i-1)`.
+    pub fn key_for_ref(&self, sr: StationRef) -> Option<StationKey> {
+        let section = self.get_section(sr.section_id)?;
+        let anchor = if sr.station_index == 0 {
+            StationAnchor::SectionStart
+        } else {
+            let shot = section.shots.get((sr.station_index - 1) as usize)?;
+            StationAnchor::AfterShot(shot.uuid.clone()?)
+        };
+        Some(StationKey::new(sr.section_id, anchor))
+    }
+
     fn section_local_coords(&self) -> HashMap<SectionId, Vec<(f64, f64)>> {
         let mut map = HashMap::with_capacity(self.sections.len());
         for section in &self.sections {

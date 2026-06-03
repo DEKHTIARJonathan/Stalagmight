@@ -37,6 +37,47 @@ fn get_connected_section_ids_traverses_merges() {
 }
 
 #[test]
+fn station_key_round_trips_and_tracks_station_across_insert() {
+    // A StationKey (stored, position-independent) round-trips with the positional
+    // StationRef, and crucially tracks the SAME physical station when an unrelated
+    // shot insert renumbers indices — the property that lets the stable-identity
+    // refactor delete shift_station_refs.
+    let mut project = Project::new("Keys".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids(); // guarantee anchors are available
+
+    // Station 2 = the boundary after shot index 1.
+    let sr = StationRef::new(a, 2);
+    let key = project.key_for_ref(sr).expect("key for in-range station");
+    assert!(matches!(key.anchor, StationAnchor::AfterShot(_)));
+    assert_eq!(project.resolve_key(&key), Some(sr), "key_for_ref/resolve_key round-trip");
+
+    // SectionStart round-trips too.
+    let start = StationRef::new(a, 0);
+    let start_key = project.key_for_ref(start).unwrap();
+    assert_eq!(start_key.anchor, StationAnchor::SectionStart);
+    assert_eq!(project.resolve_key(&start_key), Some(start));
+
+    // Insert a shot at the front: the physical station that was index 2 is now
+    // index 3, and the key (anchored to the original shot's UUID) resolves there.
+    let first_id = project.get_section(a).unwrap().shots[0].id;
+    project.insert_shot_before(a, first_id, shot(0.0, 0.0, 5.0, 0.0, 0.0), None);
+    assert_eq!(
+        project.resolve_key(&key),
+        Some(StationRef::new(a, 3)),
+        "the key must track the same physical station after the insert shifts indices"
+    );
+    // A key whose anchoring shot no longer exists resolves to None (dangling).
+    let bogus = StationKey::new(a, StationAnchor::AfterShot("not-a-real-uuid".to_string()));
+    assert_eq!(project.resolve_key(&bogus), None);
+}
+
+#[test]
 fn station_ref_traversals_cover_every_bearing_collection() {
     // for_each_station_ref / map_station_refs are the single enumeration of every
     // StationRef-bearing collection. If a new such collection is added without
