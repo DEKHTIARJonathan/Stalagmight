@@ -300,6 +300,13 @@ impl AppState {
             }
         }
 
+        // Treat section offsets as derived: after any structural command,
+        // reconcile geometry so no command path can leave merged stations
+        // drifted (a no-op when nothing moved; skipped during bulk import).
+        if result.success && Self::command_can_affect_integrity(&cmd) {
+            self.reconcile_geometry();
+        }
+
         // Push to undo stack if successful and undoable.
         // Batch commands handle their own undo push inside execute_batch()
         // (with before+after snapshots), so skip them here.

@@ -549,24 +549,22 @@ impl AppState {
         };
         let result = self.undo_inner();
         if result.success {
-            self.reconcile_geometry_after_history();
+            self.reconcile_geometry();
         }
         result
     }
 
-    /// After an undo/redo restores or replays state, re-derive section offsets
-    /// so merged stations stay colocated.
+    /// Re-derive section offsets so merged stations stay colocated, healing any
+    /// drift a just-completed operation left behind.
     ///
-    /// Several history-apply paths re-implement only a *subset* of the forward
-    /// operation (e.g. redo of an inserted shot replays the ref-shift but omits
-    /// the offset cascade that the forward insert and the undo both run),
-    /// leaving merged partners drifted. Rather than keep every one of those
-    /// paths perfectly in sync by hand — the source of this class of bugs —
-    /// treat section offsets as *derived* state and reconcile them once here,
-    /// after the history operation completes. This runs only on user-initiated
-    /// undo/redo, never inside the bulk-import loop, and is a no-op when nothing
-    /// drifted, so it doesn't reintroduce the per-mutation alignment cost.
-    fn reconcile_geometry_after_history(&self) {
+    /// Section offsets are treated as *derived* state: rather than trust every
+    /// forward / undo / redo path to maintain them perfectly by hand (the source
+    /// of the redo-desync and cascade-propagation bugs), the command layer
+    /// reconciles them once after each user action. It is a no-op when nothing
+    /// drifted (the common case — an `O(shots + merges)` check thanks to the
+    /// coordinate precompute) and is skipped during the bulk-import loop
+    /// (`cascade_deferred`), so it doesn't reintroduce the per-mutation cost.
+    pub(super) fn reconcile_geometry(&self) {
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -574,12 +572,15 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return;
         };
+        if project.cascade_deferred {
+            return;
+        }
         let fixed = project.realign_merges();
         if fixed > 0 {
             tracing::warn!(
                 fixed,
-                purpose = "self-heal geometry after undo/redo",
-                "Re-aligned drifted station merges after a history operation"
+                purpose = "self-heal derived geometry",
+                "Re-aligned drifted station merges after an operation"
             );
         }
     }
@@ -982,7 +983,7 @@ impl AppState {
         };
         let result = self.redo_inner();
         if result.success {
-            self.reconcile_geometry_after_history();
+            self.reconcile_geometry();
         }
         result
     }
