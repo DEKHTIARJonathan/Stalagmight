@@ -700,6 +700,81 @@ fn unmerge_converts_orphaned_bridge_closure() {
 }
 
 #[test]
+fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
+    // A merge is rejected only when the two sections are already RIGIDLY connected
+    // (merges or ALIGNED closures). An inert (unaligned) closure does not constrain
+    // them, so merging across one — the first real link — must be allowed; the old
+    // connectivity walk followed inert closures and wrongly rejected it, forcing the
+    // sole-bridge-closure-that-should-be-a-merge bug (catalog #8).
+    fn setup(aligned: bool) -> (AppState, SectionId, SectionId) {
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+        let a = state
+            .execute(Command::CreateSection {
+                name: Some("A".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#111111".to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![test_shot_data(5.0)],
+            })
+            .section_id
+            .unwrap();
+        let b = state
+            .execute(Command::CreateSection {
+                name: Some("B".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#222222".to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![test_shot_data(5.0)],
+            })
+            .section_id
+            .unwrap();
+        // Inject a single closure A0 <-> B1 between the otherwise-unconnected sections.
+        {
+            let mut g = state.project.lock().unwrap();
+            let p = g.as_mut().unwrap();
+            let id = p.next_closure_id;
+            p.loop_closures.push(LoopClosure {
+                id,
+                station_a: StationRef::new(a, 0),
+                station_b: StationRef::new(b, 1),
+                path_length: 10.0,
+                misclosure_distance: 0.1,
+                error_percentage: 1.0,
+                horizontal_misclosure: 0.08,
+                vertical_misclosure: 0.06,
+                strategy: ClosureStrategy::default(),
+                is_aligned: aligned,
+            });
+            p.next_closure_id += 1;
+        }
+        (state, a, b)
+    }
+
+    // Inert closure → the merge is the first rigid link → ALLOWED, result sound.
+    let (state, a, b) = setup(false);
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "merge across an inert closure must be allowed: {:?}", r.error);
+    assert!(!state.get_project_state().unwrap().has_critical_integrity_violations());
+
+    // Aligned closure → already rigidly connected → merge REJECTED (would be a cycle).
+    let (state2, a2, b2) = setup(true);
+    let r2 = state2.execute(Command::MergeStations {
+        station_a: StationRef::new(a2, 1),
+        station_b: StationRef::new(b2, 0),
+    });
+    assert!(
+        !r2.success,
+        "merge across an aligned closure must be rejected (rigid cycle — use a loop closure)"
+    );
+}
+
+#[test]
 fn restore_snapshot_into_rebuilds_transient_caches() {
     // The single restore chokepoint must rebuild the serde-skipped lookup caches
     // (section_index_cache, merge_adjacency_cache), so no rollback/undo/redo path

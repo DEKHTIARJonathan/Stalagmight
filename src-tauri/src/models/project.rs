@@ -4228,8 +4228,15 @@ impl Project {
             return Err("These stations are already merged".to_string());
         }
 
-        // Check if already connected (via merges or closures) - reject, use CreateLoopClosure instead
-        let connected_a = self.get_connected_section_ids(station_a.section_id);
+        // Reject only if the two sections are already RIGIDLY connected (via merges
+        // or *aligned* closures) — adding a merge there would create a redundant
+        // rigid cycle, which is what a loop closure is for. An INERT (unaligned)
+        // closure does not constrain the two stations yet, so a merge across one is
+        // the first real connection and must be allowed; rejecting it (the old
+        // get_connected_section_ids walk, which followed inert closures too) forced
+        // users into the sole-bridge-closure-that-should-be-a-merge bug. This asserts
+        // the same graph the cascade actually solves (catalog #8 / #integrity Root 3).
+        let connected_a = self.get_rigid_connected_section_ids(station_a.section_id);
         if connected_a.contains(&station_b.section_id) {
             return Err("Stations are already connected. Use Create Loop Closure instead.".to_string());
         }
