@@ -70,10 +70,9 @@ impl<'a> Drop for CascadeDeferGuard<'a> {
 }
 
 impl AppState {
-    /// Whether a command can change structural cross-references and therefore
-    /// needs the post-command integrity gate. Pure field edits and the project
-    /// lifecycle commands cannot dangle references, so they skip the
-    /// (full-project) snapshot the gate would otherwise take.
+    /// Whether a command can drift section offsets (move merged partners out of
+    /// alignment) and therefore needs the post-command geometry reconcile. Pure
+    /// metadata edits and lifecycle commands cannot, so they skip it.
     fn command_can_affect_integrity(cmd: &Command) -> bool {
         !matches!(
             cmd,
@@ -84,6 +83,23 @@ impl AppState {
                 | Command::UpdateShot { .. }
                 | Command::UpdateSectionMetadata { .. }
                 | Command::SetShotReference { .. }
+        )
+    }
+
+    /// Whether a command can introduce a *dangling/out-of-range cross-reference*
+    /// — by removing a referenced entity or renumbering station indices — and so
+    /// needs the (expensive) whole-project rollback snapshot. Geometry-only
+    /// commands (moves, merges, datums, closures) add valid refs or shift
+    /// offsets but cannot dangle a reference, so they get the cheap
+    /// reconcile-only path and skip the serialize.
+    fn command_can_dangle_refs(cmd: &Command) -> bool {
+        matches!(
+            cmd,
+            Command::DeleteSection { .. }
+                | Command::DeleteShot { .. }
+                | Command::CreateShot { .. }
+                | Command::Batch { .. }
+                | Command::MergeProjects { .. }
         )
     }
 
@@ -144,11 +160,12 @@ impl AppState {
             UndoData::None
         };
 
-        // Snapshot before any structural command so a result that introduces
-        // dangling references can be rejected and rolled back — corruption must
-        // not enter the project through the command path (#17). Pure field edits
-        // and lifecycle commands can't dangle refs, so they skip the snapshot.
-        let integrity_snapshot = if Self::command_can_affect_integrity(&cmd) {
+        // Snapshot before a ref-removing/renumbering command so a result that
+        // introduces dangling references can be rejected and rolled back —
+        // corruption must not enter through the command path (#17). Only those
+        // commands can dangle a ref, so geometry-only commands (moves, merges,
+        // datums) skip the expensive whole-project serialize (#8).
+        let integrity_snapshot = if Self::command_can_dangle_refs(&cmd) {
             self.capture_project_snapshot().ok()
         } else {
             None
