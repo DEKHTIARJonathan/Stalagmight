@@ -140,6 +140,19 @@ Tests added: `apply_changeset_skips_non_finite_edit_and_add`,
 | B2 | Single `visit_station_refs_mut(&mut FnMut)` traversal consumed by shift, cleanup, and integrity. | 3 (missed ref-bearing collection); prerequisite for C1 | S | low |
 | B3 | Persisted `aligned_intent: bool` (legacy `is_aligned` maps to it); cascade treats a closure as rigid only when `aligned_intent && endpoints within tolerance`. **Keep** the misclosure banner — do not auto-zero a measured loop. | 12 (stale aligned closure) | M | med |
 
+> **B3 status — DEFERRED (2026-06-03).** The obvious predicate `aligned_intent && endpoints
+> within tolerance` gates on *current endpoint coincidence*, which wrongly deactivates aligned
+> closures that simply haven't been offset-solved yet, and breaks the established `is_aligned =
+> treat-as-rigid` contract that existing tests encode (`test_move_segment_aligned_closure_connectivity`
+> injects a non-coincident aligned closure A.1↔B.0 — ~5 m apart, both sections at offset 0 — and
+> asserts the cascade still moves them together). A *correct* staleness signal must compare the
+> closure's **recorded** loop misclosure/path against the **current** shot geometry (did the loop
+> the closure solved actually change?), not endpoint coincidence — and must update that test's
+> premise. The drifted-aligned-closure condition is already surfaced to the user by
+> `check_closure_alignment`'s banner (detect-and-report, intentionally not auto-fixed), so the
+> safety net exists; B3 only changes the *solver's* rigid-edge behavior, which is the risky part.
+> Deferred to a focused follow-up rather than ship a half-right tolerance gate in this PR.
+
 ### Group C — larger re-architectures (durable wins, sequenced last)
 | # | Change | Closes | Effort | Risk |
 |---|--------|--------|--------|------|
