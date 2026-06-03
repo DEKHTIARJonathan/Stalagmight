@@ -51,6 +51,16 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     };
   }, []);
 
+  // Scroll the hovered section's row into view when it's off-screen.
+  // block: 'nearest' is a no-op when the row is already visible, so this
+  // is silent for panel-internal hovers and only acts on external (map) hovers.
+  useEffect(() => {
+    if (hoveredSectionId === null) return;
+    const idx = sections.findIndex((s) => s.id === hoveredSectionId);
+    if (idx < 0) return;
+    optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+  }, [hoveredSectionId, sections]);
+
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
     if (e && e.button !== 0) return;
