@@ -681,6 +681,47 @@ fn test_project_lifecycle_persists_undo_and_state() {
 }
 
 #[test]
+fn test_get_project_state_emits_positional_wire_refs() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        create_project(&app);
+        let section_a = create_section_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
+        let section_b = create_section_with_shots(&app, vec![shot_data(7.0)]);
+        // Merge two AfterShot stations across sections so the wire form must
+        // resolve a non-trivial positional index.
+        assert_success(&station::merge_stations(
+            state(&app),
+            StationRef::new(section_a, 1),
+            StationRef::new(section_b, 1),
+        ));
+
+        let project_state = project::get_project_state(state(&app)).expect("project state");
+
+        // The IPC payload (ProjectState) must carry the positional StationRef
+        // wire shape: `station_index` present, no StationKey `anchor`.
+        let ipc = serde_json::to_value(&project_state).unwrap();
+        let merge = &ipc["project"]["station_merges"][0];
+        assert!(
+            merge["station_a"]["station_index"].is_number(),
+            "wire merge endpoint must expose station_index, got: {merge}"
+        );
+        assert!(
+            merge["station_a"].get("anchor").is_none(),
+            "wire merge endpoint must NOT expose the StationKey anchor, got: {merge}"
+        );
+
+        // Regression guard: the raw Project serde (the undo snapshot path) must
+        // STILL emit the lossless StationKey form. The two encodings diverge by
+        // design — only the IPC view is positional.
+        let raw = serde_json::to_string(&project_state.project).unwrap();
+        assert!(
+            raw.contains("anchor"),
+            "raw Project serde must keep StationKey anchors for undo snapshots"
+        );
+    });
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn test_open_project_updates_recent_projects_when_config_save_fails() {
     use std::os::unix::fs::PermissionsExt;
