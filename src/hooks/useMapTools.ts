@@ -46,6 +46,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setDrawFromStation,
     setHoveredStation,
     setHoveredShot,
+    setHoveredSectionId,
     openDialog,
     snappedStation,
     showStations,
@@ -575,30 +576,34 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     ]
   );
 
-  // Handle station hover - only highlights the specific station, not the whole section
+  // Handle station hover - highlights the station and the owning section's name in the panel.
   const handleStationHover = useCallback(
     (ref: StationRef | null) => {
       // GUARD: No hover for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) {
         setHoveredStation(null);
+        setHoveredSectionId(null);
         return;
       }
       setHoveredStation(ref);
+      setHoveredSectionId(ref?.section_id ?? null);
     },
-    [activeTool, setHoveredStation]
+    [activeTool, setHoveredStation, setHoveredSectionId]
   );
 
-  // Handle shot hover - only highlights the specific shot, not the whole section
+  // Handle shot hover - highlights the shot and the owning section's name in the panel.
   const handleShotHover = useCallback(
     (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
       // GUARD: No hover for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) {
         setHoveredShot(null);
+        setHoveredSectionId(null);
         return;
       }
       setHoveredShot(shot);
+      setHoveredSectionId(shot?.sectionId ?? null);
     },
-    [activeTool, setHoveredShot]
+    [activeTool, setHoveredShot, setHoveredSectionId]
   );
 
   // Handle context menu
