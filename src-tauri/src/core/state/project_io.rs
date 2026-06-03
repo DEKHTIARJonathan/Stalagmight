@@ -866,6 +866,11 @@ impl AppState {
         // merged project takes the O(group) fast path.
         merged_project.rebuild_merge_adjacency();
 
+        // Re-derive section offsets from the (now combined) merge/datum
+        // constraints so the merged output is geometrically consistent and any
+        // drift in a source isn't laundered into the new file.
+        merged_project.redrive_offsets_after_load();
+
         // Set the output file path
         merged_project.file_path = Some(output_path.clone());
 
