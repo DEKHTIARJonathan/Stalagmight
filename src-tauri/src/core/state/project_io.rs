@@ -8,6 +8,23 @@ use crate::persistence::Database;
 
 use super::AppState;
 
+/// Build a save-failure `CommandResult`, tagging filesystem permission
+/// denials with `PERMISSION_DENIED_CODE` so the frontend can surface
+/// folder-access guidance instead of a misleading message. macOS drops
+/// previously-granted folder access after OS/app updates, which otherwise
+/// reaches the user as a bogus "corrupted database"/raw-OS error.
+fn save_failure(context: &str, err: &anyhow::Error) -> CommandResult {
+    let detail = format!("{context}: {err}");
+    if crate::core::loading::is_permission_denied(err) {
+        CommandResult::failure(format!(
+            "{}: {detail}",
+            crate::core::loading::PERMISSION_DENIED_CODE
+        ))
+    } else {
+        CommandResult::failure(detail)
+    }
+}
+
 impl AppState {
     /// Resolve the project file path from a name and optional directory.
     /// Sanitizes the name and ensures .stalx extension.
@@ -373,7 +390,7 @@ impl AppState {
             Err(e) => {
                 // Clean up temp file on failure
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create save file: {e}"));
+                return save_failure("Failed to create save file", &e);
             }
         };
 
@@ -386,7 +403,7 @@ impl AppState {
                 purpose = "persist edits safely",
                 "Save failed; temp file cleaned up"
             );
-            return CommandResult::failure(format!("Failed to save project: {e}"));
+            return save_failure("Failed to save project", &e);
         }
 
         // Copy display settings to the new database
@@ -408,12 +425,13 @@ impl AppState {
         // This is safe: if rename fails, original file is untouched
         if let Err(e) = std::fs::rename(&temp_path, &save_path) {
             let _ = std::fs::remove_file(&temp_path);
+            let e = anyhow::Error::from(e);
             tracing::error!(
                 error = %e,
                 purpose = "persist edits safely",
                 "Failed to rename temp file to final destination"
             );
-            return CommandResult::failure(format!("Failed to finalize save: {e}"));
+            return save_failure("Failed to finalize save", &e);
         }
 
         // Reopen the database at the final path
@@ -1015,6 +1033,11 @@ impl AppState {
             Ok(db) => db,
             Err(e) => {
                 let msg = e.to_string();
+                // A permission denial (e.g. macOS forgot folder access after an
+                // update) otherwise masquerades as corruption — check it first.
+                if crate::core::loading::is_permission_denied(&e) {
+                    early_return_err!(LoadError::permission(msg, &path.display().to_string()));
+                }
                 // Detect corruption-specific errors and return CORRUPT code
                 // so the frontend can offer recovery options
                 if msg.contains("integrity check failed") || msg.contains("corrupted") {
