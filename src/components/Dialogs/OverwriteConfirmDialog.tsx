@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { isPermissionError } from '../../utils/saveErrors';
 
 export default function OverwriteConfirmDialog() {
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
@@ -25,6 +26,11 @@ export default function OverwriteConfirmDialog() {
       const result = await saveProject(path);
       if (result && !result.success && result.error) {
         trackDialogComplete('confirm-overwrite');
+        // On a permission error, saveProject has already opened the folder-access
+        // guidance dialog; don't close it or stack a generic error on top.
+        if (isPermissionError(result.error)) {
+          return;
+        }
         closeDialog();
         showDialog('error', { message: result.error, title: 'Save Failed' });
       } else {
