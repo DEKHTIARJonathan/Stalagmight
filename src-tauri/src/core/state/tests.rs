@@ -1689,6 +1689,35 @@ fn save_into_unwritable_dir_reports_permission_code() {
 }
 
 #[test]
+fn save_into_missing_dir_is_not_a_permission_error() {
+    use crate::core::loading::PERMISSION_DENIED_CODE;
+
+    // A deleted/renamed save folder yields SQLite's generic "unable to open
+    // database file" too — but that's a vanished location, not a permission
+    // denial, so it must NOT be stamped with the permission code (which would
+    // wrongly show the user Privacy & Security guidance).
+    let temp_dir = TempDir::new().unwrap();
+    let missing = temp_dir.path().join("gone").join("p.stalx");
+
+    let mut project = Project::new("Missing".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(missing), false);
+
+    assert!(!result.success, "save into a missing dir should fail");
+    let err = result.error.unwrap_or_default();
+    assert!(
+        !err.starts_with(PERMISSION_DENIED_CODE),
+        "missing dir should be an ordinary failure, got: {err}"
+    );
+}
+
+#[test]
 fn test_display_settings_fail_when_cache_lock_poisoned() {
     let state = AppState::new().unwrap();
 

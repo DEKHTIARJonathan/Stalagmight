@@ -13,9 +13,18 @@ use super::AppState;
 /// folder-access guidance instead of a misleading message. macOS drops
 /// previously-granted folder access after OS/app updates, which otherwise
 /// reaches the user as a bogus "corrupted database"/raw-OS error.
-fn save_failure(context: &str, err: &anyhow::Error) -> CommandResult {
+///
+/// `target` is the destination file. We only treat the failure as a
+/// permission problem when its parent directory still exists: a
+/// deleted/renamed save folder yields SQLite's same generic "unable to open
+/// database file", but that's a vanished-location error, not a denial, and
+/// should stay an ordinary failure rather than show Privacy & Security steps.
+fn save_failure(context: &str, target: &std::path::Path, err: &anyhow::Error) -> CommandResult {
     let detail = format!("{context}: {err}");
-    if crate::core::loading::is_permission_denied(err) {
+    let dir_present = target
+        .parent()
+        .is_none_or(|p| p.try_exists().unwrap_or(true));
+    if dir_present && crate::core::loading::is_permission_denied(err) {
         CommandResult::failure(format!(
             "{}: {detail}",
             crate::core::loading::PERMISSION_DENIED_CODE
@@ -390,7 +399,7 @@ impl AppState {
             Err(e) => {
                 // Clean up temp file on failure
                 let _ = std::fs::remove_file(&temp_path);
-                return save_failure("Failed to create save file", &e);
+                return save_failure("Failed to create save file", &save_path, &e);
             }
         };
 
@@ -403,7 +412,7 @@ impl AppState {
                 purpose = "persist edits safely",
                 "Save failed; temp file cleaned up"
             );
-            return save_failure("Failed to save project", &e);
+            return save_failure("Failed to save project", &save_path, &e);
         }
 
         // Copy display settings to the new database
@@ -431,7 +440,7 @@ impl AppState {
                 purpose = "persist edits safely",
                 "Failed to rename temp file to final destination"
             );
-            return save_failure("Failed to finalize save", &e);
+            return save_failure("Failed to finalize save", &save_path, &e);
         }
 
         // Reopen the database at the final path
@@ -892,14 +901,14 @@ impl AppState {
             Ok(db) => db,
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);
-                return save_failure("Failed to create output file", &e);
+                return save_failure("Failed to create output file", &output_path, &e);
             }
         };
 
         if let Err(e) = db.save_project(&merged_project) {
             drop(db);
             let _ = std::fs::remove_file(&temp_path);
-            return save_failure("Failed to save merged project", &e);
+            return save_failure("Failed to save merged project", &output_path, &e);
         }
 
         // Close database before rename
@@ -909,7 +918,7 @@ impl AppState {
         if let Err(e) = std::fs::rename(&temp_path, &output_path) {
             let _ = std::fs::remove_file(&temp_path);
             let e = anyhow::Error::from(e);
-            return save_failure("Failed to finalize save", &e);
+            return save_failure("Failed to finalize save", &output_path, &e);
         }
 
         tracing::info!(
