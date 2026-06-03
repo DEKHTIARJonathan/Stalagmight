@@ -23,9 +23,11 @@ test.describe('Scroll containment', () => {
         const s = getComputedStyle(el);
         return { overscrollY: s.overscrollBehaviorY, overflowY: s.overflowY };
       };
+      const root = document.getElementById('root');
       return {
         html: read(document.documentElement),
         body: read(document.body),
+        root: root ? read(root) : null,
       };
     });
 
@@ -35,5 +37,9 @@ test.describe('Scroll containment', () => {
     // overflow: hidden — the document shell itself has no scroll range.
     expect(styles.html.overflowY).toBe('hidden');
     expect(styles.body.overflowY).toBe('hidden');
+    // #root is covered by the same rule — guard it independently.
+    expect(styles.root).not.toBeNull();
+    expect(styles.root?.overscrollY).toBe('none');
+    expect(styles.root?.overflowY).toBe('hidden');
   });
 });

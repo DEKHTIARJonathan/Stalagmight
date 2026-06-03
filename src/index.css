@@ -939,10 +939,7 @@ html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
-  /* Desktop shell: the document itself never scrolls — inner panels manage
-     their own overflow. `overscroll-behavior: none` stops wheel/trackpad
-     scroll over the map (and other inner scroll areas) from chaining up and
-     rubber-banding the whole window on macOS WKWebView (#43). */
+  /* Prevents WKWebView rubber-band window scroll on macOS (#43) */
   overflow: hidden;
   overscroll-behavior: none;
 }
