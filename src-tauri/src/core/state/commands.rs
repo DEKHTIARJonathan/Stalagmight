@@ -138,6 +138,24 @@ impl AppState {
         }
     }
 
+    /// Shared structural-edit epilogue for the custom `execute_*` paths that
+    /// bypass [`Self::execute`]'s gated epilogue (collab apply, TML import).
+    /// Converts sole-bridge closures to merges and reconciles derived offsets,
+    /// then reports whether the project now holds a CRITICAL integrity violation
+    /// (dangling ref / out-of-range index / non-finite geometry). A caller that
+    /// captured a pre-edit snapshot rolls back to it when this returns `true`,
+    /// giving these paths the same "block corruption at the source" guarantee the
+    /// standard command path gets (#integrity Root 4).
+    pub(super) fn finalize_structural_edit(&self) -> bool {
+        self.convert_orphan_closures_in_open_project();
+        self.reconcile_geometry();
+        self.project
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
+            .unwrap_or(false)
+    }
+
     /// Structural-integrity violation messages for the open project, critical
     /// first. Empty when the project is sound or none is open. Used by the
     /// load-time "warn and offer repair" surface.
@@ -1096,6 +1114,24 @@ impl AppState {
                     "Failed to track imported section hashes"
                 );
             }
+        }
+
+        // Block corruption at the source: convert sole-bridge closures, reconcile
+        // derived offsets, and reject the whole import if it produced critical
+        // corruption (dangling refs / non-finite geometry) rather than committing
+        // and later persisting it. This custom path bypasses execute()'s guard, so
+        // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
+        if self.finalize_structural_edit() {
+            self.rollback_project(&before_snapshot);
+            tracing::error!(
+                purpose = "block corruption at the source",
+                "TML import would corrupt survey structure; rolled back, nothing imported"
+            );
+            return CommandResult::failure(
+                "Blocked: the imported data would corrupt the survey structure \
+                 (dangling references or invalid geometry). Nothing was imported."
+                    .to_string(),
+            );
         }
 
         // Capture after-snapshot for redo support

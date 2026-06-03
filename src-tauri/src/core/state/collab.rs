@@ -182,6 +182,24 @@ impl AppState {
             warnings
         };
 
+        // Same structural epilogue + corruption guard the standard command path
+        // gets in execute(): convert sole-bridge closures the reconcile stranded,
+        // reconcile derived offsets, and reject (roll back) if applying the
+        // collaborator's changes introduced critical corruption. apply_changeset
+        // writes foreign TML geometry directly, so this is the first gate it sees.
+        if self.finalize_structural_edit() {
+            self.rollback_project(&before);
+            tracing::error!(
+                purpose = "block corruption at the source",
+                "Collab apply introduced critical corruption; rolled back, no changes made"
+            );
+            return CommandResult::failure(
+                "Blocked: applying the collaborator's changes would corrupt the survey \
+                 structure (dangling references or invalid geometry). No changes were made."
+                    .to_string(),
+            );
+        }
+
         let after = match self.capture_after_snapshot_or_rollback(&before) {
             Ok(s) => s,
             Err(r) => return r,
@@ -304,6 +322,17 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             continue;
         };
         let d = &e.new_data;
+        // Reject non-finite (NaN/±inf) geometry from the collaborator's TML before
+        // it poisons coordinate computation — the collab path writes foreign data
+        // directly, so this is its ingest gate (mirrors the command-boundary checks).
+        if !d.all_finite() {
+            skipped.push(format!(
+                "Skipped edit on '{}' shot #{} (non-finite geometry in collaborator data)",
+                e.section_name,
+                e.shot_index + 1,
+            ));
+            continue;
+        }
         shot.azimuth_in = d.azimuth_in;
         shot.length = d.length;
         shot.depth_in = d.depth_in;
@@ -367,6 +396,13 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
     let mut last_add: Option<(SectionId, Option<ShotId>, ShotId)> = None;
     for a in &cs.shots_added {
         let Some(sid) = a.section_id else { continue };
+        // Reject non-finite geometry before inserting (see edit-phase note).
+        if !a.data.all_finite() {
+            skipped.push(format!(
+                "Skipped added shot in section {sid} (non-finite geometry in collaborator data)"
+            ));
+            continue;
+        }
         let chained = match last_add {
             Some((lsid, lafter, lnew)) if lsid == sid && lafter == a.after_shot_id => Some(lnew),
             _ => None,

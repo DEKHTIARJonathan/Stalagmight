@@ -1415,6 +1415,52 @@ mod tests {
     }
 
     #[test]
+    fn apply_changeset_skips_non_finite_edit_and_add() {
+        // The collab apply path writes foreign TML geometry straight into shots, so
+        // it must reject non-finite (NaN/inf) values at ingest the same way the
+        // command boundary does — otherwise a corrupt collaborator file poisons
+        // coordinate computation. apply_changeset skips such shots (with a warning)
+        // and leaves the project's existing geometry untouched.
+        let mut p = project_with(three());
+        let sid = p.sections[0].id;
+        let orig_len = p.sections[0].shots[0].length;
+
+        let mut cs = CollabChangeSet::empty();
+        // Edit shot 0 with a NaN length.
+        let mut bad_edit = shot(10.0, 5.0, 0.0, 1.0);
+        bad_edit.length = f64::NAN;
+        cs.shots_edited.push(EditedShot {
+            section_id: sid,
+            shot_index: 0,
+            section_name: "Main".into(),
+            changes: vec![],
+            new_data: bad_edit,
+            new_station_comment: None,
+        });
+        // Add a shot with +inf depth.
+        let mut bad_add = shot(15.0, 4.0, 1.0, 2.0);
+        bad_add.depth_out = f64::INFINITY;
+        cs.shots_added.push(AddedShot {
+            section_id: Some(sid),
+            section_name: "Main".into(),
+            position: 0,
+            after_shot_id: None,
+            uuid: None,
+            data: bad_add,
+            station_comment: None,
+        });
+
+        let shots_before = p.sections[0].shots.len();
+        let skipped = crate::core::apply_changeset(&mut p, &cs);
+
+        assert_eq!(skipped.len(), 2, "both non-finite changes should be skipped: {skipped:?}");
+        // Existing geometry untouched, no NaN/inf shot inserted.
+        assert_eq!(p.sections[0].shots.len(), shots_before, "no non-finite shot added");
+        assert_eq!(p.sections[0].shots[0].length, orig_len, "edit not applied");
+        assert!(p.sections[0].shots.iter().all(|s| s.all_finite()), "no non-finite geometry leaked in");
+    }
+
+    #[test]
     fn station_comments_clean_roundtrip_yields_empty_changeset() {
         // Export → parse → diff against own baseline ⇒ no edits/adds/removes.
         // Without the ZWSP marker this would either drop the station comments
