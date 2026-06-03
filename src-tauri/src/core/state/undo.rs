@@ -348,32 +348,26 @@ impl AppState {
                 }
             }
 
+            // MoveStation rewrites the raw geometry of the two adjacent shots and can,
+            // through reconcile, re-anchor sections connected by merges/aligned closures.
+            // A lightweight StationMoveInfo captured only azimuth/length/depth of two
+            // shots and one section offset — it dropped pitch/lrud/temperature and any
+            // re-cascaded section. Capture a full before/after pair (like Merge/Unmerge)
+            // so undo restores every field and every offset the move could have touched.
             Command::MoveStation {
                 station_ref,
                 offset: _,
             } => {
-                // Capture adjacent shot data and station offset before execution
-                let section = project.sections.iter().find(|s| s.id == station_ref.section_id);
-                match section {
-                    Some(section) => {
-                        let idx = station_ref.station_index as usize;
-                        let prev_shot_before = if idx > 0 {
-                            section.shots.get(idx - 1).map(|s| (s.id, s.to_shot_data()))
-                        } else {
-                            None
-                        };
-                        let prev_shot_after = section.shots.get(idx).map(|s| (s.id, s.to_shot_data()));
-                        let prev_offset = project.station_offsets.get(station_ref).copied();
-                        let prev_section_offset = project.section_offsets.get(&station_ref.section_id).copied();
-                        UndoData::StationMoveInfo {
-                            station_ref: *station_ref,
-                            prev_shot_before,
-                            prev_shot_after,
-                            prev_offset,
-                            prev_section_offset,
-                        }
+                if project.get_section(station_ref.section_id).is_some() {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
                     }
-                    None => UndoData::None,
+                } else {
+                    UndoData::None
                 }
             }
 
@@ -501,15 +495,16 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/Merge/Unmerge/AdjustLoopClosures: fill in the
-            // "after" snapshot now that the mutation (and any cascade re-anchoring,
-            // orphan-closure conversion, and offset reconcile triggered in execute())
-            // is done.
+            // DeleteSection/DeleteShot/Merge/Unmerge/MoveStation/AdjustLoopClosures:
+            // fill in the "after" snapshot now that the mutation (and any cascade
+            // re-anchoring, orphan-closure conversion, and offset reconcile triggered
+            // in execute()) is done.
             Command::DeleteSection { .. }
             | Command::DeleteShot { .. }
             | Command::MergeStations { .. }
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }
+            | Command::MoveStation { .. }
             | Command::AdjustLoopClosures { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match serde_json::to_string(project) {

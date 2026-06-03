@@ -980,6 +980,63 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
 }
 
 #[test]
+fn undo_move_station_restores_pitch_and_adjacent_shots() {
+    // MoveStation rewrites the two adjacent shots' raw geometry including pitch.
+    // The old lightweight StationMoveInfo undo restored azimuth/length/depth but
+    // NOT pitch_in/pitch_out, so undo left pitch corrupted. Full-snapshot undo must
+    // restore every field.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // test_shot_data leaves pitch unset (None). Capture the adjacent shots' state.
+    let before = state.get_project_state().unwrap();
+    let sec_before = before.get_section(a).unwrap();
+    let shot0_before = sec_before.shots[0].clone();
+    let shot1_before = sec_before.shots[1].clone();
+    assert_eq!(shot0_before.pitch_in, None);
+    assert_eq!(shot1_before.pitch_in, None);
+
+    // Move station 1 (the boundary between shot 0 and shot 1).
+    let r = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(a, 1),
+        offset: Coordinates::new(2.0, 3.0, 1.5),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // Precondition: the move set pitch on the adjacent shots (so undo has work to do).
+    let moved = state.get_project_state().unwrap();
+    let sec_moved = moved.get_section(a).unwrap();
+    assert!(
+        sec_moved.shots[0].pitch_in.is_some() || sec_moved.shots[1].pitch_in.is_some(),
+        "precondition: the move must set pitch on an adjacent shot"
+    );
+
+    // Undo must restore pitch (the bug) and every other field exactly.
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let restored = state.get_project_state().unwrap();
+    let sec_r = restored.get_section(a).unwrap();
+    assert_eq!(sec_r.shots[0].pitch_in, shot0_before.pitch_in, "pitch_in[0] restored");
+    assert_eq!(sec_r.shots[0].pitch_out, shot0_before.pitch_out, "pitch_out[0] restored");
+    assert_eq!(sec_r.shots[1].pitch_in, shot1_before.pitch_in, "pitch_in[1] restored");
+    assert_eq!(sec_r.shots[1].pitch_out, shot1_before.pitch_out, "pitch_out[1] restored");
+    assert!((sec_r.shots[0].length - shot0_before.length).abs() < 1e-9, "length[0] restored");
+    assert!((sec_r.shots[1].depth_in - shot1_before.depth_in).abs() < 1e-9, "depth_in[1] restored");
+    assert!((sec_r.shots[0].azimuth_in - shot0_before.azimuth_in).abs() < 1e-9, "azimuth_in[0] restored");
+}
+
+#[test]
 fn split_converts_orphaned_bridge_closure_immediately() {
     // The split path bypasses execute()'s reconcile; confirm it still converts a
     // closure that the split strands as a section's sole bridge (the reported
