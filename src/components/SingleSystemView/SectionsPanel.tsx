@@ -392,10 +392,10 @@ const SectionRow = memo(function SectionRow({
       tabIndex={isFocused ? 0 : (isDefaultFocus ? 0 : -1)}
       data-testid={`section-row-${section.id}`}
       title={t('sections.actions.zoom')}
-      className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
+      className={`px-3 py-2 border-l-2 border-transparent cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
         isSelected
           ? 'bg-accent-20 ring-2 ring-accent ring-inset'
-          : (isHovered ? 'bg-accent-10' : 'hover:bg-accent-10')
+          : (isHovered ? 'bg-accent-10 border-accent' : 'hover:bg-accent-10')
       }`}
       onMouseDown={(e) => onMouseDown(section, e)}
       onDoubleClick={(e) => onDoubleClick(section, e)}
