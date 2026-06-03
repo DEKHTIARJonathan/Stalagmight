@@ -640,6 +640,66 @@ fn test_create_section() {
 }
 
 #[test]
+fn unmerge_converts_orphaned_bridge_closure() {
+    // Deleting the merge that was a loop's other path strands the section onto
+    // the closure — which must then become a merge (same #8 principle as delete).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    let closure = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(closure.success, "{:?}", closure.error);
+    assert_eq!(state.get_project_state().unwrap().loop_closures.len(), 1);
+
+    // Delete the merge that closed the loop's other path.
+    let r = state.execute(Command::UnmergeStationPair {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let p = state.get_project_state().unwrap();
+    assert!(
+        p.loop_closures.is_empty(),
+        "unmerge should convert the now-sole-bridge closure to a merge: {:?}",
+        p.loop_closures
+    );
+    assert!(p.check_orphan_closures().is_empty());
+}
+
+#[test]
 fn split_converts_orphaned_bridge_closure_immediately() {
     // The split path bypasses execute()'s reconcile; confirm it still converts a
     // closure that the split strands as a section's sole bridge (the reported

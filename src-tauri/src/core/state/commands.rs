@@ -103,6 +103,41 @@ impl AppState {
         )
     }
 
+    /// Whether a command can REMOVE connectivity and thereby strand a section so
+    /// its only attachment is a loop closure — which must then be converted to a
+    /// merge (issue #8). Moves/merges/closure-creation add or keep connectivity
+    /// and so are excluded (a move must leave an inert closure independent).
+    fn command_can_orphan_closures(cmd: &Command) -> bool {
+        matches!(
+            cmd,
+            Command::DeleteShot { .. }
+                | Command::DeleteSection { .. }
+                | Command::UnmergeStations { .. }
+                | Command::UnmergeStationPair { .. }
+                | Command::Batch { .. }
+                | Command::MergeProjects { .. }
+        )
+    }
+
+    /// Convert any sole-bridge loop closures in the open project to merges.
+    fn convert_orphan_closures_in_open_project(&self) {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return;
+        };
+        let converted = project.convert_orphan_closures_to_merges();
+        if converted > 0 {
+            tracing::info!(
+                converted,
+                purpose = "enforce closures-are-loops invariant",
+                "Converted sole-bridge loop closures to merges after a removal"
+            );
+        }
+    }
+
     /// Structural-integrity violation messages for the open project, critical
     /// first. Empty when the project is sound or none is open. Used by the
     /// load-time "warn and offer repair" surface.
@@ -322,6 +357,15 @@ impl AppState {
                     );
                 }
             }
+        }
+
+        // A command that REMOVES connectivity (delete shot/section, unmerge) can
+        // strand a section so its only attachment is a loop closure — which is
+        // then a merge, not a loop. Convert before reconciling offsets so the new
+        // merge is solved immediately (#8). Scoped to removal commands so a move
+        // still leaves an inert closure independent.
+        if result.success && Self::command_can_orphan_closures(&cmd) {
+            self.convert_orphan_closures_in_open_project();
         }
 
         // Treat section offsets as derived: after any structural command,
