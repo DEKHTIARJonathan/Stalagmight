@@ -6329,23 +6329,66 @@ impl Project {
     /// same physical point. The old release-mode alignment check used 5cm.
     pub const MERGE_ALIGNMENT_TOLERANCE_M: f64 = 0.05;
 
+    /// Per-section cumulative LOCAL `(x, y)` for every station index
+    /// (`0..=shots.len()`), before section/station offsets are applied. Built
+    /// once so callers that look up many stations — the alignment check and the
+    /// offset solver — avoid re-walking a section's shots on every lookup. This
+    /// is what keeps those operations `O(shots + merges)` instead of the
+    /// `O(merges × depth)` that made the per-mutation alignment check too costly.
+    fn section_local_coords(&self) -> HashMap<SectionId, Vec<(f64, f64)>> {
+        let mut map = HashMap::with_capacity(self.sections.len());
+        for section in &self.sections {
+            let mut coords = Vec::with_capacity(section.shots.len() + 1);
+            let (mut x, mut y) = (0.0_f64, 0.0_f64);
+            coords.push((x, y));
+            for shot in &section.shots {
+                let azimuth_rad = shot.average_azimuth().to_radians();
+                let horizontal = shot.horizontal_length();
+                x += horizontal * azimuth_rad.sin();
+                y += horizontal * azimuth_rad.cos();
+                coords.push((x, y));
+            }
+            map.insert(section.id, coords);
+        }
+        map
+    }
+
+    /// World `(x, y)` of a station using a [`Self::section_local_coords`] map:
+    /// section offset + cumulative local position + optional station offset.
+    /// Matches the `x`/`y` of [`Self::compute_station_raw_coords`] in `O(1)`.
+    fn station_world_xy(
+        &self,
+        sr: StationRef,
+        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+    ) -> Option<(f64, f64)> {
+        let &(lx, ly) = local.get(&sr.section_id)?.get(sr.station_index as usize)?;
+        let (ox, oy) = self.section_offsets.get(&sr.section_id).copied().unwrap_or((0.0, 0.0));
+        let (mut x, mut y) = (lx + ox, ly + oy);
+        if let Some(&(sx, sy, _)) = self.station_offsets.get(&sr) {
+            x += sx;
+            y += sy;
+        }
+        Some((x, y))
+    }
+
     /// Cross-section merges whose two stations have drifted apart — the
     /// references are valid but the geometry is wrong (a stale section offset
     /// from a missed cascade). Distinct from [`Self::check_structural_integrity`];
     /// repaired by re-cascading offsets via [`Self::realign_merges`] rather than
     /// by dropping data.
     pub fn check_merge_alignment(&self) -> Vec<IntegrityViolation> {
+        let local = self.section_local_coords();
         let mut violations = Vec::new();
         for merge in &self.station_merges {
             // Same-section merges are physically meaningless (test-only).
             if merge.station_a.section_id == merge.station_b.section_id {
                 continue;
             }
-            if let (Some(a), Some(b)) = (
-                self.compute_station_raw_coords(merge.station_a),
-                self.compute_station_raw_coords(merge.station_b),
+            if let (Some((ax, ay)), Some((bx, by))) = (
+                self.station_world_xy(merge.station_a, &local),
+                self.station_world_xy(merge.station_b, &local),
             ) {
-                let dist = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
+                let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
                 if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
                     violations.push(IntegrityViolation {
                         severity: ViolationSeverity::Critical,
