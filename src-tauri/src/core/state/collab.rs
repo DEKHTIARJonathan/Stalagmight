@@ -427,11 +427,22 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             // the Project insert/add path because those methods do
             // significant offset / station-ref bookkeeping we don't
             // want to fork.
+            // Only adopt the collaborator's UUID if it's free in this section.
+            // A duplicate would make AfterShot anchors mis-resolve (resolve_key
+            // takes the first match), and stamping it could even displace an
+            // EXISTING shot's identity if the new shot sorts ahead of it — so on
+            // collision keep the fresh UUID the insert already minted.
+            let uuid_to_adopt = a.uuid.as_ref().and_then(|u| {
+                let free = project.get_section(sid).map_or(true, |s| {
+                    s.shots.iter().all(|sh| sh.uuid.as_deref() != Some(u.as_str()))
+                });
+                free.then(|| u.clone())
+            });
             let mut shot_pos: Option<u32> = None;
             if let Some(section) = project.get_section_mut(sid) {
                 if let Some((idx, shot)) = section.shots.iter_mut().enumerate().find(|(_, s)| s.id == nid) {
-                    if let Some(uuid) = a.uuid.as_ref() {
-                        shot.uuid = Some(uuid.clone());
+                    if let Some(uuid) = uuid_to_adopt {
+                        shot.uuid = Some(uuid);
                     }
                     shot_pos = Some(idx as u32);
                 }
@@ -522,6 +533,13 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             }
         }
     }
+
+    // Defense-in-depth: a hostile/corrupt .tml could repeat a UUID across the
+    // shots it adds (e.g. within sections_added, where the per-stamp guard above
+    // does not apply). Re-mint any in-section duplicate so resolve_key's
+    // first-match cannot silently mis-anchor a cross-reference.
+    project.ensure_unique_shot_uuids();
+
     skipped
 }
 

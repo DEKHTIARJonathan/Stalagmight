@@ -440,6 +440,36 @@ impl Project {
         }
     }
 
+    /// Re-mint the UUID of any shot that shares a UUID with an earlier shot in
+    /// the SAME section, keeping the first occurrence (AfterShot anchors resolve
+    /// to the first match via `position()`, so they stay valid). Returns the
+    /// number re-minted. Restores the per-section uniqueness `resolve_key` relies
+    /// on; the companion detection lives in [`check_structural_integrity`].
+    /// Empty UUIDs are left for [`ensure_shot_uuids`].
+    pub fn ensure_unique_shot_uuids(&mut self) -> usize {
+        let mut reminted = 0;
+        for section in &mut self.sections {
+            let mut seen: HashSet<String> = HashSet::new();
+            for shot in &mut section.shots {
+                let Some(u) = shot.uuid.clone() else { continue };
+                if u.is_empty() {
+                    continue;
+                }
+                // insert() == false means this UUID already appeared in-section.
+                if !seen.insert(u) {
+                    let fresh = uuid::Uuid::new_v4().to_string();
+                    seen.insert(fresh.clone());
+                    shot.uuid = Some(fresh);
+                    reminted += 1;
+                }
+            }
+        }
+        if reminted > 0 {
+            self.touch();
+        }
+        reminted
+    }
+
     /// Rebuild the section-id → index cache from the current `sections`
     /// vector. Cheap (O(N)) and safe to call any time; call this after a
     /// bulk mutation (e.g. snapshot rollback) or before a hot lookup loop
@@ -6458,6 +6488,30 @@ impl Project {
             }
         }
 
+        // Two shots in one section sharing a UUID make AfterShot anchors
+        // mis-resolve: resolve_key takes the FIRST match via position(), so a
+        // merge/closure/datum pointing at the second station silently snaps to
+        // the first — geometrically wrong with no other signal. Critical, and
+        // section-scoped because resolve_key is section-local. Empty UUIDs are
+        // "no identity yet" (ensure_shot_uuids fills them) so they don't count.
+        for section in &self.sections {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for shot in &section.shots {
+                if let Some(u) = shot.uuid.as_deref() {
+                    if !u.is_empty() && !seen.insert(u) {
+                        violations.push(IntegrityViolation {
+                            severity: ViolationSeverity::Critical,
+                            category: "duplicate_shot_uuid".to_string(),
+                            message: format!(
+                                "Section {} has two shots sharing UUID {u}",
+                                section.id
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
         // Validate every StationRef-bearing collection through the single
         // traversal, so a newly-added ref-bearing collection is checked by
         // construction. Dangling merge/closure/datum refs are Critical (they
@@ -6517,6 +6571,11 @@ impl Project {
         if violations.is_empty() {
             return violations;
         }
+
+        // Re-mint duplicate shot UUIDs first (keeping the first occurrence), so
+        // the per-section UUID snapshot below reflects the de-duplicated set and
+        // AfterShot anchors that pointed at the kept shot stay valid.
+        self.ensure_unique_shot_uuids();
 
         // Snapshot, per section, the station count and the set of shot UUIDs, so
         // the retain closures can validate a stored `StationKey` without
