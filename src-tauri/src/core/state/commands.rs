@@ -193,9 +193,10 @@ impl AppState {
         // cascade walks the merge graph.
         project.rebuild_merge_adjacency();
         // Turn any sole-bridge closure into a merge (a closure is only a loop),
-        // then re-derive offsets.
+        // then re-derive offsets. Repair is an explicit "fix my project" action,
+        // so use the zero-trust re-solve that never honors a persisted offset.
         let converted = project.convert_orphan_closures_to_merges();
-        let realigned = project.realign_merges();
+        let realigned = project.resolve_offsets();
         structural + converted + realigned
     }
 

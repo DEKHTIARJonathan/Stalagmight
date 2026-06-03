@@ -6167,6 +6167,70 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
     assert!(project.check_merge_alignment().is_empty());
 }
 
+#[test]
+fn realign_corrects_sub_tolerance_offset_drift() {
+    // Zero-trust offsets: a sub-5cm stale offset reports NO merge-alignment
+    // violation (so the old `if before == 0` early-return skipped the cascade and
+    // the wrong offset survived load + every command), yet it IS wrong. realign
+    // must re-derive it regardless of the reported drift count.
+    let mut project = Project::new("SubTol".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    let b_correct = project.section_offset(b);
+
+    // Nudge B by 3 cm — under the 5 cm reporting tolerance.
+    project.adjust_section_offset(b, 0.03, 0.0);
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "3 cm drift is under the 5 cm report tolerance (the early-return's blind spot)"
+    );
+    assert!(
+        (project.section_offset(b).0 - b_correct.0).abs() > 0.02,
+        "precondition: B is actually drifted"
+    );
+    // The per-command self-heal still early-returns here (no reported drift)...
+    assert_eq!(project.realign_merges(), 0, "realign_merges keeps the no-drift early-return");
+    assert!(
+        (project.section_offset(b).0 - b_correct.0).abs() > 0.02,
+        "...so the sub-tolerance drift survives the per-command path"
+    );
+
+    // ...but the zero-trust load/repair re-solve corrects it despite zero drifts.
+    project.resolve_offsets();
+    let b_after = project.section_offset(b);
+    assert!(
+        (b_after.0 - b_correct.0).abs() < 1e-9 && (b_after.1 - b_correct.1).abs() < 1e-9,
+        "sub-tolerance drift must be corrected: correct={b_correct:?} after={b_after:?}"
+    );
+}
+
+#[test]
+fn realign_preserves_floating_section_offset() {
+    // A datum-less, merge-less (floating) section's absolute position is
+    // non-derivable (free placement). The always-on re-solve must NOT zero it —
+    // it's a cascade seed/anchor, never seed-adjusted.
+    let mut project = Project::new("Float".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.adjust_section_offset(a, 12.0, 7.0);
+    project.resolve_offsets(); // the unconditional re-solve
+    assert_eq!(
+        project.section_offset(a),
+        (12.0, 7.0),
+        "a free-placed floating section keeps its offset across an unconditional re-solve"
+    );
+}
+
 // === Structural integrity check ===
 
 /// A two-section project with one valid merge, zero datum, and loop closure.

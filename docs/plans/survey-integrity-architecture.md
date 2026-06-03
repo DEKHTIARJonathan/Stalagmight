@@ -159,6 +159,23 @@ Tests added: `apply_changeset_skips_non_finite_edit_and_add`,
 | C1 | **Stable station identity.** `StationRef { section_id, anchor: StationAnchor }`, `enum StationAnchor { SectionStart, AfterShot(ShotUuid) }`. Resolve to a positional index only at the geometry/render boundary. **Deletes `shift_station_refs` and its three call sites.** | 1, 2, 4, 6, 7, 21, 30, plus insert/delete off-by-one class | XL | high |
 | C2 | **Stop trusting persisted offsets.** Recompute `section_offsets` unconditionally on load/commit; **persist only per-floating-component anchors** (free `move_section`/`move_segment` placement via `adjust_section_offset` `project.rs:818` is *not* derivable). Treat any cache/recompute mismatch as "stale," never honor it. | 9, 10, 11, 15, 16 | L | med |
 
+> **C2 status — DONE, scoped (2026-06-03).** Implementation finding: the cascade's
+> `cascade_bfs` (`project.rs:1859`) already re-derives every *non-seed* section offset by
+> adjusting it to coincide with its authoritative neighbour — regardless of the stale value — so
+> the sub-tolerance-stale-offset bug was caused **purely by `realign_merges`' `if before == 0`
+> early-return** skipping the cascade. No clear step and no `floating_anchors` table are needed:
+> floating components are cascade *seeds* (never seed-adjusted), so their non-derivable offset is
+> already preserved through the existing `section_offsets` persistence. Fix: split the two callers
+> — `realign_merges` keeps the no-drift early-return for the **per-command** self-heal (an
+> unconditional re-solve there overrode the exact offsets an undo/redo snapshot restored and
+> forced coincidence on test-injected non-coincident aligned closures), while a new
+> `resolve_offsets()` **always** re-solves and is used by the **load** (`redrive_offsets_after_load`)
+> and explicit **repair** paths — the only places that read persisted (untrusted) offsets. Datum
+> sections keep their stored offset on load (maintained by the command paths); re-deriving the
+> datum anchor from GPS is a further hardening deferred (it must exactly match `set_zero_datum`'s
+> placement or datums would shift on load). Closes catalog #10/#11/#16; #9/#15 (offset corruption
+> via stale/positional refs) are closed by C1.
+
 ### Adoption order & dependencies
 ```
 A1 → A2 → A4 → A3        (Group A: schema-safe, guards the base; ship first)

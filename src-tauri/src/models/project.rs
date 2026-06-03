@@ -6525,7 +6525,9 @@ impl Project {
         // merge before solving, so a file persisted in that state (e.g. a section
         // stranded by an older delete) opens correctly.
         self.convert_orphan_closures_to_merges();
-        self.realign_merges()
+        // Zero-trust: never honor a persisted derivable offset — re-solve
+        // unconditionally so a sub-tolerance stale offset can't survive the load.
+        self.resolve_offsets()
     }
 
     /// Enforce the invariant that a loop closure exists only for a TRUE loop. If
@@ -6566,12 +6568,35 @@ impl Project {
     /// Recompute section offsets so every merge's endpoints coincide again,
     /// anchoring each connected group at its zero datum (or, failing that, an
     /// arbitrary section). Returns the number of merges that were misaligned
-    /// before the realign. A no-op when everything is already aligned.
+    /// before the realign. A no-op when everything is already aligned (within the
+    /// 5 cm reporting tolerance).
+    ///
+    /// This is the per-command self-heal (via `reconcile_geometry`): it keeps the
+    /// fast no-drift early-return because the in-memory offsets it sees were just
+    /// computed by the command/cascade, not read from an untrusted source, and an
+    /// unconditional re-solve after every command would override the exact state
+    /// an undo/redo snapshot just restored. The *load*/repair paths use
+    /// [`Self::resolve_offsets`] instead, which never trusts a persisted value.
     pub fn realign_merges(&mut self) -> usize {
         let before = self.check_merge_alignment().len();
         if before == 0 {
             return 0;
         }
+        self.resolve_offsets()
+    }
+
+    /// Zero-trust re-solve of section offsets, used on LOAD and explicit REPAIR.
+    /// Unlike [`Self::realign_merges`] it ALWAYS re-runs the cascade, even when no
+    /// merge is drifted past the 5 cm reporting tolerance: section offsets are
+    /// derived state, so a *sub-tolerance* stale/wrong cached offset (which
+    /// `check_merge_alignment` can't see) must never be trusted across a reload.
+    /// The cascade re-derives every offset reachable from an anchor; only the
+    /// genuinely non-derivable anchors (datum sections and free-placed floating
+    /// components) keep their stored offset, because the cascade never
+    /// seed-adjusts them. Returns the number of merges that were misaligned beyond
+    /// the reporting tolerance before the re-solve.
+    pub fn resolve_offsets(&mut self) -> usize {
+        let before = self.check_merge_alignment().len();
         let seeds = self.realign_seeds();
         let was_deferred = self.cascade_deferred;
         self.cascade_deferred = false;
