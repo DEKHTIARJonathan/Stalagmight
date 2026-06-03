@@ -1160,6 +1160,12 @@ impl AppState {
             );
         }
 
+        // Reject non-finite geometry before it reaches the coordinate path
+        // (NaN/inf slips past zero/negative-length checks and poisons offsets).
+        if !data.all_finite() {
+            return CommandResult::failure("Shot has a non-finite (NaN/inf) value".to_string());
+        }
+
         let config = self.config.lock().ok();
 
         let Ok(mut proj_guard) = self.project.lock() else {
@@ -1258,6 +1264,11 @@ impl AppState {
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
         };
+
+        // Reject non-finite geometry before it reaches the coordinate path.
+        if !updates.all_finite() {
+            return CommandResult::failure("Shot update has a non-finite (NaN/inf) value".to_string());
+        }
 
         // Validate resulting length (disallow zero/negative)
         if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {

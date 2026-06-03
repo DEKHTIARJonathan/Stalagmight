@@ -5843,6 +5843,24 @@ fn diagnose_naharon_merge_alignment() {
 }
 
 #[test]
+fn integrity_flags_non_finite_geometry() {
+    let mut p = Project::new("NaN".to_string(), None);
+    let a = p
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    assert!(p.check_structural_integrity().is_empty());
+    // Poison a shot the way a corrupt/older file or unguarded import could.
+    p.get_section_mut(a).unwrap().shots[0].length = f64::NAN;
+    let v = p.check_structural_integrity();
+    assert!(
+        v.iter().any(|x| x.category == "non_finite_geometry"),
+        "non-finite geometry must be flagged: {v:?}"
+    );
+    // And the live edit path rejects it.
+    assert!(!p.get_section(a).unwrap().shots[0].all_finite());
+}
+
+#[test]
 fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     // A: A0-A1-A2 north; B: B0-B1-B2 north; merge A2=B0 (chain). A closure
     // A0=B2 marked aligned, but geometry makes A0 and B2 20m apart — the merge

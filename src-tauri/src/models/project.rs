@@ -6173,6 +6173,22 @@ impl Project {
     pub fn check_structural_integrity(&self) -> Vec<IntegrityViolation> {
         let mut violations = Vec::new();
 
+        // Non-finite (NaN/inf) shot geometry — loaded from an older/corrupt file
+        // or an unguarded import. It silently poisons coordinates (NaN passes the
+        // tolerance comparisons in the alignment checks), so surface it.
+        for section in &self.sections {
+            if let Some(pos) = section.shots.iter().position(|s| !s.all_finite()) {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Critical,
+                    category: "non_finite_geometry".to_string(),
+                    message: format!(
+                        "Section {} has a shot with a non-finite (NaN/inf) value (at index {pos})",
+                        section.id
+                    ),
+                });
+            }
+        }
+
         for (i, merge) in self.station_merges.iter().enumerate() {
             for (label, sr) in [("station_a", &merge.station_a), ("station_b", &merge.station_b)] {
                 if let Some(reason) = self.station_ref_violation(sr) {
