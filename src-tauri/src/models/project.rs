@@ -540,14 +540,14 @@ impl Project {
             .station_merges
             .iter()
             .filter(|m| m.station_a.section_id == section_id || m.station_b.section_id == section_id)
-            .map(|m| self.merge_to_wire(m))
+            .filter_map(|m| self.merge_to_wire(m))
             .collect();
 
         let closures: Vec<LoopClosureWire> = self
             .loop_closures
             .iter()
             .filter(|lc| lc.station_a.section_id == section_id || lc.station_b.section_id == section_id)
-            .map(|lc| self.closure_to_wire(lc))
+            .filter_map(|lc| self.closure_to_wire(lc))
             .collect();
 
         let has_section_offset = self.section_offsets.contains_key(&section_id);
@@ -6679,37 +6679,44 @@ impl Project {
         Some(StationKey::new(sr.section_id, anchor))
     }
 
-    /// Resolve a stored key to a positional ref for the wire, falling back to
-    /// station 0 if the anchor no longer resolves (a dangling ref — surfaced by
-    /// the integrity check; we still emit a positional ref so the payload is
-    /// well-formed).
+    /// Resolve a stored key to a positional ref for a **non-persistence display
+    /// payload only**, falling back to station 0 if the anchor no longer resolves
+    /// (a dangling ref). NEVER use this on a save/wire path: collapsing a dangling
+    /// key to `(section, 0)` writes a phantom station-0 relationship and can
+    /// collide on the `(section_id, station_index)` PRIMARY KEY. Persistence and
+    /// wire encoders use [`resolve_key`] and skip what doesn't resolve. The one
+    /// legitimate caller is the delete-shot impact preview, where an endpoint may
+    /// intentionally be the station being removed.
     pub(crate) fn key_to_ref_lossy(&self, key: &StationKey) -> StationRef {
         self.resolve_key(key).unwrap_or_else(|| StationRef::new(key.section_id, 0))
     }
 
-    /// Positional wire form of a stored merge.
-    pub(crate) fn merge_to_wire(&self, m: &StationMerge) -> StationMergeWire {
-        StationMergeWire {
-            station_a: self.key_to_ref_lossy(&m.station_a),
-            station_b: self.key_to_ref_lossy(&m.station_b),
+    /// Positional wire form of a stored merge, or `None` if either endpoint
+    /// dangles (its anchoring shot was deleted) — a dangling merge is invalid and
+    /// must be omitted rather than shown at a phantom station.
+    pub(crate) fn merge_to_wire(&self, m: &StationMerge) -> Option<StationMergeWire> {
+        Some(StationMergeWire {
+            station_a: self.resolve_key(&m.station_a)?,
+            station_b: self.resolve_key(&m.station_b)?,
             merged_at: m.merged_at,
-        }
+        })
     }
 
-    /// Positional wire form of a stored zero datum.
-    pub(crate) fn datum_to_wire(&self, zd: &ZeroDatum) -> ZeroDatumWire {
-        ZeroDatumWire {
-            station_ref: self.key_to_ref_lossy(&zd.station_ref),
+    /// Positional wire form of a stored zero datum, or `None` if its ref dangles.
+    pub(crate) fn datum_to_wire(&self, zd: &ZeroDatum) -> Option<ZeroDatumWire> {
+        Some(ZeroDatumWire {
+            station_ref: self.resolve_key(&zd.station_ref)?,
             gps: zd.gps,
-        }
+        })
     }
 
-    /// Positional wire form of a stored loop closure.
-    pub(crate) fn closure_to_wire(&self, c: &LoopClosure) -> LoopClosureWire {
-        LoopClosureWire {
+    /// Positional wire form of a stored loop closure, or `None` if either
+    /// endpoint dangles.
+    pub(crate) fn closure_to_wire(&self, c: &LoopClosure) -> Option<LoopClosureWire> {
+        Some(LoopClosureWire {
             id: c.id,
-            station_a: self.key_to_ref_lossy(&c.station_a),
-            station_b: self.key_to_ref_lossy(&c.station_b),
+            station_a: self.resolve_key(&c.station_a)?,
+            station_b: self.resolve_key(&c.station_b)?,
             path_length: c.path_length,
             misclosure_distance: c.misclosure_distance,
             error_percentage: c.error_percentage,
@@ -6717,7 +6724,7 @@ impl Project {
             vertical_misclosure: c.vertical_misclosure,
             strategy: c.strategy,
             is_aligned: c.is_aligned,
-        }
+        })
     }
 
     /// Re-anchor every stored cross-reference from a transitional positional form

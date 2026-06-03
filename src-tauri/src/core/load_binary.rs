@@ -299,19 +299,21 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
 
     // Resolve the stored StationKey-based cross-references to their positional wire
     // form (the frontend reasons by station_index) before moving the rest of
-    // `project` out.
-    let station_merges = project.station_merges.iter().map(|m| project.merge_to_wire(m)).collect();
-    let zero_datums = project.zero_datums.iter().map(|zd| project.datum_to_wire(zd)).collect();
-    let loop_closures = project.loop_closures.iter().map(|c| project.closure_to_wire(c)).collect();
+    // `project` out. A dangling ref (its anchoring shot was deleted) is OMITTED
+    // rather than collapsed to a phantom station-0 relationship; the integrity
+    // banner surfaces it and offers repair.
+    let station_merges = project.station_merges.iter().filter_map(|m| project.merge_to_wire(m)).collect();
+    let zero_datums = project.zero_datums.iter().filter_map(|zd| project.datum_to_wire(zd)).collect();
+    let loop_closures = project.loop_closures.iter().filter_map(|c| project.closure_to_wire(c)).collect();
     let station_offsets = project
         .station_offsets
         .iter()
-        .map(|(k, v)| (project.resolve_key(k).unwrap_or_else(|| StationRef::new(k.section_id, 0)), *v))
+        .filter_map(|(k, v)| Some((project.resolve_key(k)?, *v)))
         .collect();
     let station_comments_map = project
         .station_comments
         .iter()
-        .map(|(k, v)| (project.resolve_key(k).unwrap_or_else(|| StationRef::new(k.section_id, 0)), v.clone()))
+        .filter_map(|(k, v)| Some((project.resolve_key(k)?, v.clone())))
         .collect();
 
     let project_header = ProjectHeaderBinary {
