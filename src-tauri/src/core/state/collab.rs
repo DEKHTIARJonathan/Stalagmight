@@ -628,6 +628,40 @@ mod tests {
     }
 
     #[test]
+    fn apply_insert_with_colliding_uuid_stays_unique() {
+        // A hostile/corrupt .tml whose added shot carries a UUID that already
+        // exists in the section must NOT make two shots share it — that would
+        // make AfterShot anchors mis-resolve (resolve_key takes the first
+        // match). The collaborator UUID is rejected in favour of a fresh one,
+        // and the pre-existing shot keeps its identity.
+        let mut p = proj_abcd();
+        p.ensure_shot_uuids();
+        let sid = p.sections[0].id;
+        let b_id = p.sections[0].shots[1].id;
+        let existing_uuid = p.sections[0].shots[0].uuid.clone().unwrap();
+
+        let mut cs = CollabChangeSet::empty();
+        let mut entry = added(sid, 2, Some(b_id), 25.0);
+        entry.uuid = Some(existing_uuid.clone()); // collides with shot A
+        cs.shots_added.push(entry);
+        apply_changeset(&mut p, &cs);
+
+        // No two shots in the section share a UUID.
+        let uuids: Vec<&str> = p.sections[0]
+            .shots
+            .iter()
+            .filter_map(|s| s.uuid.as_deref())
+            .collect();
+        let mut deduped = uuids.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(uuids.len(), deduped.len(), "no duplicate shot UUIDs after apply");
+        // The original shot kept its UUID; the inserted one did not steal it.
+        assert_eq!(p.sections[0].shots[0].uuid.as_deref(), Some(existing_uuid.as_str()));
+        assert!(!p.has_critical_integrity_violations());
+    }
+
+    #[test]
     fn apply_insert_honors_after_shot_id() {
         let mut p = proj_abcd();
         let sid = p.sections[0].id;

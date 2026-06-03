@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::ShotData;
+use crate::models::StationAnchor;
 use crate::models::StationRef;
 use tempfile::TempDir;
 
@@ -2295,4 +2296,38 @@ fn test_save_collab_state_upsert() {
     // Clearing removes the row.
     db.save_collab_state(None).unwrap();
     assert!(db.load_project().unwrap().collab.is_none());
+}
+
+#[test]
+fn two_dangling_station_offsets_in_one_section_save_without_pk_collision() {
+    // Regression for the save crash (review finding #7): two dangling station
+    // offsets in one section both used to resolve to (section, 0) via
+    // key_to_ref_lossy and collide on the (section_id, station_index) PRIMARY
+    // KEY, aborting the entire save. The persistence layer now skips a key that
+    // doesn't resolve, so the save succeeds and the dangling offsets are dropped
+    // (not persisted as phantom station-0 rows).
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Dangling".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![ShotData { length: 5.0, ..Default::default() }],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project
+        .station_offsets
+        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost-1".into())), (1.0, 0.0, 0.0));
+    project
+        .station_offsets
+        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost-2".into())), (2.0, 0.0, 0.0));
+
+    db.save_project(&project)
+        .expect("save must not PK-collide on two dangling offsets");
+
+    let loaded = db.load_project().unwrap();
+    assert!(
+        loaded.station_offsets.is_empty(),
+        "dangling offsets are dropped on save, not written as phantom station-0 rows"
+    );
 }

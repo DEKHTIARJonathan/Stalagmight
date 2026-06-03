@@ -6534,3 +6534,119 @@ fn integrity_orphan_offsets_and_comments_are_warnings_only() {
     // Warnings alone don't trip the critical gate.
     assert!(!project.has_critical_integrity_violations());
 }
+
+#[test]
+fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
+    // Two shots in one section sharing a UUID make AfterShot anchors mis-resolve
+    // (resolve_key takes the first match). It must be a Critical violation and
+    // repair must re-mint the duplicate while KEEPING the first (so anchors that
+    // resolved to it stay valid).
+    let mut project = Project::new("Dup".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    let first_uuid = project.get_section(a).unwrap().shots[0].uuid.clone().unwrap();
+    // Force shot 1 to collide with shot 0's UUID.
+    project.get_section_mut(a).unwrap().shots[1].uuid = Some(first_uuid.clone());
+
+    // A merge anchored on the first station (a:1 == AfterShot(first_uuid)).
+    let anchor = StationKey::new(a, StationAnchor::AfterShot(first_uuid.clone()));
+    project.station_merges.push(StationMerge {
+        station_a: anchor.clone(),
+        station_b: StationRef::new(a, 0).into(),
+        merged_at: Utc::now(),
+    });
+
+    // Detect.
+    let violations = project.check_structural_integrity();
+    assert!(
+        violations.iter().any(|v| v.category == "duplicate_shot_uuid"),
+        "duplicate UUID must be flagged: {violations:?}"
+    );
+    assert!(project.has_critical_integrity_violations());
+
+    // Repair: re-mint the duplicate, keep the first.
+    project.repair_structural_integrity();
+    let shots = &project.get_section(a).unwrap().shots;
+    assert_eq!(
+        shots[0].uuid.as_deref(),
+        Some(first_uuid.as_str()),
+        "first shot must keep its UUID"
+    );
+    assert_ne!(shots[0].uuid, shots[1].uuid, "duplicate must be re-minted");
+    assert!(
+        !project
+            .check_structural_integrity()
+            .iter()
+            .any(|v| v.category == "duplicate_shot_uuid"),
+        "no duplicate UUID violation after repair"
+    );
+    // The anchor that resolved to the first station is still valid.
+    assert!(project.resolve_key(&anchor).is_some(), "first-shot anchor survives repair");
+}
+
+#[test]
+fn dangling_cross_references_are_omitted_from_wire_output() {
+    // A dangling merge (endpoint anchors on a deleted shot) must be OMITTED from
+    // the wire form, not collapsed to a phantom station-0 relationship. Valid
+    // refs still round-trip to their positional index.
+    let mut project = Project::new("Wire".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.ensure_shot_uuids();
+
+    // Valid merge a:0 <-> b:0.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    // Dangling merge: one endpoint anchors on a non-existent shot UUID.
+    project.station_merges.push(StationMerge {
+        station_a: StationKey::new(a, StationAnchor::AfterShot("does-not-exist".to_string())),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+
+    assert!(
+        project.merge_to_wire(&project.station_merges[0]).is_some(),
+        "valid merge resolves to wire"
+    );
+    assert!(
+        project.merge_to_wire(&project.station_merges[1]).is_none(),
+        "dangling merge must NOT collapse to a phantom ref"
+    );
+
+    // get_section_relationships excludes the dangling merge entirely.
+    let rel = project.get_section_relationships(a);
+    assert_eq!(rel.merges.len(), 1, "dangling merge omitted from wire output");
+    assert_eq!(rel.merges[0].station_a.station_index, 0, "valid ref round-trips positionally");
+}
+
+#[test]
+fn has_unresolvable_cross_references_detects_dangling_offset() {
+    // The save gate blocks on this. A dangling station offset is only
+    // Warning-severity, but it still collapses to (section, 0) on save and can
+    // collide on the PRIMARY KEY — so it must count as unresolvable.
+    let mut project = Project::new("Block".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.ensure_shot_uuids();
+    assert!(!project.has_unresolvable_cross_references(), "clean project resolves");
+
+    let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
+    project.station_offsets.insert(dangling, (1.0, 2.0, 3.0));
+    assert!(
+        project.has_unresolvable_cross_references(),
+        "a dangling (Warning-level) offset must still block the save"
+    );
+}

@@ -9,7 +9,7 @@ use crate::core::{Command, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
-    StationRef, SurveyDirection,
+    StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -12331,4 +12331,110 @@ fn profile_stalx_load() {
     eprintln!("│ end-to-end:                     {:>9.2} ms",
         (t8 - t0).as_secs_f64() * 1000.0);
     eprintln!("└───────────────────────────────────────────────────────");
+}
+
+#[test]
+fn redo_create_shot_preserves_uuid_all_insert_modes() {
+    // Redo of CreateShot must restore the shot's ORIGINAL UUID (not mint a fresh
+    // one) on every insert mode — append, insert_after, and prepend — because
+    // cross-references and Ariane matching anchor on it. Each mode hits a
+    // distinct redo branch (append: Shot::with_uuid; after/before: the forced
+    // uuid threaded through insert_shot_*).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let sid = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let uuid_of = |s: &AppState, shot_id: u32| -> Option<String> {
+        s.get_project_state()
+            .unwrap()
+            .get_section(sid)
+            .unwrap()
+            .get_shot(shot_id)
+            .unwrap()
+            .uuid
+            .clone()
+    };
+    let first_id = state.get_project_state().unwrap().get_section(sid).unwrap().shots[0].id;
+    let last_id = {
+        let p = state.get_project_state().unwrap();
+        let shots = &p.get_section(sid).unwrap().shots;
+        shots[shots.len() - 1].id
+    };
+
+    let cases = [
+        // (after_shot_id, before_shot_id) → append / insert_after / prepend
+        Command::CreateShot { section_id: sid, shot: test_shot_data(3.0), after_shot_id: None, before_shot_id: None },
+        Command::CreateShot { section_id: sid, shot: test_shot_data(3.0), after_shot_id: Some(last_id), before_shot_id: None },
+        Command::CreateShot { section_id: sid, shot: test_shot_data(3.0), after_shot_id: None, before_shot_id: Some(first_id) },
+    ];
+    for cmd in cases {
+        let res = state.execute(cmd);
+        assert!(res.success, "create shot succeeds");
+        let new_id = res.shot_id.expect("create shot returns id");
+        let before = uuid_of(&state, new_id);
+        assert!(before.is_some(), "created shot has a uuid");
+
+        assert!(state.undo().success, "undo create shot");
+        assert!(state.redo().success, "redo create shot");
+
+        assert_eq!(uuid_of(&state, new_id), before, "redo must preserve the shot UUID");
+    }
+}
+
+#[test]
+fn repair_open_project_integrity_reports_fixed_and_remaining() {
+    // Repair returns the genuine before→after delta over the FULL violation set,
+    // so a repairable issue counts as `fixed` and a detect-only one (a drifted
+    // aligned loop closure) counts as `remaining`.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Inject a dangling merge (repairable: repair drops it).
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
+        project.station_merges.push(StationMerge {
+            station_a: dangling,
+            station_b: StationRef::new(a, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+    }
+
+    let before = state.integrity_violation_messages().len();
+    assert!(before >= 1, "seeded at least one violation");
+
+    let result = state.repair_open_project_integrity();
+    assert_eq!(
+        (result.fixed + result.remaining) as usize,
+        before,
+        "fixed + remaining accounts for every issue the banner showed"
+    );
+    assert!(result.fixed >= 1, "the dangling merge was repaired");
+    assert_eq!(
+        result.remaining as usize,
+        state.integrity_violation_messages().len(),
+        "remaining matches the true post-repair count"
+    );
 }
