@@ -716,15 +716,48 @@ impl AppState {
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
             std::collections::HashMap::new();
 
+        // Shot UUIDs already placed in the merged project. Shots carry a stable
+        // collaboration UUID that cross-references and Ariane matching anchor on;
+        // preserve it across the merge instead of re-minting. Two source files can
+        // legitimately share a UUID (one branched from the other), so dedup
+        // globally — a colliding UUID keeps a fresh mint to stay unique.
+        let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         // Append sections from all projects
         for (proj_idx, source_project) in source_projects.iter().enumerate() {
             for section in &source_project.sections {
                 let old_section_id = section.id;
                 let new_section_id = merged_project.next_section_id;
 
-                // Clone section data and add to merged project
+                // Clone section data and add to merged project. add_section mints
+                // fresh UUIDs for every shot; restore each source shot's UUID (in
+                // order) so identity survives the merge, deduping across all
+                // sources to guarantee uniqueness within the merged project.
                 let section_data = section.to_section_data();
                 merged_project.add_section(section_data);
+                let source_uuids: Vec<Option<String>> =
+                    section.shots.iter().map(|s| s.uuid.clone()).collect();
+                if let Some(new_section) = merged_project.get_section_mut(new_section_id) {
+                    for (new_shot, src_uuid) in new_section.shots.iter_mut().zip(source_uuids) {
+                        let final_uuid = match src_uuid {
+                            Some(u) if !seen_uuids.contains(&u) => Some(u),
+                            Some(dup) => {
+                                tracing::warn!(
+                                    project = %source_project.name,
+                                    uuid = %dup,
+                                    purpose = "merge shot uuid dedup",
+                                    "Duplicate shot UUID across merged projects; re-minting to keep identities unique"
+                                );
+                                new_shot.uuid.clone() // fresh mint from add_section
+                            }
+                            None => new_shot.uuid.clone(), // pre-v6 shot: keep fresh mint
+                        };
+                        if let Some(u) = &final_uuid {
+                            seen_uuids.insert(u.clone());
+                        }
+                        new_shot.uuid = final_uuid;
+                    }
+                }
 
                 // Record the mapping
                 section_id_map.insert((proj_idx, old_section_id), new_section_id);
