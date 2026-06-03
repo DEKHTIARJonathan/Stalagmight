@@ -6562,6 +6562,25 @@ impl Project {
             .any(|v| v.severity == ViolationSeverity::Critical)
     }
 
+    /// True if ANY persisted cross-reference (a merge/closure/datum endpoint, or
+    /// an offset/comment key) no longer resolves — its anchoring shot was deleted
+    /// or its section is gone. These are precisely the keys that would otherwise
+    /// be collapsed to a phantom `(section, 0)` ref on save and can collide on the
+    /// `(section_id, station_index)` PRIMARY KEY. The save path blocks on this so
+    /// corruption is never persisted; `repair_structural_integrity` drops exactly
+    /// these keys, so repair unblocks the save. Includes Warning-severity orphan
+    /// offsets/comments (they cause the same PK collision), so this is broader
+    /// than [`has_critical_integrity_violations`].
+    pub fn has_unresolvable_cross_references(&self) -> bool {
+        let mut dangling = false;
+        self.for_each_station_ref(|_label, key| {
+            if self.station_ref_violation(&key).is_some() {
+                dangling = true;
+            }
+        });
+        dangling
+    }
+
     /// Drop every structurally-invalid cross-reference (dangling merges, loop
     /// closures, zero datums) and orphaned offset/comment entries, returning the
     /// violations that were repaired (empty = nothing to do). Valid data is left

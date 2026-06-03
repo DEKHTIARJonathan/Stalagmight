@@ -301,6 +301,41 @@ impl AppState {
         // about every shot's identity until the next reload.
         project.ensure_shot_uuids();
 
+        // Refuse to persist a project with unresolvable cross-references (a
+        // station an endpoint anchors on was deleted). Writing them would
+        // collapse the ref to a phantom (section, 0) and can collide on the
+        // station_offsets/station_comments PRIMARY KEY, aborting the whole save.
+        // Block instead and direct the user to Repair, which drops exactly these
+        // refs and unblocks the save. A loaded-corrupt project still opens and
+        // shows the integrity banner; only persisting the corruption is blocked.
+        if project.has_unresolvable_cross_references() {
+            let count = project
+                .check_structural_integrity()
+                .iter()
+                .filter(|v| {
+                    matches!(
+                        v.category.as_str(),
+                        "dangling_merge_ref"
+                            | "dangling_closure_ref"
+                            | "dangling_zero_datum_ref"
+                            | "orphan_station_offset"
+                            | "orphan_station_comment"
+                    )
+                })
+                .count();
+            tracing::error!(
+                count,
+                purpose = "block persisting unresolvable cross-references",
+                "Refused to save project with dangling cross-references"
+            );
+            return CommandResult::failure(format!(
+                "Can't save: the project has {count} unresolved cross-reference{} \
+                 (a station they point to was deleted). Use \"Repair\" in the \
+                 integrity banner, then save.",
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+
         // Don't let geometric corruption persist silently: a release-mode warning
         // when drifted merges are about to be written. (The frontend re-checks
         // after save and offers a repair via the integrity banner.)

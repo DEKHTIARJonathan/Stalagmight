@@ -790,6 +790,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
     } else {
       set({ error: result.error ?? 'Failed to save project' });
+      // A save is blocked when the project has unresolvable cross-references;
+      // re-check so they surface in the integrity banner (the repair entry
+      // point) and the user can Repair and re-save. Cheap and safe on any
+      // failure — including autosave, where the banner is the only signal.
+      void get().checkProjectIntegrity();
     }
     return result;
   },

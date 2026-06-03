@@ -1309,9 +1309,21 @@ impl Database {
         // `StationKey` anchors in memory but persisted positionally (resolved
         // against the current shots) — the on-disk format stays positional, like
         // the binary IPC wire; load reconstructs anchors and re-anchors them.
+        // A dangling endpoint is SKIPPED, never collapsed to (section, 0): the
+        // app-layer save gate already blocks this, but the persistence layer must
+        // not crash (PK collision) or write a phantom for any path that reaches
+        // it directly (collab sibling write, salvage).
         for merge in &project.station_merges {
-            let a = project.key_to_ref_lossy(&merge.station_a);
-            let b = project.key_to_ref_lossy(&merge.station_b);
+            let (Some(a), Some(b)) = (
+                project.resolve_key(&merge.station_a),
+                project.resolve_key(&merge.station_b),
+            ) else {
+                tracing::warn!(
+                    purpose = "skip dangling merge on save",
+                    "Dropping a station merge whose endpoint no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO station_merges (station_a_section, station_a_index, station_b_section, station_b_index, merged_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
@@ -1326,7 +1338,13 @@ impl Database {
 
         // Save zero datums
         for zd in &project.zero_datums {
-            let sr = project.key_to_ref_lossy(&zd.station_ref);
+            let Some(sr) = project.resolve_key(&zd.station_ref) else {
+                tracing::warn!(
+                    purpose = "skip dangling zero datum on save",
+                    "Dropping a zero datum whose station no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
@@ -1349,7 +1367,13 @@ impl Database {
 
         // Save station offsets
         for (key, (offset_x, offset_y, offset_z)) in &project.station_offsets {
-            let sr = project.key_to_ref_lossy(key);
+            let Some(sr) = project.resolve_key(key) else {
+                tracing::warn!(
+                    purpose = "skip orphan station offset on save",
+                    "Dropping a station offset whose station no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![sr.section_id, sr.station_index, offset_x, offset_y, offset_z],
@@ -1358,7 +1382,13 @@ impl Database {
 
         // Save station comments
         for (key, comment) in &project.station_comments {
-            let sr = project.key_to_ref_lossy(key);
+            let Some(sr) = project.resolve_key(key) else {
+                tracing::warn!(
+                    purpose = "skip orphan station comment on save",
+                    "Dropping a station comment whose station no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
                 params![sr.section_id, sr.station_index, comment],
@@ -1427,8 +1457,16 @@ impl Database {
         for lc in &project.loop_closures {
             let closure_id_i64 = i64::try_from(lc.id)
                 .map_err(|_| anyhow::anyhow!("Closure ID {} exceeds i64 range", lc.id))?;
-            let a = project.key_to_ref_lossy(&lc.station_a);
-            let b = project.key_to_ref_lossy(&lc.station_b);
+            let (Some(a), Some(b)) = (
+                project.resolve_key(&lc.station_a),
+                project.resolve_key(&lc.station_b),
+            ) else {
+                tracing::warn!(
+                    purpose = "skip dangling loop closure on save",
+                    "Dropping a loop closure whose endpoint no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id, strategy, is_aligned) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
