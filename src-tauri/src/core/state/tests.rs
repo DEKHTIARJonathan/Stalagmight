@@ -700,6 +700,62 @@ fn unmerge_converts_orphaned_bridge_closure() {
 }
 
 #[test]
+fn restore_snapshot_into_rebuilds_transient_caches() {
+    // The single restore chokepoint must rebuild the serde-skipped lookup caches
+    // (section_index_cache, merge_adjacency_cache), so no rollback/undo/redo path
+    // can install a project with an empty/stale cache that silently mis-resolves a
+    // section or merge group (catalog #14/#39).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(a, 2),
+            station_b: StationRef::new(b, 0),
+        })
+        .success);
+
+    let snapshot = match state.capture_project_snapshot() {
+        Ok(s) => s,
+        Err(e) => panic!("snapshot failed: {e:?}"),
+    };
+
+    // Deserialize into a fresh slot via the chokepoint; serde drops the caches, so
+    // restore_snapshot_into must repopulate them.
+    let mut slot: Option<Project> = None;
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+    let p = slot.expect("restored");
+    assert!(!p.section_index_cache.is_empty(), "section index cache must be rebuilt");
+    assert!(
+        !p.merge_adjacency_cache.is_empty(),
+        "merge adjacency cache must be rebuilt so get_merged_section_ids stays O(group)"
+    );
+    // Sanity: the rebuilt index resolves both sections.
+    assert!(p.get_section(a).is_some() && p.get_section(b).is_some());
+}
+
+#[test]
 fn undo_unmerge_restores_converted_closure_and_position() {
     // The orphan-closure conversion unmerge triggers is a structural side-effect;
     // undo must reverse it completely — the re-created merge AND the

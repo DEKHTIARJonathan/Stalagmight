@@ -1,6 +1,6 @@
 use crate::core::{Command, CommandResult, UndoData};
 use crate::models::{
-    ClosureStrategy, Coordinates, Project, Section, SectionData, SectionId,
+    ClosureStrategy, Coordinates, Section, SectionData, SectionId,
     SectionUpdates, Shot, ShotData, ShotId, ShotUpdates,
 };
 
@@ -912,39 +912,31 @@ impl AppState {
             }
 
             UndoData::ProjectSnapshot(json) => {
-                // Restore entire project
-                match serde_json::from_str::<Project>(json.as_str()) {
-                    Ok(mut project) => match self.project.lock() {
-                        Ok(mut proj) => {
-                            // serde skips the transient caches; rebuild
-                            // so subsequent get_section /
-                            // get_merged_section_ids stay O(1)/O(group)
-                            // instead of degrading to the linear scan.
-                            // Mirrors AppState::rollback_project.
-                            project.rebuild_section_index();
-                            project.rebuild_merge_adjacency();
-                            *proj = Some(project);
+                // Restore entire project (caches rebuilt centrally; see
+                // AppState::restore_snapshot_into).
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        if Self::restore_snapshot_into(&mut proj, json.as_str()) {
                             CommandResult::success()
+                        } else {
+                            CommandResult::failure("Failed to parse project snapshot".to_string())
                         }
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
+                    }
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
 
             UndoData::ProjectSnapshotPair { before, after: _ } => {
-                // Restore the "before" snapshot for undo
-                match serde_json::from_str::<Project>(before.as_str()) {
-                    Ok(mut project) => match self.project.lock() {
-                        Ok(mut proj) => {
-                            project.rebuild_section_index();
-                            project.rebuild_merge_adjacency();
-                            *proj = Some(project);
+                // Restore the "before" snapshot for undo.
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        if Self::restore_snapshot_into(&mut proj, before.as_str()) {
                             CommandResult::success()
+                        } else {
+                            CommandResult::failure("Failed to parse project snapshot".to_string())
                         }
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
+                    }
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
 
@@ -1010,20 +1002,16 @@ impl AppState {
         // IMPORTANT: No early returns after the pop — all paths flow through the epilogue.
         let result = match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => {
-                match serde_json::from_str::<Project>(after.as_str()) {
-                    Ok(mut project) => match self.project.lock() {
-                        Ok(mut proj) => {
-                            // Same rebuild as the undo path above —
-                            // serde drops the transient lookup caches.
-                            project.rebuild_section_index();
-                            project.rebuild_merge_adjacency();
-                            *proj = Some(project);
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        if Self::restore_snapshot_into(&mut proj, after.as_str()) {
                             CommandResult::success()
+                        } else {
+                            CommandResult::failure("Failed to parse project snapshot".to_string())
                         }
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    },
+                    }
                     Err(_) => {
-                        CommandResult::failure("Failed to parse project snapshot".to_string())
+                        CommandResult::failure("Failed to lock project".to_string())
                     }
                 }
             }

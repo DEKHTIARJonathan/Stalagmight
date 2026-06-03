@@ -2590,14 +2590,7 @@ impl AppState {
                     purpose = "remove single-shot section",
                     "remove_section returned None after validation; rolling back"
                 );
-                match serde_json::from_str::<Project>(&before_snapshot) {
-                    Ok(restored) => *proj_guard = Some(restored),
-                    Err(e) => tracing::error!(
-                        purpose = "remove single-shot section",
-                        reason = %e,
-                        "Failed to rollback from before_snapshot"
-                    ),
-                }
+                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(format!("Section {section_id} not found during removal"));
             }
 
@@ -2618,19 +2611,11 @@ impl AppState {
                         reason = %e,
                         "Failed to serialize after snapshot; rolling back"
                     );
-                    match serde_json::from_str::<Project>(&before_snapshot) {
-                        Ok(restored) => {
-                            *proj_guard = Some(restored);
-                            tracing::info!(
-                                purpose = "restore after snapshot failure",
-                                "Successfully rolled back after snapshot failure"
-                            );
-                        }
-                        Err(re) => tracing::error!(
+                    if Self::restore_snapshot_into(&mut proj_guard, &before_snapshot) {
+                        tracing::info!(
                             purpose = "restore after snapshot failure",
-                            reason = %re,
-                            "Failed to rollback from before_snapshot"
-                        ),
+                            "Successfully rolled back after snapshot failure"
+                        );
                     }
                     return CommandResult::failure(format!("Failed to serialize after snapshot: {e}"));
                 }
@@ -2640,14 +2625,7 @@ impl AppState {
                     purpose = "restore after mutation failure",
                     "Project became None after mutation; rolling back"
                 );
-                match serde_json::from_str::<Project>(&before_snapshot) {
-                    Ok(restored) => *proj_guard = Some(restored),
-                    Err(e) => tracing::error!(
-                        purpose = "restore after mutation failure",
-                        reason = %e,
-                        "Failed to rollback from before_snapshot"
-                    ),
-                }
+                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure("No project after mutation".to_string());
             }
         };

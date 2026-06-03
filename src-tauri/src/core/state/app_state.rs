@@ -244,42 +244,45 @@ impl AppState {
             .map_err(|e| CommandResult::failure(format!("Failed to serialize project: {e}")))
     }
 
-    /// Rollback the project to a previously captured snapshot.
-    /// Handles poisoned mutex gracefully (recovery is more important than panic).
-    pub(super) fn rollback_project(&self, snapshot: &str) {
+    /// Deserialize a project snapshot and install it into `slot`, rebuilding the
+    /// transient lookup caches (`section_index_cache`, `merge_adjacency_cache`)
+    /// that serde skips. THE single place a restored project enters the live slot:
+    /// every rollback/undo/redo path routes through here so none can forget to
+    /// rebuild a cache and leave a half-populated / stale map behind (which would
+    /// silently mis-resolve sections or merge groups) — see catalog #14/#39.
+    /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
+    #[must_use]
+    pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
         match serde_json::from_str::<Project>(snapshot) {
             Ok(mut restored) => {
-                // serde skips the transient caches → empty maps after
-                // deserialization. Rebuild so subsequent lookups stay
-                // O(1) / O(group) and don't fall back to the linear
-                // scans in `get_section` and `get_merged_section_ids`.
                 restored.rebuild_section_index();
                 restored.rebuild_merge_adjacency();
-                match self.project.lock() {
-                    Ok(mut proj) => {
-                        *proj = Some(restored);
-                        tracing::info!(
-                            purpose = "restore project after failed command",
-                            "Successfully rolled back to pre-mutation snapshot"
-                        );
-                    }
-                    Err(poisoned) => {
-                        let mut proj = poisoned.into_inner();
-                        *proj = Some(restored);
-                        tracing::warn!(
-                            purpose = "restore project after failed command",
-                            "Rolled back via poisoned mutex"
-                        );
-                    }
-                }
+                *slot = Some(restored);
+                true
             }
             Err(e) => {
                 tracing::error!(
-                    purpose = "restore project after failed command",
+                    purpose = "restore project snapshot",
                     reason = %e,
-                    "Failed to deserialize snapshot for rollback"
+                    "Failed to deserialize project snapshot; slot left unchanged"
                 );
+                false
             }
+        }
+    }
+
+    /// Rollback the project to a previously captured snapshot.
+    /// Handles poisoned mutex gracefully (recovery is more important than panic).
+    pub(super) fn rollback_project(&self, snapshot: &str) {
+        let mut proj = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if Self::restore_snapshot_into(&mut proj, snapshot) {
+            tracing::info!(
+                purpose = "restore project after failed command",
+                "Successfully rolled back to pre-mutation snapshot"
+            );
         }
     }
 
@@ -304,14 +307,7 @@ impl AppState {
                 purpose = "restore project after mutation error",
                 "Project became None after mutation; rolling back"
             );
-            match serde_json::from_str::<Project>(before_snapshot) {
-                Ok(restored) => *proj_guard = Some(restored),
-                Err(e) => tracing::error!(
-                    purpose = "restore project after mutation error",
-                    reason = %e,
-                    "Failed to deserialize snapshot for rollback"
-                ),
-            }
+            let _ = Self::restore_snapshot_into(&mut proj_guard, before_snapshot);
             return Err(CommandResult::failure(
                 "No project for after snapshot".to_string(),
             ));
@@ -324,19 +320,11 @@ impl AppState {
                     reason = %e,
                     "Failed to serialize after snapshot; rolling back"
                 );
-                match serde_json::from_str::<Project>(before_snapshot) {
-                    Ok(restored) => {
-                        *proj_guard = Some(restored);
-                        tracing::info!(
-                            purpose = "restore project after snapshot failure",
-                            "Successfully rolled back after serialization failure"
-                        );
-                    }
-                    Err(re) => tracing::error!(
+                if Self::restore_snapshot_into(&mut proj_guard, before_snapshot) {
+                    tracing::info!(
                         purpose = "restore project after snapshot failure",
-                        reason = %re,
-                        "Failed to deserialize snapshot for rollback"
-                    ),
+                        "Successfully rolled back after serialization failure"
+                    );
                 }
                 Err(CommandResult::failure(format!(
                     "Failed to serialize after snapshot: {e}"
