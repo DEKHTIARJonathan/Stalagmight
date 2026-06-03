@@ -8,6 +8,7 @@ Update this file every time a new version is tagged.
 ## [Unreleased]
 
 ### Fixed
+- **Drifted (misaligned) station merges are detected and repairable** — a performance regression left a section's alignment offset stale after some edits, so two merged stations could silently end up far apart (one real project had a station 30 m from its merged counterpart) with no warning and no way to fix it in-app. Loading or saving a project now re-checks every cross-section merge; when merged stations are more than 5 cm apart the integrity banner flags it and its **Repair** re-cascades the section offsets to pull them back together (anchored at the group's zero datum). The command guard now blocks only *newly* introduced corruption, so a project that was already corrupt on disk can still be opened and repaired rather than freezing.
 - **Deleting a shot on a loop no longer fabricates a false closure** — when a deleted shot's station was a loop-closure endpoint, the closure was rewired to a neighbouring station and kept even if the surviving segment was no longer connected through the survey, producing a bogus loop and a geometry shift. Deletion now checks survey connectivity (shots + merges, excluding the deleted shot) and, when the loop is genuinely broken, converts the closure into a plain station merge instead. The delete-shot impact dialog lists any closures that will become merges. ([#8](https://github.com/Stalagmight/Stalagmight/issues/8), related [#41](https://github.com/Stalagmight/Stalagmight/issues/41))
 
 ### Added
