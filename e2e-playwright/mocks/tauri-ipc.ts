@@ -2816,6 +2816,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ],
               replacement_merges: [],
               replacement_closure_updates: [],
+              closure_to_merge: [],
               merge_rewire_skipped: false,
               closure_rewire_skipped: true,
               shift_blocked: false,
