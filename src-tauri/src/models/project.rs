@@ -6441,6 +6441,20 @@ impl Project {
         seeds
     }
 
+    /// Re-derive section offsets from the merge/datum constraints right after
+    /// loading from disk. Section offsets are **derived** state that the file
+    /// merely caches; re-solving them on load heals any drift a previous session
+    /// persisted (e.g. an older redo bug) so the project always opens
+    /// geometrically correct, without the user having to repair anything. The
+    /// transient caches are rebuilt first so the solve walks the merge graph
+    /// correctly. Returns the number of merges that had drifted (0 = file was
+    /// already consistent, the common case).
+    pub fn redrive_offsets_after_load(&mut self) -> usize {
+        self.rebuild_section_index();
+        self.rebuild_merge_adjacency();
+        self.realign_merges()
+    }
+
     /// Recompute section offsets so every merge's endpoints coincide again,
     /// anchoring each connected group at its zero datum (or, failing that, an
     /// arbitrary section). Returns the number of merges that were misaligned

@@ -1052,6 +1052,18 @@ impl AppState {
         project.file_path = Some(path.clone());
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
+        // Section offsets are derived state: re-solve them from the merge/datum
+        // constraints so a file persisted with drifted offsets (e.g. from an
+        // older redo bug) opens geometrically correct, before stations are
+        // computed below. No-op for an already-consistent file.
+        let healed_offsets = project.redrive_offsets_after_load();
+        if healed_offsets > 0 {
+            tracing::warn!(
+                healed = healed_offsets,
+                purpose = "self-heal derived geometry on load",
+                "Re-derived drifted section offsets while opening project"
+            );
+        }
         progress.update_phase(LoadingPhase::LoadingProjectData, 1, 1);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingProjectData);

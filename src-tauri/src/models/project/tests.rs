@@ -5843,6 +5843,33 @@ fn diagnose_naharon_merge_alignment() {
 }
 
 #[test]
+fn redrive_offsets_after_load_heals_persisted_drift() {
+    // Simulate a file persisted with a drifted offset (older redo bug) plus
+    // empty transient caches (as after deserialization).
+    let mut project = Project::new("Loaded".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    // Persisted drift + stale caches.
+    project.adjust_section_offset(b, 31.0, -9.0);
+    project.section_index_cache.clear();
+    project.merge_adjacency_cache.clear();
+    assert!(!project.check_merge_alignment().is_empty());
+
+    let healed = project.redrive_offsets_after_load();
+    assert_eq!(healed, 1);
+    assert!(project.check_merge_alignment().is_empty(), "load must open geometrically correct");
+}
+
+#[test]
 fn check_merge_alignment_detects_and_realign_fixes_drift() {
     // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
     let mut project = Project::new("Drift".to_string(), None);
