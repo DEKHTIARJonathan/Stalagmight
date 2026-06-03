@@ -210,6 +210,19 @@ pub struct IntegrityRepairResult {
     pub remaining: u32,
 }
 
+/// Result of a structural-integrity check. `messages` is the human-readable
+/// violation list (critical first; empty = sound). `save_blocked` is true when
+/// the project currently has unresolvable cross-references — the exact condition
+/// that refuses a save (manual AND auto-save). The frontend uses it to keep the
+/// integrity banner non-dismissable while saving is blocked (so the Repair entry
+/// point can't be hidden on a project that can't be saved), while still allowing
+/// dismissal of detect-only issues that don't block saving.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+pub struct IntegrityCheckResult {
+    pub messages: Vec<String>,
+    pub save_blocked: bool,
+}
+
 /// Validation warning from command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ValidationWarning {

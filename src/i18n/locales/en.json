@@ -1685,7 +1685,7 @@
       "saving": "Saving...",
       "unsavedChanges": "Unsaved changes",
       "autoSaveCountdown": "Auto-save in {{seconds}}s",
-      "saveError": "Save error"
+      "saveError": "Auto-save didn't run — not saved"
     }
   },
   "toolbar": {

@@ -151,7 +151,17 @@ export function useAutoSave(): AutoSaveState {
           // subscriber above to flash "saved".  On failure we handle here.
           if (!result.success) {
             savingRef.current = false;
-            flash('error', 3000);
+            // Auto-save must never persist a broken project, so the backend
+            // refuses the save when the project has unresolvable cross-references.
+            // Surface that auto-save did NOT run *persistently* (not a transient
+            // flash) so the user knows their changes are not on disk; the integrity
+            // banner shows how to fix it (Repair). It clears on the next successful
+            // save or when a new edit restarts the auto-save countdown.
+            if (flashRef.current) {
+              clearTimeout(flashRef.current);
+              flashRef.current = null;
+            }
+            setStatus('error');
           }
         }, seconds * 1000);
       }

@@ -78,6 +78,81 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
 }
 
 #[test]
+fn station_key_deserializes_legacy_positional_shape() {
+    // Persisted undo snapshots (and offset/comment keys) written by pre-anchor
+    // builds embed station refs in the old positional `{section_id, station_index}`
+    // shape. The current StationKey must still deserialize them — mapping the index
+    // to a transitional anchor — so opening an old project after upgrading does not
+    // silently drop its undo history (the old blob would fail to parse otherwise).
+    // Legacy index 0 -> SectionStart.
+    let start: StationKey =
+        serde_json::from_str(r#"{"section_id":3,"station_index":0}"#).unwrap();
+    assert_eq!(start, StationKey::new(3, StationAnchor::SectionStart));
+
+    // Legacy positive index -> transitional Index anchor (the load re-anchor pass
+    // later canonicalizes it; resolve_key tolerates it in the meantime).
+    let mid: StationKey =
+        serde_json::from_str(r#"{"section_id":3,"station_index":2}"#).unwrap();
+    assert_eq!(mid, StationKey::new(3, StationAnchor::Index(2)));
+
+    // The current `{section_id, anchor}` shape still round-trips.
+    let modern = StationKey::new(7, StationAnchor::AfterShot("uuid-1".to_string()));
+    let json = serde_json::to_string(&modern).unwrap();
+    assert_eq!(serde_json::from_str::<StationKey>(&json).unwrap(), modern);
+
+    // A payload with neither field is still rejected.
+    assert!(serde_json::from_str::<StationKey>(r#"{"section_id":3}"#).is_err());
+}
+
+#[test]
+fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
+    // A section with non-finite (NaN/inf) geometry must be treated like a dangling
+    // edge: cascade_bfs must NOT mark it — nor anything reachable ONLY through it —
+    // authoritative, or it would seed propagation from an unpositioned section and
+    // mis-locate that section's other merge partners. (Regression guard: the bug
+    // anchored + enqueued the neighbour unconditionally, skipping only the offset
+    // adjustment.)
+    use std::collections::{HashMap, HashSet};
+
+    let mut project = Project::new("NaN".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let n = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let x = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+
+    // Per-station local coords. Section N is NaN-poisoned at every station.
+    let local: HashMap<SectionId, Vec<(f64, f64)>> = HashMap::from([
+        (a, vec![(0.0, 0.0), (1.0, 0.0)]),
+        (n, vec![(f64::NAN, 0.0), (f64::NAN, 0.0)]),
+        (x, vec![(5.0, 0.0), (6.0, 0.0)]),
+    ]);
+    let station_offsets: HashMap<StationRef, (f64, f64, f64)> = HashMap::new();
+    // A:0 merges to N:0 (the only path to N), and N:1 merges to X:0 (the only path
+    // to X), so X is reachable solely through the NaN section N.
+    let adjacency: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::from([
+        (a, vec![(StationRef::new(a, 0), StationRef::new(n, 0))]),
+        (n, vec![(StationRef::new(n, 1), StationRef::new(x, 0))]),
+    ]);
+
+    let mut authoritative: HashSet<SectionId> = HashSet::from([a]);
+    project.cascade_bfs(&adjacency, &local, &station_offsets, &mut authoritative, &[a]);
+
+    // Only the seed A stays authoritative: N is reached via a non-finite delta (not
+    // anchored), and X is reachable only through N (never reached).
+    assert!(!authoritative.contains(&n), "a NaN-poisoned section must not be anchored");
+    assert!(
+        !authoritative.contains(&x),
+        "a section reachable only through a NaN section must not be anchored"
+    );
+    assert_eq!(authoritative.len(), 1, "only the seed should remain authoritative");
+}
+
+#[test]
 fn station_ref_traversals_cover_every_bearing_collection() {
     // for_each_station_ref / map_station_refs are the single enumeration of every
     // StationRef-bearing collection. If a new such collection is added without

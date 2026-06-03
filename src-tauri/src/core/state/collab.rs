@@ -478,9 +478,20 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         }).id;
         if !s.shot_uuids.is_empty() {
             if let Some(section) = project.get_section_mut(new_sid) {
+                // Adopt each collaborator UUID only if it has not already been
+                // adopted by an earlier shot in THIS section. A repeated UUID would
+                // make AfterShot anchors mis-resolve (resolve_key takes the first
+                // match), so the station comment attached below would silently snap
+                // to the wrong station; keep the unique fresh mint add_section gave
+                // the shot in that case. (Mirrors the per-stamp guard the
+                // `shots_added` path already applies above.)
+                let mut adopted: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 for (shot, uuid_opt) in section.shots.iter_mut().zip(s.shot_uuids.iter()) {
                     if let Some(u) = uuid_opt.as_ref() {
-                        shot.uuid = Some(u.clone());
+                        if adopted.insert(u.clone()) {
+                            shot.uuid = Some(u.clone());
+                        }
                     }
                 }
             }
@@ -761,6 +772,48 @@ mod tests {
         assert_eq!(shot.pitch_out, Some(5.0), "pitch_out preserved");
         assert_eq!(shot.marker_index, Some(7), "marker_index preserved");
         assert_eq!(shot.temperature, Some(12.5), "temperature preserved");
+    }
+
+    #[test]
+    fn apply_sections_added_dedups_uuids_so_comments_anchor_correctly() {
+        // A corrupt/hostile .tml can hand `sections_added` two shots sharing a
+        // UUID. The old code adopted both, so a station comment attached to the
+        // SECOND station (keyed AfterShot(U)) silently snapped to the FIRST
+        // (resolve_key takes the first match). The adopt-only-if-free guard must
+        // keep the second shot's UUID unique so its comment anchors correctly.
+        let mut p = Project::new("Cave".into(), None);
+
+        let mut cs = CollabChangeSet::empty();
+        cs.sections_added.push(crate::core::reconcile::AddedSection {
+            name: "New".into(),
+            color: "#000000".into(),
+            surveyor: None,
+            date: None,
+            shots: vec![shot(10.0, 5.0), shot(20.0, 6.0)],
+            shot_uuids: vec![Some("dup".into()), Some("dup".into())],
+            shot_station_comments: vec![None, Some("second station note".into())],
+        });
+        apply_changeset(&mut p, &cs);
+
+        let sec = &p.sections[0];
+        let u0 = sec.shots[0].uuid.clone().unwrap();
+        let u1 = sec.shots[1].uuid.clone().unwrap();
+        assert_ne!(u0, u1, "duplicate collaborator UUIDs must not both be adopted");
+        assert_eq!(u0, "dup", "the first occurrence keeps the collaborator UUID");
+
+        let sid = sec.id;
+        // The comment was attached to the SECOND station (after shot index 1 = 2).
+        assert_eq!(
+            p.station_comment_for_ref(crate::models::StationRef::new(sid, 2))
+                .map(String::as_str),
+            Some("second station note"),
+            "the comment must anchor to the second station, not collapse onto the first"
+        );
+        // The FIRST station (index 1, after shot 0) carries no comment.
+        assert_eq!(
+            p.station_comment_for_ref(crate::models::StationRef::new(sid, 1)),
+            None
+        );
     }
 
     #[test]

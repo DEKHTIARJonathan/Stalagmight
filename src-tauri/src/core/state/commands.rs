@@ -1,6 +1,9 @@
 use std::sync::Mutex;
 
-use crate::core::{Command, CommentHolder, CommandResult, IntegrityRepairResult, UndoData, Validator};
+use crate::core::{
+    Command, CommentHolder, CommandResult, IntegrityCheckResult, IntegrityRepairResult, UndoData,
+    Validator,
+};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
     Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationKey,
@@ -197,8 +200,18 @@ impl AppState {
     /// first. Empty when the project is sound or none is open. Used by the
     /// load-time "warn and offer repair" surface.
     pub fn integrity_violation_messages(&self) -> Vec<String> {
+        self.integrity_check().messages
+    }
+
+    /// Full integrity check for the open project: the violation messages
+    /// (critical first; empty = sound) plus whether the project is currently
+    /// save-blocked (has unresolvable cross-references — the exact condition that
+    /// refuses both manual and auto-save). The frontend uses `save_blocked` to keep
+    /// the integrity banner non-dismissable while saving is blocked, so the Repair
+    /// entry point can't be hidden on a project that can't be saved.
+    pub fn integrity_check(&self) -> IntegrityCheckResult {
         let Some(project) = self.get_project_state() else {
-            return Vec::new();
+            return IntegrityCheckResult::default();
         };
         // Structural (dangling refs) + geometric (drifted merges + stale,
         // still-marked-closed loop closures) + topological (a closure that is
@@ -211,7 +224,10 @@ impl AppState {
             ViolationSeverity::Critical => 0,
             ViolationSeverity::Warning => 1,
         });
-        violations.into_iter().map(|v| v.message).collect()
+        IntegrityCheckResult {
+            save_blocked: project.has_unresolvable_cross_references(),
+            messages: violations.into_iter().map(|v| v.message).collect(),
+        }
     }
 
     /// Repair the open project's integrity: drop dangling refs/orphans, re-mint
@@ -2482,6 +2498,17 @@ impl AppState {
                 remap_i += 1;
                 next.unwrap_or(old_key)
             });
+            // `new_keys` was built 1:1 from `old_refs` (a for_each_station_ref pass)
+            // and is consumed positionally here; the alignment is only valid if
+            // map_station_refs visits the same refs in the same order. Assert it so
+            // a future divergence fails loudly in debug rather than silently
+            // re-anchoring a cross-reference onto the wrong station.
+            debug_assert_eq!(
+                remap_i,
+                new_keys.len(),
+                "split-section remap: map_station_refs visited a different number of \
+                 refs than were captured in old_refs — traversal order diverged"
+            );
 
             // The split can strand a section so its only attachment is a loop
             // closure — that is a merge, not a loop. Convert it now (issue #8)

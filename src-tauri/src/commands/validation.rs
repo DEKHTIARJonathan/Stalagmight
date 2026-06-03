@@ -1,7 +1,7 @@
 use chrono::Utc;
 use tauri::State;
 
-use crate::core::{AppState, IntegrityRepairResult};
+use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
 use crate::models::{SectionId, ShotId};
 use crate::persistence::ResolvedWarning;
 
@@ -18,8 +18,8 @@ pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
 /// first). Empty when the project is sound. The frontend uses a non-empty
 /// result after load to warn the user and offer a repair.
 #[tauri::command]
-pub fn check_project_integrity(state: State<AppState>) -> Vec<String> {
-    state.integrity_violation_messages()
+pub fn check_project_integrity(state: State<AppState>) -> IntegrityCheckResult {
+    state.integrity_check()
 }
 
 /// Repair the open project's structural integrity, returning `{ fixed,

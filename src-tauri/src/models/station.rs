@@ -56,10 +56,54 @@ pub enum StationAnchor {
 /// an unrelated shot never has to rewrite them and a reference can never silently
 /// point at the wrong in-range station. The solver/IPC use the transient
 /// positional [`StationRef`], obtained via `Project::resolve_key`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct StationKey {
     pub section_id: SectionId,
     pub anchor: StationAnchor,
+}
+
+// Backward-compatible deserialization: accept BOTH the current
+// `{section_id, anchor}` shape AND the legacy positional `{section_id,
+// station_index}` shape written by pre-anchor builds. The legacy shape appears
+// in persisted data that embeds a serialized `Project` or `StationMerge`/
+// `LoopClosure`/`ZeroDatum`/offset/comment key — most importantly the
+// `undo_stack` snapshot blobs, which are NOT re-encoded through the positional
+// wire form. Without this, opening an old project after upgrading would fail to
+// deserialize every legacy undo entry and silently drop the undo history. A
+// legacy positional ref maps to a transitional `SectionStart`/`Index` anchor,
+// which the resolve layer tolerates and the load re-anchor pass canonicalizes.
+//
+// NOTE: this `Compat` shim distinguishes the two shapes by FIELD NAME, so it only
+// works for self-describing formats (JSON — what the undo blobs and offset/comment
+// maps use). If a future code path serializes a `StationKey` through a
+// non-self-describing format (bincode/postcard/positional msgpack), this manual
+// impl must be revisited — there is no such path today (the binary IPC/SQLite
+// routes use the positional `StationRef` wire types, never `StationKey`).
+impl<'de> Deserialize<'de> for StationKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Compat {
+            section_id: SectionId,
+            #[serde(default)]
+            anchor: Option<StationAnchor>,
+            #[serde(default)]
+            station_index: Option<u32>,
+        }
+        let c = Compat::deserialize(deserializer)?;
+        match (c.anchor, c.station_index) {
+            // Current shape — the anchor is authoritative.
+            (Some(anchor), _) => Ok(StationKey {
+                section_id: c.section_id,
+                anchor,
+            }),
+            // Legacy positional shape — map index to a transitional anchor.
+            (None, Some(index)) => Ok(StationKey::positional(c.section_id, index)),
+            (None, None) => Err(<D::Error as serde::de::Error>::missing_field("anchor")),
+        }
+    }
 }
 
 impl StationKey {

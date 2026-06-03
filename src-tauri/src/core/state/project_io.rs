@@ -302,12 +302,19 @@ impl AppState {
         project.ensure_shot_uuids();
 
         // Refuse to persist a project with unresolvable cross-references (a
-        // station an endpoint anchors on was deleted). Writing them would
-        // collapse the ref to a phantom (section, 0) and can collide on the
+        // station an endpoint anchors on was deleted). Writing them would collapse
+        // the ref to a phantom (section, 0) and can collide on the
         // station_offsets/station_comments PRIMARY KEY, aborting the whole save.
-        // Block instead and direct the user to Repair, which drops exactly these
-        // refs and unblocks the save. A loaded-corrupt project still opens and
-        // shows the integrity banner; only persisting the corruption is blocked.
+        //
+        // This block applies to AUTO-SAVE as well as manual saves: AUTO-SAVE MUST
+        // NEVER PERSIST A BROKEN PROJECT. We would rather skip the save than
+        // silently write a structurally-corrupt project to disk — so when the
+        // project is broken the save is refused (no file is written), and the
+        // caller surfaces to the user that auto-save did not run (the auto-save
+        // indicator + the integrity banner). The user restores integrity via
+        // Repair, after which saves resume. Blocking here, for both manual and
+        // auto-save, is the single chokepoint that guarantees only sound projects
+        // reach disk.
         if project.has_unresolvable_cross_references() {
             let count = project
                 .check_structural_integrity()
@@ -325,6 +332,7 @@ impl AppState {
                 .count();
             tracing::error!(
                 count,
+                is_autosave,
                 purpose = "block persisting unresolvable cross-references",
                 "Refused to save project with dangling cross-references"
             );
@@ -828,6 +836,30 @@ impl AppState {
                         section_id = old_key.section_id,
                         purpose = "merge station offsets",
                         "Station offset references unknown section ID; skipping"
+                    );
+                }
+            }
+
+            // Copy station comments with remapped section IDs. Same transitional
+            // Index-anchor approach as station_offsets above: resolve the source
+            // key to a positional index, then store under the new section; the
+            // redrive reanchor pass canonicalizes it once the merged shots exist.
+            // (Without this, every per-station comment was silently dropped on
+            // merge while every sibling collection was copied.)
+            for (old_key, comment) in &source_project.station_comments {
+                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_key.section_id)) {
+                    if let Some(src_sr) = source_project.resolve_key(old_key) {
+                        let new_key = StationKey::positional(new_section_id, src_sr.station_index);
+                        merged_project
+                            .station_comments
+                            .insert(new_key, comment.clone());
+                    }
+                } else {
+                    tracing::warn!(
+                        project = %source_project.name,
+                        section_id = old_key.section_id,
+                        purpose = "merge station comments",
+                        "Station comment references unknown section ID; skipping"
                     );
                 }
             }

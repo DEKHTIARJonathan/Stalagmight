@@ -21,7 +21,7 @@ use stalagmight_lib::config::{
     PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
     StationConfig, ThemeMode, UnitsConfig, ValidationConfig,
 };
-use stalagmight_lib::core::command::{CommandResult, CommentHolder, IntegrityRepairResult, ValidationWarning, WarningSeverity};
+use stalagmight_lib::core::command::{CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning, WarningSeverity};
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
 };
@@ -72,6 +72,7 @@ fn main() {
     export::<CommandResult>(&out_dir);
     export::<CommentHolder>(&out_dir);
     export::<IntegrityRepairResult>(&out_dir);
+    export::<IntegrityCheckResult>(&out_dir);
     export::<ValidationWarning>(&out_dir);
     export::<WarningSeverity>(&out_dir);
 
@@ -245,6 +246,7 @@ fn main() {
         "CommandResult",
         "CommentHolder",
         "IntegrityRepairResult",
+        "IntegrityCheckResult",
         "ValidationWarning",
         "WarningSeverity",
         // Collaboration mode

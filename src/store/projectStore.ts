@@ -24,7 +24,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
@@ -203,6 +203,17 @@ interface ProjectStore {
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   /** Structural-integrity issues found in the open project (empty = sound). */
   integrityIssues: string[];
+  /** True once the user dismissed the integrity banner for the CURRENT issue set.
+   * Suppresses the banner so a re-check after a save (or a failed autosave) can't
+   * resurrect a banner the user explicitly dismissed; reset automatically when the
+   * issue set changes (genuinely new issues re-show). Ignored while
+   * `integritySaveBlocked` is true (a save-blocking project can't hide Repair). */
+  integrityDismissed: boolean;
+  /** True when the open project has unresolvable cross-references — the exact
+   * condition that refuses both manual and auto-save. While true the integrity
+   * banner stays shown and non-dismissable so the Repair entry point can't be
+   * hidden on a project that can't be saved. */
+  integritySaveBlocked: boolean;
   /** Re-check the open project's structural integrity, updating integrityIssues. */
   checkProjectIntegrity: () => Promise<string[]>;
   /** Repair structural integrity; returns {fixed, remaining} and refreshes
@@ -365,6 +376,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   warnings: [],
   recentProjects: [],
   integrityIssues: [],
+  integrityDismissed: false,
+  integritySaveBlocked: false,
   config: null,
   loading: { ...initialLoadingState },
   error: null,
@@ -537,6 +550,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           stats: result.stats,
           warnings: result.warnings,
           isDirty: false,
+          // Reset integrity state on project switch so a dismissal from the
+          // previous project can never carry over and suppress this one's banner
+          // (the post-load check below repopulates it for the new project).
+          integrityIssues: [],
+          integrityDismissed: false,
+          integritySaveBlocked: false,
         });
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
@@ -688,6 +707,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         frozenShots: [],
         warnings: [],
         isDirty: false,
+        // Reset integrity state on project switch (see loadProject).
+        integrityIssues: [],
+        integrityDismissed: false,
+        integritySaveBlocked: false,
       });
 
       // Apply display settings from backend (defaults for new project)
@@ -828,7 +851,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false });
+        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false });
       }
       return result;
     } finally {
@@ -944,10 +967,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   checkProjectIntegrity: async () => {
     try {
-      const issues = await invokeIpc<string[]>('check_project_integrity', undefined, {
+      const result = await invokeIpc<IntegrityCheckResult>('check_project_integrity', undefined, {
         purpose: 'check project structural integrity after load',
       });
-      set({ integrityIssues: issues });
+      const issues = result.messages;
+      set((state) => {
+        // Keep a dismissal sticky across re-checks (e.g. after every save) as long
+        // as the issue SET is unchanged; reset it when the set genuinely changes so
+        // newly-appeared issues re-show the banner. Compare order-independently:
+        // the backend's message order isn't stable (orphan offset/comment messages
+        // come from HashMap iteration), so a positional compare could spuriously
+        // reset a dismissal — and thus resurface a banner — on a mere reorder.
+        const prev = [...state.integrityIssues].sort();
+        const next = [...issues].sort();
+        const unchanged =
+          prev.length === next.length && prev.every((v, i) => v === next[i]);
+        return {
+          integrityIssues: issues,
+          integritySaveBlocked: result.save_blocked,
+          integrityDismissed: unchanged ? state.integrityDismissed : false,
+        };
+      });
       return issues;
     } catch (e) {
       console.error('Failed to check project integrity:', e);
@@ -974,7 +1014,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  dismissIntegrityIssues: () => set({ integrityIssues: [] }),
+  // Hide the banner without clearing integrityIssues, so a re-check after a save
+  // (which re-detects the same set) can't resurrect it; the flag is reset when the
+  // issue set actually changes. Keeping the issues populated also lets the
+  // Review & Repair dialog still open them.
+  dismissIntegrityIssues: () => set({ integrityDismissed: true }),
 
   removeFromRecentProjects: async (path: string) => {
     try {

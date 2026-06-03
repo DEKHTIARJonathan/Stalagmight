@@ -25,6 +25,8 @@ import type { OrphanPlacementSuggestion } from './types/commands';
 function App() {
   const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseCompass, parseGpx, setConfig } = useProjectStore();
   const integrityIssues = useProjectStore((s) => s.integrityIssues);
+  const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
+  const integritySaveBlocked = useProjectStore((s) => s.integritySaveBlocked);
   const checkProjectIntegrity = useProjectStore((s) => s.checkProjectIntegrity);
   const repairProjectIntegrity = useProjectStore((s) => s.repairProjectIntegrity);
   const dismissIntegrityIssues = useProjectStore((s) => s.dismissIntegrityIssues);
@@ -430,7 +432,7 @@ function App() {
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       {/* Integrity warning banner (corruption found on load/save) */}
-      {integrityIssues.length > 0 && !loading.isLoading && (
+      {integrityIssues.length > 0 && (integritySaveBlocked || !integrityDismissed) && !loading.isLoading && (
         <div
           className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
           role="alert"
@@ -439,6 +441,7 @@ function App() {
           <span className="text-warning font-medium flex-1 min-w-0">
             This project has {integrityIssues.length} integrity{' '}
             {integrityIssues.length === 1 ? 'issue' : 'issues'} that may affect your survey.
+            {integritySaveBlocked && ' Saving is paused until you repair them.'}
           </span>
           <button
             onClick={() => setShowIntegrityDialog(true)}
@@ -447,13 +450,18 @@ function App() {
           >
             Review &amp; Repair
           </button>
-          <button
-            onClick={dismissIntegrityIssues}
-            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
-            data-testid="integrity-dismiss-button"
-          >
-            Dismiss
-          </button>
+          {/* Dismiss is offered only for non-blocking (detect-only) issues. When
+              saving is blocked, the banner stays so the Repair entry point can't
+              be hidden on a project that can't be saved. */}
+          {!integritySaveBlocked && (
+            <button
+              onClick={dismissIntegrityIssues}
+              className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+              data-testid="integrity-dismiss-button"
+            >
+              Dismiss
+            </button>
+          )}
         </div>
       )}
 

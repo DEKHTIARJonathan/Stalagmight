@@ -2,6 +2,7 @@
 export * from './ipc/CommandResult';
 export * from './ipc/CommentHolder';
 export * from './ipc/IntegrityRepairResult';
+export * from './ipc/IntegrityCheckResult';
 export * from './ipc/ValidationWarning';
 export * from './ipc/WarningSeverity';
 export * from './ipc/CollabState';

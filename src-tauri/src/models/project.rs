@@ -1986,14 +1986,20 @@ impl Project {
                 ) {
                     let dx = mx - tx;
                     let dy = my - ty;
-                    // Skip non-finite deltas so a NaN-poisoned section can't drag
-                    // its partners (the alignment check can't see NaN distance).
-                    if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
-                        self.adjust_section_offset(theirs.section_id, dx, dy);
+                    // A non-finite delta means the coincidence isn't computable (a
+                    // NaN/inf-poisoned section). Don't adjust, anchor, OR propagate
+                    // through it: marking the unpositioned neighbour authoritative
+                    // would drag ITS other partners to a bogus location, and the
+                    // alignment check can't see a NaN distance to catch it later.
+                    // Treat it like a dangling edge — leave the neighbour alone.
+                    if dx.is_finite() && dy.is_finite() {
+                        if dx != 0.0 || dy != 0.0 {
+                            self.adjust_section_offset(theirs.section_id, dx, dy);
+                        }
+                        // Anchor + propagate ONLY when the coincidence was computable.
+                        authoritative.insert(theirs.section_id);
+                        queue.push_back(theirs.section_id);
                     }
-                    // Anchor + propagate ONLY when the coincidence was computable.
-                    authoritative.insert(theirs.section_id);
-                    queue.push_back(theirs.section_id);
                 }
             }
         }
@@ -6764,6 +6770,19 @@ impl Project {
             i += 1;
             next.unwrap_or(key)
         });
+        // The two passes (for_each_station_ref above, map_station_refs here) must
+        // visit the ref-bearing collections in identical order for the positional
+        // `canon` alignment to be correct. That holds only because the two HashMaps
+        // (station_offsets/comments) are not mutated between the passes. Assert it
+        // so a future change that breaks the order coupling fails loudly in debug
+        // instead of silently re-anchoring an offset onto the wrong station.
+        debug_assert_eq!(
+            i,
+            canon.len(),
+            "reanchor_station_refs: map_station_refs visited a different number of \
+             refs than for_each_station_ref produced — station-ref traversal order \
+             diverged between the read and write passes"
+        );
     }
 
     fn section_local_coords(&self) -> HashMap<SectionId, Vec<(f64, f64)>> {

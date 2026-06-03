@@ -425,6 +425,132 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
 }
 
 #[test]
+fn test_merge_projects_preserves_station_comments() {
+    // merge_projects remaps every sibling cross-reference collection; station
+    // comments must be carried over too (they were previously dropped silently
+    // while offsets/datums/merges/closures were all copied).
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut project_a = Project::new("A".to_string(), None);
+    let section_a = project_a
+        .add_section(SectionData {
+            name: Some("Section A".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    project_a.ensure_shot_uuids();
+    let key_a = project_a.key_for_ref(StationRef::new(section_a, 0)).unwrap();
+    project_a
+        .station_comments
+        .insert(key_a, "junction with main line".to_string());
+
+    let mut project_b = Project::new("B".to_string(), None);
+    let section_b = project_b
+        .add_section(SectionData {
+            name: Some("Section B".to_string()),
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project_b.ensure_shot_uuids();
+    let key_b = project_b.key_for_ref(StationRef::new(section_b, 1)).unwrap();
+    project_b
+        .station_comments
+        .insert(key_b, "sump start".to_string());
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    Database::open(&source_a).unwrap().save_project(&project_a).unwrap();
+    Database::open(&source_b).unwrap().save_project(&project_b).unwrap();
+
+    let state = AppState::new().unwrap();
+    let output_path = temp_dir.path().join("merged-output.stalx");
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![source_a, source_b],
+        output_path: output_path.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+
+    let merged = Database::open_existing(&output_path).unwrap().load_project().unwrap();
+    let merged_section_a = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Section A"))
+        .unwrap()
+        .id;
+    let merged_section_b = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Section B"))
+        .unwrap()
+        .id;
+
+    assert_eq!(
+        merged
+            .station_comment_for_ref(StationRef::new(merged_section_a, 0))
+            .map(String::as_str),
+        Some("junction with main line"),
+        "section A's station comment must survive the merge"
+    );
+    assert_eq!(
+        merged
+            .station_comment_for_ref(StationRef::new(merged_section_b, 1))
+            .map(String::as_str),
+        Some("sump start"),
+        "section B's station comment must survive the merge"
+    );
+}
+
+#[test]
+fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
+    // Auto-save must NEVER persist a broken project: a save with unresolvable
+    // cross-references is refused (no file written) for BOTH manual and auto-save,
+    // so corruption never reaches disk. The user is told it didn't run and restores
+    // integrity via Repair, after which saves resume.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Dangle".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            name: Some("Main".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Dangling station offset: anchors a shot UUID that doesn't exist.
+    let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
+    project.station_offsets.insert(dangling, (1.0, 2.0, 3.0));
+    assert!(project.has_unresolvable_cross_references());
+    state.set_project_for_tests(project);
+
+    let stalx = temp_dir.path().join("dangle.stalx");
+
+    // Manual save is blocked and writes nothing.
+    let manual = state.execute(Command::SaveProject {
+        path: Some(stalx.clone()),
+        is_autosave: false,
+    });
+    assert!(!manual.success, "manual save must block on dangling refs");
+    assert!(!stalx.exists(), "a blocked manual save must not write a file");
+
+    // Auto-save is ALSO blocked — it must never persist a broken project.
+    let auto = state.execute(Command::SaveProject {
+        path: Some(stalx.clone()),
+        is_autosave: true,
+    });
+    assert!(
+        !auto.success,
+        "auto-save must also block on dangling refs (never persist a broken project)"
+    );
+    assert!(!stalx.exists(), "a blocked auto-save must not write a file either");
+}
+
+#[test]
 fn test_open_project_fails_on_invalid_file() {
     let temp_dir = TempDir::new().unwrap();
     let invalid_path = temp_dir.path().join("invalid.stalx");
