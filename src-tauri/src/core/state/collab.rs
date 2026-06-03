@@ -372,13 +372,13 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             _ => None,
         };
         let new_id = if let Some(anchor) = chained.or(a.after_shot_id) {
-            project.insert_shot_after(sid, anchor, a.data.clone()).map(|s| s.id)
+            project.insert_shot_after(sid, anchor, a.data.clone(), None).map(|s| s.id)
         } else {
             let first = project
                 .get_section(sid)
                 .and_then(|s| s.shots.first().map(|sh| sh.id));
             match first {
-                Some(fid) => project.insert_shot_before(sid, fid, a.data.clone()).map(|s| s.id),
+                Some(fid) => project.insert_shot_before(sid, fid, a.data.clone(), None).map(|s| s.id),
                 None => project.add_shot(sid, a.data.clone()).map(|s| s.id),
             }
         };

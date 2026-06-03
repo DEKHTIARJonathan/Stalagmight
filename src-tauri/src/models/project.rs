@@ -1201,12 +1201,15 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
-    /// Insert a shot after a specific shot in a section
+    /// Insert a shot after a specific shot in a section. `forced_id` preserves
+    /// the original id when redo re-runs this exact path (see
+    /// [`AppState::redo`]); pass `None` for normal inserts.
     pub fn insert_shot_after(
         &mut self,
         section_id: SectionId,
         after_shot_id: ShotId,
         data: ShotData,
+        forced_id: Option<ShotId>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
@@ -1218,7 +1221,7 @@ impl Project {
         // all stations after the insertion point.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_after(after_shot_id, data)?;
+        let shot = section.insert_shot_after_with_id(after_shot_id, data, forced_id)?;
         let shot_id = shot.id;
         // insert_after at pos: new shot at pos+1, old stations >= pos+2 shift up
         self.shift_station_refs(section_id, (pos + 2) as u32, 1);
@@ -1265,12 +1268,15 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
-    /// Insert a shot before a specific shot in a section
+    /// Insert a shot before a specific shot in a section. `forced_id` preserves
+    /// the original id when redo re-runs this exact path; pass `None` for normal
+    /// inserts.
     pub fn insert_shot_before(
         &mut self,
         section_id: SectionId,
         before_shot_id: ShotId,
         data: ShotData,
+        forced_id: Option<ShotId>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
@@ -1282,7 +1288,7 @@ impl Project {
         // all stations after the insertion point by this displacement.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_before(before_shot_id, data)?;
+        let shot = section.insert_shot_before_with_id(before_shot_id, data, forced_id)?;
         let shot_id = shot.id;
         // insert_before at pos: new shot at pos, old station at pos becomes pos+1
         self.shift_station_refs(section_id, pos as u32, 1);

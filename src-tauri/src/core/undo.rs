@@ -86,6 +86,14 @@ pub enum UndoData {
         /// Undo of CreateShot (delete) uses the inverse shift automatically via remove_shot.
         #[serde(default)]
         station_shift_from: u32,
+        /// The original command's anchor shot. Redo re-runs the SAME
+        /// `insert_shot_after`/`insert_shot_before` (with `shot_id` forced) so the
+        /// forward and redo paths share one code path and can't drift apart. Both
+        /// `None` means the shot was appended.
+        #[serde(default)]
+        after_shot_id: Option<ShotId>,
+        #[serde(default)]
+        before_shot_id: Option<ShotId>,
     },
 
     /// Merge info for unmerging stations
@@ -1335,6 +1343,8 @@ mod tests {
                     },
                     position: 0,
                     station_shift_from: 1,
+                    after_shot_id: None,
+                    before_shot_id: None,
                 },
                 timestamp: None,
             },

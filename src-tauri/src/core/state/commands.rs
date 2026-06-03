@@ -1210,9 +1210,9 @@ impl AppState {
         }
 
         let shot = if let Some(before_id) = before_shot_id {
-            project.insert_shot_before(section_id, before_id, data)
+            project.insert_shot_before(section_id, before_id, data, None)
         } else if let Some(after_id) = after_shot_id {
-            project.insert_shot_after(section_id, after_id, data)
+            project.insert_shot_after(section_id, after_id, data, None)
         } else {
             project.add_shot(section_id, data)
         };

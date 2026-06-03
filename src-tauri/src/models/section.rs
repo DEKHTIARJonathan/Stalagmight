@@ -298,9 +298,55 @@ impl Section {
         Some(&self.shots[pos + 1])
     }
 
+    /// Insert a shot after a specific shot ID, forcing the new shot's id when
+    /// `forced_id` is `Some` (used by redo to preserve station references).
+    pub fn insert_shot_after_with_id(
+        &mut self,
+        after_id: ShotId,
+        data: ShotData,
+        forced_id: Option<ShotId>,
+    ) -> Option<&Shot> {
+        let pos = self.shots.iter().position(|s| s.id == after_id)?;
+        let id = self.take_shot_id(forced_id);
+        self.shots.insert(pos + 1, Shot::new(id, data));
+        Some(&self.shots[pos + 1])
+    }
+
     /// Insert a shot before a specific shot ID
     pub fn insert_shot_before(&mut self, before_id: ShotId, data: ShotData) -> Option<&Shot> {
         self.insert_shot_before_with_uuid(before_id, data, None)
+    }
+
+    /// Insert a shot before a specific shot ID, forcing the new shot's id when
+    /// `forced_id` is `Some` (used by redo to preserve station references).
+    pub fn insert_shot_before_with_id(
+        &mut self,
+        before_id: ShotId,
+        data: ShotData,
+        forced_id: Option<ShotId>,
+    ) -> Option<&Shot> {
+        let pos = self.shots.iter().position(|s| s.id == before_id)?;
+        let id = self.take_shot_id(forced_id);
+        self.shots.insert(pos, Shot::new(id, data));
+        Some(&self.shots[pos])
+    }
+
+    /// Resolve the id for a newly inserted shot: a forced id (keeping the counter
+    /// ahead of it), or the next sequential id.
+    fn take_shot_id(&mut self, forced_id: Option<ShotId>) -> ShotId {
+        match forced_id {
+            Some(id) => {
+                if id >= self.next_shot_id {
+                    self.next_shot_id = id + 1;
+                }
+                id
+            }
+            None => {
+                let id = self.next_shot_id;
+                self.next_shot_id += 1;
+                id
+            }
+        }
     }
 
     /// Insert a shot before a specific shot ID, preserving an explicit UUID.

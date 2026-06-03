@@ -1914,7 +1914,7 @@ fn test_project_insert_shot_after() {
     ));
 
     let first_shot_id = project.sections[0].shots[0].id;
-    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0));
+    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0), None);
 
     assert!(result.is_some());
     assert_eq!(project.sections[0].shots.len(), 3);

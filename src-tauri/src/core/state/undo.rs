@@ -415,6 +415,7 @@ impl AppState {
 
             Command::CreateShot {
                 section_id,
+                after_shot_id,
                 before_shot_id,
                 ..
             } => {
@@ -455,6 +456,8 @@ impl AppState {
                             shot_data: shot.to_shot_data(),
                             position,
                             station_shift_from,
+                            after_shot_id: *after_shot_id,
+                            before_shot_id: *before_shot_id,
                         }
                     } else {
                         undo_data
@@ -1032,28 +1035,51 @@ impl AppState {
                 shot_id,
                 shot_data,
                 position,
-                station_shift_from,
+                after_shot_id,
+                before_shot_id,
+                ..
             } => {
-                // Redo CreateShot by restoring from snapshot to preserve original ID
-                let result = self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position);
-                if result.success && *station_shift_from < u32::MAX {
-                    // Apply station ref shift for redo (mirrors what insert_shot_before/after does)
-                    if let Ok(mut proj_guard) = self.project.lock() {
-                        if let Some(project) = proj_guard.as_mut() {
-                            project.shift_station_refs(*section_id, *station_shift_from, 1);
-                            // For insert_before at pos=0, also adjust this section's
-                            // offset to keep existing stations at the same visual position
-                            if *position == 0 && *station_shift_from == 0 {
-                                let (dx, dy) = Project::shot_displacement(shot_data);
-                                if dx != 0.0 || dy != 0.0 {
-                                    let current = project.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
-                                    project.section_offsets.insert(*section_id, (current.0 - dx, current.1 - dy));
-                                }
-                            }
+                // Redo by re-running the SAME insert the forward command did, with
+                // the original id forced — so the ref-shift, offset and cascade are
+                // identical to the forward path and can't drift (this is the
+                // single-source-of-truth that prevents the redo-misalignment bug).
+                // Append (no anchor) does no geometry maintenance, so a plain
+                // restore is exact there.
+                let mut guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let Some(project) = guard.as_mut() else {
+                    return CommandResult::failure("No project open".to_string());
+                };
+                let ok = if let Some(before_id) = before_shot_id {
+                    project
+                        .insert_shot_before(*section_id, *before_id, shot_data.clone(), Some(*shot_id))
+                        .is_some()
+                } else if let Some(after_id) = after_shot_id {
+                    project
+                        .insert_shot_after(*section_id, *after_id, shot_data.clone(), Some(*shot_id))
+                        .is_some()
+                } else {
+                    // Append: restore directly at the captured position.
+                    let id = *shot_id;
+                    if let Some(section) = project.get_section_mut(*section_id) {
+                        if id >= section.next_shot_id {
+                            section.next_shot_id = id + 1;
                         }
+                        let pos = (*position).min(section.shots.len());
+                        section.shots.insert(pos, Shot::new(id, shot_data.clone()));
+                        project.touch();
+                        true
+                    } else {
+                        false
                     }
+                };
+                if ok {
+                    CommandResult::success()
+                } else {
+                    CommandResult::failure("Failed to redo shot creation".to_string())
                 }
-                result
             }
             UndoData::SegmentMoveInfo {
                 affected_sections,

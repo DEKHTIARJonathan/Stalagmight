@@ -2741,6 +2741,7 @@ fn insert_shot_before_at_position_zero_adjusts_offset() {
         section_id,
         first_shot_id,
         shot(90.0, 90.0, 5.0, 0.0, 0.0),
+        None,
     );
     assert!(inserted.is_some());
 
@@ -2811,6 +2812,7 @@ fn insert_shot_after_shifts_station_refs() {
         section_a,
         first_shot_id,
         shot(0.0, 0.0, 1.0, 0.0, 0.0),
+        None,
     );
     assert!(inserted.is_some());
 
