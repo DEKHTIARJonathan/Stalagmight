@@ -1,6 +1,6 @@
 use crate::core::{Command, CommandResult, UndoData};
 use crate::models::{
-    ClosureStrategy, Coordinates, LoopClosure, Project, Section, SectionData, SectionId,
+    ClosureStrategy, Coordinates, Project, Section, SectionData, SectionId,
     SectionUpdates, Shot, ShotData, ShotId, ShotUpdates,
 };
 
@@ -157,55 +157,57 @@ impl AppState {
                 is_reference: !*is_reference,
             }),
 
-            // For merge, store the info to unmerge + section offsets to restore positions
+            // Merge can shift sections BEYOND the two merge groups: after aligning
+            // the groups, cascade_connection_offsets re-anchors any section reachable
+            // through an ALIGNED loop closure (cascade phase 2), and such a section is
+            // in neither merge group. A lightweight MergeInfo only restores the two
+            // groups' offsets, so that external section stays drifted on undo — and
+            // realign_merges() cannot self-heal it (it checks merge alignment only,
+            // never closures). So capture a full before/after pair (like
+            // Delete/Unmerge); undo then restores EVERY section_offset the cascade
+            // could have touched.
             Command::MergeStations {
                 station_a,
                 station_b,
             } => {
-                // Capture section offsets for both merge groups before the merge moves them
-                let mut previous_offsets = std::collections::HashMap::new();
-                let sections_a = project.get_merged_section_ids(station_a.section_id);
-                let sections_b = project.get_merged_section_ids(station_b.section_id);
-                for section_id in sections_a.into_iter().chain(sections_b.into_iter()) {
-                    previous_offsets
-                        .insert(section_id, project.section_offsets.get(&section_id).copied());
-                }
-
-                UndoData::MergeInfo {
-                    station_a: *station_a,
-                    station_b: *station_b,
-                    removed_closures: Vec::new(),
-                    previous_offsets,
+                if project.get_section(station_a.section_id).is_some()
+                    && project.get_section(station_b.section_id).is_some()
+                {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
                 }
             }
 
             // For unmerge, we need to know which stations to re-merge
             // Also capture closures that will be removed during unmerge
+            // Unmerge removes a merge edge, which can strand a section so its sole
+            // remaining bridge is a loop closure — execute() then converts that
+            // closure into a merge and re-derives offsets (#8). A lightweight
+            // UnmergeInfo can only re-create the removed merge; it cannot reverse
+            // that conversion (the closure would stay a merge, forming a cycle) or
+            // restore the pre-unmerge offsets. So capture a full before/after pair
+            // (matching DeleteShot/DeleteSection, which trigger the same side
+            // effect) — undo then restores the merge AND the converted closure AND
+            // the original positions atomically.
             Command::UnmergeStations { station_ref } => {
-                // Find all merges involving this station
-                let merges: Vec<_> = project
+                let involved = project
                     .station_merges
                     .iter()
-                    .filter(|m| m.station_a == *station_ref || m.station_b == *station_ref)
-                    .map(|m| (m.station_a, m.station_b))
-                    .collect();
-
-                if let Some((a, b)) = merges.first() {
-                    // Capture closures that will be removed during unmerge
-                    let closures_to_remove: Vec<LoopClosure> = project
-                        .loop_closures
-                        .iter()
-                        .filter(|lc| {
-                            (lc.station_a == *a && lc.station_b == *b)
-                                || (lc.station_a == *b && lc.station_b == *a)
-                        })
-                        .cloned()
-                        .collect();
-
-                    UndoData::UnmergeInfo {
-                        station_a: *a,
-                        station_b: *b,
-                        removed_closures: closures_to_remove,
+                    .any(|m| m.station_a == *station_ref || m.station_b == *station_ref);
+                if involved {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
                     }
                 } else {
                     UndoData::None
@@ -216,20 +218,20 @@ impl AppState {
                 station_a,
                 station_b,
             } => {
-                let closures_to_remove: Vec<LoopClosure> = project
-                    .loop_closures
-                    .iter()
-                    .filter(|lc| {
-                        (lc.station_a == *station_a && lc.station_b == *station_b)
-                            || (lc.station_a == *station_b && lc.station_b == *station_a)
-                    })
-                    .cloned()
-                    .collect();
-
-                UndoData::UnmergeInfo {
-                    station_a: *station_a,
-                    station_b: *station_b,
-                    removed_closures: closures_to_remove,
+                let merged = project.station_merges.iter().any(|m| {
+                    (m.station_a == *station_a && m.station_b == *station_b)
+                        || (m.station_a == *station_b && m.station_b == *station_a)
+                });
+                if merged {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
                 }
             }
 
@@ -499,9 +501,15 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/AdjustLoopClosures: fill in the "after" snapshot now that removal/adjustment is done
+            // DeleteSection/DeleteShot/Merge/Unmerge/AdjustLoopClosures: fill in the
+            // "after" snapshot now that the mutation (and any cascade re-anchoring,
+            // orphan-closure conversion, and offset reconcile triggered in execute())
+            // is done.
             Command::DeleteSection { .. }
             | Command::DeleteShot { .. }
+            | Command::MergeStations { .. }
+            | Command::UnmergeStations { .. }
+            | Command::UnmergeStationPair { .. }
             | Command::AdjustLoopClosures { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match serde_json::to_string(project) {

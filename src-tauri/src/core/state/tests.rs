@@ -700,6 +700,286 @@ fn unmerge_converts_orphaned_bridge_closure() {
 }
 
 #[test]
+fn undo_unmerge_restores_converted_closure_and_position() {
+    // The orphan-closure conversion unmerge triggers is a structural side-effect;
+    // undo must reverse it completely — the re-created merge AND the
+    // closure-that-became-a-merge AND the original section position must all come
+    // back, with no leftover merge cycle. (User report: undoing the unmerge left
+    // the converted merge in place and the geometry shifted.)
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+
+    // Snapshot the pre-unmerge state we expect undo to restore exactly.
+    let before = state.get_project_state().unwrap();
+    let offset_before = before.section_offset(b);
+    let merges_before = before.station_merges.len();
+    assert_eq!(before.loop_closures.len(), 1);
+
+    // Unmerge → closure becomes a merge, section B repositions onto A0.
+    let r = state.execute(Command::UnmergeStationPair {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let converted = state.get_project_state().unwrap();
+    assert!(
+        converted.loop_closures.is_empty(),
+        "closure should have converted to a merge"
+    );
+    let offset_converted = converted.section_offset(b);
+    assert!(
+        (offset_converted.0 - offset_before.0).abs() > 1e-9
+            || (offset_converted.1 - offset_before.1).abs() > 1e-9,
+        "precondition: conversion must actually move B, else the position check is vacuous"
+    );
+
+    // Undo → merge, closure, and position all come back.
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(
+        restored.loop_closures.len(),
+        1,
+        "undo must turn the converted merge back into a closure"
+    );
+    assert_eq!(
+        restored.station_merges.len(),
+        merges_before,
+        "undo must restore exactly the original merge — no leftover cycle"
+    );
+    assert!(
+        restored.check_orphan_closures().is_empty(),
+        "with the merge restored the closure is no longer a sole bridge"
+    );
+    assert!(
+        !restored.has_critical_integrity_violations(),
+        "restored state must be structurally clean"
+    );
+    let offset_restored = restored.section_offset(b);
+    assert!(
+        (offset_restored.0 - offset_before.0).abs() < 1e-9
+            && (offset_restored.1 - offset_before.1).abs() < 1e-9,
+        "undo must reset section position: before={offset_before:?} after={offset_restored:?}"
+    );
+
+    // Redo → back to the converted state.
+    let re = state.redo();
+    assert!(re.success, "{:?}", re.error);
+    let redone = state.get_project_state().unwrap();
+    assert!(
+        redone.loop_closures.is_empty(),
+        "redo must re-apply the closure→merge conversion"
+    );
+    assert!(redone.check_orphan_closures().is_empty());
+    let offset_redone = redone.section_offset(b);
+    assert!(
+        (offset_redone.0 - offset_converted.0).abs() < 1e-9
+            && (offset_redone.1 - offset_converted.1).abs() < 1e-9,
+        "redo must restore the converted position"
+    );
+}
+
+#[test]
+fn undo_unmerge_singular_restores_converted_closure_and_position() {
+    // Same round-trip as the pair variant, but via the singular Command::UnmergeStations
+    // (which removes ALL merges on a station). It shares the conversion + snapshot path,
+    // so this guards against the two unmerge variants diverging.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+
+    let offset_before = state.get_project_state().unwrap().section_offset(b);
+
+    // Singular unmerge of the merged station strands B onto the closure.
+    let r = state.execute(Command::UnmergeStations {
+        station_ref: StationRef::new(a, 2),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let converted = state.get_project_state().unwrap();
+    assert!(converted.loop_closures.is_empty(), "closure should have converted to a merge");
+
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(restored.loop_closures.len(), 1, "undo reverts the converted merge to a closure");
+    assert!(restored.check_orphan_closures().is_empty());
+    assert!(!restored.has_critical_integrity_violations());
+    let offset_restored = restored.section_offset(b);
+    assert!(
+        (offset_restored.0 - offset_before.0).abs() < 1e-9
+            && (offset_restored.1 - offset_before.1).abs() < 1e-9,
+        "undo must reset position: before={offset_before:?} after={offset_restored:?}"
+    );
+}
+
+#[test]
+fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
+    // A merge re-anchors not just the two merge groups but any section reachable
+    // through an ALIGNED loop closure (cascade phase 2). The old lightweight MergeInfo
+    // undo captured only the two groups' offsets, so such an external section stayed
+    // drifted on undo — and realign_merges() can't self-heal closure drift (it inspects
+    // merges only). With the full-snapshot undo, undo must restore EVERY section the
+    // cascade could touch.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let z = state
+        .execute(Command::CreateSection {
+            name: Some("Z".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#333333".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Anchor A to GPS so the merge moves the B side (and, via the aligned closure, Z).
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(45.0, 90.0, 0.0).unwrap(),
+    });
+
+    // Inject an ALIGNED loop closure B.1 <-> Z.0 (no merge). Z is reachable from the
+    // rest only through this aligned closure, so the cascade re-anchors it on merge.
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        let closure_id = project.next_closure_id;
+        project.loop_closures.push(LoopClosure {
+            id: closure_id,
+            station_a: StationRef::new(b, 1),
+            station_b: StationRef::new(z, 0),
+            path_length: 10.0,
+            misclosure_distance: 0.1,
+            error_percentage: 1.0,
+            horizontal_misclosure: 0.08,
+            vertical_misclosure: 0.06,
+            strategy: ClosureStrategy::default(),
+            is_aligned: true,
+        });
+        project.next_closure_id += 1;
+    }
+
+    let z_before = state.get_project_state().unwrap().section_offset(z);
+
+    // Merge A.1 <-> B.0: A holds the datum, so B (and Z via the aligned closure) move.
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let z_merged = state.get_project_state().unwrap().section_offset(z);
+    assert!(
+        (z_merged.0 - z_before.0).abs() > 1e-6 || (z_merged.1 - z_before.1).abs() > 1e-6,
+        "precondition: the merge cascade must re-anchor Z (else vacuous): \
+         before={z_before:?} merged={z_merged:?}"
+    );
+
+    // Undo must restore Z exactly — not just the two merge groups.
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let z_restored = state.get_project_state().unwrap().section_offset(z);
+    assert!(
+        (z_restored.0 - z_before.0).abs() < 1e-9 && (z_restored.1 - z_before.1).abs() < 1e-9,
+        "undo must restore the aligned-closure section outside the merge groups: \
+         before={z_before:?} after_undo={z_restored:?}"
+    );
+}
+
+#[test]
 fn split_converts_orphaned_bridge_closure_immediately() {
     // The split path bypasses execute()'s reconcile; confirm it still converts a
     // closure that the split strands as a section's sole bridge (the reported
