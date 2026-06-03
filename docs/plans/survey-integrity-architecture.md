@@ -110,13 +110,28 @@ Risk = residual risk after current mitigations.
 
 ## Prioritized roadmap
 
-### Group A — quick wins / catch-at-source guards (no schema change) — IMPLEMENTED
-| # | Change | Closes | Effort | Risk |
-|---|--------|--------|--------|------|
-| A1 | One shared `finalize_structural_command()` (orphan-convert + reconcile + critical-rollback); route collab/import/delete-last-shot through it; add `all_finite` skip-and-warn to collab writes. | 13, 17, 19, 23, 34, 35 (bypass paths) | M | low |
-| A2 | One `restore_project_into()` that always rebuilds the transient caches; central restore helper used by every snapshot-restore path. | 14, 39 (stale-cache-after-restore) | S | low |
-| A3 | Merge cycle-check on the **aligned** graph (a separate aligned-only walk — *not* an edit to the 6-caller `get_connected_section_ids`). | 8 (merge wrongly rejected over an inert closure) | S | low |
-| A4 | `MoveStation` undo → full `ProjectSnapshotPair`. | 33 (pitch drop) and any other field-drop in move undo | S | low |
+### Group A — quick wins / catch-at-source guards (no schema change) — IMPLEMENTED (branch `fix/geometry-robustness`)
+| # | Change | Closes | Status |
+|---|--------|--------|--------|
+| A1 | Shared `AppState::finalize_structural_edit()` (orphan-convert + reconcile + critical-corruption report); route `apply_collab_changes` and `execute_import_sections` through it with rollback-on-critical; add `ShotData::all_finite()` skip-and-warn to `apply_changeset` edit + add phases. | 13, 17, 19, 27, 34 | ✅ done |
+| A2 | `AppState::restore_snapshot_into(slot, snapshot)` — the single chokepoint that always rebuilds `section_index_cache` + `merge_adjacency_cache`; `rollback_project`, both `capture_after_snapshot_or_rollback` error paths, the 3 `execute_delete_last_shot_and_section` inline rollbacks, and the `ProjectSnapshot`/`ProjectSnapshotPair` undo+redo arms all route through it. | 14, 39 | ✅ done |
+| A3 | Merge cycle-check switched from `get_connected_section_ids` to the existing `get_rigid_connected_section_ids` (merges + **aligned** closures only) — the same graph the cascade solves. `create_loop_closure`'s pre-connection check left as-is. | 8 | ✅ done |
+| A4 | `MoveStation` undo → full `ProjectSnapshotPair` (legacy `StationMoveInfo` apply arm kept for back-compat). | 33 (pitch drop) + lrud/temperature/cascade-side-effect drop | ✅ done |
+
+**Scope note — delete-last (catalog #23/#35) intentionally NOT changed.** Investigation showed
+`preserve_connections_for_section_deletion` (`project.rs:552`) only creates replacement merges
+*within an already-colocated merge group* (`record_station_merge` between members that are by
+definition identical), so the claimed "after-snapshot carries a drifted merge" is **not
+reproducible** — a regression test built to the #35 description passed even with the delete-last
+finalize disabled. Rather than restructure that path's snapshot capture for a no-op reconcile, it
+was left as-is. (The merge/unmerge/move-station undo records *were* genuinely lossy and are fixed.)
+An example of an audit single-lens finding down-weighted by implementation evidence; re-open #35
+only if a concrete drifting-merge repro appears.
+
+Tests added: `apply_changeset_skips_non_finite_edit_and_add`,
+`restore_snapshot_into_rebuilds_transient_caches`,
+`merge_allowed_across_inert_closure_but_rejected_across_aligned`,
+`undo_move_station_restores_pitch_and_adjacent_shots`.
 
 ### Group B — medium structural refactors
 | # | Change | Closes | Effort | Risk |
