@@ -1,7 +1,7 @@
 use chrono::Utc;
 use tauri::State;
 
-use crate::core::AppState;
+use crate::core::{AppState, IntegrityRepairResult};
 use crate::models::{SectionId, ShotId};
 use crate::persistence::ResolvedWarning;
 
@@ -22,10 +22,12 @@ pub fn check_project_integrity(state: State<AppState>) -> Vec<String> {
     state.integrity_violation_messages()
 }
 
-/// Repair the open project's structural integrity, returning the number of
-/// violations fixed. The project is left dirty so the user can save the repair.
+/// Repair the open project's structural integrity, returning `{ fixed,
+/// remaining }`. The project is left dirty so the user can save the repair.
+/// `remaining > 0` means some issues are detect-only (drifted aligned loop
+/// closures, non-finite geometry) and need manual attention.
 #[tauri::command]
-pub fn repair_project_integrity(state: State<AppState>) -> usize {
+pub fn repair_project_integrity(state: State<AppState>) -> IntegrityRepairResult {
     state.repair_open_project_integrity()
 }
 

@@ -52,7 +52,7 @@ test.describe('Structural-integrity banner', () => {
     // Dialog and banner clear; a confirmation toast appears.
     await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
     await expect(page.getByTestId('integrity-banner')).toHaveCount(0);
-    await expect(page.getByText(/Repaired 2 structural issues/)).toBeVisible();
+    await expect(page.getByText(/Repaired 2 issues/)).toBeVisible();
   });
 
   test('review dialog can be cancelled without repairing', async ({ page }) => {

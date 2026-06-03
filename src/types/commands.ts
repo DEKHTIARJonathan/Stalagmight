@@ -4,6 +4,7 @@ import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy
 
 export type {
   CommandResult,
+  IntegrityRepairResult,
   ValidationWarning,
   WarningSeverity,
   ProjectWarning,

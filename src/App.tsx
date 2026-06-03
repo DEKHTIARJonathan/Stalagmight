@@ -411,12 +411,17 @@ function App() {
   const handleRepairIntegrity = async () => {
     setRepairingIntegrity(true);
     try {
-      const fixed = await repairProjectIntegrity();
-      useUIStore.getState().showToast(
-        `Repaired ${fixed} structural issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`,
-        'integrity-repair'
-      );
-      setShowIntegrityDialog(false);
+      const { fixed, remaining } = await repairProjectIntegrity();
+      const message =
+        remaining > 0
+          ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
+          : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
+      useUIStore.getState().showToast(message, 'integrity-repair');
+      // Close the dialog only when fully clean; if issues remain the banner
+      // re-populates (checkProjectIntegrity ran) so the user can act on them.
+      if (remaining === 0) {
+        setShowIntegrityDialog(false);
+      }
     } finally {
       setRepairingIntegrity(false);
     }

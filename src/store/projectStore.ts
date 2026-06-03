@@ -24,7 +24,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
@@ -205,8 +205,10 @@ interface ProjectStore {
   integrityIssues: string[];
   /** Re-check the open project's structural integrity, updating integrityIssues. */
   checkProjectIntegrity: () => Promise<string[]>;
-  /** Repair structural integrity; returns the number of issues fixed and clears integrityIssues. */
-  repairProjectIntegrity: () => Promise<number>;
+  /** Repair structural integrity; returns {fixed, remaining} and refreshes
+   * integrityIssues from the true post-repair state (remaining>0 = detect-only
+   * issues that need manual attention). */
+  repairProjectIntegrity: () => Promise<IntegrityRepairResult>;
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
   refreshWarnings: () => Promise<void>;
@@ -955,7 +957,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   repairProjectIntegrity: async () => {
     try {
-      const fixed = await invokeIpc<number>('repair_project_integrity', undefined, {
+      const result = await invokeIpc<IntegrityRepairResult>('repair_project_integrity', undefined, {
         purpose: 'repair project structural integrity',
       });
       // Repair mutates the project; refresh derived state so the UI reflects it.
@@ -965,10 +967,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // non-finite shot geometry — fix the data), so reflect the TRUE post-repair
       // state instead of clearing the banner on issues that still exist.
       await get().checkProjectIntegrity();
-      return fixed;
+      return result;
     } catch (e) {
       console.error('Failed to repair project integrity:', e);
-      return 0;
+      return { fixed: 0, remaining: 0 };
     }
   },
 

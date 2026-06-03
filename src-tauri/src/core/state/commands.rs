@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use crate::core::{Command, CommentHolder, CommandResult, UndoData, Validator};
+use crate::core::{Command, CommentHolder, CommandResult, IntegrityRepairResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
     Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationKey,
@@ -214,27 +214,42 @@ impl AppState {
         violations.into_iter().map(|v| v.message).collect()
     }
 
-    /// Repair the open project's integrity: drop dangling refs/orphans, then
-    /// re-cascade section offsets so drifted merges line up again. Returns the
-    /// number of issues fixed.
-    pub fn repair_open_project_integrity(&self) -> usize {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(project) = guard.as_mut() else {
-            return 0;
-        };
-        let structural = project.repair_structural_integrity().len();
-        // Dropping refs may have cleared the adjacency cache; rebuild before the
-        // cascade walks the merge graph.
-        project.rebuild_merge_adjacency();
-        // Turn any sole-bridge closure into a merge (a closure is only a loop),
-        // then re-derive offsets. Repair is an explicit "fix my project" action,
-        // so use the zero-trust re-solve that never honors a persisted offset.
-        let converted = project.convert_orphan_closures_to_merges();
-        let realigned = project.resolve_offsets();
-        structural + converted + realigned
+    /// Repair the open project's integrity: drop dangling refs/orphans, re-mint
+    /// duplicate shot UUIDs, then re-cascade section offsets so drifted merges
+    /// line up again. Returns `{ fixed, remaining }` measured as the change in
+    /// the FULL violation set (the same set the banner counts), so the reported
+    /// numbers match what the user sees. `remaining > 0` means some issues are
+    /// detect-only and need manual attention (a drifted aligned loop closure to
+    /// recompute/remove; non-finite shot geometry to correct).
+    pub fn repair_open_project_integrity(&self) -> IntegrityRepairResult {
+        // Count over the full violation set before repairing. Locks the project
+        // internally, so it must run with no project guard held.
+        let before = self.integrity_violation_messages().len();
+        {
+            let mut guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(project) = guard.as_mut() else {
+                return IntegrityRepairResult { fixed: 0, remaining: 0 };
+            };
+            // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
+            project.repair_structural_integrity();
+            // Dropping refs may have cleared the adjacency cache; rebuild before
+            // the cascade walks the merge graph.
+            project.rebuild_merge_adjacency();
+            // Turn any sole-bridge closure into a merge (a closure is only a
+            // loop), then re-derive offsets. Repair is an explicit "fix my
+            // project" action, so use the zero-trust re-solve that never honors a
+            // persisted offset.
+            project.convert_orphan_closures_to_merges();
+            project.resolve_offsets();
+        } // release the guard before re-measuring (integrity_violation_messages re-locks)
+        let after = self.integrity_violation_messages().len();
+        IntegrityRepairResult {
+            fixed: before.saturating_sub(after) as u32,
+            remaining: after as u32,
+        }
     }
 
     /// Execute a command and return the result

@@ -197,6 +197,19 @@ pub struct CommandResult {
     pub saved_path: Option<String>,
 }
 
+/// Result of an explicit "repair project integrity" action. `fixed` and
+/// `remaining` are the drop in the FULL violation set (structural + merge/
+/// closure alignment + orphan closures) measured before vs after the repair, so
+/// they stay consistent with the integrity banner's count — unlike summing
+/// per-operation counters that mix different units. `remaining` is whatever the
+/// repair could not auto-fix (detect-only: a drifted aligned loop closure to
+/// recompute/remove, or non-finite shot geometry to correct by hand).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct IntegrityRepairResult {
+    pub fixed: u32,
+    pub remaining: u32,
+}
+
 /// Validation warning from command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ValidationWarning {
