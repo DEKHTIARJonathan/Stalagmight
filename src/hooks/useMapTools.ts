@@ -575,7 +575,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     ]
   );
 
-  // Handle station hover - only highlights the specific station, not the whole section
+  // Handle station hover - only highlights the specific station, not the whole section.
+  // Panel-side section-name highlight is derived in SectionsPanel from the hovered
+  // shot/station, so we deliberately don't touch hoveredSectionId here (doing so would
+  // (a) feed back into SurveyLayer.setHoveredSection and light up the whole section on
+  // the map, and (b) get clobbered by the trailing null callback when the cursor moves
+  // from a shot to a station).
   const handleStationHover = useCallback(
     (ref: StationRef | null) => {
       // GUARD: No hover for pan/zoom tools
@@ -588,7 +593,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [activeTool, setHoveredStation]
   );
 
-  // Handle shot hover - only highlights the specific shot, not the whole section
+  // Handle shot hover - only highlights the specific shot, not the whole section.
+  // See handleStationHover for why we don't set hoveredSectionId here.
   const handleShotHover = useCallback(
     (shot: { sectionId: SectionId; shotId: ShotId } | null) => {
       // GUARD: No hover for pan/zoom tools
