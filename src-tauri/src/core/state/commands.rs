@@ -138,6 +138,43 @@ impl AppState {
         }
     }
 
+    /// True iff the open project currently holds a Critical integrity violation.
+    fn project_has_critical(&self) -> bool {
+        self.project
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
+            .unwrap_or(false)
+    }
+
+    /// Integrity gate shared by [`Self::execute`] and [`Self::execute_batch`]: if
+    /// the project was clean before (`!pre_had_critical`) but the command made it
+    /// Critical, roll back to `snapshot` and return the standard "blocked"
+    /// failure; otherwise return `None` and let the caller proceed. Corruption
+    /// must be rejected BEFORE any undo entry is pushed, or a later undo+redo
+    /// would reinstate the corrupt state the guard rejected (#1).
+    fn guard_introduced_corruption(
+        &self,
+        pre_had_critical: bool,
+        snapshot: &str,
+        cmd_desc: &str,
+    ) -> Option<CommandResult> {
+        if pre_had_critical || !self.project_has_critical() {
+            return None;
+        }
+        self.rollback_project(snapshot);
+        tracing::error!(
+            command = cmd_desc,
+            purpose = "block corruption at the source",
+            "Rejected command that would corrupt survey structure; rolled back"
+        );
+        Some(CommandResult::failure(
+            "Blocked: this action would corrupt the survey structure \
+             (it leaves dangling references). No changes were made."
+                .to_string(),
+        ))
+    }
+
     /// Shared structural-edit epilogue for the custom `execute_*` paths that
     /// bypass [`Self::execute`]'s gated epilogue (collab apply, TML import).
     /// Converts sole-bridge closures to merges and reconciles derived offsets,
@@ -224,21 +261,20 @@ impl AppState {
         // corruption must not enter through the command path (#17). Only those
         // commands can dangle a ref, so geometry-only commands (moves, merges,
         // datums) skip the expensive whole-project serialize (#8).
-        let integrity_snapshot = if Self::command_can_dangle_refs(&cmd) {
-            self.capture_project_snapshot().ok()
-        } else {
-            None
-        };
+        // Batch owns its own snapshot + integrity guard inside execute_batch
+        // (which must reject corruption BEFORE pushing its undo entry, #1), so it
+        // is excluded here to avoid a redundant whole-project serialize and a
+        // double rollback.
+        let integrity_snapshot =
+            if Self::command_can_dangle_refs(&cmd) && !matches!(cmd, Command::Batch { .. }) {
+                self.capture_project_snapshot().ok()
+            } else {
+                None
+            };
         // If the project is ALREADY corrupt (loaded that way), don't block — the
         // user repairs via the banner. We only reject commands that newly
         // introduce corruption into a clean project.
-        let pre_had_critical = integrity_snapshot.is_some()
-            && self
-                .project
-                .lock()
-                .ok()
-                .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
-                .unwrap_or(false);
+        let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
 
         let result = match &cmd {
             Command::CreateProject { name, location } => {
@@ -356,24 +392,10 @@ impl AppState {
         // a corrupt state (#17).
         if result.success && !pre_had_critical {
             if let Some(snapshot) = &integrity_snapshot {
-                let introduced_corruption = self
-                    .project
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
-                    .unwrap_or(false);
-                if introduced_corruption {
-                    self.rollback_project(snapshot);
-                    tracing::error!(
-                        command = ?cmd.description(),
-                        purpose = "block corruption at the source",
-                        "Rejected command that would corrupt survey structure; rolled back"
-                    );
-                    return CommandResult::failure(
-                        "Blocked: this action would corrupt the survey structure \
-                         (it leaves dangling references). No changes were made."
-                            .to_string(),
-                    );
+                if let Some(failure) =
+                    self.guard_introduced_corruption(pre_had_critical, snapshot, &cmd.description())
+                {
+                    return failure;
                 }
             }
         }
@@ -2212,6 +2234,11 @@ impl AppState {
             }
         }
 
+        // Whether the project was ALREADY corrupt before the batch (loaded that
+        // way) — captured against the pre-batch state so the guard below only
+        // rejects corruption the batch itself introduces.
+        let pre_had_critical = self.project_has_critical();
+
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
@@ -2236,6 +2263,17 @@ impl AppState {
                 section_ids.push(id);
             }
             section_ids.extend(result.section_ids);
+        }
+
+        // Block corruption at the source — BEFORE pushing the undo entry. The
+        // sub-commands ran via execute_without_undo (no per-command guard), so a
+        // batch can strand a dangling reference; if we pushed the snapshot pair
+        // first (as before) a later undo+redo would reinstate the corrupt state.
+        // #1
+        if let Some(failure) =
+            self.guard_introduced_corruption(pre_had_critical, &before_snapshot, "Batch")
+        {
+            return failure;
         }
 
         if push_undo {
