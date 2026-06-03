@@ -551,6 +551,52 @@ fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
 }
 
 #[test]
+fn repair_open_project_integrity_is_undoable_and_redoable() {
+    // Repair drops dangling refs / re-cascades offsets; it must record an undo
+    // entry so the user can revert it. Undo restores the pre-repair (corrupt)
+    // state, redo re-applies the fix — both via the snapshot pair.
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Repairable".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            name: Some("Main".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Dangling station offset → unresolvable cross-reference (corrupt project).
+    let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
+    project.station_offsets.insert(dangling, (1.0, 2.0, 3.0));
+    assert!(project.has_unresolvable_cross_references());
+    state.set_project_for_tests(project);
+
+    // Repair fixes it AND records exactly one undo entry.
+    let result = state.repair_open_project_integrity();
+    assert!(result.fixed >= 1, "repair should report at least one fix");
+    assert!(
+        !state.get_project_state().unwrap().has_unresolvable_cross_references(),
+        "repair drops the dangling ref"
+    );
+    assert_eq!(state.get_undo_stack().len(), 1, "repair records one undo entry");
+
+    // Undo restores the pre-repair (corrupt) state.
+    assert!(state.undo().success, "repair must be undoable");
+    assert!(
+        state.get_project_state().unwrap().has_unresolvable_cross_references(),
+        "undo brings the dangling ref back"
+    );
+
+    // Redo re-applies the repair.
+    assert!(state.redo().success, "repair must be redoable");
+    assert!(
+        !state.get_project_state().unwrap().has_unresolvable_cross_references(),
+        "redo re-drops the dangling ref"
+    );
+}
+
+#[test]
 fn test_open_project_fails_on_invalid_file() {
     let temp_dir = TempDir::new().unwrap();
     let invalid_path = temp_dir.path().join("invalid.stalx");

@@ -546,6 +546,9 @@ impl AppState {
                 | Command::MergeProjects { .. }
                 // Pushes its own snapshot-pair undo inside apply_collab_changes.
                 | Command::ApplyCollabChanges
+                // Records its own snapshot-pair undo inside repair_open_project_integrity;
+                // never routed through execute() anyway.
+                | Command::RepairIntegrity
         )
     }
 

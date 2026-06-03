@@ -241,6 +241,11 @@ impl AppState {
         // Count over the full violation set before repairing. Locks the project
         // internally, so it must run with no project guard held.
         let before = self.integrity_violation_messages().len();
+        // Snapshot the project BEFORE mutating so the repair can be undone: it
+        // drops dangling refs, re-mints duplicate UUIDs and re-cascades offsets,
+        // all reversible by restoring this snapshot. (capture locks the project
+        // internally, so take it with no guard held.)
+        let before_snapshot = self.capture_project_snapshot().ok();
         {
             let mut guard = match self.project.lock() {
                 Ok(g) => g,
@@ -262,6 +267,18 @@ impl AppState {
             project.resolve_offsets();
         } // release the guard before re-measuring (integrity_violation_messages re-locks)
         let after = self.integrity_violation_messages().len();
+        // Record an undo entry (before -> after) so the user can revert the repair.
+        // Only when it actually changed the project, so a no-op repair doesn't add
+        // a spurious history entry. Undo restores the pre-repair (corrupt) state —
+        // which the save guard still refuses to persist — and redo re-applies the
+        // fix; both go through the snapshot-pair restore, never re-executing.
+        if let Some(before_json) = before_snapshot {
+            if let Ok(after_json) = self.capture_project_snapshot() {
+                if before_json != after_json {
+                    self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
+                }
+            }
+        }
         IntegrityRepairResult {
             fixed: before.saturating_sub(after) as u32,
             remaining: after as u32,
@@ -415,6 +432,13 @@ impl AppState {
                 *archive_originals,
             ),
             Command::ApplyCollabChanges => self.apply_collab_changes(),
+            // Never routed here: repair is applied via `repair_project_integrity`,
+            // which records its own snapshot-pair undo entry. Present only for match
+            // exhaustiveness.
+            Command::RepairIntegrity => CommandResult::failure(
+                "RepairIntegrity is applied via repair_project_integrity, not execute()"
+                    .to_string(),
+            ),
         };
 
         // Block corruption at the source: if a structural command left the

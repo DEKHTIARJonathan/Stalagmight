@@ -1002,6 +1002,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       });
       // Repair mutates the project; refresh derived state so the UI reflects it.
       await get().refreshProjectState();
+      // Repair records a snapshot-pair undo entry, so refresh undo/redo
+      // availability — the Undo button must enable so the user can revert it.
+      await get().refreshUndoState();
       // Re-check rather than assuming clean: some issues are detect-only and not
       // auto-repairable (a drifted aligned loop closure — recompute/remove it;
       // non-finite shot geometry — fix the data), so reflect the TRUE post-repair

@@ -175,6 +175,12 @@ pub enum Command {
     /// Apply a collaborator's reconciled `.tml` changes into the project
     /// (single undoable operation via snapshot pair).
     ApplyCollabChanges,
+    /// Repair the open project's structural integrity (drop dangling refs, re-mint
+    /// duplicate UUIDs, re-cascade offsets). Applied directly via the
+    /// `repair_project_integrity` IPC command, which records its own snapshot-pair
+    /// undo entry; this variant exists only to LABEL that entry in the undo
+    /// history and is never run through `execute()`.
+    RepairIntegrity,
 }
 
 /// Result of command execution
@@ -420,6 +426,7 @@ impl Command {
                 )
             }
             Command::ApplyCollabChanges => "Apply collaborator changes".to_string(),
+            Command::RepairIntegrity => "Repair integrity".to_string(),
         }
     }
 }
