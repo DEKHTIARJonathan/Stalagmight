@@ -6003,6 +6003,12 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
         "insert_after and insert_before disagree on the boundary merge ref index \
          (after={after_idx}, before={before_idx})"
     );
+    // And the merge partner stays geometrically colocated in BOTH paths — the
+    // off-by-one re-pointed the merge onto the new station, which still
+    // "coincided" but at the wrong place; this checks the merge holds after the
+    // insert + cascade.
+    assert!(p_after.check_merge_alignment().is_empty(), "after-path partner displaced");
+    assert!(p_before.check_merge_alignment().is_empty(), "before-path partner displaced");
 }
 
 #[test]

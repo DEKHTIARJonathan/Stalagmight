@@ -953,9 +953,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const fixed = await invokeIpc<number>('repair_project_integrity', undefined, {
         purpose: 'repair project structural integrity',
       });
-      set({ integrityIssues: [] });
       // Repair mutates the project; refresh derived state so the UI reflects it.
       await get().refreshProjectState();
+      // Re-check rather than assuming clean: some issues are detect-only and not
+      // auto-repairable (a drifted aligned loop closure — recompute/remove it;
+      // non-finite shot geometry — fix the data), so reflect the TRUE post-repair
+      // state instead of clearing the banner on issues that still exist.
+      await get().checkProjectIntegrity();
       return fixed;
     } catch (e) {
       console.error('Failed to repair project integrity:', e);

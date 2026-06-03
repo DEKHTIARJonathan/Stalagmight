@@ -640,6 +640,48 @@ fn test_create_section() {
 }
 
 #[test]
+fn create_section_rejects_non_finite_geometry() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let mut bad = test_shot_data(5.0);
+    bad.length = f64::NAN;
+    let r = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ffffff".to_string(),
+        direction: None,
+        shots: vec![bad],
+    });
+    assert!(!r.success, "create_section must reject non-finite geometry");
+    assert_eq!(state.get_project_state().unwrap().sections.len(), 0, "nothing committed");
+}
+
+#[test]
+fn move_station_rejects_non_finite_offset() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let r = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(a, 1),
+        offset: Coordinates::new(f64::INFINITY, 0.0, 0.0),
+    });
+    assert!(!r.success, "move_station must reject a non-finite offset");
+    let p = state.get_project_state().unwrap();
+    assert!(p.sections[0].shots[0].all_finite(), "shot geometry left untouched");
+}
+
+#[test]
 fn redo_insert_shot_keeps_merged_stations_aligned() {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject { name: "Align".to_string(), location: None });

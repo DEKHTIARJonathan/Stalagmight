@@ -1760,39 +1760,39 @@ impl Project {
             return;
         }
 
-        // Coincidence edges: every merge, plus every ALIGNED loop closure
-        // (unaligned closures are inert). Each says its two StationRefs occupy
-        // the same point. Merges form a forest (loop-forming merges are rejected
-        // in merge_stations), so for a well-formed project this graph is a tree
-        // per component with at most one extra edge per aligned closure.
-        let mut adjacency: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
+        // Coincidence edges, kept in TWO graphs: merges (the rigid, acyclic
+        // forest — loop-forming merges are rejected in merge_stations) and
+        // ALIGNED loop closures (the redundant, cycle-closing edges; unaligned
+        // closures are inert). Solving merges to full reach FIRST, then closures,
+        // keeps a hard merge constraint winning over a stale aligned closure on
+        // any section the merges can reach.
         let push_edge = |adj: &mut HashMap<SectionId, Vec<(StationRef, StationRef)>>,
                          a: StationRef,
                          b: StationRef| {
             adj.entry(a.section_id).or_default().push((a, b));
             adj.entry(b.section_id).or_default().push((b, a));
         };
+        let mut merge_adj: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
         for m in &self.station_merges {
-            push_edge(&mut adjacency, m.station_a, m.station_b);
+            push_edge(&mut merge_adj, m.station_a, m.station_b);
         }
+        let mut closure_adj: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
         for c in &self.loop_closures {
             if c.is_aligned {
-                push_edge(&mut adjacency, c.station_a, c.station_b);
+                push_edge(&mut closure_adj, c.station_a, c.station_b);
             }
         }
-        if adjacency.is_empty() {
+        if merge_adj.is_empty() && closure_adj.is_empty() {
             return;
         }
 
         // O(1) station coordinates via the per-section local-coord precompute,
         // so each visit is constant work instead of re-walking the section's
-        // shots (the old cascade's per-node O(depth) cost). Local coords are
-        // offset-independent, so this stays valid as offsets are mutated below.
+        // shots. Local coords are offset-independent, so this stays valid as
+        // offsets are mutated.
         let local = self.section_local_coords();
 
         // Authoritative anchors: the seeds + every datum-bearing section.
-        // Deterministic (sorted) frontier so a drifted, cyclic graph resolves
-        // identically every run.
         let mut authoritative: HashSet<SectionId> = HashSet::new();
         for &sid in seeds {
             authoritative.insert(sid);
@@ -1800,16 +1800,47 @@ impl Project {
         for zd in &self.zero_datums {
             authoritative.insert(zd.station_ref.section_id);
         }
-        let mut queue: VecDeque<SectionId> = authoritative.iter().copied().collect();
-        queue.make_contiguous().sort_unstable();
 
-        // Single BFS pass: each free section is reached exactly once and its
-        // offset set so its edge-station coincides with the already-anchored
-        // side. Exact and O(V + E), order-independent, with no iteration cap —
-        // it cannot silently under-converge the way the 20-iteration fixpoint
-        // could on a deep, adversarially-ordered chain. A redundant
-        // (cycle-closing) aligned closure is simply skipped once both ends are
-        // authoritative, leaving its residual — the loop misclosure — intact.
+        let sorted = |auth: &HashSet<SectionId>| {
+            let mut v: Vec<SectionId> = auth.iter().copied().collect();
+            v.sort_unstable();
+            v
+        };
+
+        // Phase 1: BFS over merges only, to full reachability.
+        let seed1 = sorted(&authoritative);
+        self.cascade_bfs(&merge_adj, &local, &mut authoritative, &seed1);
+
+        // Phase 2: aligned closures bridge to any component merges couldn't
+        // reach; merges within that component then continue. A redundant closure
+        // (both ends already authoritative) is skipped, leaving its residual —
+        // the loop misclosure — intact.
+        if !closure_adj.is_empty() {
+            let mut combined = merge_adj;
+            for (section, edges) in closure_adj {
+                combined.entry(section).or_default().extend(edges);
+            }
+            let seed2 = sorted(&authoritative);
+            self.cascade_bfs(&combined, &local, &mut authoritative, &seed2);
+        }
+    }
+
+    /// One BFS pass of the offset solver over a coincidence-edge `adjacency`,
+    /// starting from the already-`authoritative` sections in `seeds` order. Each
+    /// non-authoritative neighbour reached through a computable edge has its
+    /// section offset set so its station coincides with the anchored side, then
+    /// is itself marked authoritative and enqueued. A neighbour reached only
+    /// through a dangling/out-of-range edge (coords return `None`) is left alone
+    /// — it is not anchored or propagated, so it can't mis-position a chain
+    /// behind a broken reference.
+    fn cascade_bfs(
+        &mut self,
+        adjacency: &HashMap<SectionId, Vec<(StationRef, StationRef)>>,
+        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        authoritative: &mut HashSet<SectionId>,
+        seeds: &[SectionId],
+    ) {
+        let mut queue: VecDeque<SectionId> = seeds.iter().copied().collect();
         while let Some(section) = queue.pop_front() {
             let Some(neighbors) = adjacency.get(&section).cloned() else {
                 continue;
@@ -1819,7 +1850,7 @@ impl Project {
                     continue;
                 }
                 if let (Some((mx, my)), Some((tx, ty))) =
-                    (self.station_world_xy(mine, &local), self.station_world_xy(theirs, &local))
+                    (self.station_world_xy(mine, local), self.station_world_xy(theirs, local))
                 {
                     let dx = mx - tx;
                     let dy = my - ty;
@@ -1828,9 +1859,10 @@ impl Project {
                     if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
                         self.adjust_section_offset(theirs.section_id, dx, dy);
                     }
+                    // Anchor + propagate ONLY when the coincidence was computable.
+                    authoritative.insert(theirs.section_id);
+                    queue.push_back(theirs.section_id);
                 }
-                authoritative.insert(theirs.section_id);
-                queue.push_back(theirs.section_id);
             }
         }
     }

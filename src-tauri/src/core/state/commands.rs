@@ -1088,6 +1088,15 @@ impl AppState {
             ));
         }
 
+        // Reject non-finite geometry before it reaches the coordinate path (NaN/
+        // inf slips past the zero/negative-length checks below). This is the
+        // import/create-and-merge ingest path, alongside create_shot/update_shot.
+        if data.shots.iter().any(|s| !s.all_finite()) {
+            return CommandResult::failure(
+                "Section has a shot with a non-finite (NaN/inf) value".to_string(),
+            );
+        }
+
         // Validate shots using the section_id that will be assigned
         let section_id_for_validation = project.next_section_id;
         let mut warnings = Vec::new();
@@ -1899,6 +1908,14 @@ impl AppState {
 
     pub(super) fn move_station(&self, station_ref: StationRef, offset: Coordinates) -> CommandResult {
         self.with_project_mut(|project| {
+            // Reject a non-finite offset: move_station recomputes and writes raw
+            // shot geometry (length/azimuth/depth) from it, and the only numeric
+            // guard below is `new_len <= 0.0`, which is false for NaN and inf.
+            if !offset.x.is_finite() || !offset.y.is_finite() || !offset.z.is_finite() {
+                return CommandResult::failure(
+                    "Move offset has a non-finite (NaN/inf) value".to_string(),
+                );
+            }
             if project.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
                 && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
             {
@@ -1939,7 +1956,7 @@ impl AppState {
                 let new_depth_out = shot.depth_out + total_dz;
                 let new_dz = new_depth_out - shot.depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-                if new_len <= 0.0 {
+                if new_len <= 0.0 || !new_len.is_finite() {
                     return CommandResult::failure("Move would create zero-length shot".to_string());
                 }
                 let new_azi = if new_horizontal > 1e-9 {
@@ -1963,7 +1980,7 @@ impl AppState {
                 let new_depth_in = shot.depth_in + total_dz;
                 let new_dz = shot.depth_out - new_depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-                if new_len <= 0.0 {
+                if new_len <= 0.0 || !new_len.is_finite() {
                     return CommandResult::failure("Move would create zero-length shot".to_string());
                 }
                 let new_azi = if new_horizontal > 1e-9 {
