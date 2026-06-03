@@ -5843,6 +5843,58 @@ fn diagnose_naharon_merge_alignment() {
 }
 
 #[test]
+fn insert_before_and_after_agree_on_boundary_merge_ref() {
+    // insert_before(s1) and insert_after(s0) are the SAME physical insertion
+    // (a new shot in the array slot between s0 and s1), so a merge anchored
+    // exactly on the boundary station must end up referencing the same station
+    // index either way. A divergence is an off-by-one in one of the shifts.
+    fn build() -> (Project, SectionId, ShotId, ShotId) {
+        let mut p = Project::new("Boundary".to_string(), None);
+        let a = p
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        let b = p
+            .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+            .id;
+        // Merge B0 onto A's MIDDLE station (index 1) — the insertion boundary.
+        p.record_station_merge(StationMerge {
+            station_a: StationRef::new(a, 1),
+            station_b: StationRef::new(b, 0),
+            merged_at: Utc::now(),
+        });
+        let s0 = p.get_section(a).unwrap().shots[0].id;
+        let s1 = p.get_section(a).unwrap().shots[1].id;
+        (p, a, s0, s1)
+    }
+
+    let a_side_index = |p: &Project, a: SectionId| -> u32 {
+        let m = p
+            .station_merges
+            .iter()
+            .find(|m| m.station_a.section_id == a || m.station_b.section_id == a)
+            .expect("merge");
+        if m.station_a.section_id == a { m.station_a.station_index } else { m.station_b.station_index }
+    };
+
+    let (mut p_after, a, s0, _) = build();
+    p_after.insert_shot_after(a, s0, shot(10.0, 10.0, 3.0, 0.0, 0.0), None);
+    let after_idx = a_side_index(&p_after, a);
+
+    let (mut p_before, a2, _, s1) = build();
+    p_before.insert_shot_before(a2, s1, shot(10.0, 10.0, 3.0, 0.0, 0.0), None);
+    let before_idx = a_side_index(&p_before, a2);
+
+    assert_eq!(
+        after_idx, before_idx,
+        "insert_after and insert_before disagree on the boundary merge ref index \
+         (after={after_idx}, before={before_idx})"
+    );
+}
+
+#[test]
 fn redrive_offsets_after_load_heals_persisted_drift() {
     // Simulate a file persisted with a drifted offset (older redo bug) plus
     // empty transient caches (as after deserialization).

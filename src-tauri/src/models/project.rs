@@ -1284,62 +1284,29 @@ impl Project {
         if section.shots.len() >= Self::max_shots_per_section() {
             return None;
         }
-        // Compute displacement before data is consumed — the new shot shifts
-        // all stations after the insertion point by this displacement.
+
+        // Inserting before shot[pos] (pos > 0) is the SAME physical insertion as
+        // inserting after shot[pos-1]: same array slot, same station split. Route
+        // it through the one code path so the ref-shift / offset / cascade can't
+        // diverge between the two entry points (the off-by-one that re-pointed a
+        // boundary merge onto the new station and silently displaced its
+        // partner). Only the prepend case (pos == 0, no preceding shot) is
+        // genuinely distinct and handled below.
+        if pos > 0 {
+            let prev_id = section.shots[pos - 1].id;
+            return self.insert_shot_after(section_id, prev_id, data, forced_id);
+        }
+
+        // Prepend (pos == 0): the new shot becomes the section's first shot and
+        // every existing station shifts up by one; keep them in place by
+        // back-shifting the offset.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
         let shot = section.insert_shot_before_with_id(before_shot_id, data, forced_id)?;
         let shot_id = shot.id;
-        // insert_before at pos: new shot at pos, old station at pos becomes pos+1
-        self.shift_station_refs(section_id, pos as u32, 1);
-        // The new shot's displacement shifts all stations > pos in section-local
-        // coordinates.  We must decide which side to keep at its original
-        // absolute position (mirroring remove_shot_with_rewire):
-        //
-        //   pos == 0: all existing stations are tail → always adjust offset
-        //   pos > 0:  if tail is datum-anchored → adjust offset (tail stays,
-        //             head shifts); otherwise head stays, tail shifts.
-        //
-        // After adjustment, cascade to propagate alignment to merged partners.
+        self.shift_station_refs(section_id, 0, 1);
         if dx != 0.0 || dy != 0.0 {
-            if pos == 0 {
-                // Prepend: keep all existing stations in place.
-                self.adjust_section_offset(section_id, -dx, -dy);
-            } else {
-                // Mid-insert: check if the tail side is datum-anchored.
-                // After shift_station_refs, tail stations have index > pos.
-                let tail_anchored = self.zero_datums.iter().any(|zd| {
-                    zd.station_ref.section_id == section_id
-                        && zd.station_ref.station_index > pos as u32
-                }) || self.station_merges.iter().any(|m| {
-                    let (our, their) = if m.station_a.section_id == section_id {
-                        (m.station_a, m.station_b)
-                    } else if m.station_b.section_id == section_id {
-                        (m.station_b, m.station_a)
-                    } else {
-                        return false;
-                    };
-                    our.station_index > pos as u32
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                }) || self.loop_closures.iter().any(|c| {
-                    if !c.is_aligned { return false; }
-                    let (our, their) = if c.station_a.section_id == section_id {
-                        (c.station_a, c.station_b)
-                    } else if c.station_b.section_id == section_id {
-                        (c.station_b, c.station_a)
-                    } else {
-                        return false;
-                    };
-                    our.station_index > pos as u32
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                });
-
-                if tail_anchored {
-                    self.adjust_section_offset(section_id, -dx, -dy);
-                }
-            }
+            self.adjust_section_offset(section_id, -dx, -dy);
         }
         self.cascade_connection_offsets(&[section_id]);
         self.debug_assert_merge_alignment("insert_shot_before");
