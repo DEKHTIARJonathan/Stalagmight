@@ -68,6 +68,56 @@ impl LoadError {
     pub fn corrupt(message: impl Into<String>, path: &str) -> Self {
         Self::with_details("CORRUPT", message, path)
     }
+
+    /// Error when the OS denied filesystem access to the file — e.g. macOS
+    /// forgot a previously-granted folder permission after an OS/app update.
+    /// The `path` rides in `details` so the frontend can name the file.
+    pub fn permission(message: impl Into<String>, path: &str) -> Self {
+        Self::with_details("PERMISSION", message, path)
+    }
+}
+
+/// Prefix stamped onto a save `CommandResult` error when the failure is a
+/// filesystem permission denial, so the frontend can show folder-access
+/// guidance instead of a misleading "corrupted"/raw-OS message.
+pub(crate) const PERMISSION_DENIED_CODE: &str = "FS_PERMISSION_DENIED";
+
+/// True if `err` (or any error in its chain) is a filesystem permission
+/// denial. macOS forgets previously-granted folder access after an OS or
+/// app update, which surfaces as EPERM (os error 1) / EACCES (os error 13),
+/// a `PermissionDenied` io error, or a SQLite "unable to open database file".
+///
+/// Deliberately conservative on the string side: it must NOT classify a
+/// genuine corruption ("integrity check failed") as a permission problem,
+/// since the whole point is to stop showing the wrong remediation.
+pub(crate) fn is_permission_denied(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        // A typed io error decodes the platform errno for us: EACCES/EPERM on
+        // unix and ERROR_ACCESS_DENIED on Windows all map to PermissionDenied,
+        // so we never hardcode platform-specific error numbers.
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::PermissionDenied {
+                return true;
+            }
+        }
+        // String fallback for causes that don't reach us as a typed io error
+        // (e.g. SQLite reporting it cannot open the database file).
+        let msg = cause.to_string().to_ascii_lowercase();
+        if msg.contains("permission denied")
+            || msg.contains("operation not permitted")
+            || msg.contains("unable to open database file")
+        {
+            return true;
+        }
+        // Unix errno text that can show up in a stringified (non-typed) cause.
+        // Gated to unix: "(os error 1)"/"(os error 13)" are EPERM/EACCES there
+        // but unrelated codes on Windows.
+        #[cfg(unix)]
+        if msg.contains("(os error 1)") || msg.contains("(os error 13)") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Escape a string for JSON, handling quotes, backslashes, and control characters.

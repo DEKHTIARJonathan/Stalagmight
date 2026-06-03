@@ -1601,6 +1601,122 @@ fn test_save_project_failure_does_not_change_existing_file() {
     assert!(!temp_path.exists());
 }
 
+// ── #39: macOS lost-folder-access detection ──────────────────────────────
+// macOS forgets previously-granted folder access after an OS/app update,
+// which the user sees as a bogus "corrupted database" / save failure. The
+// backend classifies the underlying permission denial so the frontend can
+// show folder-access guidance instead.
+
+#[test]
+fn is_permission_denied_classifies_os_errors() {
+    use crate::core::loading::is_permission_denied;
+    // The portable io kind — covers ERROR_ACCESS_DENIED on Windows and
+    // EACCES/EPERM on unix without hardcoding platform errnos.
+    let kind_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+    assert!(is_permission_denied(&anyhow::Error::from(kind_err)));
+    // SQLite's wording when it can't open the file (what Database::open emits).
+    assert!(is_permission_denied(&anyhow::anyhow!(
+        "unable to open database file: /Users/x/cave.stalx"
+    )));
+    // EPERM (the "os error 1" from the bug report) and EACCES decode to
+    // PermissionDenied on unix; the libc constants keep this portable.
+    #[cfg(unix)]
+    {
+        assert!(is_permission_denied(&anyhow::Error::from(
+            std::io::Error::from_raw_os_error(libc::EPERM)
+        )));
+        assert!(is_permission_denied(&anyhow::Error::from(
+            std::io::Error::from_raw_os_error(libc::EACCES)
+        )));
+    }
+}
+
+#[test]
+fn is_permission_denied_rejects_unrelated_errors() {
+    use crate::core::loading::is_permission_denied;
+    // The crux of the fix: corruption must NOT be read as a permission
+    // problem, or we'd show the wrong remediation for a real data issue.
+    assert!(!is_permission_denied(&anyhow::anyhow!(
+        "Database integrity check failed: database disk image is malformed"
+    )));
+    assert!(!is_permission_denied(&anyhow::anyhow!("file is corrupted")));
+    assert!(!is_permission_denied(&anyhow::anyhow!("Failed to save project")));
+    // ENOENT is not a permission denial.
+    #[cfg(unix)]
+    assert!(!is_permission_denied(&anyhow::Error::from(
+        std::io::Error::from_raw_os_error(libc::ENOENT)
+    )));
+}
+
+#[cfg(unix)]
+#[test]
+fn save_into_unwritable_dir_reports_permission_code() {
+    use crate::core::loading::PERMISSION_DENIED_CODE;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = TempDir::new().unwrap();
+    let locked = temp_dir.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    // If we can still write despite 0o000 (e.g. running as root, as some CI
+    // does), the permission scenario doesn't apply — skip rather than
+    // false-fail. Restore perms first so TempDir cleanup can remove it.
+    if std::fs::File::create(locked.join(".probe")).is_ok() {
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        return;
+    }
+
+    let mut project = Project::new("Perm".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(locked.join("p.stalx")), false);
+
+    // Restore perms so TempDir's drop can clean up the directory.
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+
+    assert!(!result.success, "save into an unwritable dir should fail");
+    let err = result.error.unwrap_or_default();
+    assert!(
+        err.starts_with(PERMISSION_DENIED_CODE),
+        "expected permission code prefix, got: {err}"
+    );
+}
+
+#[test]
+fn save_into_missing_dir_is_not_a_permission_error() {
+    use crate::core::loading::PERMISSION_DENIED_CODE;
+
+    // A deleted/renamed save folder yields SQLite's generic "unable to open
+    // database file" too — but that's a vanished location, not a permission
+    // denial, so it must NOT be stamped with the permission code (which would
+    // wrongly show the user Privacy & Security guidance).
+    let temp_dir = TempDir::new().unwrap();
+    let missing = temp_dir.path().join("gone").join("p.stalx");
+
+    let mut project = Project::new("Missing".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![test_shot_data(1.0)],
+        ..Default::default()
+    });
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(missing), false);
+
+    assert!(!result.success, "save into a missing dir should fail");
+    let err = result.error.unwrap_or_default();
+    assert!(
+        !err.starts_with(PERMISSION_DENIED_CODE),
+        "missing dir should be an ordinary failure, got: {err}"
+    );
+}
+
 #[test]
 fn test_display_settings_fail_when_cache_lock_poisoned() {
     let state = AppState::new().unwrap();

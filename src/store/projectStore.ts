@@ -3,6 +3,7 @@ import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
+import { isPermissionError } from '../utils/saveErrors';
 import { useUIStore } from './uiStore';
 import { useGlobalViewStore } from './globalViewStore';
 import type {
@@ -614,6 +615,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           return { success: true };
         }
 
+        // Handle PERMISSION - folder-access guidance, not a corruption/error.
+        // Checked before CORRUPT so a denial doesn't masquerade as corruption.
+        if (error.code === 'PERMISSION') {
+          get().resetLoading();
+          useUIStore.getState().openDialog('save-permission', {
+            detail: error.message,
+            context: 'open',
+          });
+          return { success: false };
+        }
+
         // Handle CORRUPT - open recovery dialog instead of generic error
         if (error.code === 'CORRUPT' && error.details) {
           get().resetLoading();
@@ -774,7 +786,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       await get().refreshUndoState();
       set({ isDirty: false });
     } else {
-      set({ error: result.error ?? 'Failed to save project' });
+      const permission = isPermissionError(result.error);
+      // Never surface the raw "FS_PERMISSION_DENIED:" marker in error state
+      // (a status indicator/toast may render it, e.g. on autosave).
+      set({
+        error: permission
+          ? 'Folder access denied — check Privacy & Security settings'
+          : (result.error ?? 'Failed to save project'),
+      });
+      // A filesystem permission denial (e.g. macOS forgot folder access after
+      // an update) needs actionable guidance, not a raw error. Skip on autosave
+      // so we don't reopen the dialog on every debounced retry.
+      if (permission && !isAutosave) {
+        useUIStore.getState().openDialog('save-permission', {
+          detail: result.error,
+          context: 'save',
+        });
+      }
     }
     return result;
   },

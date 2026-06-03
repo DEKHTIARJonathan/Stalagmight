@@ -7,6 +7,7 @@ import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import { getErrorMessage } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
+import { isPermissionError } from '../utils/saveErrors';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -688,7 +689,9 @@ export function useKeyboardShortcuts() {
 
                   const store = useProjectStore.getState();
                   const result = await store.saveProject(finalPath);
-                  if (result && !result.success && result.error) {
+                  // saveProject already opens the folder-access guidance dialog
+                  // on a permission denial; don't replace it with the generic one.
+                  if (result && !result.success && result.error && !isPermissionError(result.error)) {
                     openDialog('error', { message: result.error, title: 'Save Failed' });
                   }
                 }

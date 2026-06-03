@@ -5,6 +5,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { getErrorMessage } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
+import { isPermissionError } from '../utils/saveErrors';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -78,7 +79,9 @@ export function useProject() {
       }
 
       const result = await store.saveProject(finalPath);
-      if (result && !result.success && result.error) {
+      // saveProject already opens the folder-access guidance dialog on a
+      // permission denial; don't replace it with the generic error dialog.
+      if (result && !result.success && result.error && !isPermissionError(result.error)) {
         openDialog('error', { message: result.error, title: 'Save Failed' });
       }
       return result;
@@ -91,7 +94,7 @@ export function useProject() {
       ? await store.saveProject()
       : await handleSaveProjectAs();
 
-    if (result && !result.success && result.error) {
+    if (result && !result.success && result.error && !isPermissionError(result.error)) {
       openDialog('error', { message: result.error, title: 'Save Failed' });
     }
     return result;
