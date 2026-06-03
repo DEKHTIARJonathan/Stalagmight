@@ -24,6 +24,11 @@ import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
   const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseCompass, parseGpx, setConfig } = useProjectStore();
+  const integrityIssues = useProjectStore((s) => s.integrityIssues);
+  const checkProjectIntegrity = useProjectStore((s) => s.checkProjectIntegrity);
+  const repairProjectIntegrity = useProjectStore((s) => s.repairProjectIntegrity);
+  const dismissIntegrityIssues = useProjectStore((s) => s.dismissIntegrityIssues);
+  const [repairingIntegrity, setRepairingIntegrity] = useState(false);
   const {
     view,
     setView,
@@ -99,6 +104,14 @@ function App() {
       void initTelemetry(config.general.telemetry_enabled);
     }
   }, [config?.general.telemetry_enabled]);
+
+  // After a project loads, check its structural integrity so corruption already
+  // on disk (older versions / external edits) surfaces a warn + repair banner (#17).
+  useEffect(() => {
+    if (project?.file_path && !loading.isLoading) {
+      void checkProjectIntegrity();
+    }
+  }, [project?.file_path, loading.isLoading, checkProjectIntegrity]);
 
   // Hide splash once config has loaded (or immediately if splash is disabled)
   useEffect(() => {
@@ -394,8 +407,53 @@ function App() {
     void store.updateConfig(nextConfig);
   }, []);
 
+  const handleRepairIntegrity = async () => {
+    setRepairingIntegrity(true);
+    try {
+      const fixed = await repairProjectIntegrity();
+      useUIStore.getState().showToast(
+        `Repaired ${fixed} structural issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`,
+        'integrity-repair'
+      );
+    } finally {
+      setRepairingIntegrity(false);
+    }
+  };
+
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      {/* Structural-integrity warning banner (corruption found on load) */}
+      {integrityIssues.length > 0 && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="alert"
+          data-testid="integrity-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            This project has {integrityIssues.length} structural{' '}
+            {integrityIssues.length === 1 ? 'issue' : 'issues'} (dangling references).
+            <span className="text-text-secondary font-normal" title={integrityIssues.join('\n')}>
+              {' '}Hover for details.
+            </span>
+          </span>
+          <button
+            onClick={handleRepairIntegrity}
+            disabled={repairingIntegrity}
+            className="px-3 py-1 rounded bg-accent text-white text-xs disabled:opacity-50"
+            data-testid="integrity-repair-button"
+          >
+            {repairingIntegrity ? 'Repairing…' : 'Repair'}
+          </button>
+          <button
+            onClick={dismissIntegrityIssues}
+            className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+            data-testid="integrity-dismiss-button"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Splash screen overlay */}
       {splashMounted && (
         <SplashScreen

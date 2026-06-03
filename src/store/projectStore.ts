@@ -201,6 +201,14 @@ interface ProjectStore {
   refreshProjectState: () => Promise<void>;
   /** Check if a shot (by section_id + shot index) is frozen */
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
+  /** Structural-integrity issues found in the open project (empty = sound). */
+  integrityIssues: string[];
+  /** Re-check the open project's structural integrity, updating integrityIssues. */
+  checkProjectIntegrity: () => Promise<string[]>;
+  /** Repair structural integrity; returns the number of issues fixed and clears integrityIssues. */
+  repairProjectIntegrity: () => Promise<number>;
+  /** Dismiss the integrity warning without repairing. */
+  dismissIntegrityIssues: () => void;
   refreshWarnings: () => Promise<void>;
   resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
   resolveAllWarnings: () => Promise<number>;
@@ -354,6 +362,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   frozenShots: [],
   warnings: [],
   recentProjects: [],
+  integrityIssues: [],
   config: null,
   loading: { ...initialLoadingState },
   error: null,
@@ -919,6 +928,36 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       console.error('Failed to load recent projects:', e);
     }
   },
+
+  checkProjectIntegrity: async () => {
+    try {
+      const issues = await invokeIpc<string[]>('check_project_integrity', undefined, {
+        purpose: 'check project structural integrity after load',
+      });
+      set({ integrityIssues: issues });
+      return issues;
+    } catch (e) {
+      console.error('Failed to check project integrity:', e);
+      return [];
+    }
+  },
+
+  repairProjectIntegrity: async () => {
+    try {
+      const fixed = await invokeIpc<number>('repair_project_integrity', undefined, {
+        purpose: 'repair project structural integrity',
+      });
+      set({ integrityIssues: [] });
+      // Repair mutates the project; refresh derived state so the UI reflects it.
+      await get().refreshProjectState();
+      return fixed;
+    } catch (e) {
+      console.error('Failed to repair project integrity:', e);
+      return 0;
+    }
+  },
+
+  dismissIntegrityIssues: () => set({ integrityIssues: [] }),
 
   removeFromRecentProjects: async (path: string) => {
     try {

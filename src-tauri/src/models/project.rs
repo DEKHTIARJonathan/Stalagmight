@@ -6278,6 +6278,46 @@ impl Project {
             .iter()
             .any(|v| v.severity == ViolationSeverity::Critical)
     }
+
+    /// Drop every structurally-invalid cross-reference (dangling merges, loop
+    /// closures, zero datums) and orphaned offset/comment entries, returning the
+    /// violations that were repaired (empty = nothing to do). Valid data is left
+    /// untouched. Used by the load-time "warn and offer repair" path.
+    pub fn repair_structural_integrity(&mut self) -> Vec<IntegrityViolation> {
+        let violations = self.check_structural_integrity();
+        if violations.is_empty() {
+            return violations;
+        }
+
+        // Snapshot section id → station count so the retain closures don't need
+        // to borrow `self` while mutating its fields.
+        let counts: HashMap<SectionId, u32> = self
+            .sections
+            .iter()
+            .map(|s| (s.id, s.shots.len() as u32))
+            .collect();
+        let valid = |sr: &StationRef| {
+            counts
+                .get(&sr.section_id)
+                .is_some_and(|&max| sr.station_index <= max)
+        };
+
+        self.station_merges
+            .retain(|m| valid(&m.station_a) && valid(&m.station_b));
+        self.loop_closures
+            .retain(|c| valid(&c.station_a) && valid(&c.station_b));
+        self.zero_datums.retain(|z| valid(&z.station_ref));
+        self.section_offsets
+            .retain(|section_id, _| counts.contains_key(section_id));
+        self.station_offsets.retain(|sr, _| valid(sr));
+        self.station_comments.retain(|sr, _| valid(sr));
+
+        // Merges may have been dropped; the adjacency cache is now stale.
+        self.merge_adjacency_cache.clear();
+        self.touch();
+
+        violations
+    }
 }
 
 #[cfg(test)]

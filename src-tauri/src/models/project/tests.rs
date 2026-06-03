@@ -5905,6 +5905,36 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
 }
 
 #[test]
+fn repair_structural_integrity_drops_dangling_refs_and_keeps_valid() {
+    let (mut project, a, b) = integrity_fixture();
+    // Corrupt: a dangling merge, closure, datum, plus orphan offset/comment.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(9999, 0),
+        merged_at: Utc::now(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(9999, 0),
+        gps: GpsCoordinates::new(1.0, 2.0, 3.0).unwrap(),
+    });
+    project.section_offsets.insert(9999, (1.0, 1.0));
+
+    let valid_merges_before = project.station_merges.len();
+    let repaired = project.repair_structural_integrity();
+
+    // It reported the violations it fixed and the project is now sound.
+    assert!(!repaired.is_empty());
+    assert!(project.check_structural_integrity().is_empty());
+    assert!(!project.has_critical_integrity_violations());
+    // The originally-valid merge/datum/closure survive (only the bad ones dropped).
+    assert_eq!(project.station_merges.len(), valid_merges_before - 1);
+    assert_eq!(project.loop_closures.len(), 1);
+    assert!(project.get_section(a).is_some() && project.get_section(b).is_some());
+    // Repairing a clean project is a no-op.
+    assert!(project.repair_structural_integrity().is_empty());
+}
+
+#[test]
 fn integrity_clean_project_has_no_violations() {
     let (project, _, _) = integrity_fixture();
     assert!(project.check_structural_integrity().is_empty());

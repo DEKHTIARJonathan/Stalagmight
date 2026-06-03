@@ -14,6 +14,21 @@ pub fn get_project_warnings(state: State<AppState>) -> Vec<ProjectWarning> {
     get_project_warnings_impl(state.inner())
 }
 
+/// Structural-integrity violation messages for the open project (critical
+/// first). Empty when the project is sound. The frontend uses a non-empty
+/// result after load to warn the user and offer a repair.
+#[tauri::command]
+pub fn check_project_integrity(state: State<AppState>) -> Vec<String> {
+    state.integrity_violation_messages()
+}
+
+/// Repair the open project's structural integrity, returning the number of
+/// violations fixed. The project is left dirty so the user can save the repair.
+#[tauri::command]
+pub fn repair_project_integrity(state: State<AppState>) -> usize {
+    state.repair_open_project_integrity()
+}
+
 pub(crate) fn get_project_warnings_impl(state: &AppState) -> Vec<ProjectWarning> {
     let Some(project) = state.get_project_state() else {
         return Vec::new();

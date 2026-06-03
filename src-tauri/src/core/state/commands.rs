@@ -4,7 +4,7 @@ use crate::core::{Command, CommentHolder, CommandResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
     Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
-    FEATURE_ID_STRIDE,
+    ViolationSeverity, FEATURE_ID_STRIDE,
 };
 
 use super::AppState;
@@ -85,6 +85,34 @@ impl AppState {
                 | Command::UpdateSectionMetadata { .. }
                 | Command::SetShotReference { .. }
         )
+    }
+
+    /// Structural-integrity violation messages for the open project, critical
+    /// first. Empty when the project is sound or none is open. Used by the
+    /// load-time "warn and offer repair" surface.
+    pub fn integrity_violation_messages(&self) -> Vec<String> {
+        let Some(project) = self.get_project_state() else {
+            return Vec::new();
+        };
+        let mut violations = project.check_structural_integrity();
+        violations.sort_by_key(|v| match v.severity {
+            ViolationSeverity::Critical => 0,
+            ViolationSeverity::Warning => 1,
+        });
+        violations.into_iter().map(|v| v.message).collect()
+    }
+
+    /// Repair the open project's structural integrity (drop dangling refs and
+    /// orphans), returning the number of violations fixed.
+    pub fn repair_open_project_integrity(&self) -> usize {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return 0;
+        };
+        project.repair_structural_integrity().len()
     }
 
     /// Execute a command and return the result

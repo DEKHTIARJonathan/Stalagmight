@@ -1214,6 +1214,8 @@ pub fn run() {
             commands::config::get_display_setting,
             // Validation
             commands::validation::get_project_warnings,
+            commands::validation::check_project_integrity,
+            commands::validation::repair_project_integrity,
             commands::validation::resolve_warning,
             commands::validation::resolve_all_warnings,
             commands::validation::unresolve_warning,

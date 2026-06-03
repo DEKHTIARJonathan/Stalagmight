@@ -285,6 +285,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
 
+      // Structural-integrity issues returned by check_project_integrity. Tests
+      // seed these via __MOCK_SET_INTEGRITY_ISSUES__; repair clears them.
+      let mockIntegrityIssues: string[] = [];
+      (window as unknown as Record<string, unknown>).__MOCK_SET_INTEGRITY_ISSUES__ = (
+        issues: string[]
+      ) => {
+        mockIntegrityIssues = Array.isArray(issues) ? issues : [];
+      };
+
       // Expose currentProject setter for E2E tests (allows injecting test fixtures)
       (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
         setCurrentProject: (project: typeof currentProject) => {
@@ -2562,6 +2571,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'get_warnings':
           case 'get_project_warnings':
             return [];
+
+          case 'check_project_integrity':
+            return mockIntegrityIssues;
+
+          case 'repair_project_integrity': {
+            const fixed = mockIntegrityIssues.length;
+            mockIntegrityIssues = [];
+            return fixed;
+          }
 
           case 'remove_from_recent_projects':
             // Mock remove from recent - just return success

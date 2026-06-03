@@ -1087,6 +1087,22 @@ impl AppState {
         // Compute warnings using the local db reference (before finalization)
         progress.start_phase(LoadingPhase::ValidatingData);
         let warnings = self.compute_project_warnings(&project, Some(&db));
+
+        // Surface structural corruption present on disk (older versions /
+        // external edits). The frontend re-checks after load and offers a
+        // repair; here we just record it. (#17)
+        let integrity = project.check_structural_integrity();
+        if !integrity.is_empty() {
+            tracing::warn!(
+                count = integrity.len(),
+                purpose = "flag structural corruption on load",
+                "Loaded project has structural-integrity violations"
+            );
+            for violation in &integrity {
+                tracing::warn!(category = %violation.category, "{}", violation.message);
+            }
+        }
+
         progress.heartbeat(LoadingPhase::ValidatingData);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::ValidatingData);
