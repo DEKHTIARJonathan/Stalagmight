@@ -417,6 +417,58 @@ fn prop_uuid_survives_local_insert(seed: u64) {
     );
 }
 
+/// True if any stored cross-reference dangles (its anchoring shot is gone).
+/// With stable identity this is the failure an interleaved insert/delete must
+/// never produce — a missed positional shift used to leave one silently.
+fn has_dangling_ref(p: &Project) -> bool {
+    p.check_structural_integrity()
+        .iter()
+        .any(|v| v.category.starts_with("dangling_"))
+}
+
+/// Property: a random interleaving of shot inserts and deletes on a merged
+/// project never strands a cross-reference (no dangling anchor after ANY edit)
+/// and the surviving merge stays colocated. This is the core C1 invariant:
+/// anchors track their physical station across structural edits without the
+/// positional ref-shifting that used to mispoint them.
+fn prop_anchors_survive_interleaved_edits(seed: u64) {
+    let mut rng = Rng::new(seed);
+    let mut p = gen_project(&mut rng, Kind::Merge);
+    // Canonicalize anchors, exactly as a load does, then confirm it starts sound.
+    p.redrive_offsets_after_load();
+    assert!(!has_dangling_ref(&p), "seed={seed}: project starts with a dangling ref");
+
+    let root_id = p.sections[0].id;
+    let ops = rng.range(3, 12);
+    for _ in 0..ops {
+        let Some(shots_len) = p.get_section(root_id).map(|s| s.shots.len()) else { break };
+        if shots_len == 0 {
+            break;
+        }
+        let pick = rng.below(shots_len);
+        let shot_id = p.get_section(root_id).unwrap().shots[pick].id;
+        if shots_len > 1 && rng.below(2) == 0 {
+            // Delete the picked shot (rewires/removes any ref on its station).
+            let _ = p.remove_shot_with_rewire(root_id, shot_id);
+        } else {
+            // Insert a fresh shot after the picked one.
+            let data = gen_run(&mut rng, 1, 0.0).0.into_iter().next().unwrap();
+            p.insert_shot_after(root_id, shot_id, data, None);
+        }
+        assert!(
+            !has_dangling_ref(&p),
+            "seed={seed}: an interleaved edit stranded a cross-reference:\n{:#?}",
+            p.check_structural_integrity()
+        );
+    }
+    // Any merge that survived the edits must still be colocated (the offset
+    // cascade kept its endpoints coincident — no silent drift).
+    assert!(
+        p.check_merge_alignment().is_empty(),
+        "seed={seed}: a merge drifted after interleaved edits:\n{p:#?}"
+    );
+}
+
 /// Re-run a single seed across all properties — for pinning a discovered failure
 /// as a deterministic regression test.
 #[expect(dead_code)]
@@ -430,6 +482,7 @@ fn run_seed(seed: u64) {
     }
     prop_edit_converges(seed);
     prop_uuid_survives_local_insert(seed);
+    prop_anchors_survive_interleaved_edits(seed);
 }
 
 const KINDS_ALL: [Kind; 4] = [Kind::Plain, Kind::Datum, Kind::Merge, Kind::DupNames];
@@ -472,6 +525,14 @@ fn fuzz_uuid_survives_local_insert() {
     for i in 0..iters() {
         let seed = i ^ 0xC011AB_0005;
         prop_uuid_survives_local_insert(seed);
+    }
+}
+
+#[test]
+fn fuzz_anchors_survive_interleaved_edits() {
+    for i in 0..iters() {
+        let seed = i ^  0xC011AB_0006;
+        prop_anchors_survive_interleaved_edits(seed);
     }
 }
 

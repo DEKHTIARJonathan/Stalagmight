@@ -2877,6 +2877,85 @@ fn insert_shot_after_shifts_station_refs() {
     assert!(project.key_is_ref(&closure.station_b, StationRef::new(section_b, 1)));
 }
 
+/// C1 regression: inserting a shot UPSTREAM of a merge must keep the merge on
+/// the SAME physical station — the stored anchor never moves, it just resolves
+/// to a higher index — and must NOT silently re-point onto the new in-range
+/// station the insert created. This is the exact failure mode positional refs
+/// produced (a missed shift mispointed the merge); anchors make it impossible.
+#[test]
+fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
+    let mut project = Project::new("StableId".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    // Merge A:1 ↔ B:0, then canonicalize anchors as a load would.
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    project.reanchor_station_refs();
+    assert!(project.check_merge_alignment().is_empty(), "merge starts aligned");
+
+    let a_endpoint = |p: &Project| -> StationKey {
+        let m = &p.station_merges[0];
+        if m.station_a.section_id == a { m.station_a.clone() } else { m.station_b.clone() }
+    };
+    assert!(project.key_is_ref(&a_endpoint(&project), StationRef::new(a, 1)));
+
+    // Insert a shot at the FRONT of A. The merge's physical station (old A:1) is
+    // now A:2; B:0 is untouched.
+    let first = project.get_section(a).unwrap().shots[0].id;
+    project
+        .insert_shot_before(a, first, shot(45.0, 45.0, 3.0, 0.0, 0.0), None)
+        .expect("insert at front of A");
+
+    assert!(
+        project.key_is_ref(&a_endpoint(&project), StationRef::new(a, 2)),
+        "merge must follow its physical station to A:2, not stay at the new A:1"
+    );
+    assert!(
+        !project.key_is_ref(&a_endpoint(&project), StationRef::new(a, 1)),
+        "merge must NOT silently re-point onto the freshly-inserted in-range station A:1"
+    );
+    // And the partner stays colocated (the offset cascade kept them coincident).
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "merge endpoints stay colocated after the upstream insert"
+    );
+}
+
+/// C1 regression: a stored anchor whose shot was deleted is flagged Critical by
+/// the integrity check (a dangling reference), where a positional ref could only
+/// ever be out-of-range — never a silent in-range mispoint.
+#[test]
+fn dangling_anchor_flagged_by_integrity() {
+    let mut project = Project::new("Dangling".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project.reanchor_station_refs();
+    assert!(project.check_structural_integrity().is_empty(), "sound to start");
+
+    // Forge a merge endpoint onto a shot UUID that doesn't exist in the section.
+    project.station_merges[0].station_a =
+        StationKey::new(a, StationAnchor::AfterShot("does-not-exist".to_string()));
+    let v = project.check_structural_integrity();
+    assert!(
+        v.iter().any(|x| x.category == "dangling_merge_ref"),
+        "dangling anchor must be flagged: {v:?}"
+    );
+}
+
 #[test]
 fn calculate_penetration_with_zero_datum() {
     let mut project = Project::new("Penetration".to_string(), None);
