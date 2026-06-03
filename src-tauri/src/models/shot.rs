@@ -245,6 +245,43 @@ impl Shot {
         !opts.into_iter().flatten().any(|v| !v.is_finite())
     }
 
+    /// Replace any non-finite (NaN/±inf) numeric field with a safe finite value:
+    /// the required core fields become `0.0`, optional fields become `None`.
+    /// Returns true if anything was changed. Used at the load boundary to
+    /// neutralize geometry corrupt-on-disk before it can poison coordinate
+    /// computation (a single NaN propagates through the whole cascade); the
+    /// degenerate-but-finite result is localized and visible.
+    pub fn sanitize_non_finite(&mut self) -> bool {
+        if self.all_finite() {
+            return false;
+        }
+        for f in [
+            &mut self.azimuth_in,
+            &mut self.azimuth_out,
+            &mut self.length,
+            &mut self.depth_in,
+            &mut self.depth_out,
+        ] {
+            if !f.is_finite() {
+                *f = 0.0;
+            }
+        }
+        for o in [
+            &mut self.pitch_in,
+            &mut self.pitch_out,
+            &mut self.left,
+            &mut self.right,
+            &mut self.up,
+            &mut self.down,
+            &mut self.temperature,
+        ] {
+            if matches!(o, Some(v) if !v.is_finite()) {
+                *o = None;
+            }
+        }
+        true
+    }
+
     /// Create a new shot from shot data.  A fresh v4 UUID is minted for
     /// collaboration identity (see `Shot::uuid`); call [`Shot::with_uuid`]
     /// instead when restoring a shot from a persisted UUID.

@@ -1925,6 +1925,11 @@ impl AppState {
 
     pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
         self.with_project_mut(|project| {
+            if !offset.is_finite() {
+                return CommandResult::failure(
+                    "Move offset must be finite (no NaN/inf)".to_string(),
+                );
+            }
             if !project.sections.iter().any(|s| s.id == section_id) {
                 return CommandResult::failure("Section not found".to_string());
             }
@@ -1951,6 +1956,11 @@ impl AppState {
 
     pub(super) fn move_segment(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
         self.with_project_mut(|project| {
+            if !offset.is_finite() {
+                return CommandResult::failure(
+                    "Move offset must be finite (no NaN/inf)".to_string(),
+                );
+            }
             // Validate section exists
             if !project.sections.iter().any(|s| s.id == section_id) {
                 return CommandResult::failure("Section not found".to_string());

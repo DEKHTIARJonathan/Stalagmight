@@ -1799,14 +1799,32 @@ impl Database {
                     ))
                 })?;
 
+                let mut sanitized_shots = 0usize;
                 for row in shot_rows {
-                    let (section_id, shot) = row?;
+                    let (section_id, mut shot) = row?;
+                    // Neutralize geometry corrupt-on-disk at the load boundary: a
+                    // single non-finite (NaN/inf) value would otherwise propagate
+                    // through the offset cascade and break the whole survey. The
+                    // degenerate-but-finite result is localized and visible. (Our own
+                    // save can't write NaN — SQLite coerces it to NULL, which the
+                    // NOT NULL columns reject — so this guards inf, hand-edited DBs,
+                    // and any future nullable geometry column.)
+                    if shot.sanitize_non_finite() {
+                        sanitized_shots += 1;
+                    }
                     if let Some(&idx) = section_by_id.get(&section_id) {
                         sections[idx].shots.push(shot);
                     }
                     // (rows for unknown sections are silently dropped —
                     // matches the legacy `WHERE section_id = ?` filter
                     // which never returned orphan rows in the first place.)
+                }
+                if sanitized_shots > 0 {
+                    tracing::warn!(
+                        sanitized_shots,
+                        purpose = "block corruption at the source",
+                        "Replaced non-finite (NaN/inf) shot geometry with finite defaults on load"
+                    );
                 }
 
                 // Advance each section's next_shot_id past its loaded

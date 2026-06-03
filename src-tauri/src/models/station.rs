@@ -117,6 +117,23 @@ impl Coordinates {
         Self { x, y, z }
     }
 
+    /// True if all three components are finite (no NaN/±inf).
+    pub fn is_finite(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
+
+    /// Construct only if every component is finite. Use at ingest boundaries
+    /// (offsets/moves) so a non-finite value can't enter coordinate computation,
+    /// where it silently poisons every downstream distance/alignment comparison.
+    pub fn new_checked(x: f64, y: f64, z: f64) -> Result<Self, String> {
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            return Err(format!(
+                "Coordinates must be finite, got ({x}, {y}, {z})"
+            ));
+        }
+        Ok(Self { x, y, z })
+    }
+
     /// Calculate distance to another coordinate
     pub fn distance_to(&self, other: &Coordinates) -> f64 {
         let dx = other.x - self.x;

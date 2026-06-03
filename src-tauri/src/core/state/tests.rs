@@ -700,6 +700,71 @@ fn unmerge_converts_orphaned_bridge_closure() {
 }
 
 #[test]
+fn shot_sanitize_non_finite_neutralizes_geometry() {
+    // The load-boundary sanitizer (used by the SQLite loader) replaces non-finite
+    // core fields with 0.0 and non-finite optional fields with None.
+    use crate::models::ShotData;
+    let mut shot = crate::models::Shot::new(
+        1,
+        ShotData {
+            azimuth_in: 1.0,
+            azimuth_out: 1.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        },
+    );
+    shot.length = f64::NAN;
+    shot.depth_out = f64::INFINITY;
+    shot.pitch_in = Some(f64::NEG_INFINITY);
+    shot.left = Some(2.0); // finite optional stays
+
+    assert!(shot.sanitize_non_finite(), "must report a change");
+    assert!(shot.all_finite(), "result must be finite");
+    assert_eq!(shot.length, 0.0);
+    assert_eq!(shot.depth_out, 0.0);
+    assert_eq!(shot.pitch_in, None);
+    assert_eq!(shot.left, Some(2.0), "finite optional preserved");
+    assert!(!shot.sanitize_non_finite(), "already-finite shot reports no change");
+}
+
+#[test]
+fn coordinates_new_checked_rejects_non_finite() {
+    assert!(Coordinates::new_checked(1.0, 2.0, 3.0).is_ok());
+    assert!(Coordinates::new_checked(f64::NAN, 0.0, 0.0).is_err());
+    assert!(Coordinates::new_checked(0.0, f64::INFINITY, 0.0).is_err());
+    assert!(Coordinates::new_checked(0.0, 0.0, f64::NEG_INFINITY).is_err());
+}
+
+#[test]
+fn move_section_and_segment_reject_non_finite_offset() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let nan = Coordinates::new(f64::NAN, 0.0, 0.0);
+    assert!(!state.execute(Command::MoveSection { section_id: a, offset: nan }).success);
+    assert!(!state.execute(Command::MoveSegment { section_id: a, offset: nan }).success);
+    // A finite move still works.
+    assert!(state
+        .execute(Command::MoveSegment {
+            section_id: a,
+            offset: Coordinates::new(1.0, 2.0, 0.0),
+        })
+        .success);
+}
+
+#[test]
 fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
     // A merge is rejected only when the two sections are already RIGIDLY connected
     // (merges or ALIGNED closures). An inert (unaligned) closure does not constrain
