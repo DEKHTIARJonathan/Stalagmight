@@ -544,7 +544,41 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        self.undo_inner()
+        let result = self.undo_inner();
+        if result.success {
+            self.reconcile_geometry_after_history();
+        }
+        result
+    }
+
+    /// After an undo/redo restores or replays state, re-derive section offsets
+    /// so merged stations stay colocated.
+    ///
+    /// Several history-apply paths re-implement only a *subset* of the forward
+    /// operation (e.g. redo of an inserted shot replays the ref-shift but omits
+    /// the offset cascade that the forward insert and the undo both run),
+    /// leaving merged partners drifted. Rather than keep every one of those
+    /// paths perfectly in sync by hand — the source of this class of bugs —
+    /// treat section offsets as *derived* state and reconcile them once here,
+    /// after the history operation completes. This runs only on user-initiated
+    /// undo/redo, never inside the bulk-import loop, and is a no-op when nothing
+    /// drifted, so it doesn't reintroduce the per-mutation alignment cost.
+    fn reconcile_geometry_after_history(&self) {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return;
+        };
+        let fixed = project.realign_merges();
+        if fixed > 0 {
+            tracing::warn!(
+                fixed,
+                purpose = "self-heal geometry after undo/redo",
+                "Re-aligned drifted station merges after a history operation"
+            );
+        }
     }
 
     /// Undo implementation (caller must hold command_lock)
@@ -943,7 +977,11 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        self.redo_inner()
+        let result = self.redo_inner();
+        if result.success {
+            self.reconcile_geometry_after_history();
+        }
+        result
     }
 
     /// Redo implementation (caller must hold command_lock)

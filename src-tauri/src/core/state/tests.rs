@@ -640,6 +640,71 @@ fn test_create_section() {
 }
 
 #[test]
+fn redo_insert_shot_keeps_merged_stations_aligned() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Align".to_string(), location: None });
+
+    // Section A (id 0): two shots → stations A0, A1, A2.
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        })
+        .section_id
+        .unwrap();
+    // Section B (id 1): one shot → stations B0, B1.
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Anchor A at a zero datum, then merge B0 onto A2 (B hangs off A's tail).
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    let merge = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merge.success, "{:?}", merge.error);
+
+    let aligned =
+        |state: &AppState| state.get_project_state().unwrap().check_merge_alignment().is_empty();
+    assert!(aligned(&state), "merge should start aligned");
+
+    // Insert a shot after A's first shot (between A1 and A2): shifts the tail and
+    // the merge point. The forward path cascades B back into alignment.
+    let after_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+    let ins = state.execute(Command::CreateShot {
+        section_id: a,
+        shot: test_shot_data(6.0),
+        after_shot_id: Some(after_id),
+        before_shot_id: None,
+    });
+    assert!(ins.success, "{:?}", ins.error);
+    assert!(aligned(&state), "forward insert should stay aligned");
+
+    // Undo (already correct) then redo — redo used to omit the offset cascade and
+    // leave B drifted tens of metres. The post-history reconcile must prevent it.
+    assert!(state.undo().success);
+    assert!(aligned(&state), "undo should stay aligned");
+    assert!(state.redo().success);
+    assert!(aligned(&state), "redo must not desync the merge geometry");
+}
+
+#[test]
 fn test_create_section_returns_id() {
     let state = AppState::new().unwrap();
 
