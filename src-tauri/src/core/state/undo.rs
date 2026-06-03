@@ -1,6 +1,6 @@
 use crate::core::{Command, CommandResult, UndoData};
 use crate::models::{
-    ClosureStrategy, Coordinates, Section, SectionData, SectionId,
+    ClosureStrategy, Section, SectionData, SectionId,
     SectionUpdates, Shot, ShotData, ShotId, ShotUpdates,
 };
 
@@ -321,19 +321,14 @@ impl AppState {
             }
 
             // Move commands use inverse commands
-            Command::MoveSection { section_id, offset } => {
-                // Inverse is moving back by negative offset
-                UndoData::InverseCommand(Command::MoveSection {
-                    section_id: *section_id,
-                    offset: Coordinates::new(-offset.x, -offset.y, -offset.z),
-                })
-            }
-
-            Command::MoveSegment { section_id, offset } => {
-                // Capture affected sections and their previous offsets at execution time
-                // so that undo/redo is correct even if the connectivity graph changes later.
-                // Filter to existing sections to avoid stale merges/closures referencing
-                // deleted sections (matches move_segment() filtering).
+            // MoveSection and MoveSegment both move the whole rigid-connected group
+            // (MoveSection delegates to move_segment), so both capture every affected
+            // section and its previous offset at execution time — undo/redo stays
+            // correct even if the connectivity graph changes later. Filter to existing
+            // sections to avoid stale merges/closures referencing deleted sections
+            // (matches move_segment()'s own filtering).
+            Command::MoveSection { section_id, offset }
+            | Command::MoveSegment { section_id, offset } => {
                 let existing: std::collections::HashSet<SectionId> =
                     project.sections.iter().map(|s| s.id).collect();
                 let connected: Vec<SectionId> = project

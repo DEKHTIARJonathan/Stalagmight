@@ -891,12 +891,6 @@ impl Project {
             .any(|sid| self.zero_datums.iter().any(|zd| zd.station_ref.section_id == *sid))
     }
 
-    /// Does this specific section directly hold a zero datum?
-    pub(crate) fn section_has_direct_datum(&self, id: SectionId) -> bool {
-        self.zero_datums
-            .iter()
-            .any(|zd| zd.station_ref.section_id == id)
-    }
 
     /// Assert that all merge points are colocated (within 1cm tolerance).
     /// Only active in debug builds — no-op in release.

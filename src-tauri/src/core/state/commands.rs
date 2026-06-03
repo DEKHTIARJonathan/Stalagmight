@@ -2037,34 +2037,18 @@ impl AppState {
     }
 
     pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
-        self.with_project_mut(|project| {
-            if !offset.is_finite() {
-                return CommandResult::failure(
-                    "Move offset must be finite (no NaN/inf)".to_string(),
-                );
-            }
-            if !project.sections.iter().any(|s| s.id == section_id) {
-                return CommandResult::failure("Section not found".to_string());
-            }
-
-            if project.section_has_direct_datum(section_id)
-                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-            {
-                return CommandResult::failure(
-                    "Cannot move a section that directly holds a zero datum".to_string(),
-                );
-            }
-
-            project.adjust_section_offset(section_id, offset.x, offset.y);
-            project.touch();
-            tracing::debug!(
-                ?section_id,
-                ?offset,
-                purpose = "reposition section for alignment",
-                "Section moved"
-            );
-            CommandResult::success()
-        })
+        // "Adjust Position" on a section moves the WHOLE rigid group it belongs to
+        // (its merge partners and aligned-closure-connected sections), not just this
+        // one section. A merged section is rigidly bound to its partner: moving it
+        // alone would shove its merged station off the partner's, and the
+        // post-command geometry reconcile would then either snap it back (silently
+        // discarding the move when this isn't the group's min-id anchor) or drag the
+        // partner along. Moving the rigid group as one body keeps every merge aligned,
+        // so the move sticks. For a standalone section the rigid group is just itself,
+        // so this is identical to the previous single-section move. Delegating to
+        // `move_segment` also upgrades the datum guard from "this section holds a
+        // datum" to "the group holds a datum" (a partner's datum now blocks too).
+        self.move_segment(section_id, offset)
     }
 
     pub(super) fn move_segment(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {

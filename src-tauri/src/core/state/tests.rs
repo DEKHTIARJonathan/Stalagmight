@@ -2894,6 +2894,84 @@ fn test_move_section_undo_redo() {
 }
 
 #[test]
+fn move_section_moves_the_whole_merged_group_and_sticks() {
+    // A merged section is rigidly bound to its partner: "Adjust Position"
+    // (MoveSection) must move the WHOLE merge group together so the merge stays
+    // aligned and the move isn't snapped back by the post-command reconcile — not
+    // shove one member off the other (finding #6).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Merged".to_string(),
+        location: None,
+    });
+
+    let mk = |name: &str, color: &str| Command::CreateSection {
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: color.to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    };
+    let a = state.execute(mk("A", "#ff0000")).section_id.unwrap();
+    let b = state.execute(mk("B", "#00ff00")).section_id.unwrap();
+
+    // Merge A:0 with B:0 → A and B are now one rigid group.
+    let merge = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merge.success, "merge failed: {:?}", merge.error);
+    assert!(
+        state
+            .get_project_state()
+            .unwrap()
+            .get_rigid_connected_section_ids(a)
+            .contains(&b),
+        "A and B must be one rigid group after the merge"
+    );
+
+    // Offsets right after the merge (the merge/reconcile may have set them to align).
+    let off = |st: &AppState, id| {
+        st.get_project_state()
+            .unwrap()
+            .section_offsets
+            .get(&id)
+            .copied()
+            .unwrap_or((0.0, 0.0))
+    };
+    let a_before = off(&state, a);
+    let b_before = off(&state, b);
+
+    // Move section A — the whole group must translate by the same offset and STICK.
+    let r = state.execute(Command::MoveSection {
+        section_id: a,
+        offset: Coordinates::new(10.0, 20.0, 0.0),
+    });
+    assert!(r.success);
+
+    assert_eq!(
+        off(&state, a),
+        (a_before.0 + 10.0, a_before.1 + 20.0),
+        "the moved section translated and the move stuck (not reverted by reconcile)"
+    );
+    assert_eq!(
+        off(&state, b),
+        (b_before.0 + 10.0, b_before.1 + 20.0),
+        "the merge partner translated by the same offset (moved as a rigid group)"
+    );
+
+    // Undo restores both; redo re-applies to both.
+    assert!(state.undo().success);
+    assert_eq!(off(&state, a), a_before, "undo restores the moved section");
+    assert_eq!(off(&state, b), b_before, "undo restores the merge partner too");
+
+    assert!(state.redo().success);
+    assert_eq!(off(&state, a), (a_before.0 + 10.0, a_before.1 + 20.0));
+    assert_eq!(off(&state, b), (b_before.0 + 10.0, b_before.1 + 20.0));
+}
+
+#[test]
 fn test_move_nonexistent_section() {
     let state = AppState::new().unwrap();
 

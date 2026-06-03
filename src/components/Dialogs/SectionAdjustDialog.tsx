@@ -13,7 +13,7 @@ import type { SectionId } from '../../types/project';
  */
 export default function SectionAdjustDialog() {
   const { closeDialog, dialogData } = useUIStore();
-  const { project, moveSection } = useProjectStore();
+  const { project, moveSection, getConnectedSectionIds } = useProjectStore();
 
   const sectionId = dialogData.sectionId as SectionId | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
@@ -22,6 +22,25 @@ export default function SectionAdjustDialog() {
   const [dy, setDy] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // How many sections move together: a section that is merged (or aligned-closure
+  // connected) to others is rigidly bound to them, so adjusting it moves the whole
+  // group to keep the merge aligned. The set includes this section itself.
+  const [connectedCount, setConnectedCount] = useState(1);
+
+  useEffect(() => {
+    if (sectionId === undefined) return;
+    let cancelled = false;
+    void getConnectedSectionIds(sectionId)
+      .then((ids) => {
+        if (!cancelled) setConnectedCount(Math.max(1, ids.length));
+      })
+      .catch(() => {
+        /* best-effort; default to "just this section" */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sectionId, getConnectedSectionIds]);
 
   // Track preview state for live updates
   const [previewApplied, setPreviewApplied] = useState(false);
@@ -163,6 +182,16 @@ export default function SectionAdjustDialog() {
         <div className="text-sm text-text-secondary mb-4">
           Adjusting: <span className="text-text-primary font-medium">{section.name ?? `Section ${section.id}`}</span>
         </div>
+
+        {connectedCount > 1 && (
+          <div
+            className="p-2 bg-warning-10 border border-warning-20 rounded text-xs text-warning"
+            data-testid="section-adjust-connected-note"
+          >
+            Merged with {connectedCount - 1} other{connectedCount - 1 === 1 ? '' : 's'} — all {connectedCount} sections
+            move together so the merge stays aligned.
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
