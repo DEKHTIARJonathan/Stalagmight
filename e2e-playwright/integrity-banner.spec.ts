@@ -30,26 +30,45 @@ test.describe('Structural-integrity banner', () => {
     await expect(page.getByTestId('integrity-banner')).toHaveCount(0);
   });
 
-  test('warns about issues and repairs them', async ({ page }) => {
+  test('shows issue details in a dialog and repairs from there', async ({ page }) => {
     await seedAndCheck(page, [
-      'Loop closure 1 station_b references missing section 9999',
+      'Merged stations 1:0 and 0:13 are 30.03 m apart but should be the same point',
       'Station merge #0 station_a references missing section 42',
     ]);
 
     const banner = page.getByTestId('integrity-banner');
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText('2 structural issues');
+    await expect(banner).toContainText('2 integrity issues');
 
-    await page.getByTestId('integrity-repair-button').click();
+    // Details are shown in a dialog on Review, not on hover.
+    await page.getByTestId('integrity-review-button').click();
+    const dialog = page.getByTestId('integrity-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId('integrity-dialog-list')).toContainText('30.03 m apart');
+    await expect(dialog.getByTestId('integrity-dialog-list')).toContainText('missing section 42');
 
-    // Banner clears and a confirmation toast appears.
+    await page.getByTestId('integrity-dialog-repair').click();
+
+    // Dialog and banner clear; a confirmation toast appears.
+    await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
     await expect(page.getByTestId('integrity-banner')).toHaveCount(0);
     await expect(page.getByText(/Repaired 2 structural issues/)).toBeVisible();
   });
 
-  test('can be dismissed without repairing', async ({ page }) => {
+  test('review dialog can be cancelled without repairing', async ({ page }) => {
     await seedAndCheck(page, ['Zero datum #0 references missing section 7']);
-    await expect(page.getByTestId('integrity-banner')).toContainText('1 structural issue');
+    await expect(page.getByTestId('integrity-banner')).toContainText('1 integrity issue');
+    await page.getByTestId('integrity-review-button').click();
+    await expect(page.getByTestId('integrity-dialog')).toBeVisible();
+    await page.getByTestId('integrity-dialog-cancel').click();
+    await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
+    // Banner stays — nothing was repaired.
+    await expect(page.getByTestId('integrity-banner')).toBeVisible();
+  });
+
+  test('banner can be dismissed without opening the dialog', async ({ page }) => {
+    await seedAndCheck(page, ['Zero datum #0 references missing section 7']);
+    await expect(page.getByTestId('integrity-banner')).toContainText('1 integrity issue');
     await page.getByTestId('integrity-dismiss-button').click();
     await expect(page.getByTestId('integrity-banner')).toHaveCount(0);
   });

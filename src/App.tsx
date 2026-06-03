@@ -29,6 +29,7 @@ function App() {
   const repairProjectIntegrity = useProjectStore((s) => s.repairProjectIntegrity);
   const dismissIntegrityIssues = useProjectStore((s) => s.dismissIntegrityIssues);
   const [repairingIntegrity, setRepairingIntegrity] = useState(false);
+  const [showIntegrityDialog, setShowIntegrityDialog] = useState(false);
   const {
     view,
     setView,
@@ -415,6 +416,7 @@ function App() {
         `Repaired ${fixed} structural issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`,
         'integrity-repair'
       );
+      setShowIntegrityDialog(false);
     } finally {
       setRepairingIntegrity(false);
     }
@@ -422,7 +424,7 @@ function App() {
 
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-      {/* Structural-integrity warning banner (corruption found on load) */}
+      {/* Integrity warning banner (corruption found on load/save) */}
       {integrityIssues.length > 0 && !loading.isLoading && (
         <div
           className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
@@ -430,19 +432,15 @@ function App() {
           data-testid="integrity-banner"
         >
           <span className="text-warning font-medium flex-1 min-w-0">
-            This project has {integrityIssues.length} structural{' '}
-            {integrityIssues.length === 1 ? 'issue' : 'issues'} (dangling references).
-            <span className="text-text-secondary font-normal" title={integrityIssues.join('\n')}>
-              {' '}Hover for details.
-            </span>
+            This project has {integrityIssues.length} integrity{' '}
+            {integrityIssues.length === 1 ? 'issue' : 'issues'} that may affect your survey.
           </span>
           <button
-            onClick={handleRepairIntegrity}
-            disabled={repairingIntegrity}
-            className="px-3 py-1 rounded bg-accent text-white text-xs disabled:opacity-50"
-            data-testid="integrity-repair-button"
+            onClick={() => setShowIntegrityDialog(true)}
+            className="px-3 py-1 rounded bg-accent text-white text-xs"
+            data-testid="integrity-review-button"
           >
-            {repairingIntegrity ? 'Repairing…' : 'Repair'}
+            Review &amp; Repair
           </button>
           <button
             onClick={dismissIntegrityIssues}
@@ -451,6 +449,63 @@ function App() {
           >
             Dismiss
           </button>
+        </div>
+      )}
+
+      {/* Integrity details + repair dialog */}
+      {showIntegrityDialog && integrityIssues.length > 0 && (
+        <div
+          className="fixed inset-0 z-[1000] bg-overlay flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="integrity-dialog-title"
+          data-testid="integrity-dialog"
+          onClick={() => !repairingIntegrity && setShowIntegrityDialog(false)}
+        >
+          <div
+            className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-border">
+              <h2 id="integrity-dialog-title" className="font-medium text-text-primary">
+                Project integrity ({integrityIssues.length}{' '}
+                {integrityIssues.length === 1 ? 'issue' : 'issues'})
+              </h2>
+            </div>
+            <div className="px-4 py-3 overflow-auto">
+              <p className="text-sm text-text-secondary mb-3">
+                The following problems were found in this project. Repairing drops invalid
+                references and realigns drifted station merges; valid survey data is kept. Save the
+                project afterwards to make the fix permanent.
+              </p>
+              <ul
+                className="list-disc list-inside space-y-1 text-sm text-text-primary"
+                data-testid="integrity-dialog-list"
+              >
+                {integrityIssues.map((issue, i) => (
+                  <li key={i} className="break-words">{issue}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="px-4 py-3 border-t border-border flex justify-end gap-2">
+              <button
+                onClick={() => setShowIntegrityDialog(false)}
+                disabled={repairingIntegrity}
+                className="px-3 py-1.5 rounded border border-border text-sm hover:bg-background disabled:opacity-50"
+                data-testid="integrity-dialog-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRepairIntegrity}
+                disabled={repairingIntegrity}
+                className="px-3 py-1.5 rounded bg-accent text-white text-sm disabled:opacity-50"
+                data-testid="integrity-dialog-repair"
+              >
+                {repairingIntegrity ? 'Repairing…' : 'Repair'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
