@@ -892,14 +892,14 @@ impl AppState {
             Ok(db) => db,
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create output file: {e}"));
+                return save_failure("Failed to create output file", &e);
             }
         };
 
         if let Err(e) = db.save_project(&merged_project) {
             drop(db);
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to save merged project: {e}"));
+            return save_failure("Failed to save merged project", &e);
         }
 
         // Close database before rename
@@ -908,7 +908,8 @@ impl AppState {
         // Atomically rename temp file to final destination
         if let Err(e) = std::fs::rename(&temp_path, &output_path) {
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to finalize save: {e}"));
+            let e = anyhow::Error::from(e);
+            return save_failure("Failed to finalize save", &e);
         }
 
         tracing::info!(
@@ -1025,8 +1026,24 @@ impl AppState {
 
         // === PHASE 0: Opening database (5%) ===
         progress.start_phase(LoadingPhase::OpeningDatabase);
-        if !path.exists() {
-            early_return_err!(LoadError::not_found(&path.display().to_string()));
+        // `try_exists()` rather than `exists()`: a metadata-access denial
+        // (macOS folder permission) must surface guidance, not NOT_FOUND —
+        // `exists()` would collapse that error to `false`.
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                early_return_err!(LoadError::not_found(&path.display().to_string()))
+            }
+            Err(e) => {
+                let e = anyhow::Error::from(e);
+                if crate::core::loading::is_permission_denied(&e) {
+                    early_return_err!(LoadError::permission(
+                        e.to_string(),
+                        &path.display().to_string()
+                    ));
+                }
+                early_return_err!(LoadError::not_found(&path.display().to_string()));
+            }
         }
         // Local variable only - NO state mutation until Finalizing
         let db = match Database::open_existing(&path) {

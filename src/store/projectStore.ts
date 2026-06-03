@@ -786,11 +786,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       await get().refreshUndoState();
       set({ isDirty: false });
     } else {
-      set({ error: result.error ?? 'Failed to save project' });
+      const permission = isPermissionError(result.error);
+      // Never surface the raw "FS_PERMISSION_DENIED:" marker in error state
+      // (a status indicator/toast may render it, e.g. on autosave).
+      set({
+        error: permission
+          ? 'Folder access denied — check Privacy & Security settings'
+          : (result.error ?? 'Failed to save project'),
+      });
       // A filesystem permission denial (e.g. macOS forgot folder access after
       // an update) needs actionable guidance, not a raw error. Skip on autosave
       // so we don't reopen the dialog on every debounced retry.
-      if (isPermissionError(result.error) && !isAutosave) {
+      if (permission && !isAutosave) {
         useUIStore.getState().openDialog('save-permission', {
           detail: result.error,
           context: 'save',

@@ -1,42 +1,31 @@
-import { useCallback, useState } from 'react';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { useCallback } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { isMac } from '../../utils/shortcuts';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 
-// Deep-link to macOS System Settings → Privacy & Security → Files and Folders.
-const MAC_PRIVACY_URL =
-  'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles';
-
 /**
  * Shown when the OS denies filesystem access to a project file — most often
  * because macOS reset previously-granted folder access after an update. Gives
  * actionable guidance instead of the misleading "corrupted database" / raw OS
  * error the user would otherwise see (#39).
+ *
+ * Intentionally no "open System Settings" deep-link button: the
+ * `x-apple.systempreferences:` scheme is outside the app's `opener:default`
+ * capability scope, so it would silently no-op in a packaged build. The
+ * written steps are the reliable remediation; a backend-command opener could
+ * be added later if desired.
  */
 export default function SavePermissionDialog() {
   const { closeDialog, dialogData } = useUIStore();
   const mac = isMac();
   const context = dialogData.context === 'open' ? 'open' : 'save';
-  const [opening, setOpening] = useState(false);
 
   const handleClose = useCallback(() => {
     trackDialogComplete('save-permission');
     closeDialog();
   }, [closeDialog]);
-
-  const handleOpenSettings = useCallback(async () => {
-    setOpening(true);
-    try {
-      await openUrl(MAC_PRIVACY_URL);
-    } catch {
-      /* best-effort; the written steps still guide the user */
-    } finally {
-      setOpening(false);
-    }
-  }, []);
 
   const action = context === 'open' ? 'open this project' : 'save your changes';
 
@@ -54,11 +43,11 @@ export default function SavePermissionDialog() {
             <p className="text-text-primary font-medium">To fix it:</p>
             <ol className="list-decimal list-inside space-y-1">
               <li>
-                Open <span className="text-text-primary">System Settings → Privacy &amp; Security → Files and Folders</span>
-                {' '}(or Full Disk Access).
+                Open <span className="text-text-primary">System Settings → Privacy &amp; Security → Full Disk Access</span>
+                {' '}(or Files and Folders).
               </li>
               <li>
-                Enable access for <span className="text-text-primary">Stalagmight</span> to the folder where your
+                Enable access for <span className="text-text-primary">Stalagmight</span>, including the folder where your
                 {' '}<code>.stalx</code> files live (often Downloads or Documents).
               </li>
               <li>Restart Stalagmight and try again.</li>
@@ -71,12 +60,7 @@ export default function SavePermissionDialog() {
           </div>
         )}
 
-        <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          {mac && (
-            <Button onClick={handleOpenSettings} disabled={opening}>
-              {opening ? 'Opening…' : 'Open Privacy & Security'}
-            </Button>
-          )}
+        <div className="flex justify-end pt-4 border-t border-border">
           <Button variant="primary" onClick={handleClose}>OK</Button>
         </div>
       </div>
