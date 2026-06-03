@@ -1055,6 +1055,11 @@ impl AppState {
             }
         };
         project.file_path = Some(path.clone());
+        // Guarantee every shot has a stable UUID at runtime, not just after the
+        // next save: pre-v6 files load shots with uuid=None, and station identity
+        // (and the Ariane collaboration round-trip) anchors on the shot UUID. The
+        // minted UUIDs persist on the next save (matching save_project's call).
+        project.ensure_shot_uuids();
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
         // Section offsets are derived state: re-solve them from the merge/datum
