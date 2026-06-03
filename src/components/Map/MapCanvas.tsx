@@ -2385,38 +2385,18 @@ export default function MapCanvas() {
       const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
       const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
-      // Skip-zoom-in: if section already fits in usable viewport and occupies ≥30%,
-      // just pan/center without zooming
-      const usableWidth = Math.max(1, container.clientWidth - padding.left - padding.right);
-      const usableHeight = Math.max(1, container.clientHeight - padding.top - padding.bottom);
-      const swScreen = map.current.project(sw as [number, number]);
-      const neScreen = map.current.project(ne as [number, number]);
-      const screenWidth = Math.abs(neScreen.x - swScreen.x);
-      const screenHeight = Math.abs(neScreen.y - swScreen.y);
-      const ratioX = screenWidth / usableWidth;
-      const ratioY = screenHeight / usableHeight;
-
-      const fitsInViewport = ratioX <= 1.0 && ratioY <= 1.0;
-      const occupiesEnough = ratioX >= 0.3 || ratioY >= 0.3;
-
-      if (fitsInViewport && occupiesEnough) {
-        // Section already visible and large enough — center without re-zooming
-        const centerLng = (sw[0] + ne[0]) / 2;
-        const centerLat = (sw[1] + ne[1]) / 2;
-        map.current.easeTo({
-          center: [centerLng, centerLat],
-          padding,
-          duration: animationDuration,
-        });
-      } else {
-        // Section too large or too small — use fitBounds
-        map.current.fitBounds([sw, ne], {
-          padding,
-          linear: true,
-          duration: animationDuration,
-          maxZoom: config.map.zoom_max ?? 22,
-        });
-      }
+      // Always fit the section's bounds. fitBounds depends only on the bounds,
+      // padding and container — not the live (possibly mid-animation) camera —
+      // so rapidly clicking between different sections can't drift the zoom.
+      // (The previous skip-zoom-in heuristic read the transitional camera via
+      // map.project() and accumulated across interrupted animations.) Re-fitting
+      // an already-framed section is idempotent (same target zoom).
+      map.current.fitBounds([sw, ne], {
+        padding,
+        linear: true,
+        duration: animationDuration,
+        maxZoom: config.map.zoom_max ?? 22,
+      });
     },
     [stations, project?.sections, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth, calcPadding]
   );
