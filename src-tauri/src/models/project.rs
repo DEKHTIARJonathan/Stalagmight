@@ -1215,14 +1215,16 @@ impl Project {
     }
 
     /// Insert a shot after a specific shot in a section. `forced_id` preserves
-    /// the original id when redo re-runs this exact path (see
-    /// [`AppState::redo`]); pass `None` for normal inserts.
+    /// the original id and `forced_uuid` the original collaboration UUID when
+    /// redo re-runs this exact path (see [`AppState::redo`]); pass `None`/`None`
+    /// for normal inserts (a fresh UUID is minted).
     pub fn insert_shot_after(
         &mut self,
         section_id: SectionId,
         after_shot_id: ShotId,
         data: ShotData,
         forced_id: Option<ShotId>,
+        forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
@@ -1234,7 +1236,7 @@ impl Project {
         // all stations after the insertion point.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_after_with_id(after_shot_id, data, forced_id)?;
+        let shot = section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
@@ -1285,14 +1287,15 @@ impl Project {
     }
 
     /// Insert a shot before a specific shot in a section. `forced_id` preserves
-    /// the original id when redo re-runs this exact path; pass `None` for normal
-    /// inserts.
+    /// the original id and `forced_uuid` the original collaboration UUID when
+    /// redo re-runs this exact path; pass `None`/`None` for normal inserts.
     pub fn insert_shot_before(
         &mut self,
         section_id: SectionId,
         before_shot_id: ShotId,
         data: ShotData,
         forced_id: Option<ShotId>,
+        forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
@@ -1310,7 +1313,7 @@ impl Project {
         // genuinely distinct and handled below.
         if pos > 0 {
             let prev_id = section.shots[pos - 1].id;
-            return self.insert_shot_after(section_id, prev_id, data, forced_id);
+            return self.insert_shot_after(section_id, prev_id, data, forced_id, forced_uuid);
         }
 
         // Prepend (pos == 0): the new shot becomes the section's first shot and
@@ -1318,7 +1321,7 @@ impl Project {
         // back-shifting the offset.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_before_with_id(before_shot_id, data, forced_id)?;
+        let shot = section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
         // Prepend is the one insert that shifts identity: the old section-start
         // station is now *after* the new first shot, so re-anchor any ref on this

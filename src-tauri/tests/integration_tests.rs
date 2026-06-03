@@ -672,6 +672,7 @@ fn test_comprehensive_undo_types() {
             shot_id: 0,
             shot_data: create_shot_data(0.0, 10.0, 5.0, 5.0),
             position: 0,
+            uuid: None,
         },
         UndoData::MergeInfo {
             station_a: StationRef::new(0, 0),
@@ -1914,7 +1915,7 @@ fn test_project_insert_shot_after() {
     ));
 
     let first_shot_id = project.sections[0].shots[0].id;
-    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0), None);
+    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0), None, None);
 
     assert!(result.is_some());
     assert_eq!(project.sections[0].shots.len(), 3);

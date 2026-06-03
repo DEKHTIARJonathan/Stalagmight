@@ -453,7 +453,7 @@ fn prop_anchors_survive_interleaved_edits(seed: u64) {
         } else {
             // Insert a fresh shot after the picked one.
             let data = gen_run(&mut rng, 1, 0.0).0.into_iter().next().unwrap();
-            p.insert_shot_after(root_id, shot_id, data, None);
+            p.insert_shot_after(root_id, shot_id, data, None, None);
         }
         assert!(
             !has_dangling_ref(&p),

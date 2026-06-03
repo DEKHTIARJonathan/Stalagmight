@@ -458,6 +458,7 @@ impl AppState {
                             station_shift_from,
                             after_shot_id: *after_shot_id,
                             before_shot_id: *before_shot_id,
+                            uuid: shot.uuid.clone(),
                         }
                     } else {
                         undo_data
@@ -661,9 +662,13 @@ impl AppState {
                 shot_id,
                 shot_data,
                 position,
+                uuid,
             } => {
                 // Restore deleted shot at its original position with original ID
-                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
+                // and original UUID. (Live DeleteShot now captures a full
+                // ProjectSnapshotPair; this path serves legacy persisted entries,
+                // where `uuid` is None and a fresh one is minted.)
+                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position, uuid.clone())
             }
 
             UndoData::CreatedShotSnapshot {
@@ -1044,12 +1049,18 @@ impl AppState {
                 position,
                 after_shot_id,
                 before_shot_id,
+                uuid,
                 ..
             } => {
                 // Redo by re-running the SAME insert the forward command did, with
-                // the original id forced — so the ref-shift, offset and cascade are
-                // identical to the forward path and can't drift (this is the
-                // single-source-of-truth that prevents the redo-misalignment bug).
+                // the original id AND uuid forced — so the ref-shift, offset and
+                // cascade are identical to the forward path and can't drift (this
+                // is the single-source-of-truth that prevents the redo-misalignment
+                // bug), and the shot keeps its stable collaboration identity (a
+                // fresh uuid here would dangle every AfterShot anchor and break the
+                // Ariane tier-1 match). `uuid` is None for shots created before this
+                // field existed (legacy persisted undo entries) — falls back to a
+                // fresh mint, matching the old behavior.
                 // Append (no anchor) does no geometry maintenance, so a plain
                 // restore is exact there.
                 let mut guard = match self.project.lock() {
@@ -1061,11 +1072,11 @@ impl AppState {
                 };
                 let ok = if let Some(before_id) = before_shot_id {
                     project
-                        .insert_shot_before(*section_id, *before_id, shot_data.clone(), Some(*shot_id))
+                        .insert_shot_before(*section_id, *before_id, shot_data.clone(), Some(*shot_id), uuid.clone())
                         .is_some()
                 } else if let Some(after_id) = after_shot_id {
                     project
-                        .insert_shot_after(*section_id, *after_id, shot_data.clone(), Some(*shot_id))
+                        .insert_shot_after(*section_id, *after_id, shot_data.clone(), Some(*shot_id), uuid.clone())
                         .is_some()
                 } else {
                     // Append: restore directly at the captured position.
@@ -1075,7 +1086,7 @@ impl AppState {
                             section.next_shot_id = id + 1;
                         }
                         let pos = (*position).min(section.shots.len());
-                        section.shots.insert(pos, Shot::new(id, shot_data.clone()));
+                        section.shots.insert(pos, Shot::with_uuid(id, shot_data.clone(), uuid.clone()));
                         project.touch();
                         true
                     } else {
@@ -1306,6 +1317,7 @@ impl AppState {
         original_shot_id: ShotId,
         data: ShotData,
         position: usize,
+        uuid: Option<String>,
     ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
@@ -1319,8 +1331,10 @@ impl AppState {
             return CommandResult::failure(format!("Section {section_id} not found"));
         };
 
-        // Create shot with original ID
-        let shot = Shot::new(original_shot_id, data);
+        // Recreate the shot with its original ID and UUID so cross-references and
+        // Ariane matching keep anchoring on the same identity. `uuid: None`
+        // (legacy entry) mints a fresh one.
+        let shot = Shot::with_uuid(original_shot_id, data, uuid);
 
         // Update next_shot_id if needed to avoid collisions
         if original_shot_id >= section.next_shot_id {

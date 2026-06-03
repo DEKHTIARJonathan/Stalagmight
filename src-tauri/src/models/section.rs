@@ -299,16 +299,23 @@ impl Section {
     }
 
     /// Insert a shot after a specific shot ID, forcing the new shot's id when
-    /// `forced_id` is `Some` (used by redo to preserve station references).
+    /// `forced_id` is `Some` and its UUID when `forced_uuid` is `Some` (used by
+    /// redo to preserve both the station id and the stable collaboration UUID).
+    /// `forced_uuid: None` mints a fresh UUID via `Shot::new`.
     pub fn insert_shot_after_with_id(
         &mut self,
         after_id: ShotId,
         data: ShotData,
         forced_id: Option<ShotId>,
+        forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         let pos = self.shots.iter().position(|s| s.id == after_id)?;
         let id = self.take_shot_id(forced_id);
-        self.shots.insert(pos + 1, Shot::new(id, data));
+        let shot = match forced_uuid {
+            Some(u) => Shot::with_uuid(id, data, Some(u)),
+            None => Shot::new(id, data),
+        };
+        self.shots.insert(pos + 1, shot);
         Some(&self.shots[pos + 1])
     }
 
@@ -318,16 +325,23 @@ impl Section {
     }
 
     /// Insert a shot before a specific shot ID, forcing the new shot's id when
-    /// `forced_id` is `Some` (used by redo to preserve station references).
+    /// `forced_id` is `Some` and its UUID when `forced_uuid` is `Some` (used by
+    /// redo to preserve both the station id and the stable collaboration UUID).
+    /// `forced_uuid: None` mints a fresh UUID via `Shot::new`.
     pub fn insert_shot_before_with_id(
         &mut self,
         before_id: ShotId,
         data: ShotData,
         forced_id: Option<ShotId>,
+        forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         let pos = self.shots.iter().position(|s| s.id == before_id)?;
         let id = self.take_shot_id(forced_id);
-        self.shots.insert(pos, Shot::new(id, data));
+        let shot = match forced_uuid {
+            Some(u) => Shot::with_uuid(id, data, Some(u)),
+            None => Shot::new(id, data),
+        };
+        self.shots.insert(pos, shot);
         Some(&self.shots[pos])
     }
 

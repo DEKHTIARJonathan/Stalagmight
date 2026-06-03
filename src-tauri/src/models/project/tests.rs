@@ -66,7 +66,7 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
     // Insert a shot at the front: the physical station that was index 2 is now
     // index 3, and the key (anchored to the original shot's UUID) resolves there.
     let first_id = project.get_section(a).unwrap().shots[0].id;
-    project.insert_shot_before(a, first_id, shot(0.0, 0.0, 5.0, 0.0, 0.0), None);
+    project.insert_shot_before(a, first_id, shot(0.0, 0.0, 5.0, 0.0, 0.0), None, None);
     assert_eq!(
         project.resolve_key(&key),
         Some(StationRef::new(a, 3)),
@@ -2785,6 +2785,7 @@ fn insert_shot_before_at_position_zero_adjusts_offset() {
         first_shot_id,
         shot(90.0, 90.0, 5.0, 0.0, 0.0),
         None,
+        None,
     );
     assert!(inserted.is_some());
 
@@ -2861,6 +2862,7 @@ fn insert_shot_after_shifts_station_refs() {
         first_shot_id,
         shot(0.0, 0.0, 1.0, 0.0, 0.0),
         None,
+        None,
     );
     assert!(inserted.is_some());
 
@@ -2909,7 +2911,7 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
     // now A:2; B:0 is untouched.
     let first = project.get_section(a).unwrap().shots[0].id;
     project
-        .insert_shot_before(a, first, shot(45.0, 45.0, 3.0, 0.0, 0.0), None)
+        .insert_shot_before(a, first, shot(45.0, 45.0, 3.0, 0.0, 0.0), None, None)
         .expect("insert at front of A");
 
     assert!(
@@ -6111,11 +6113,11 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
     };
 
     let (mut p_after, a, s0, _) = build();
-    p_after.insert_shot_after(a, s0, shot(10.0, 10.0, 3.0, 0.0, 0.0), None);
+    p_after.insert_shot_after(a, s0, shot(10.0, 10.0, 3.0, 0.0, 0.0), None, None);
     let after_idx = a_side_index(&p_after, a);
 
     let (mut p_before, a2, _, s1) = build();
-    p_before.insert_shot_before(a2, s1, shot(10.0, 10.0, 3.0, 0.0, 0.0), None);
+    p_before.insert_shot_before(a2, s1, shot(10.0, 10.0, 3.0, 0.0, 0.0), None, None);
     let before_idx = a_side_index(&p_before, a2);
 
     assert_eq!(
