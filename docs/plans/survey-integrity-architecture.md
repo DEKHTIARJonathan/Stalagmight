@@ -158,7 +158,15 @@ Tests added: `apply_changeset_skips_non_finite_edit_and_add`,
 |---|--------|--------|--------|------|
 | C1 | **Stable station identity.** `StationRef { section_id, anchor: StationAnchor }`, `enum StationAnchor { SectionStart, AfterShot(ShotUuid) }`. Resolve to a positional index only at the geometry/render boundary. **Deletes `shift_station_refs` and its three call sites.** | 1, 2, 4, 6, 7, 21, 30, plus insert/delete off-by-one class | XL | high |
 
-> **C1 status — STEP 1 DONE, swap IN PROGRESS / checkpointed (2026-06-03).** Decisions locked:
+> **C1 status — STEPS 1–2 DONE, swap IN PROGRESS (2026-06-03).** Done: (1) load-time UUID
+> guarantee; (2) `StationAnchor`/`StationKey` internal types + `Project::resolve_key`/`key_for_ref`
+> resolve boundary (no IPC/TS — wire stays positional), with a round-trip + insert-stability +
+> dangling test. Realization vs the plan: keep `StationRef` as the transient positional Copy type
+> (solver/IPC unchanged) and introduce `StationKey` as the *stored* identity — so the anchor never
+> enters the hot `HashSet<StationRef>` loops and the u32 interner is unnecessary. Remaining steps
+> 3–5 below (the ~550-site in-memory collection swap + v7 migration + binary-IPC resolve + delete
+> `shift_station_refs`) are the multi-step bulk, done collection-by-collection keeping HEAD green.
+> Decisions locked:
 > u32-interned anchor (keep `StationRef` `Copy` for the solver hot paths) and the IPC wire stays
 > positional (`station_index`), Rust resolving anchor↔index at the boundary so the ~228 frontend
 > sites are untouched. **Step 1 shipped:** every shot is now guaranteed a UUID at *load* (not just
