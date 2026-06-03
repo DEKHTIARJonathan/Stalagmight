@@ -2253,12 +2253,17 @@ fn test_is_undoable_commands() {
 
 #[test]
 fn test_get_config() {
-    let state = AppState::new().unwrap();
-    let config = state.get_config();
+    // Isolate the config path to a fresh temp dir so this default-value
+    // assertion can't read a value left in the real config file by a
+    // config-writing test (which previously made this fail with 42 vs 100).
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        let config = state.get_config();
 
-    // Should have default values
-    assert!(config.general.auto_save);
-    assert_eq!(config.general.undo_history_limit, 100);
+        // Should have default values
+        assert!(config.general.auto_save);
+        assert_eq!(config.general.undo_history_limit, 100);
+    });
 }
 
 #[test]
