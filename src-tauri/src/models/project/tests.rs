@@ -37,6 +37,72 @@ fn get_connected_section_ids_traverses_merges() {
 }
 
 #[test]
+fn station_ref_traversals_cover_every_bearing_collection() {
+    // for_each_station_ref / map_station_refs are the single enumeration of every
+    // StationRef-bearing collection. If a new such collection is added without
+    // wiring it in here, this test (and the integrity check that consumes the
+    // traversal) won't see it — the failure that motivates centralizing them.
+    let mut project = Project::new("Refs".to_string(), None);
+    let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+    let b = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
+
+    // One ref in each of the five collections, all anchored at station a:1.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+        merged_at: Utc::now(),
+    });
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 1),
+        path_length: 1.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 1),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    project.station_offsets.insert(StationRef::new(a, 1), (1.0, 2.0, 3.0));
+    project.station_comments.insert(StationRef::new(a, 1), "note".to_string());
+
+    // READ traversal: every collection's label is visited.
+    let mut labels: HashSet<String> = HashSet::new();
+    let mut a1_hits = 0;
+    project.for_each_station_ref(|label, sr| {
+        labels.insert(label.to_string());
+        if sr == StationRef::new(a, 1) {
+            a1_hits += 1;
+        }
+    });
+    for expected in ["merge", "loop closure", "zero datum", "station offset", "station comment"] {
+        assert!(labels.contains(expected), "for_each_station_ref must visit {expected}");
+    }
+    assert_eq!(a1_hits, 5, "a:1 is referenced once in each of the five collections");
+
+    // REWRITE traversal: shifting a:1 -> a:2 must update every collection, incl.
+    // the two HashMap keys.
+    project.map_station_refs(|mut sr| {
+        if sr == StationRef::new(a, 1) {
+            sr.station_index = 2;
+        }
+        sr
+    });
+    assert_eq!(project.station_merges[0].station_a, StationRef::new(a, 2));
+    assert_eq!(project.loop_closures[0].station_a, StationRef::new(a, 2));
+    assert_eq!(project.zero_datums[0].station_ref, StationRef::new(a, 2));
+    assert!(project.station_offsets.contains_key(&StationRef::new(a, 2)));
+    assert!(!project.station_offsets.contains_key(&StationRef::new(a, 1)));
+    assert!(project.station_comments.contains_key(&StationRef::new(a, 2)));
+    assert!(!project.station_comments.contains_key(&StationRef::new(a, 1)));
+}
+
+#[test]
 fn section_has_zero_datum_with_connected_merges() {
     let mut project = Project::new("Zero".to_string(), None);
     let a = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;

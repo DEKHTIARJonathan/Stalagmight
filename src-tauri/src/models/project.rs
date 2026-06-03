@@ -922,64 +922,65 @@ impl Project {
     /// have their `station_index` shifted by `delta`. This is needed when inserting or
     /// removing shots, which changes station indices for all subsequent stations.
     ///
-    /// Affects: station_merges, loop_closures, zero_datums, station_offsets.
+    /// Affects: station_merges, loop_closures, zero_datums, station_offsets,
+    /// station_comments — all routed through [`Self::map_station_refs`].
     pub(crate) fn shift_station_refs(&mut self, section_id: SectionId, from_index: u32, delta: i32) {
-        let shift = |sr: &mut StationRef| {
+        self.map_station_refs(|mut sr| {
             if sr.section_id == section_id && sr.station_index >= from_index {
                 sr.station_index = (sr.station_index as i32 + delta) as u32;
             }
-        };
+            sr
+        });
+    }
 
-        // Shift station_merges
-        for merge in &mut self.station_merges {
-            shift(&mut merge.station_a);
-            shift(&mut merge.station_b);
+    /// THE single enumeration of every `StationRef`-bearing collection on the
+    /// project, for READ access (`station_merges` a/b, `loop_closures` a/b,
+    /// `zero_datums` ref, and the `station_offsets`/`station_comments` map keys).
+    /// `check_structural_integrity` consumes this so a newly-added ref-bearing
+    /// collection can't be silently left unvalidated; the `label` distinguishes
+    /// categories for the violation message.
+    pub(crate) fn for_each_station_ref(&self, mut f: impl FnMut(&str, StationRef)) {
+        for m in &self.station_merges {
+            f("merge", m.station_a);
+            f("merge", m.station_b);
         }
-
-        // Shift loop_closures
-        for closure in &mut self.loop_closures {
-            shift(&mut closure.station_a);
-            shift(&mut closure.station_b);
+        for c in &self.loop_closures {
+            f("loop closure", c.station_a);
+            f("loop closure", c.station_b);
         }
+        for zd in &self.zero_datums {
+            f("zero datum", zd.station_ref);
+        }
+        for k in self.station_offsets.keys() {
+            f("station offset", *k);
+        }
+        for k in self.station_comments.keys() {
+            f("station comment", *k);
+        }
+    }
 
-        // Shift zero_datums
+    /// THE single enumeration for REWRITING every `StationRef`-bearing collection
+    /// (the rewrite twin of [`Self::for_each_station_ref`]). Vec fields are mapped
+    /// in place; the `station_offsets`/`station_comments` HashMaps are rebuilt with
+    /// transformed keys. `shift_station_refs` is its only caller today, but routing
+    /// every rewrite through one place is what lets the planned stable-identity
+    /// refactor change the ref representation in a single site.
+    pub(crate) fn map_station_refs(&mut self, mut f: impl FnMut(StationRef) -> StationRef) {
+        for m in &mut self.station_merges {
+            m.station_a = f(m.station_a);
+            m.station_b = f(m.station_b);
+        }
+        for c in &mut self.loop_closures {
+            c.station_a = f(c.station_a);
+            c.station_b = f(c.station_b);
+        }
         for zd in &mut self.zero_datums {
-            shift(&mut zd.station_ref);
+            zd.station_ref = f(zd.station_ref);
         }
-
-        // Shift station_offsets (HashMap keys — collect, remove, re-insert)
-        let keys_to_shift: Vec<(StationRef, (f64, f64, f64))> = self
-            .station_offsets
-            .iter()
-            .filter(|(sr, _)| sr.section_id == section_id && sr.station_index >= from_index)
-            .map(|(sr, v)| (*sr, *v))
-            .collect();
-
-        for (old_key, value) in keys_to_shift {
-            self.station_offsets.remove(&old_key);
-            let new_key = StationRef::new(
-                old_key.section_id,
-                (old_key.station_index as i32 + delta) as u32,
-            );
-            self.station_offsets.insert(new_key, value);
-        }
-
-        // Shift station_comments (HashMap keys — collect, remove, re-insert)
-        let comments_to_shift: Vec<(StationRef, String)> = self
-            .station_comments
-            .iter()
-            .filter(|(sr, _)| sr.section_id == section_id && sr.station_index >= from_index)
-            .map(|(sr, v)| (*sr, v.clone()))
-            .collect();
-
-        for (old_key, value) in comments_to_shift {
-            self.station_comments.remove(&old_key);
-            let new_key = StationRef::new(
-                old_key.section_id,
-                (old_key.station_index as i32 + delta) as u32,
-            );
-            self.station_comments.insert(new_key, value);
-        }
+        let offsets = std::mem::take(&mut self.station_offsets);
+        self.station_offsets = offsets.into_iter().map(|(k, v)| (f(k), v)).collect();
+        let comments = std::mem::take(&mut self.station_comments);
+        self.station_comments = comments.into_iter().map(|(k, v)| (f(k), v)).collect();
     }
 
     fn station_ref_key(station_ref: &StationRef) -> (SectionId, u32) {
@@ -6234,66 +6235,41 @@ impl Project {
             }
         }
 
-        for (i, merge) in self.station_merges.iter().enumerate() {
-            for (label, sr) in [("station_a", &merge.station_a), ("station_b", &merge.station_b)] {
-                if let Some(reason) = self.station_ref_violation(sr) {
-                    violations.push(IntegrityViolation {
-                        severity: ViolationSeverity::Critical,
-                        category: "dangling_merge_ref".to_string(),
-                        message: format!("Station merge #{i} {label} {reason}"),
-                    });
-                }
+        // Validate every StationRef-bearing collection through the single
+        // traversal, so a newly-added ref-bearing collection is checked by
+        // construction. Dangling merge/closure/datum refs are Critical (they
+        // corrupt connectivity); orphaned offset/comment keys are Warning (they
+        // are inert until their station is recreated).
+        self.for_each_station_ref(|label, sr| {
+            let Some(reason) = self.station_ref_violation(&sr) else {
+                return;
+            };
+            let (severity, category) = match label {
+                "merge" => (ViolationSeverity::Critical, "dangling_merge_ref"),
+                "loop closure" => (ViolationSeverity::Critical, "dangling_closure_ref"),
+                "zero datum" => (ViolationSeverity::Critical, "dangling_zero_datum_ref"),
+                "station offset" => (ViolationSeverity::Warning, "orphan_station_offset"),
+                _ => (ViolationSeverity::Warning, "orphan_station_comment"),
+            };
+            let mut subject = label.to_string();
+            if let Some(first) = subject.get_mut(0..1) {
+                first.make_ascii_uppercase();
             }
-        }
+            violations.push(IntegrityViolation {
+                severity,
+                category: category.to_string(),
+                message: format!("{subject} {reason}"),
+            });
+        });
 
-        for (i, datum) in self.zero_datums.iter().enumerate() {
-            if let Some(reason) = self.station_ref_violation(&datum.station_ref) {
-                violations.push(IntegrityViolation {
-                    severity: ViolationSeverity::Critical,
-                    category: "dangling_zero_datum_ref".to_string(),
-                    message: format!("Zero datum #{i} {reason}"),
-                });
-            }
-        }
-
-        for closure in &self.loop_closures {
-            for (label, sr) in [("station_a", &closure.station_a), ("station_b", &closure.station_b)] {
-                if let Some(reason) = self.station_ref_violation(sr) {
-                    violations.push(IntegrityViolation {
-                        severity: ViolationSeverity::Critical,
-                        category: "dangling_closure_ref".to_string(),
-                        message: format!("Loop closure {} {label} {reason}", closure.id),
-                    });
-                }
-            }
-        }
-
+        // section_offsets is keyed by SectionId (not a StationRef), so it isn't
+        // covered by for_each_station_ref — check it for a missing section here.
         for section_id in self.section_offsets.keys() {
             if self.get_section(*section_id).is_none() {
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_section_offset".to_string(),
                     message: format!("Section offset for missing section {section_id}"),
-                });
-            }
-        }
-
-        for sr in self.station_offsets.keys() {
-            if let Some(reason) = self.station_ref_violation(sr) {
-                violations.push(IntegrityViolation {
-                    severity: ViolationSeverity::Warning,
-                    category: "orphan_station_offset".to_string(),
-                    message: format!("Station offset {reason}"),
-                });
-            }
-        }
-
-        for sr in self.station_comments.keys() {
-            if let Some(reason) = self.station_ref_violation(sr) {
-                violations.push(IntegrityViolation {
-                    severity: ViolationSeverity::Warning,
-                    category: "orphan_station_comment".to_string(),
-                    message: format!("Station comment {reason}"),
                 });
             }
         }
