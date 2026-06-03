@@ -1167,7 +1167,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = project_with(three());
         p.zero_datums.push(ZeroDatum {
-            station_ref: StationRef::new(p.sections[0].id, 2),
+            station_ref: StationRef::new(p.sections[0].id, 2).into(),
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
         });
         let base = baseline_for(p, dir.path());
@@ -1208,8 +1208,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 2),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 2).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1273,8 +1273,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 0),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 0).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1306,8 +1306,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 0),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 0).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1346,8 +1346,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 0),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 0).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1408,9 +1408,9 @@ mod tests {
         let mut p = project_with(three());
         p.sections[0].shots[1].comment = Some("broken tape".into());
         p.station_comments
-            .insert(StationRef::new(0, 2), "junction with main".into());
+            .insert(StationRef::new(0, 2).into(), "junction with main".into());
         p.station_comments
-            .insert(StationRef::new(0, 3), "beware silt".into());
+            .insert(StationRef::new(0, 3).into(), "beware silt".into());
         p
     }
 
@@ -1520,7 +1520,7 @@ mod tests {
         crate::core::apply_changeset(&mut applied, &cs);
         let s1 = StationRef::new(0, 1);
         assert_eq!(
-            applied.station_comments.get(&s1).map(String::as_str),
+            applied.station_comment_for_ref(s1).map(String::as_str),
             Some("muddy floor"),
         );
     }
@@ -1536,7 +1536,7 @@ mod tests {
         let mut edited = base.clone();
         edited
             .station_comments
-            .insert(StationRef::new(0, 2), "junction widened in 2026".into());
+            .insert(StationRef::new(0, 2).into(), "junction widened in 2026".into());
         let ret = returned(&edited, dir.path());
 
         let cs = diff(&base, &ret);
@@ -1569,7 +1569,7 @@ mod tests {
         let mut p = project_with(three());
         p.sections[0].shots[1].comment = Some("broken tape".into());
         p.station_comments
-            .insert(StationRef::new(0, 2), "junction with main".into());
+            .insert(StationRef::new(0, 2).into(), "junction with main".into());
 
         let path = dir.path().join("import.tmlu");
         export_tml_with_baseline(&p, &path).unwrap();

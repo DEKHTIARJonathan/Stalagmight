@@ -19,13 +19,13 @@ fn get_connected_section_ids_traverses_merges() {
     let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 0),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 0).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -89,14 +89,14 @@ fn station_ref_traversals_cover_every_bearing_collection() {
 
     // One ref in each of the five collections, all anchored at station a:1.
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 1).into(),
         path_length: 1.0,
         misclosure_distance: 0.0,
         error_percentage: 0.0,
@@ -106,18 +106,18 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         is_aligned: false,
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 1),
+        station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
-    project.station_offsets.insert(StationRef::new(a, 1), (1.0, 2.0, 3.0));
-    project.station_comments.insert(StationRef::new(a, 1), "note".to_string());
+    project.station_offsets.insert(StationRef::new(a, 1).into(), (1.0, 2.0, 3.0));
+    project.station_comments.insert(StationRef::new(a, 1).into(), "note".to_string());
 
     // READ traversal: every collection's label is visited.
     let mut labels: HashSet<String> = HashSet::new();
     let mut a1_hits = 0;
     project.for_each_station_ref(|label, sr| {
         labels.insert(label.to_string());
-        if sr == StationRef::new(a, 1) {
+        if sr == StationRef::new(a, 1).into() {
             a1_hits += 1;
         }
     });
@@ -128,19 +128,23 @@ fn station_ref_traversals_cover_every_bearing_collection() {
 
     // REWRITE traversal: shifting a:1 -> a:2 must update every collection, incl.
     // the two HashMap keys.
-    project.map_station_refs(|mut sr| {
-        if sr == StationRef::new(a, 1) {
-            sr.station_index = 2;
+    project.map_station_refs(|key| {
+        if key == StationRef::new(a, 1).into() {
+            StationRef::new(a, 2).into()
+        } else {
+            key
         }
-        sr
     });
-    assert_eq!(project.station_merges[0].station_a, StationRef::new(a, 2));
-    assert_eq!(project.loop_closures[0].station_a, StationRef::new(a, 2));
-    assert_eq!(project.zero_datums[0].station_ref, StationRef::new(a, 2));
-    assert!(project.station_offsets.contains_key(&StationRef::new(a, 2)));
-    assert!(!project.station_offsets.contains_key(&StationRef::new(a, 1)));
-    assert!(project.station_comments.contains_key(&StationRef::new(a, 2)));
-    assert!(!project.station_comments.contains_key(&StationRef::new(a, 1)));
+    // Pure traversal mechanics: keys were inserted as transitional Index anchors
+    // and never reanchored, so compare the rewritten keys directly (a:2 is
+    // intentionally past the end — this checks the rewrite, not resolvability).
+    assert_eq!(project.station_merges[0].station_a, StationRef::new(a, 2).into());
+    assert_eq!(project.loop_closures[0].station_a, StationRef::new(a, 2).into());
+    assert_eq!(project.zero_datums[0].station_ref, StationRef::new(a, 2).into());
+    assert!(project.station_offsets.contains_key(&StationRef::new(a, 2).into()));
+    assert!(!project.station_offsets.contains_key(&StationRef::new(a, 1).into()));
+    assert!(project.station_comments.contains_key(&StationRef::new(a, 2).into()));
+    assert!(!project.station_comments.contains_key(&StationRef::new(a, 1).into()));
 }
 
 #[test]
@@ -152,18 +156,18 @@ fn section_has_zero_datum_with_connected_merges() {
     let d = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 0),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 0).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(c, 0),
+        station_ref: StationRef::new(c, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
 
@@ -262,8 +266,8 @@ fn set_zero_datum_connected_sections_move_together() {
 
     // Merge section b's station 0 to section a's station 1
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -481,7 +485,7 @@ fn store_zero_datum_without_repositioning_does_not_modify_offsets() {
 
     // But datum should be stored
     assert_eq!(project.zero_datums.len(), 1);
-    assert_eq!(project.zero_datums[0].station_ref, station_ref);
+    assert!(project.key_is_ref(&project.zero_datums[0].station_ref, station_ref));
 }
 
 #[test]
@@ -497,7 +501,7 @@ fn coordinate_computation_no_global_datum_subtraction() {
 
     // Add a datum directly to zero_datums (bypassing set_zero_datum to avoid offset computation)
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_id, 1),
+        station_ref: StationRef::new(section_id, 1).into(),
         gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
     });
 
@@ -761,8 +765,8 @@ fn set_zero_datum_rejects_duplicate_in_connected_group() {
 
     // Merge B.0 to A.1
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -987,8 +991,8 @@ fn create_loop_closure_creates_correct_values() {
         ClosureStrategy::Batch,
     ).unwrap();
 
-    assert_eq!(closure.station_a, StationRef::new(a, 0));
-    assert_eq!(closure.station_b, StationRef::new(b, 1));
+    assert!(project.key_is_ref(&closure.station_a, StationRef::new(a, 0)));
+    assert!(project.key_is_ref(&closure.station_b, StationRef::new(b, 1)));
 
     // Path length should be sum of shot lengths: 10m + 5m = 15m
     assert!((closure.path_length - 15.0).abs() < 0.1,
@@ -1205,8 +1209,8 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     // (create_loop_closure won't accept stations that are the merge pair itself)
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         path_length: 10.0,
         misclosure_distance: 0.2,
         error_percentage: 2.0,
@@ -1219,8 +1223,8 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     // Also inject an unrelated closure for B-C pair
     project.loop_closures.push(LoopClosure {
         id: 2,
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         path_length: 3.0,
         misclosure_distance: 0.1,
         error_percentage: 3.3,
@@ -1239,13 +1243,13 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
     );
     assert!(success);
     assert_eq!(removed.len(), 1, "Should remove exactly 1 closure matching the merge pair");
-    assert_eq!(removed[0].station_a, StationRef::new(a, 1));
-    assert_eq!(removed[0].station_b, StationRef::new(b, 0));
+    assert!(project.key_is_ref(&removed[0].station_a, StationRef::new(a, 1)));
+    assert!(project.key_is_ref(&removed[0].station_b, StationRef::new(b, 0)));
 
     // Only the B-C closure should remain
     assert_eq!(project.loop_closures.len(), 1);
-    assert_eq!(project.loop_closures[0].station_a, StationRef::new(b, 1));
-    assert_eq!(project.loop_closures[0].station_b, StationRef::new(c, 0));
+    assert!(project.key_is_ref(&project.loop_closures[0].station_a, StationRef::new(b, 1)));
+    assert!(project.key_is_ref(&project.loop_closures[0].station_b, StationRef::new(c, 0)));
 }
 
 #[test]
@@ -1273,8 +1277,8 @@ fn unmerge_stations_preserves_unrelated_closures() {
     // This is a direct closure at the merge point
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         path_length: 3.0,
         misclosure_distance: 0.1,
         error_percentage: 3.3,
@@ -1322,16 +1326,16 @@ fn closure_expands_connected_sections_with_existing_merges() {
 
     // Merge A-B
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Closure B-C (no merge, just a closure)
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         path_length: 5.0,
         misclosure_distance: 0.1,
         error_percentage: 2.0,
@@ -1420,13 +1424,13 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
         .id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 2),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 2).into(),
         merged_at: Utc::now(),
     });
 
@@ -1467,8 +1471,8 @@ fn new_merge_expands_existing_closure_connectivity() {
     // Closure A-B (before any merges)
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         path_length: 5.0,
         misclosure_distance: 0.1,
         error_percentage: 2.0,
@@ -1490,8 +1494,8 @@ fn new_merge_expands_existing_closure_connectivity() {
 
     // Now merge B-C
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -1550,16 +1554,16 @@ fn transitive_closure_computation_correct() {
 
     // Merge A.1 with B.0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Closure A.1 to C.0
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         path_length: 8.0,
         misclosure_distance: 0.2,
         error_percentage: 2.5,
@@ -1674,23 +1678,23 @@ fn transitive_closure_both_endpoints_merged() {
 
     // Merge A.1 ↔ B.0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Merge B.1 ↔ C.0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Closure A.1 ↔ C.0 (both endpoints are in merge groups)
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         path_length: 8.0,
         misclosure_distance: 0.2,
         error_percentage: 2.5,
@@ -2313,16 +2317,16 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
 
     // Merge a -> b
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Loop closure b -> c
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         path_length: 5.0,
         misclosure_distance: 0.1,
         error_percentage: 2.0,
@@ -2337,11 +2341,11 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
     project.section_offsets.insert(a, (10.0, 20.0));
 
     // Station offset for a:0
-    project.station_offsets.insert(StationRef::new(a, 0), (1.0, 2.0, 3.0));
+    project.station_offsets.insert(StationRef::new(a, 0).into(), (1.0, 2.0, 3.0));
 
     // Zero datum for a:0
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
     });
 
@@ -2415,8 +2419,8 @@ fn test_cleanup_preserves_unrelated_relationships() {
     let (mut project, a, b, c) = build_project_with_relationships();
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -2456,79 +2460,11 @@ fn test_get_section_relationships() {
     assert_eq!(rel_b.zero_datum_count, 0, "Section B has no zero datums");
 }
 
-#[test]
-fn shift_station_refs_updates_related_collections() {
-    let mut project = Project::new("Shift".to_string(), None);
-    let section_id = project
-        .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 1.0, 0.0, 0.0),
-                shot(90.0, 90.0, 1.0, 0.0, 0.0),
-                shot(180.0, 180.0, 1.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-
-    project
-        .station_offsets
-        .insert(StationRef::new(section_id, 1), (1.0, 1.0, 1.0));
-    project
-        .station_offsets
-        .insert(StationRef::new(section_id, 3), (3.0, 3.0, 3.0));
-
-    project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_id, 2),
-        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
-    });
-
-    project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_id, 2),
-        station_b: StationRef::new(section_id, 3),
-        merged_at: Utc::now(),
-    });
-
-    project.loop_closures.push(LoopClosure {
-        id: 1,
-        station_a: StationRef::new(section_id, 1),
-        station_b: StationRef::new(section_id, 3),
-        path_length: 2.0,
-        misclosure_distance: 0.1,
-        error_percentage: 5.0,
-        horizontal_misclosure: 0.1,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::default(),
-        is_aligned: false,
-    });
-
-    project.shift_station_refs(section_id, 2, -1);
-
-    assert!(project
-        .station_offsets
-        .contains_key(&StationRef::new(section_id, 1)));
-    assert!(!project
-        .station_offsets
-        .contains_key(&StationRef::new(section_id, 3)));
-    assert_eq!(
-        project
-            .station_offsets
-            .get(&StationRef::new(section_id, 2)),
-        Some(&(3.0, 3.0, 3.0))
-    );
-
-    assert_eq!(
-        project.zero_datums[0].station_ref,
-        StationRef::new(section_id, 1)
-    );
-
-    let merge = &project.station_merges[0];
-    assert_eq!(merge.station_a, StationRef::new(section_id, 1));
-    assert_eq!(merge.station_b, StationRef::new(section_id, 2));
-
-    let closure = &project.loop_closures[0];
-    assert_eq!(closure.station_a, StationRef::new(section_id, 1));
-    assert_eq!(closure.station_b, StationRef::new(section_id, 2));
-}
+// (Removed `shift_station_refs_updates_related_collections`: the positional
+// ref-shifting mechanism it exercised no longer exists. Under stable
+// shot-UUID identity, cross-references never shift on insert/delete — they
+// resolve to the moved station automatically — so there is nothing to shift.
+// Anchor-stability is covered by the insert/delete identity tests instead.)
 
 #[test]
 fn preview_delete_shot_basic() {
@@ -2554,8 +2490,8 @@ fn preview_delete_shot_basic() {
 
     // Merge station_a:1 with station_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 1),
-        station_b: StationRef::new(section_b, 0),
+        station_a: StationRef::new(section_a, 1).into(),
+        station_b: StationRef::new(section_b, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -2577,8 +2513,8 @@ fn preview_delete_shot_basic() {
 
     // Add a merge at station_a:2 with station_b:1
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 2),
-        station_b: StationRef::new(section_b, 1),
+        station_a: StationRef::new(section_a, 2).into(),
+        station_b: StationRef::new(section_b, 1).into(),
         merged_at: Utc::now(),
     });
 
@@ -2615,16 +2551,16 @@ fn preview_delete_shot_with_closure_rewire() {
 
     // Merge section_a:1 with section_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 1),
-        station_b: StationRef::new(section_b, 0),
+        station_a: StationRef::new(section_a, 1).into(),
+        station_b: StationRef::new(section_b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Add a loop closure between section_a:1 and section_b:1
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(section_a, 1),
-        station_b: StationRef::new(section_b, 1),
+        station_a: StationRef::new(section_a, 1).into(),
+        station_b: StationRef::new(section_b, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.1,
         error_percentage: 5.0,
@@ -2644,8 +2580,8 @@ fn preview_delete_shot_with_closure_rewire() {
     // Now add a closure with section_a:2 and section_b:1
     project.loop_closures.push(LoopClosure {
         id: 2,
-        station_a: StationRef::new(section_a, 2),
-        station_b: StationRef::new(section_b, 1),
+        station_a: StationRef::new(section_a, 2).into(),
+        station_b: StationRef::new(section_b, 1).into(),
         path_length: 3.0,
         misclosure_distance: 0.2,
         error_percentage: 6.7,
@@ -2694,15 +2630,15 @@ fn preview_delete_shot_mid_shot_loop_blocks_shift() {
 
     // Merge A:0 with B:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 0),
-        station_b: StationRef::new(section_b, 0),
+        station_a: StationRef::new(section_a, 0).into(),
+        station_b: StationRef::new(section_b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Merge A:3 with B:1
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 3),
-        station_b: StationRef::new(section_b, 1),
+        station_a: StationRef::new(section_a, 3).into(),
+        station_b: StationRef::new(section_b, 1).into(),
         merged_at: Utc::now(),
     });
 
@@ -2797,15 +2733,15 @@ fn remove_shot_with_rewire_replaces_merges() {
 
     // Merge section_a:1 with section_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 1),
-        station_b: StationRef::new(section_b, 0),
+        station_a: StationRef::new(section_a, 1).into(),
+        station_b: StationRef::new(section_b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Merge section_b:0 with section_c:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_b, 0),
-        station_b: StationRef::new(section_c, 0),
+        station_a: StationRef::new(section_b, 0).into(),
+        station_b: StationRef::new(section_c, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -2818,10 +2754,10 @@ fn remove_shot_with_rewire_replaces_merges() {
 
     // After removal, there should be a replacement merge between section_a:1 and section_c:0
     let has_replacement = project.station_merges.iter().any(|m| {
-        (m.station_a == StationRef::new(section_a, 1)
-            && m.station_b == StationRef::new(section_c, 0))
-            || (m.station_a == StationRef::new(section_c, 0)
-                && m.station_b == StationRef::new(section_a, 1))
+        (project.key_is_ref(&m.station_a, StationRef::new(section_a, 1))
+            && project.key_is_ref(&m.station_b, StationRef::new(section_c, 0)))
+            || (project.key_is_ref(&m.station_a, StationRef::new(section_c, 0))
+                && project.key_is_ref(&m.station_b, StationRef::new(section_a, 1)))
     });
     assert!(
         has_replacement,
@@ -2893,16 +2829,16 @@ fn insert_shot_after_shifts_station_refs() {
 
     // Add a merge between section_a:2 (after second shot) and section_b:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 2),
-        station_b: StationRef::new(section_b, 0),
+        station_a: StationRef::new(section_a, 2).into(),
+        station_b: StationRef::new(section_b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Add a loop closure between section_a:2 and section_b:1
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(section_a, 2),
-        station_b: StationRef::new(section_b, 1),
+        station_a: StationRef::new(section_a, 2).into(),
+        station_b: StationRef::new(section_b, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.1,
         error_percentage: 5.0,
@@ -2912,6 +2848,11 @@ fn insert_shot_after_shifts_station_refs() {
         is_aligned: false,
     });
     project.next_closure_id = 2;
+
+    // Canonicalize the transitional Index anchors to stable shot-UUID anchors
+    // (as a load would) so they track the physical station across the insert —
+    // that position-independence is exactly what C1 verifies here.
+    project.reanchor_station_refs();
 
     // Insert a shot after section_a's first shot (position 0)
     let first_shot_id = project.get_section(section_a).unwrap().shots[0].id;
@@ -2927,21 +2868,13 @@ fn insert_shot_after_shifts_station_refs() {
     // So section_a:2 becomes section_a:3.
     // The merge should now reference section_a:3.
     let merge = &project.station_merges[0];
-    assert_eq!(
-        merge.station_a,
-        StationRef::new(section_a, 3),
-        "Merge station_a should have shifted from 2 to 3"
-    );
-    assert_eq!(merge.station_b, StationRef::new(section_b, 0));
+    assert!(project.key_is_ref(&merge.station_a, StationRef::new(section_a, 3)), "Merge station_a should have shifted from 2 to 3");
+    assert!(project.key_is_ref(&merge.station_b, StationRef::new(section_b, 0)));
 
     // The closure should reference section_a:3 (was section_a:2).
     let closure = &project.loop_closures[0];
-    assert_eq!(
-        closure.station_a,
-        StationRef::new(section_a, 3),
-        "Closure station_a should have shifted from 2 to 3"
-    );
-    assert_eq!(closure.station_b, StationRef::new(section_b, 1));
+    assert!(project.key_is_ref(&closure.station_a, StationRef::new(section_a, 3)), "Closure station_a should have shifted from 2 to 3");
+    assert!(project.key_is_ref(&closure.station_b, StationRef::new(section_b, 1)));
 }
 
 #[test]
@@ -2960,7 +2893,7 @@ fn calculate_penetration_with_zero_datum() {
 
     // Set a zero datum on station 0
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_id, 0),
+        station_ref: StationRef::new(section_id, 0).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
     });
 
@@ -3256,7 +3189,7 @@ fn distribute_closure_with_zero_datum_mid_path() {
 
     // Set zero datum on A:1 (mid-path station)
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 1),
+        station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
     });
 
@@ -3305,11 +3238,11 @@ fn distribute_closure_both_anchored_fails() {
 
     // Set zero datums on both closure endpoints
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 1),
+        station_ref: StationRef::new(a, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 1),
+        station_ref: StationRef::new(b, 1).into(),
         gps: GpsCoordinates::new(0.0, 0.01, 0.0).unwrap(),
     });
 
@@ -3729,7 +3662,7 @@ fn is_shot_frozen_single_datum_dead_end() {
     }).id;
 
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(sec, 0),
+        station_ref: StationRef::new(sec, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
 
@@ -3762,22 +3695,22 @@ fn is_shot_frozen_loop_with_two_datums() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 2),
-        station_b: StationRef::new(b, 2),
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 2).into(),
         merged_at: Utc::now(),
     });
 
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 0),
+        station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
 
@@ -3819,21 +3752,21 @@ fn is_shot_frozen_loop_with_aligned_closure() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
 
     // Add aligned closure: A:2 <-> B:2
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
-        station_a: StationRef::new(a, 2),
-        station_b: StationRef::new(b, 2),
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 2).into(),
         path_length: 4.0,
         misclosure_distance: 0.1,
         error_percentage: 2.5,
@@ -3877,21 +3810,21 @@ fn is_shot_frozen_unaligned_closure_not_traversed() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
 
     // Unaligned closure: A:2 <-> B:2
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
-        station_a: StationRef::new(a, 2),
-        station_b: StationRef::new(b, 2),
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 2).into(),
         path_length: 4.0,
         misclosure_distance: 0.1,
         error_percentage: 2.5,
@@ -3965,22 +3898,22 @@ fn update_shot_rejects_frozen_geometry() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 1).into(),
         merged_at: Utc::now(),
     });
 
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 0),
+        station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
 
@@ -4002,7 +3935,7 @@ fn update_shot_rejects_frozen_geometry() {
     let merge_adj = project.build_merge_adjacency(&section_lookup);
     let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
     let datum_stations: HashSet<StationRef> =
-        project.zero_datums.iter().map(|d| d.station_ref).collect();
+        project.zero_datums.iter().filter_map(|d| project.resolve_key(&d.station_ref)).collect();
     assert!(project.is_shot_frozen(a, 0, &section_lookup, &merge_adj, &closure_adj, &datum_stations));
 
     // Non-geometry update should be allowed (touches_geometry returns false)
@@ -4101,8 +4034,8 @@ fn stats_with_loop_closures() {
 
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         strategy: ClosureStrategy::Move,
         is_aligned: false,
         path_length: 10.0,
@@ -4230,7 +4163,7 @@ fn compute_station_raw_coords_with_individual_station_offset() {
     assert!((coords_before.y - 10.0).abs() < 1e-6);
 
     // Add individual station offset
-    project.station_offsets.insert(station_ref, (3.0, -2.0, 1.0));
+    project.station_offsets.insert(station_ref.into(), (3.0, -2.0, 1.0));
 
     let coords_after = project.compute_station_raw_coords(station_ref).unwrap();
     assert!((coords_after.x - 3.0).abs() < 1e-6);
@@ -4311,8 +4244,8 @@ fn path_length_through_merge() {
 
     // Merge a.1 to b.0 (zero-distance edge)
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -4390,8 +4323,8 @@ fn compute_station_coordinates_merged_sections_have_merged_with() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -4517,8 +4450,8 @@ fn realign_merged_section_keeps_merge_point_aligned() {
 
     // Merge 1:3 <-> 2:3
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(sec1, 3),
-        station_b: StationRef::new(sec2, 3),
+        station_a: StationRef::new(sec1, 3).into(),
+        station_b: StationRef::new(sec2, 3).into(),
         merged_at: Utc::now(),
     });
 
@@ -4664,8 +4597,8 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
 
     // Merge 1:3 <-> 2:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(sec1, 3),
-        station_b: StationRef::new(sec2, 0),
+        station_a: StationRef::new(sec1, 3).into(),
+        station_b: StationRef::new(sec2, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -4766,13 +4699,13 @@ fn cleanup_removes_merges_referencing_section() {
     let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -4790,8 +4723,8 @@ fn cleanup_removes_closures_referencing_section() {
 
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         path_length: 10.0,
         misclosure_distance: 0.1,
         error_percentage: 1.0,
@@ -4802,8 +4735,8 @@ fn cleanup_removes_closures_referencing_section() {
     });
     project.loop_closures.push(LoopClosure {
         id: 2,
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(a, 1),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(a, 1).into(),
         path_length: 5.0,
         misclosure_distance: 0.05,
         error_percentage: 1.0,
@@ -4827,8 +4760,8 @@ fn cleanup_removes_offsets_and_datums() {
 
     project.section_offsets.insert(a, (1.0, 2.0));
     project.section_offsets.insert(b, (3.0, 4.0));
-    project.station_offsets.insert(StationRef::new(a, 0), (1.0, 2.0, 3.0));
-    project.station_offsets.insert(StationRef::new(b, 0), (4.0, 5.0, 6.0));
+    project.station_offsets.insert(StationRef::new(a, 0).into(), (1.0, 2.0, 3.0));
+    project.station_offsets.insert(StationRef::new(b, 0).into(), (4.0, 5.0, 6.0));
 
     let gps = GpsCoordinates::new(45.0, 10.0, 0.0).unwrap();
     project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
@@ -4851,13 +4784,13 @@ fn cleanup_preserves_unrelated_merges() {
     let c = project.add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -4911,8 +4844,8 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
     let mut project = Project::new("ClosureIDs".to_string(), None);
     project.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(0, 0),
-        station_b: StationRef::new(0, 1),
+        station_a: StationRef::new(0, 0).into(),
+        station_b: StationRef::new(0, 1).into(),
         path_length: 10.0,
         misclosure_distance: 0.1,
         error_percentage: 1.0,
@@ -4923,8 +4856,8 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
     });
     project.loop_closures.push(LoopClosure {
         id: 5, // already assigned
-        station_a: StationRef::new(0, 0),
-        station_b: StationRef::new(0, 1),
+        station_a: StationRef::new(0, 0).into(),
+        station_b: StationRef::new(0, 1).into(),
         path_length: 10.0,
         misclosure_distance: 0.1,
         error_percentage: 1.0,
@@ -4935,8 +4868,8 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
     });
     project.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(0, 0),
-        station_b: StationRef::new(0, 1),
+        station_a: StationRef::new(0, 0).into(),
+        station_b: StationRef::new(0, 1).into(),
         path_length: 10.0,
         misclosure_distance: 0.1,
         error_percentage: 1.0,
@@ -4959,42 +4892,10 @@ fn assign_closure_ids_fills_zeros_and_updates_counter() {
     assert_eq!(project.next_closure_id, 8);
 }
 
-#[test]
-fn shift_station_refs_adjusts_all_references() {
-    let mut project = Project::new("Shift".to_string(), None);
-    let sec = project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
-        ..Default::default()
-    }).id;
-
-    project.station_merges.push(StationMerge {
-        station_a: StationRef::new(sec, 2),
-        station_b: StationRef::new(sec, 0),
-        merged_at: Utc::now(),
-    });
-    project.loop_closures.push(LoopClosure {
-        id: 1,
-        station_a: StationRef::new(sec, 1),
-        station_b: StationRef::new(sec, 3),
-        path_length: 1.0, misclosure_distance: 0.0, error_percentage: 0.0,
-        horizontal_misclosure: 0.0, vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::Batch, is_aligned: false,
-    });
-    let gps = GpsCoordinates::new(45.0, 10.0, 0.0).unwrap();
-    project.set_zero_datum(StationRef::new(sec, 2), gps).unwrap();
-
-    // Shift indices >= 1 by +1 (as if inserting a shot at position 1)
-    project.shift_station_refs(sec, 1, 1);
-
-    // merge.station_a was (sec,2), now (sec,3); station_b was (sec,0), stays (sec,0)
-    assert_eq!(project.station_merges[0].station_a.station_index, 3);
-    assert_eq!(project.station_merges[0].station_b.station_index, 0);
-    // closure station_a was (sec,1) → (sec,2); station_b was (sec,3) → (sec,4)
-    assert_eq!(project.loop_closures[0].station_a.station_index, 2);
-    assert_eq!(project.loop_closures[0].station_b.station_index, 4);
-    // zero datum was (sec,2) → (sec,3)
-    assert_eq!(project.zero_datums[0].station_ref.station_index, 3);
-}
+// (Removed `shift_station_refs_adjusts_all_references`: `shift_station_refs`
+// no longer exists. Stable shot-UUID anchors are position-independent, so an
+// insert/delete never rewrites a cross-reference's index — the ref resolves to
+// the moved station on the fly. Covered by the insert/delete identity tests.)
 
 // ── Station depth computation tests ─────────────────────────────────
 
@@ -5070,8 +4971,8 @@ fn compute_station_depth_with_merge_averages_both_sections() {
 
     // Merge A:1 with B:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -5185,7 +5086,7 @@ fn compute_raw_coords_with_station_offset() {
         ..Default::default()
     }).id;
 
-    project.station_offsets.insert(StationRef::new(sec, 0), (1.0, 2.0, 3.0));
+    project.station_offsets.insert(StationRef::new(sec, 0).into(), (1.0, 2.0, 3.0));
 
     let c0 = project.compute_station_raw_coords(StationRef::new(sec, 0)).unwrap();
     assert!((c0.x - 1.0).abs() < 1e-9, "x should include station offset");
@@ -5234,21 +5135,21 @@ fn lsq_preserves_depth_values() {
 
     // Merge to form a loop: A:1 → B:0, B:1 → C:0
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Closure: C:1 should be at A:0 (closing the loop)
     let closure = LoopClosure {
         id: 1,
-        station_a: StationRef::new(c, 1),
-        station_b: StationRef::new(a, 0),
+        station_a: StationRef::new(c, 1).into(),
+        station_b: StationRef::new(a, 0).into(),
         path_length: 34.5,
         misclosure_distance: 0.5,
         error_percentage: 1.4,
@@ -5292,15 +5193,15 @@ fn lsq_anchor_station_stays_fixed() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 2),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     let closure = LoopClosure {
         id: 1,
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(a, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(a, 0).into(),
         path_length: 30.5,
         misclosure_distance: 0.5,
         error_percentage: 1.6,
@@ -5344,15 +5245,15 @@ fn lsq_produces_finite_coordinates() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 2),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
 
     let closure = LoopClosure {
         id: 1,
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(a, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(a, 0).into(),
         path_length: 34.0,
         misclosure_distance: 0.2,
         error_percentage: 0.6,
@@ -5395,25 +5296,25 @@ fn lsq_with_zero_datum_fixes_that_group() {
     }).id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(b, 1),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
 
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 100.0).unwrap(),
     });
 
     let closure = LoopClosure {
         id: 1,
-        station_a: StationRef::new(c, 1),
-        station_b: StationRef::new(a, 0),
+        station_a: StationRef::new(c, 1).into(),
+        station_b: StationRef::new(a, 0).into(),
         path_length: 34.5,
         misclosure_distance: 0.5,
         error_percentage: 1.4,
@@ -5517,11 +5418,11 @@ fn lsq_long_chain_per_shot_changes_are_small() {
 
     // Zero datums
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 200),
+        station_ref: StationRef::new(a, 200).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 0),
+        station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
     });
 
@@ -5543,8 +5444,8 @@ fn lsq_long_chain_per_shot_changes_are_small() {
 
     let closure = LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 100),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 100).into(),
+        station_b: StationRef::new(b, 1).into(),
         path_length: 1010.0,
         misclosure_distance: 10.0,
         error_percentage: 0.99,
@@ -5658,11 +5559,11 @@ fn lsq_realistic_topology_preserves_geometry() {
 
     // Zero datums
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 364),
+        station_ref: StationRef::new(a, 364).into(),
         gps: GpsCoordinates::new(50.0, 50.0, 0.0).unwrap(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 0),
+        station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(49.99, 50.013, 0.0).unwrap(),
     });
 
@@ -5674,8 +5575,8 @@ fn lsq_realistic_topology_preserves_geometry() {
     // Closure: A:73 ↔ B:1 (misclosure ~2m)
     let closure = LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 73),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 73).into(),
+        station_b: StationRef::new(b, 1).into(),
         path_length: 3133.0,
         misclosure_distance: 2.0,
         error_percentage: 0.06,
@@ -5761,18 +5662,18 @@ fn lsq_spur_shots_are_not_modified() {
 
     // Merge C:0 ↔ A:50
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(c, 0),
-        station_b: StationRef::new(a, 50),
+        station_a: StationRef::new(c, 0).into(),
+        station_b: StationRef::new(a, 50).into(),
         merged_at: Utc::now(),
     });
 
     // Zero datums
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 100),
+        station_ref: StationRef::new(a, 100).into(),
         gps: GpsCoordinates::new(45.0, 10.0, 0.0).unwrap(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(b, 0),
+        station_ref: StationRef::new(b, 0).into(),
         gps: GpsCoordinates::new(45.01, 10.01, 0.0).unwrap(),
     });
 
@@ -5793,8 +5694,8 @@ fn lsq_spur_shots_are_not_modified() {
 
     let closure = LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 30),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 30).into(),
+        station_b: StationRef::new(b, 1).into(),
         path_length: 360.0,
         misclosure_distance: 5.0,
         error_percentage: 1.4,
@@ -5887,13 +5788,13 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     // Establish two surviving merges A↔B and B↔C via the maintained
     // helper so the cache is fully populated.
     project.record_station_merge(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.record_station_merge(StationMerge {
-        station_a: StationRef::new(b, 0),
-        station_b: StationRef::new(c, 0),
+        station_a: StationRef::new(b, 0).into(),
+        station_b: StationRef::new(c, 0).into(),
         merged_at: Utc::now(),
     });
     assert_eq!(project.get_merged_section_ids(a).len(), 3);
@@ -5908,8 +5809,8 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
     // containing ONLY {C, D} edges; with the guard it must contain
     // all three groups.
     project.record_station_merge(StationMerge {
-        station_a: StationRef::new(c, 0),
-        station_b: StationRef::new(d, 0),
+        station_a: StationRef::new(c, 0).into(),
+        station_b: StationRef::new(d, 0).into(),
         merged_at: Utc::now(),
     });
     let merged = project.get_merged_section_ids(a);
@@ -6018,7 +5919,7 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
         })
         .id;
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     // Merge A2 <-> B0 and align (B0 lands on A2).
@@ -6027,8 +5928,8 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
     // A closure A0 <-> B2, marked aligned — but A0=(0,0) and B2 is 20m north.
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 2),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 2).into(),
         path_length: 0.0,
         misclosure_distance: 0.0,
         error_percentage: 0.0,
@@ -6070,15 +5971,15 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
     // Chain: section[i] station 1 merged to section[i+1] station 0.
     for w in ids.windows(2) {
         project.record_station_merge(StationMerge {
-            station_a: StationRef::new(w[0], 1),
-            station_b: StationRef::new(w[1], 0),
+            station_a: StationRef::new(w[0], 1).into(),
+            station_b: StationRef::new(w[1], 0).into(),
             merged_at: Utc::now(),
         });
     }
     // Datum on the LAST section (far end from section[0]).
     let last = *ids.last().unwrap();
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(last, 0),
+        station_ref: StationRef::new(last, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     // Knock every section out of alignment, then re-solve from scratch.
@@ -6111,8 +6012,8 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
             .id;
         // Merge B0 onto A's MIDDLE station (index 1) — the insertion boundary.
         p.record_station_merge(StationMerge {
-            station_a: StationRef::new(a, 1),
-            station_b: StationRef::new(b, 0),
+            station_a: StationRef::new(a, 1).into(),
+            station_b: StationRef::new(b, 0).into(),
             merged_at: Utc::now(),
         });
         let s0 = p.get_section(a).unwrap().shots[0].id;
@@ -6126,7 +6027,8 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
             .iter()
             .find(|m| m.station_a.section_id == a || m.station_b.section_id == a)
             .expect("merge");
-        if m.station_a.section_id == a { m.station_a.station_index } else { m.station_b.station_index }
+        let key = if m.station_a.section_id == a { &m.station_a } else { &m.station_b };
+        p.resolve_key(key).expect("merge endpoint resolves").station_index
     };
 
     let (mut p_after, a, s0, _) = build();
@@ -6162,7 +6064,7 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
         .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
         .id;
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
@@ -6189,7 +6091,7 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
         .id;
     // Anchor A at a zero datum so realign has an authority.
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     // Merge A1 <-> B0 (merge_stations computes the aligning offset).
@@ -6222,7 +6124,7 @@ fn realign_corrects_sub_tolerance_offset_drift() {
         .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
         .id;
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
@@ -6284,18 +6186,18 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
         .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
         .id;
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 5.0).unwrap(),
     });
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 1).into(),
         path_length: 10.0,
         misclosure_distance: 0.2,
         error_percentage: 2.0,
@@ -6319,8 +6221,8 @@ fn check_orphan_closures_detects_sole_bridge_closure() {
     // A closure between A and B with NO merge connecting them: a sole bridge.
     p.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 0).into(),
         path_length: 0.0,
         misclosure_distance: 0.0,
         error_percentage: 0.0,
@@ -6336,8 +6238,8 @@ fn check_orphan_closures_detects_sole_bridge_closure() {
     // Once a merge connects the two sections, the closure is a genuine
     // (redundant) loop and is no longer flagged.
     p.record_station_merge(StationMerge {
-        station_a: StationRef::new(a, 1),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 1).into(),
         merged_at: Utc::now(),
     });
     assert!(p.check_orphan_closures().is_empty());
@@ -6361,18 +6263,18 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
         .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
         .id;
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(a, 0),
+        station_ref: StationRef::new(a, 0).into(),
         gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
     });
     project.record_station_merge(StationMerge {
-        station_a: StationRef::new(a, 2),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(b, 1),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 1).into(),
         path_length: 0.0,
         misclosure_distance: 0.0,
         error_percentage: 0.0,
@@ -6393,9 +6295,9 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
     );
     assert!(
         project.station_merges.iter().any(|m| {
-            let pair = (m.station_a, m.station_b);
-            pair == (StationRef::new(a, 0), StationRef::new(b, 1))
-                || pair == (StationRef::new(b, 1), StationRef::new(a, 0))
+            let pair = (m.station_a.clone(), m.station_b.clone());
+            pair == (StationRef::new(a, 0).into(), StationRef::new(b, 1).into())
+                || pair == (StationRef::new(b, 1).into(), StationRef::new(a, 0).into())
         }),
         "expected a merge A0<->B1; got {:?}",
         project.station_merges
@@ -6417,15 +6319,15 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
         .id;
     // A2 is merged with B0 (B hangs off the end of A).
     project.record_station_merge(StationMerge {
-        station_a: StationRef::new(a, 2),
-        station_b: StationRef::new(b, 0),
+        station_a: StationRef::new(a, 2).into(),
+        station_b: StationRef::new(b, 0).into(),
         merged_at: Utc::now(),
     });
     // A loop closure ties A0 to A2 (the A0-A1-A2 survey is the loop).
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(a, 2),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(a, 2).into(),
         path_length: 2.0,
         misclosure_distance: 0.0,
         error_percentage: 0.0,
@@ -6434,6 +6336,11 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
         strategy: ClosureStrategy::default(),
         is_aligned: false,
     });
+
+    // Canonicalize the transitional Index anchors to stable shot-UUID anchors,
+    // as every load path does before any command runs (so in-memory keys are
+    // canonical, which is what remove_shot_with_rewire matches against).
+    project.reanchor_station_refs();
 
     // Delete A's last shot (A1->A2): removes station A2, a closure endpoint. The
     // surviving B segment is detached, so the closure must become a merge.
@@ -6448,9 +6355,9 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
     );
     assert!(
         project.station_merges.iter().any(|m| {
-            let pair = (m.station_a, m.station_b);
-            pair == (StationRef::new(b, 0), StationRef::new(a, 0))
-                || pair == (StationRef::new(a, 0), StationRef::new(b, 0))
+            let pair = (m.station_a.clone(), m.station_b.clone());
+            pair == (StationRef::new(b, 0).into(), StationRef::new(a, 0).into())
+                || pair == (StationRef::new(a, 0).into(), StationRef::new(b, 0).into())
         }),
         "expected a merge between A0 and B0; got {:?}",
         project.station_merges
@@ -6464,12 +6371,12 @@ fn repair_structural_integrity_drops_dangling_refs_and_keeps_valid() {
     let (mut project, a, b) = integrity_fixture();
     // Corrupt: a dangling merge, closure, datum, plus orphan offset/comment.
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(a, 0),
-        station_b: StationRef::new(9999, 0),
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(9999, 0).into(),
         merged_at: Utc::now(),
     });
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(9999, 0),
+        station_ref: StationRef::new(9999, 0).into(),
         gps: GpsCoordinates::new(1.0, 2.0, 3.0).unwrap(),
     });
     project.section_offsets.insert(9999, (1.0, 1.0));
@@ -6500,7 +6407,7 @@ fn integrity_clean_project_has_no_violations() {
 fn integrity_flags_merge_to_missing_section() {
     let (mut project, a, _) = integrity_fixture();
     // Point the merge at a section id that doesn't exist.
-    project.station_merges[0].station_b = StationRef::new(9999, 0);
+    project.station_merges[0].station_b = StationRef::new(9999, 0).into();
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 1, "{v:?}");
     assert_eq!(v[0].severity, ViolationSeverity::Critical);
@@ -6513,19 +6420,20 @@ fn integrity_flags_merge_to_missing_section() {
 #[test]
 fn integrity_flags_station_index_out_of_range() {
     let (mut project, a, _) = integrity_fixture();
-    // Section a has 1 shot → stations 0..=1; index 5 is out of range.
-    project.station_merges[0].station_a = StationRef::new(a, 5);
+    // Section a has 1 shot → stations 0..=1; index 5 is out of range, so the
+    // transitional Index anchor no longer resolves → flagged as a dangling ref.
+    project.station_merges[0].station_a = StationRef::new(a, 5).into();
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 1, "{v:?}");
     assert_eq!(v[0].severity, ViolationSeverity::Critical);
-    assert!(v[0].message.contains("out of range"));
+    assert!(v[0].message.contains("no longer resolves"), "{v:?}");
 }
 
 #[test]
 fn integrity_flags_dangling_closure_and_zero_datum() {
     let (mut project, _, _) = integrity_fixture();
-    project.loop_closures[0].station_b = StationRef::new(9999, 0);
-    project.zero_datums[0].station_ref = StationRef::new(9999, 0);
+    project.loop_closures[0].station_b = StationRef::new(9999, 0).into();
+    project.zero_datums[0].station_ref = StationRef::new(9999, 0).into();
     let v = project.check_structural_integrity();
     let categories: Vec<&str> = v.iter().map(|x| x.category.as_str()).collect();
     assert!(categories.contains(&"dangling_closure_ref"), "{v:?}");
@@ -6537,8 +6445,8 @@ fn integrity_flags_dangling_closure_and_zero_datum() {
 fn integrity_orphan_offsets_and_comments_are_warnings_only() {
     let (mut project, _, _) = integrity_fixture();
     project.section_offsets.insert(9999, (1.0, 2.0));
-    project.station_offsets.insert(StationRef::new(9999, 0), (1.0, 2.0, 3.0));
-    project.station_comments.insert(StationRef::new(9999, 0), "x".to_string());
+    project.station_offsets.insert(StationRef::new(9999, 0).into(), (1.0, 2.0, 3.0));
+    project.station_comments.insert(StationRef::new(9999, 0).into(), "x".to_string());
     let v = project.check_structural_integrity();
     assert_eq!(v.len(), 3, "{v:?}");
     assert!(v.iter().all(|x| x.severity == ViolationSeverity::Warning));

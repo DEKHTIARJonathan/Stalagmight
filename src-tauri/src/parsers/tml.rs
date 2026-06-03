@@ -3315,9 +3315,13 @@ mod tests {
         //    This validates the full import + merge + offset pipeline.
         let merge_tolerance = 1e-6;
         for merge in &project.station_merges {
-            let ca = project.compute_station_raw_coords(merge.station_a)
+            let sa = project.resolve_key(&merge.station_a)
+                .unwrap_or_else(|| panic!("Resolve merge station_a {:?}", merge.station_a));
+            let sb = project.resolve_key(&merge.station_b)
+                .unwrap_or_else(|| panic!("Resolve merge station_b {:?}", merge.station_b));
+            let ca = project.compute_station_raw_coords(sa)
                 .unwrap_or_else(|| panic!("Coords for merge station_a {:?}", merge.station_a));
-            let cb = project.compute_station_raw_coords(merge.station_b)
+            let cb = project.compute_station_raw_coords(sb)
                 .unwrap_or_else(|| panic!("Coords for merge station_b {:?}", merge.station_b));
             assert!(
                 (ca.x - cb.x).abs() < merge_tolerance && (ca.y - cb.y).abs() < merge_tolerance,

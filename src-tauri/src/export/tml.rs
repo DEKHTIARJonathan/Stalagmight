@@ -502,12 +502,13 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
         let split_root_at = if is_root {
             primary_datum
                 .filter(|datum| datum.station_ref.section_id == section.id)
-                .and_then(|datum| {
-                    let idx = datum.station_ref.station_index as usize;
+                .and_then(|datum| project.resolve_key(&datum.station_ref))
+                .and_then(|sr| {
+                    let idx = sr.station_index as usize;
                     if idx > section.shots.len() {
                         tracing::warn!(
                             section_id = section.id,
-                            station_index = datum.station_ref.station_index,
+                            station_index = sr.station_index,
                             shot_count = section.shots.len(),
                             "Zero datum station is out of bounds; exporting section without split"
                         );
@@ -1081,7 +1082,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
             .station_comments
             .iter()
             .filter(|(_, v)| !v.is_empty())
-            .map(|(k, v)| (*k, v.as_str()))
+            .filter_map(|(k, v)| project.resolve_key(k).map(|sr| (sr, v.as_str())))
             .collect();
         entries.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
         for (sr, text) in entries {
@@ -1129,38 +1130,44 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
         // physical station.
         for entry in &mut baseline {
             let primary = StationRef::new(entry.section_id, entry.shot_index + 1);
-            entry.station_comment = project.station_comments.get(&primary).cloned();
+            // Resolve-based (same lookup as the attachment loop above) so the
+            // baseline matches whatever anchor kind the comment is stored under.
+            entry.station_comment = project.station_comment_for_ref(primary).cloned();
         }
     }
 
     // Third pass: generate CLOSURE shots from loop_closures
     let mut closure_shots = Vec::new();
     for closure in &project.loop_closures {
-        let Some(&from_id) = station_to_ariane.get(&(
-            closure.station_a.section_id,
-            closure.station_a.station_index,
-        )) else {
+        let (Some(a_ref), Some(b_ref)) = (
+            project.resolve_key(&closure.station_a),
+            project.resolve_key(&closure.station_b),
+        ) else {
             tracing::warn!(
                 closure_id = closure.id,
-                from_section_id = closure.station_a.section_id,
-                from_station_index = closure.station_a.station_index,
-                to_section_id = closure.station_b.section_id,
-                to_station_index = closure.station_b.station_index,
+                "Skipping closure export: an endpoint anchor no longer resolves"
+            );
+            continue;
+        };
+        let Some(&from_id) = station_to_ariane.get(&(a_ref.section_id, a_ref.station_index)) else {
+            tracing::warn!(
+                closure_id = closure.id,
+                from_section_id = a_ref.section_id,
+                from_station_index = a_ref.station_index,
+                to_section_id = b_ref.section_id,
+                to_station_index = b_ref.station_index,
                 "Skipping closure export: from station is not representable in Ariane topology"
             );
             continue;
         };
 
-        let Some(&to_id) = station_to_ariane.get(&(
-            closure.station_b.section_id,
-            closure.station_b.station_index,
-        )) else {
+        let Some(&to_id) = station_to_ariane.get(&(b_ref.section_id, b_ref.station_index)) else {
             tracing::warn!(
                 closure_id = closure.id,
-                from_section_id = closure.station_a.section_id,
-                from_station_index = closure.station_a.station_index,
-                to_section_id = closure.station_b.section_id,
-                to_station_index = closure.station_b.station_index,
+                from_section_id = a_ref.section_id,
+                from_station_index = a_ref.station_index,
+                to_section_id = b_ref.section_id,
+                to_station_index = b_ref.station_index,
                 "Skipping closure export: target station is not representable in Ariane topology"
             );
             continue;
@@ -1169,8 +1176,8 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
         if from_id == to_id {
             tracing::warn!(
                 closure_id = closure.id,
-                section_id = closure.station_a.section_id,
-                station_index = closure.station_a.station_index,
+                section_id = a_ref.section_id,
+                station_index = a_ref.station_index,
                 "Skipping closure export: closure endpoints collapse to the same Ariane node"
             );
             continue;
@@ -1308,21 +1315,27 @@ fn build_parent_map(project: &Project, root_section_id: SectionId) -> HashMap<Se
 
     let mut adjacency: HashMap<SectionId, Vec<NeighborLink>> = HashMap::new();
     for merge in &project.station_merges {
+        let (Some(a), Some(b)) = (
+            project.resolve_key(&merge.station_a),
+            project.resolve_key(&merge.station_b),
+        ) else {
+            continue;
+        };
         adjacency
-            .entry(merge.station_a.section_id)
+            .entry(a.section_id)
             .or_default()
             .push(NeighborLink {
-                neighbor_section_id: merge.station_b.section_id,
-                parent_station: merge.station_a,
-                child_station_index: merge.station_b.station_index,
+                neighbor_section_id: b.section_id,
+                parent_station: a,
+                child_station_index: b.station_index,
             });
         adjacency
-            .entry(merge.station_b.section_id)
+            .entry(b.section_id)
             .or_default()
             .push(NeighborLink {
-                neighbor_section_id: merge.station_a.section_id,
-                parent_station: merge.station_b,
-                child_station_index: merge.station_a.station_index,
+                neighbor_section_id: a.section_id,
+                parent_station: b,
+                child_station_index: a.station_index,
             });
     }
 
@@ -1758,11 +1771,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 0,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -1837,11 +1850,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 2,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 1,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -1902,11 +1915,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 0,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -1916,11 +1929,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 1,
                 station_index: 0,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 0,
                 station_index: 2,
-            },
+            }.into(),
             path_length: 10.0,
             misclosure_distance: 0.4,
             error_percentage: 4.0,
@@ -1963,11 +1976,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 0,
                 station_index: 2,
-            },
+            }.into(),
             path_length: 8.0,
             misclosure_distance: 0.2,
             error_percentage: 2.5,
@@ -2019,7 +2032,7 @@ mod tests {
             station_ref: StationRef {
                 section_id: 0,
                 station_index: 2,
-            },
+            }.into(),
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
         });
 
@@ -2072,7 +2085,7 @@ mod tests {
             station_ref: StationRef {
                 section_id: 0,
                 station_index: 2,
-            },
+            }.into(),
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
@@ -2136,18 +2149,18 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 2,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
                 section_id: 1,
                 station_index: 2,
-            },
+            }.into(),
             gps: GpsCoordinates::new(20.0, -87.0, 0.0).unwrap(),
         });
 
@@ -2374,11 +2387,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 2,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -2474,11 +2487,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 2,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 3,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -2574,11 +2587,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 0,
                 station_index: 1,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 1,
                 station_index: 1,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
 
@@ -2587,11 +2600,11 @@ mod tests {
             station_a: StationRef {
                 section_id: 1,
                 station_index: 3,
-            },
+            }.into(),
             station_b: StationRef {
                 section_id: 2,
                 station_index: 0,
-            },
+            }.into(),
             merged_at: chrono::Utc::now(),
         });
 

@@ -135,7 +135,7 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
             // Datum on a mid-station (>=1) of the root → pre-zero-datum leg.
             let station = rng.range(1, root_n);
             p.zero_datums.push(ZeroDatum {
-                station_ref: StationRef::new(root_id, station as u32),
+                station_ref: StationRef::new(root_id, station as u32).into(),
                 gps: GpsCoordinates::new(20.0, -87.0, 10.0).unwrap(),
             });
         }
@@ -160,8 +160,8 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
             let root_id = p.sections[0].id;
             let child_id = p.sections[1].id;
             p.station_merges.push(StationMerge {
-                station_a: StationRef::new(root_id, 1),
-                station_b: StationRef::new(child_id, 1),
+                station_a: StationRef::new(root_id, 1).into(),
+                station_b: StationRef::new(child_id, 1).into(),
                 merged_at: chrono::Utc::now(),
             });
         }
@@ -175,8 +175,8 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
             let root_id = p.sections[0].id;
             let child_id = p.sections[1].id;
             p.station_merges.push(StationMerge {
-                station_a: StationRef::new(root_id, 1),
-                station_b: StationRef::new(child_id, 0),
+                station_a: StationRef::new(root_id, 1).into(),
+                station_b: StationRef::new(child_id, 0).into(),
                 merged_at: chrono::Utc::now(),
             });
         }

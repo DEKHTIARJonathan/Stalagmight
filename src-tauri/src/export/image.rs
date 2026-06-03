@@ -315,22 +315,26 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
 
     // Merges and aligned closures collapse colocated stations into one node.
     for merge in &project.station_merges {
-        if let (Some(&a), Some(&b)) = (
-            station_index.get(&merge.station_a),
-            station_index.get(&merge.station_b),
+        if let (Some(a_sr), Some(b_sr)) = (
+            project.resolve_key(&merge.station_a),
+            project.resolve_key(&merge.station_b),
         ) {
-            uf.union(a, b);
+            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                uf.union(a, b);
+            }
         }
     }
     for closure in &project.loop_closures {
         if !closure.is_aligned {
             continue;
         }
-        if let (Some(&a), Some(&b)) = (
-            station_index.get(&closure.station_a),
-            station_index.get(&closure.station_b),
+        if let (Some(a_sr), Some(b_sr)) = (
+            project.resolve_key(&closure.station_a),
+            project.resolve_key(&closure.station_b),
         ) {
-            uf.union(a, b);
+            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                uf.union(a, b);
+            }
         }
     }
 
@@ -516,22 +520,26 @@ pub fn generate_svg_string(project: &Project, options: &ExportImageOptions) -> R
     // incident reference shot.
     let mut physical_uf = UnionFind::new(stations.len());
     for merge in &project.station_merges {
-        if let (Some(&a), Some(&b)) = (
-            station_index.get(&merge.station_a),
-            station_index.get(&merge.station_b),
+        if let (Some(a_sr), Some(b_sr)) = (
+            project.resolve_key(&merge.station_a),
+            project.resolve_key(&merge.station_b),
         ) {
-            physical_uf.union(a, b);
+            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                physical_uf.union(a, b);
+            }
         }
     }
     for closure in &project.loop_closures {
         if !closure.is_aligned {
             continue;
         }
-        if let (Some(&a), Some(&b)) = (
-            station_index.get(&closure.station_a),
-            station_index.get(&closure.station_b),
+        if let (Some(a_sr), Some(b_sr)) = (
+            project.resolve_key(&closure.station_a),
+            project.resolve_key(&closure.station_b),
         ) {
-            physical_uf.union(a, b);
+            if let (Some(&a), Some(&b)) = (station_index.get(&a_sr), station_index.get(&b_sr)) {
+                physical_uf.union(a, b);
+            }
         }
     }
     let mut ref_tied_segs_per_phys: HashMap<usize, HashSet<usize>> = HashMap::new();
@@ -1198,8 +1206,8 @@ mod tests {
         // the same coordinate frame.
         let merged_at = chrono::Utc::now();
         project.station_merges.push(StationMerge {
-            station_a: StationRef::new(ref_id, 0),
-            station_b: StationRef::new(main_id, 1),
+            station_a: StationRef::new(ref_id, 0).into(),
+            station_b: StationRef::new(main_id, 1).into(),
             merged_at,
         });
         project.rebuild_merge_adjacency();
@@ -1348,13 +1356,13 @@ mod tests {
                 })
                 .id;
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 0),
-                station_b: StationRef::new(parent_id, parent_station),
+                station_a: StationRef::new(stub, 0).into(),
+                station_b: StationRef::new(parent_id, parent_station).into(),
                 merged_at,
             });
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 1),
-                station_b: StationRef::new(side_id, side_station),
+                station_a: StationRef::new(stub, 1).into(),
+                station_b: StationRef::new(side_id, side_station).into(),
                 merged_at,
             });
         }
@@ -1460,13 +1468,13 @@ mod tests {
                 })
                 .id;
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 0),
-                station_b: trunk_mid,
+                station_a: StationRef::new(stub, 0).into(),
+                station_b: trunk_mid.into(),
                 merged_at,
             });
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 1),
-                station_b: StationRef::new(child, 0),
+                station_a: StationRef::new(stub, 1).into(),
+                station_b: StationRef::new(child, 0).into(),
                 merged_at,
             });
         }
@@ -1567,13 +1575,13 @@ mod tests {
                 })
                 .id;
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 0),
-                station_b: trunk_east,
+                station_a: StationRef::new(stub, 0).into(),
+                station_b: trunk_east.into(),
                 merged_at,
             });
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 1),
-                station_b: StationRef::new(child, 0),
+                station_a: StationRef::new(stub, 1).into(),
+                station_b: StationRef::new(child, 0).into(),
                 merged_at,
             });
         }
@@ -1778,13 +1786,13 @@ mod tests {
         let trunk_tip = StationRef::new(trunk_id, 2);
         for (stub, leaf) in [(stub_a, a_id), (stub_b, b_id), (stub_c, c_id)] {
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 0),
-                station_b: trunk_tip,
+                station_a: StationRef::new(stub, 0).into(),
+                station_b: trunk_tip.into(),
                 merged_at,
             });
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 1),
-                station_b: StationRef::new(leaf, 0),
+                station_a: StationRef::new(stub, 1).into(),
+                station_b: StationRef::new(leaf, 0).into(),
                 merged_at,
             });
         }
@@ -1860,13 +1868,13 @@ mod tests {
         // merges. Chain station 1 stays free in the middle.
         let merged_at = chrono::Utc::now();
         project.station_merges.push(StationMerge {
-            station_a: StationRef::new(chain_id, 0),
-            station_b: StationRef::new(left_id, 1),
+            station_a: StationRef::new(chain_id, 0).into(),
+            station_b: StationRef::new(left_id, 1).into(),
             merged_at,
         });
         project.station_merges.push(StationMerge {
-            station_a: StationRef::new(chain_id, 2),
-            station_b: StationRef::new(right_id, 1),
+            station_a: StationRef::new(chain_id, 2).into(),
+            station_b: StationRef::new(right_id, 1).into(),
             merged_at,
         });
         project.rebuild_merge_adjacency();
@@ -1951,13 +1959,13 @@ mod tests {
                 })
                 .id;
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 0),
-                station_b: trunk_tip,
+                station_a: StationRef::new(stub, 0).into(),
+                station_b: trunk_tip.into(),
                 merged_at,
             });
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(stub, 1),
-                station_b: StationRef::new(leaf, 0),
+                station_a: StationRef::new(stub, 1).into(),
+                station_b: StationRef::new(leaf, 0).into(),
                 merged_at,
             });
         }
@@ -2024,8 +2032,8 @@ mod tests {
                 })
                 .id;
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(spoke, 1),
-                station_b: StationRef::new(leaf, 0),
+                station_a: StationRef::new(spoke, 1).into(),
+                station_b: StationRef::new(leaf, 0).into(),
                 merged_at,
             });
             spoke_ids.push(spoke);
@@ -2033,8 +2041,8 @@ mod tests {
         // Tie all three spoke-tail stations together → the shared free hub.
         for win in spoke_ids.windows(2) {
             project.station_merges.push(StationMerge {
-                station_a: StationRef::new(win[0], 0),
-                station_b: StationRef::new(win[1], 0),
+                station_a: StationRef::new(win[0], 0).into(),
+                station_b: StationRef::new(win[1], 0).into(),
                 merged_at,
             });
         }
@@ -2302,13 +2310,13 @@ mod tests {
             .id;
         let merged_at = chrono::Utc::now();
         project.station_merges.push(StationMerge {
-            station_a: StationRef::new(chain_id, 0),
-            station_b: StationRef::new(trunk_id, 1),
+            station_a: StationRef::new(chain_id, 0).into(),
+            station_b: StationRef::new(trunk_id, 1).into(),
             merged_at,
         });
         project.station_merges.push(StationMerge {
-            station_a: StationRef::new(chain_id, 2),
-            station_b: StationRef::new(far_id, 0),
+            station_a: StationRef::new(chain_id, 2).into(),
+            station_b: StationRef::new(far_id, 0).into(),
             merged_at,
         });
         project.rebuild_merge_adjacency();

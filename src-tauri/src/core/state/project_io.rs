@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::{CommandResult, UndoStack};
-use crate::models::{Project, SectionId, StationRef};
+use crate::models::{Project, SectionId, StationKey, StationRef};
 use crate::persistence::Database;
 
 use super::AppState;
@@ -744,15 +744,20 @@ impl AppState {
                 }
             }
 
-            // Copy station offsets with remapped section IDs
-            for (old_station_ref, offset) in &source_project.station_offsets {
-                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_station_ref.section_id)) {
-                    let new_station_ref = StationRef::new(new_section_id, old_station_ref.station_index);
-                    merged_project.station_offsets.insert(new_station_ref, *offset);
+            // Copy station offsets with remapped section IDs. Resolve the source
+            // key to a positional index against the source, then store as a
+            // transitional Index anchor under the new section; redrive's
+            // reanchor pass canonicalizes it once merged shots are present.
+            for (old_key, offset) in &source_project.station_offsets {
+                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_key.section_id)) {
+                    if let Some(src_sr) = source_project.resolve_key(old_key) {
+                        let new_key = StationKey::positional(new_section_id, src_sr.station_index);
+                        merged_project.station_offsets.insert(new_key, *offset);
+                    }
                 } else {
                     tracing::warn!(
                         project = %source_project.name,
-                        section_id = old_station_ref.section_id,
+                        section_id = old_key.section_id,
                         purpose = "merge station offsets",
                         "Station offset references unknown section ID; skipping"
                     );
@@ -766,7 +771,10 @@ impl AppState {
                 if let Some(&new_section_id) =
                     section_id_map.get(&(proj_idx, zd.station_ref.section_id))
                 {
-                    let new_station_ref = StationRef::new(new_section_id, zd.station_ref.station_index);
+                    let Some(src_sr) = source_project.resolve_key(&zd.station_ref) else {
+                        continue;
+                    };
+                    let new_station_ref = StationRef::new(new_section_id, src_sr.station_index);
                     // Use store-only helper to avoid triggering repositioning during merge
                     if let Err(e) = merged_project.store_zero_datum_without_repositioning(new_station_ref, zd.gps) {
                         return CommandResult::failure(format!(
@@ -790,13 +798,15 @@ impl AppState {
                     section_id_map.get(&(proj_idx, merge.station_a.section_id)),
                     section_id_map.get(&(proj_idx, merge.station_b.section_id)),
                 ) {
-                    let new_station_a =
-                        StationRef::new(new_a_section, merge.station_a.station_index);
-                    let new_station_b =
-                        StationRef::new(new_b_section, merge.station_b.station_index);
+                    let (Some(a_sr), Some(b_sr)) = (
+                        source_project.resolve_key(&merge.station_a),
+                        source_project.resolve_key(&merge.station_b),
+                    ) else {
+                        continue;
+                    };
                     merged_project.station_merges.push(crate::models::StationMerge {
-                        station_a: new_station_a,
-                        station_b: new_station_b,
+                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
+                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
                         merged_at: merge.merged_at,
                     });
                 } else {
@@ -816,14 +826,16 @@ impl AppState {
                     section_id_map.get(&(proj_idx, closure.station_a.section_id)),
                     section_id_map.get(&(proj_idx, closure.station_b.section_id)),
                 ) {
-                    let new_station_a =
-                        StationRef::new(new_a_section, closure.station_a.station_index);
-                    let new_station_b =
-                        StationRef::new(new_b_section, closure.station_b.station_index);
+                    let (Some(a_sr), Some(b_sr)) = (
+                        source_project.resolve_key(&closure.station_a),
+                        source_project.resolve_key(&closure.station_b),
+                    ) else {
+                        continue;
+                    };
                     merged_project.loop_closures.push(crate::models::LoopClosure {
                         id: 0, // Reset to 0; assign_closure_ids() will reassign unique IDs
-                        station_a: new_station_a,
-                        station_b: new_station_b,
+                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
+                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
                         path_length: closure.path_length,
                         misclosure_distance: closure.misclosure_distance,
                         error_percentage: closure.error_percentage,

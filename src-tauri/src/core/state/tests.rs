@@ -229,8 +229,8 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
 
     project.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(section_id, 0),
-        station_b: StationRef::new(section_id, 1),
+        station_a: StationRef::new(section_id, 0).into(),
+        station_b: StationRef::new(section_id, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.1,
         error_percentage: 5.0,
@@ -306,15 +306,15 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     project_a.section_offsets.insert(section_a, (1.0, 2.0));
     project_a
         .station_offsets
-        .insert(StationRef::new(section_a, 0), (0.5, -0.5, 1.0));
+        .insert(StationRef::new(section_a, 0).into(), (0.5, -0.5, 1.0));
     let gps_a = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
     project_a
         .store_zero_datum_without_repositioning(StationRef::new(section_a, 0), gps_a)
         .unwrap();
     project_a.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(section_a, 0),
-        station_b: StationRef::new(section_a, 1),
+        station_a: StationRef::new(section_a, 0).into(),
+        station_b: StationRef::new(section_a, 1).into(),
         path_length: 1.0,
         misclosure_distance: 0.1,
         error_percentage: 10.0,
@@ -335,15 +335,15 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     project_b.section_offsets.insert(section_b, (3.0, 4.0));
     project_b
         .station_offsets
-        .insert(StationRef::new(section_b, 0), (-1.0, 1.5, 0.0));
+        .insert(StationRef::new(section_b, 0).into(), (-1.0, 1.5, 0.0));
     let gps_b = GpsCoordinates::new(-5.0, 40.0, 2.0).unwrap();
     project_b
         .store_zero_datum_without_repositioning(StationRef::new(section_b, 0), gps_b)
         .unwrap();
     project_b.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(section_b, 0),
-        station_b: StationRef::new(section_b, 1),
+        station_a: StationRef::new(section_b, 0).into(),
+        station_b: StationRef::new(section_b, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.2,
         error_percentage: 10.0,
@@ -392,16 +392,12 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     assert_eq!(merged.section_offsets.get(&merged_section_b), Some(&(3.0, 4.0)));
 
     assert_eq!(
-        merged
-            .station_offsets
-            .get(&StationRef::new(merged_section_a, 0)),
-        Some(&(0.5, -0.5, 1.0))
+        merged.station_offset_for_ref(StationRef::new(merged_section_a, 0)),
+        Some((0.5, -0.5, 1.0))
     );
     assert_eq!(
-        merged
-            .station_offsets
-            .get(&StationRef::new(merged_section_b, 0)),
-        Some(&(-1.0, 1.5, 0.0))
+        merged.station_offset_for_ref(StationRef::new(merged_section_b, 0)),
+        Some((-1.0, 1.5, 0.0))
     );
 
     assert!(merged
@@ -803,8 +799,8 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
             let id = p.next_closure_id;
             p.loop_closures.push(LoopClosure {
                 id,
-                station_a: StationRef::new(a, 0),
-                station_b: StationRef::new(b, 1),
+                station_a: StationRef::new(a, 0).into(),
+                station_b: StationRef::new(b, 1).into(),
                 path_length: 10.0,
                 misclosure_distance: 0.1,
                 error_percentage: 1.0,
@@ -1135,8 +1131,8 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
             id: closure_id,
-            station_a: StationRef::new(b, 1),
-            station_b: StationRef::new(z, 0),
+            station_a: StationRef::new(b, 1).into(),
+            station_b: StationRef::new(z, 0).into(),
             path_length: 10.0,
             misclosure_distance: 0.1,
             error_percentage: 1.0,
@@ -1757,8 +1753,8 @@ fn test_delete_shot_rewires_merges() {
 
     let project_after = state.get_project_state().unwrap();
     let has_merge_bc = project_after.station_merges.iter().any(|m| {
-        (m.station_a == StationRef::new(sec_b, 0) && m.station_b == StationRef::new(sec_c, 0))
-            || (m.station_a == StationRef::new(sec_c, 0) && m.station_b == StationRef::new(sec_b, 0))
+        (project_after.key_is_ref(&m.station_a, StationRef::new(sec_b, 0)) && project_after.key_is_ref(&m.station_b, StationRef::new(sec_c, 0)))
+            || (project_after.key_is_ref(&m.station_a, StationRef::new(sec_c, 0)) && project_after.key_is_ref(&m.station_b, StationRef::new(sec_b, 0)))
     });
     assert!(has_merge_bc, "Expected replacement merge between B:0 and C:0");
 }
@@ -2943,8 +2939,8 @@ fn test_execute_merge_stations_command() {
     // Verify merge was recorded
     assert_eq!(project.station_merges.len(), 1);
     let merge = &project.station_merges[0];
-    assert_eq!(merge.station_a, station_a);
-    assert_eq!(merge.station_b, station_b);
+    assert!(project.key_is_ref(&merge.station_a, station_a));
+    assert!(project.key_is_ref(&merge.station_b, station_b));
 
     // Verify section offsets were updated - one section should have an offset
     // (the moving section gets an offset to align with the anchor)
@@ -2987,7 +2983,7 @@ fn test_execute_set_zero_datum_command() {
     assert_eq!(project.zero_datums.len(), 1);
 
     let datum = &project.zero_datums[0];
-    assert_eq!(datum.station_ref, station_ref);
+    assert!(project.key_is_ref(&datum.station_ref, station_ref));
     assert!((datum.gps.latitude - 48.8584).abs() < 0.0001);
     assert!((datum.gps.longitude - 2.2945).abs() < 0.0001);
     assert!((datum.gps.depth_reference - 35.0).abs() < 0.0001);
@@ -3596,8 +3592,8 @@ fn test_undo_merge_stations() {
     // Verify merge was created
     let project_after = state.get_project_state().unwrap();
     assert_eq!(project_after.station_merges.len(), 1);
-    assert_eq!(project_after.station_merges[0].station_a, station_a);
-    assert_eq!(project_after.station_merges[0].station_b, station_b);
+    assert!(project_after.key_is_ref(&project_after.station_merges[0].station_a, station_a));
+    assert!(project_after.key_is_ref(&project_after.station_merges[0].station_b, station_b));
 
     // Undo the merge
     let result = state.undo();
@@ -4381,7 +4377,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         let gps = project
             .zero_datums
             .iter()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| project.key_is_ref(&zd.station_ref, station_ref))
             .map(|zd| zd.gps);
         (offsets, gps)
     };
@@ -4412,7 +4408,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         let current_gps = project
             .zero_datums
             .iter()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| project.key_is_ref(&zd.station_ref, station_ref))
             .map(|zd| zd.gps)
             .unwrap();
         assert!(
@@ -4433,7 +4429,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         let gps = project
             .zero_datums
             .iter()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| project.key_is_ref(&zd.station_ref, station_ref))
             .map(|zd| zd.gps);
         (offsets, gps)
     };
@@ -4625,12 +4621,13 @@ fn test_undo_create_loop_closure_has_closure_info() {
     });
 
     // Check undo stack has ClosureInfo data
+    let proj = state.get_project_state().unwrap();
     let stack = state.undo_stack.lock().unwrap();
     let undo_data = stack.peek_undo_data().unwrap();
     match undo_data {
         UndoData::ClosureInfo { closure } => {
-            assert_eq!(closure.station_a, StationRef::new(section_a, 0));
-            assert_eq!(closure.station_b, StationRef::new(section_b, 1));
+            assert!(proj.key_is_ref(&closure.station_a, StationRef::new(section_a, 0)));
+            assert!(proj.key_is_ref(&closure.station_b, StationRef::new(section_b, 1)));
             assert!(closure.path_length > 0.0);
         }
         other => panic!("Expected ClosureInfo, got {:?}", other.variant_name()),
@@ -4729,8 +4726,8 @@ fn test_undo_unmerge_restores_removed_closures() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: 1,
-            station_a: merge_station_a,
-            station_b: merge_station_b,
+            station_a: merge_station_a.into(),
+            station_b: merge_station_b.into(),
             path_length: 15.0,
             misclosure_distance: 0.3,
             error_percentage: 2.0,
@@ -4773,8 +4770,8 @@ fn test_undo_unmerge_restores_removed_closures() {
             "Closure should be restored after undo of unmerge"
         );
         let restored_closure = &project.loop_closures[0];
-        assert_eq!(restored_closure.station_a, merge_station_a);
-        assert_eq!(restored_closure.station_b, merge_station_b);
+        assert!(project.key_is_ref(&restored_closure.station_a, merge_station_a));
+        assert!(project.key_is_ref(&restored_closure.station_b, merge_station_b));
         assert!((restored_closure.path_length - 15.0).abs() < 1e-6);
     }
 }
@@ -4822,7 +4819,7 @@ fn test_move_station_updates_shot_data() {
     let shot = &project.get_section(section_id).unwrap().shots[0];
     assert!((shot.length - 15.0).abs() < 1e-6, "Length should be 15.0, got {}", shot.length);
     assert!((shot.azimuth_in - 90.0).abs() < 1e-6, "Azimuth should still be 90°");
-    assert!(!project.station_offsets.contains_key(&station_ref), "Station offset should be cleared");
+    assert!(!project.station_offset_for_ref(station_ref).is_some(), "Station offset should be cleared");
 
     // Second move: (0, 10, 3) — shot vector becomes (15, 10, 3)
     let result = state.execute(Command::MoveStation {
@@ -6080,8 +6077,8 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(c, 1),
-            station_b: StationRef::new(b, 0),
+            station_a: StationRef::new(c, 1).into(),
+            station_b: StationRef::new(b, 0).into(),
             path_length: 8.0,
             misclosure_distance: 0.2,
             error_percentage: 2.5,
@@ -6202,8 +6199,8 @@ fn test_transitive_closures_in_computed_stations() {
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
             id: closure_id,
-            station_a: StationRef::new(a, 2), // A.2 (merged with B.0)
-            station_b: StationRef::new(c, 1), // C.1 (not merged with anything)
+            station_a: StationRef::new(a, 2).into(), // A.2 (merged with B.0)
+            station_b: StationRef::new(c, 1).into(), // C.1 (not merged with anything)
             path_length: 20.0,
             misclosure_distance: 0.5,
             error_percentage: 2.5,
@@ -6331,8 +6328,8 @@ fn test_transitive_closures_serialization_preserves_data() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(a, 1),
-            station_b: StationRef::new(c, 1),
+            station_a: StationRef::new(a, 1).into(),
+            station_b: StationRef::new(c, 1).into(),
             path_length: 15.0,
             misclosure_distance: 0.3,
             error_percentage: 2.0,
@@ -6614,8 +6611,8 @@ fn test_move_segment_unaligned_closure_independent() {
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
             id: closure_id,
-            station_a: StationRef::new(sid_a, 1),
-            station_b: StationRef::new(sid_b, 0),
+            station_a: StationRef::new(sid_a, 1).into(),
+            station_b: StationRef::new(sid_b, 0).into(),
             path_length: 10.0,
             misclosure_distance: 0.1,
             error_percentage: 1.0,
@@ -6698,8 +6695,8 @@ fn test_move_segment_aligned_closure_connectivity() {
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
             id: closure_id,
-            station_a: StationRef::new(sid_a, 1),
-            station_b: StationRef::new(sid_b, 0),
+            station_a: StationRef::new(sid_a, 1).into(),
+            station_b: StationRef::new(sid_b, 0).into(),
             path_length: 10.0,
             misclosure_distance: 0.1,
             error_percentage: 1.0,
@@ -7203,9 +7200,11 @@ fn test_split_remaps_merges() {
     // (original index 3, split_station = 2, so new index = 3 - 2 = 1)
     let proj = state.get_project_state().unwrap();
     let has_remapped_merge = proj.station_merges.iter().any(|m| {
-        (m.station_a.section_id == new_section_id && m.station_a.station_index == 1
+        let a = proj.resolve_key(&m.station_a);
+        let b = proj.resolve_key(&m.station_b);
+        (a.is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
             && m.station_b.section_id == section_b_id)
-        || (m.station_b.section_id == new_section_id && m.station_b.station_index == 1
+        || (b.is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
             && m.station_a.section_id == section_b_id)
     });
     assert!(has_remapped_merge, "Merge should be remapped to new section with adjusted index");
@@ -7277,8 +7276,10 @@ fn test_split_remaps_closures() {
         proj.loop_closures
     );
     let has_remapped_merge = proj.station_merges.iter().any(|m| {
-        (m.station_a.section_id == new_section_id && m.station_a.station_index == 1)
-            || (m.station_b.section_id == new_section_id && m.station_b.station_index == 1)
+        proj.resolve_key(&m.station_a)
+            .is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
+            || proj.resolve_key(&m.station_b)
+                .is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
     });
     assert!(
         has_remapped_merge,
@@ -7309,7 +7310,7 @@ fn test_split_remaps_station_offsets() {
     // Directly insert a station offset for station 3 (simulates legacy offset data)
     {
         let mut proj = state.get_project_state().unwrap();
-        proj.station_offsets.insert(StationRef::new(section_id, 3), (1.0, 2.0, 3.0));
+        proj.station_offsets.insert(StationRef::new(section_id, 3).into(), (1.0, 2.0, 3.0));
         state.set_project_for_tests(proj);
     }
 
@@ -7329,7 +7330,7 @@ fn test_split_remaps_station_offsets() {
     // split_station = 2, so 3 - 2 = 1
     let proj = state.get_project_state().unwrap();
     let new_ref = StationRef::new(new_section_id, 1);
-    let offset = proj.station_offsets.get(&new_ref);
+    let offset = proj.station_offset_for_ref(new_ref);
     assert!(offset.is_some(), "Station offset should be remapped to new section");
     let (ox, oy, oz) = offset.unwrap();
     assert!((ox - 1.0).abs() < 0.001);
@@ -7338,7 +7339,7 @@ fn test_split_remaps_station_offsets() {
 
     // Old ref should not exist
     let old_ref = StationRef::new(section_id, 3);
-    assert!(!proj.station_offsets.contains_key(&old_ref), "Old station offset should be removed");
+    assert!(!proj.station_offset_for_ref(old_ref).is_some(), "Old station offset should be removed");
 }
 
 #[test]
@@ -7706,7 +7707,7 @@ fn test_delete_last_shot_cleans_up_station_offsets() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         let station_ref = StationRef::new(section_id, 0);
-        project.station_offsets.insert(station_ref, (1.0, 2.0, 3.0));
+        project.station_offsets.insert(station_ref.into(), (1.0, 2.0, 3.0));
     }
 
     let shot_id = {
@@ -7754,8 +7755,8 @@ fn test_delete_last_shot_cleans_up_closures() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(section_a_id, 0),
-            station_b: StationRef::new(section_b_id, 1),
+            station_a: StationRef::new(section_a_id, 0).into(),
+            station_b: StationRef::new(section_b_id, 1).into(),
             path_length: 10.0,
             misclosure_distance: 0.5,
             error_percentage: 5.0,
@@ -7824,12 +7825,12 @@ fn test_delete_last_shot_undo_restores_references() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         // Note: merge already sets section_offsets, so add station offset
-        project.station_offsets.insert(StationRef::new(section_a_id, 0), (1.0, 2.0, 3.0));
+        project.station_offsets.insert(StationRef::new(section_a_id, 0).into(), (1.0, 2.0, 3.0));
         // Add a closure referencing section A
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(section_a_id, 0),
-            station_b: StationRef::new(section_b_id, 1),
+            station_a: StationRef::new(section_a_id, 0).into(),
+            station_b: StationRef::new(section_b_id, 1).into(),
             path_length: 10.0,
             misclosure_distance: 0.5,
             error_percentage: 5.0,
@@ -7939,7 +7940,7 @@ fn test_delete_section_undo_restores_relationships() {
     // Directly insert a station offset for sec_a:0 (MoveStation now modifies shot data directly)
     {
         let mut proj = state.get_project_state().unwrap();
-        proj.station_offsets.insert(StationRef::new(sec_a, 0), (1.0, 2.0, 0.0));
+        proj.station_offsets.insert(StationRef::new(sec_a, 0).into(), (1.0, 2.0, 0.0));
         state.set_project_for_tests(proj);
     }
 
@@ -8075,8 +8076,8 @@ fn test_insert_before_shifts_station_merge() {
     // Verify initial merge is at station 0 of both sections
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.station_merges.len(), 1);
-    assert_eq!(proj.station_merges[0].station_a, StationRef::new(sec_a, 0));
-    assert_eq!(proj.station_merges[0].station_b, StationRef::new(sec_b, 0));
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)));
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)));
 
     // Get first shot ID of section A
     let first_shot_id = proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
@@ -8093,16 +8094,8 @@ fn test_insert_before_shifts_station_merge() {
     // Verify merge shifted: station_a should now be station 1 of A (not 0)
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.station_merges.len(), 1);
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 1),
-        "Merge station_a should shift from 0 to 1 after insert_before"
-    );
-    assert_eq!(
-        proj.station_merges[0].station_b,
-        StationRef::new(sec_b, 0),
-        "Merge station_b (different section) should not shift"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 1)), "Merge station_a should shift from 0 to 1 after insert_before");
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)), "Merge station_b (different section) should not shift");
 }
 
 #[test]
@@ -8131,7 +8124,7 @@ fn test_insert_before_shifts_zero_datum() {
     assert!(zd_result.success);
 
     let proj = state.get_project_state().unwrap();
-    assert_eq!(proj.zero_datums[0].station_ref, StationRef::new(sec_id, 0));
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_id, 0)));
 
     // Get first shot ID
     let first_shot_id = proj.sections[0].shots[0].id;
@@ -8147,11 +8140,7 @@ fn test_insert_before_shifts_zero_datum() {
 
     // Verify zero datum shifted to station 1
     let proj = state.get_project_state().unwrap();
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_id, 1),
-        "Zero datum should shift from station 0 to station 1 after insert_before"
-    );
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_id, 1)), "Zero datum should shift from station 0 to station 1 after insert_before");
 }
 
 #[test]
@@ -8177,13 +8166,13 @@ fn test_insert_before_shifts_station_offset() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         project.station_offsets.insert(
-            StationRef::new(sec_id, 0),
+            StationRef::new(sec_id, 0).into(),
             (1.0, 2.0, 3.0),
         );
     }
 
     let proj = state.get_project_state().unwrap();
-    assert!(proj.station_offsets.contains_key(&StationRef::new(sec_id, 0)));
+    assert!(proj.station_offset_for_ref(StationRef::new(sec_id, 0)).is_some());
 
     // Get first shot ID
     let first_shot_id = proj.sections[0].shots[0].id;
@@ -8200,12 +8189,12 @@ fn test_insert_before_shifts_station_offset() {
     // Verify station offset key shifted from station 0 to station 1
     let proj = state.get_project_state().unwrap();
     assert!(
-        !proj.station_offsets.contains_key(&StationRef::new(sec_id, 0)),
+        !proj.station_offset_for_ref(StationRef::new(sec_id, 0)).is_some(),
         "Station offset at old index 0 should be gone"
     );
     assert_eq!(
-        proj.station_offsets.get(&StationRef::new(sec_id, 1)),
-        Some(&(1.0, 2.0, 3.0)),
+        proj.station_offset_for_ref(StationRef::new(sec_id, 1)),
+        Some((1.0, 2.0, 3.0)),
         "Station offset should have moved to station 1"
     );
 }
@@ -8265,32 +8254,28 @@ fn test_insert_before_shifts_loop_closure() {
 
     // Check the merge that was at station 0 of A
     let merge_a0 = proj.station_merges.iter().find(|m|
-        m.station_b == StationRef::new(sec_b, 0)
+        proj.key_is_ref(&m.station_b, StationRef::new(sec_b, 0))
     ).unwrap();
-    assert_eq!(
-        merge_a0.station_a,
-        StationRef::new(sec_a, 1),
-        "Merge at original station 0 should shift to station 1"
-    );
+    assert!(proj.key_is_ref(&merge_a0.station_a, StationRef::new(sec_a, 1)), "Merge at original station 0 should shift to station 1");
 
     // Check the merge that was at station 2 of A (now station 3)
     let merge_a2 = proj.station_merges.iter().find(|m|
-        m.station_b == StationRef::new(sec_c, 0) || m.station_a == StationRef::new(sec_c, 0)
+        proj.key_is_ref(&m.station_b, StationRef::new(sec_c, 0))
+            || proj.key_is_ref(&m.station_a, StationRef::new(sec_c, 0))
     ).unwrap();
     let a_ref = if merge_a2.station_a.section_id == sec_a {
-        merge_a2.station_a
+        merge_a2.station_a.clone()
     } else {
-        merge_a2.station_b
+        merge_a2.station_b.clone()
     };
-    assert_eq!(
-        a_ref,
-        StationRef::new(sec_a, 3),
+    assert!(
+        proj.key_is_ref(&a_ref, StationRef::new(sec_a, 3)),
         "Merge at original station 2 should shift to station 3"
     );
 
     // Loop closure refs should NOT have changed (they reference sec_b and sec_c, not sec_a)
-    assert_eq!(proj.loop_closures[0].station_a, StationRef::new(sec_b, 2));
-    assert_eq!(proj.loop_closures[0].station_b, StationRef::new(sec_c, 1));
+    assert!(proj.key_is_ref(&proj.loop_closures[0].station_a, StationRef::new(sec_b, 2)));
+    assert!(proj.key_is_ref(&proj.loop_closures[0].station_b, StationRef::new(sec_c, 1)));
 }
 
 #[test]
@@ -8311,7 +8296,7 @@ fn test_insert_before_undo_restores_refs() {
 
     // Verify merge shifted
     let proj = state.get_project_state().unwrap();
-    assert_eq!(proj.station_merges[0].station_a, StationRef::new(sec_a, 1));
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 1)));
 
     // Undo the insert
     let undo_result = state.undo();
@@ -8319,16 +8304,8 @@ fn test_insert_before_undo_restores_refs() {
 
     // Verify merge returned to original position
     let proj = state.get_project_state().unwrap();
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 0),
-        "Merge should return to station 0 after undo"
-    );
-    assert_eq!(
-        proj.station_merges[0].station_b,
-        StationRef::new(sec_b, 0),
-        "Merge station_b should still be station 0 of B"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)), "Merge should return to station 0 after undo");
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)), "Merge station_b should still be station 0 of B");
 }
 
 #[test]
@@ -8357,16 +8334,8 @@ fn test_insert_before_redo_shifts_refs_again() {
 
     // Verify merge shifted back to station 1
     let proj = state.get_project_state().unwrap();
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 1),
-        "Merge should shift to station 1 after redo"
-    );
-    assert_eq!(
-        proj.station_merges[0].station_b,
-        StationRef::new(sec_b, 0),
-        "Merge station_b should stay at station 0 of B"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 1)), "Merge should shift to station 1 after redo");
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)), "Merge station_b should stay at station 0 of B");
 }
 
 #[test]
@@ -8378,7 +8347,7 @@ fn test_insert_after_only_shifts_refs_beyond() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         project.station_offsets.insert(
-            StationRef::new(sec_a, 1),
+            StationRef::new(sec_a, 1).into(),
             (5.0, 6.0, 7.0),
         );
     }
@@ -8399,15 +8368,11 @@ fn test_insert_after_only_shifts_refs_beyond() {
     let proj = state.get_project_state().unwrap();
 
     // Station merge at sec_a station 0 should NOT shift (0 < 2)
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 0),
-        "Merge at station 0 should not shift for insert_after shot 0"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)), "Merge at station 0 should not shift for insert_after shot 0");
 
     // Station offset at station 1 should NOT shift (1 < 2)
     assert!(
-        proj.station_offsets.contains_key(&StationRef::new(sec_a, 1)),
+        proj.station_offset_for_ref(StationRef::new(sec_a, 1)).is_some(),
         "Station offset at station 1 should not shift for insert_after shot 0"
     );
 }
@@ -8441,11 +8406,7 @@ fn test_delete_shot_undo_redo_with_snapshot() {
         "Merges referencing deleted station should be removed"
     );
     // Zero datum was at station 2, should shift to station 1
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_a, 1),
-        "Zero datum should shift from station 2 to station 1 after delete shot 0"
-    );
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_a, 1)), "Zero datum should shift from station 2 to station 1 after delete shot 0");
 
     // Undo the delete — should restore via ProjectSnapshotPair
     let undo_result = state.undo();
@@ -8453,16 +8414,8 @@ fn test_delete_shot_undo_redo_with_snapshot() {
 
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots.len(), 2);
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 0),
-        "Merge should be at station 0 after undo"
-    );
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_a, 2),
-        "Zero datum should be at station 2 after undo"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)), "Merge should be at station 0 after undo");
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_a, 2)), "Zero datum should be at station 2 after undo");
 
     // Redo the delete
     let redo_result = state.redo();
@@ -8470,11 +8423,7 @@ fn test_delete_shot_undo_redo_with_snapshot() {
 
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots.len(), 1);
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_a, 1),
-        "Zero datum should be at station 1 after redo"
-    );
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_a, 1)), "Zero datum should be at station 1 after redo");
 }
 
 // === Section offset adjustment tests for insert_before at pos=0 ===
@@ -10607,14 +10556,14 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
     assert_eq!(merges.len(), 2, "Should still have two merge edges");
 
     let has_a1_b1 = merges.iter().any(|m| {
-        (m.station_a == StationRef::new(a, 1) && m.station_b == StationRef::new(b, 1))
-        || (m.station_a == StationRef::new(b, 1) && m.station_b == StationRef::new(a, 1))
+        (proj.key_is_ref(&m.station_a, StationRef::new(a, 1)) && proj.key_is_ref(&m.station_b, StationRef::new(b, 1)))
+        || (proj.key_is_ref(&m.station_a, StationRef::new(b, 1)) && proj.key_is_ref(&m.station_b, StationRef::new(a, 1)))
     });
     assert!(has_a1_b1, "After insert-before-0 in B, merge should be A.1↔B.1, got: {:?}", merges);
 
     let has_b2_c0 = merges.iter().any(|m| {
-        (m.station_a == StationRef::new(b, 2) && m.station_b == StationRef::new(c, 0))
-        || (m.station_a == StationRef::new(c, 0) && m.station_b == StationRef::new(b, 2))
+        (proj.key_is_ref(&m.station_a, StationRef::new(b, 2)) && proj.key_is_ref(&m.station_b, StationRef::new(c, 0)))
+        || (proj.key_is_ref(&m.station_a, StationRef::new(c, 0)) && proj.key_is_ref(&m.station_b, StationRef::new(b, 2)))
     });
     assert!(has_b2_c0, "After insert-before-0 in B, merge should be B.2↔C.0, got: {:?}", merges);
 
@@ -10941,17 +10890,17 @@ fn test_set_station_comment_set_update_remove() {
     assert!(state.execute(Command::SetStationComment {
         station_ref: station, comment: Some("marker A".to_string()),
     }).success);
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("marker A"));
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("marker A"));
     // Update
     state.execute(Command::SetStationComment { station_ref: station, comment: Some("marker B".to_string()) });
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("marker B"));
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("marker B"));
     // Remove via None
     state.execute(Command::SetStationComment { station_ref: station, comment: None });
-    assert!(!state.get_project_state().unwrap().station_comments.contains_key(&station), "None removes comment");
+    assert!(!state.get_project_state().unwrap().station_comment_for_ref(station).is_some(), "None removes comment");
     // Remove via empty string
     state.execute(Command::SetStationComment { station_ref: station, comment: Some("temp".to_string()) });
     state.execute(Command::SetStationComment { station_ref: station, comment: Some(String::new()) });
-    assert!(!state.get_project_state().unwrap().station_comments.contains_key(&station), "empty string removes comment");
+    assert!(!state.get_project_state().unwrap().station_comment_for_ref(station).is_some(), "empty string removes comment");
 }
 
 #[test]
@@ -10990,9 +10939,9 @@ fn test_station_comment_survives_unrelated_undo_redo() {
         shots: vec![test_shot_data(2.0)],
     });
     assert!(state.undo().success);
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("keep me"), "survives undo");
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("keep me"), "survives undo");
     assert!(state.redo().success);
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("keep me"), "survives redo");
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("keep me"), "survives redo");
 }
 
 #[test]
@@ -11011,7 +10960,7 @@ fn test_station_comment_persists_across_save_open() {
     assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
-    assert_eq!(state2.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("persisted note"),
+    assert_eq!(state2.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("persisted note"),
         "comment survives save/open");
 }
 
@@ -11035,8 +10984,8 @@ fn test_move_comment_transfers_between_stations() {
     });
     assert!(r.success, "MoveComment should succeed");
     let proj = state.get_project_state().unwrap();
-    assert!(!proj.station_comments.contains_key(&src), "source has no comment after move");
-    assert_eq!(proj.station_comments.get(&tgt).map(String::as_str), Some("source text"), "target has comment");
+    assert!(!proj.station_comment_for_ref(src).is_some(), "source has no comment after move");
+    assert_eq!(proj.station_comment_for_ref(tgt).map(String::as_str), Some("source text"), "target has comment");
 }
 
 #[test]
@@ -11059,8 +11008,8 @@ fn test_move_comment_swap_exchanges_comments() {
         swap: true,
     }).success);
     let proj = state.get_project_state().unwrap();
-    assert_eq!(proj.station_comments.get(&s1).map(String::as_str), Some("beta"));
-    assert_eq!(proj.station_comments.get(&s2).map(String::as_str), Some("alpha"));
+    assert_eq!(proj.station_comment_for_ref(s1).map(String::as_str), Some("beta"));
+    assert_eq!(proj.station_comment_for_ref(s2).map(String::as_str), Some("alpha"));
 }
 
 // === Import hash tracking tests ===
@@ -11295,18 +11244,21 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
     // Verify merges
     assert_eq!(project_after.station_merges.len(), 1, "merge should survive save/open");
     let m = &project_after.station_merges[0];
-    let merge_stations: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_stations: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_stations.contains(&StationRef::new(sec_a, 2)));
     assert!(merge_stations.contains(&StationRef::new(sec_b, 0)));
 
     // Verify zero datums
     assert_eq!(project_after.zero_datums.len(), 1, "datum should survive save/open");
-    assert_eq!(project_after.zero_datums[0].station_ref, StationRef::new(sec_a, 0));
+    assert!(project_after.key_is_ref(&project_after.zero_datums[0].station_ref, StationRef::new(sec_a, 0)));
     assert!((project_after.zero_datums[0].gps.latitude - 45.5).abs() < 1e-6);
 
     // Verify station comments
     assert_eq!(
-        project_after.station_comments.get(&StationRef::new(sec_b, 1)).map(String::as_str),
+        project_after.station_comment_for_ref(StationRef::new(sec_b, 1)).map(String::as_str),
         Some("junction marker"),
         "comment should survive save/open"
     );
@@ -11414,7 +11366,10 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
     // The merge should now reference A:3 (shifted from A:2) and B:0 (unchanged)
     assert_eq!(project_after.station_merges.len(), 1, "merge should still exist");
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)),
         "B:0 should be unchanged in merge");
     assert!(merge_refs.contains(&StationRef::new(sec_a, 3)),
@@ -11471,7 +11426,10 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
     // which creates a new station at index 2, shifting old station 2 to 3
     let project_after = state.get_project_state().unwrap();
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_a, 1)),
         "A:1 should remain unchanged since insertion is after it");
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)),
@@ -11519,19 +11477,15 @@ fn test_delete_mid_shot_splits_section_with_merge_intact() {
     // no merge should reference a nonexistent station
     let project_after = state.get_project_state().unwrap();
     for merge in &project_after.station_merges {
-        let sa = merge.station_a;
-        let sb = merge.station_b;
-        let valid_a = project_after.sections.iter().any(|s|
-            s.id == sa.section_id && (sa.station_index as usize) <= s.shots.len());
-        let valid_b = project_after.sections.iter().any(|s|
-            s.id == sb.section_id && (sb.station_index as usize) <= s.shots.len());
-        assert!(valid_a, "merge station_a {:?} references valid station", sa);
-        assert!(valid_b, "merge station_b {:?} references valid station", sb);
+        let valid_a = project_after.resolve_key(&merge.station_a).is_some();
+        let valid_b = project_after.resolve_key(&merge.station_b).is_some();
+        assert!(valid_a, "merge station_a {:?} references valid station", merge.station_a);
+        assert!(valid_b, "merge station_b {:?} references valid station", merge.station_b);
     }
 
     // The merge to B:0 should still exist (connected to one of the split fragments)
     let b_in_merge = project_after.station_merges.iter().any(|m|
-        m.station_a == StationRef::new(sec_b, 0) || m.station_b == StationRef::new(sec_b, 0)
+        project_after.key_is_ref(&m.station_a, StationRef::new(sec_b, 0)) || project_after.key_is_ref(&m.station_b, StationRef::new(sec_b, 0))
     );
     assert!(b_in_merge, "B:0 merge should survive the split (rewired to fragment)");
 }
@@ -11590,7 +11544,10 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
 
     // Merge should now reference the shifted station
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_a, 1)),
         "A:0 should have shifted to A:1 in merge");
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)),
@@ -11673,8 +11630,7 @@ fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
 
     let project_after = state.get_project_state().unwrap();
     assert_eq!(project_after.zero_datums.len(), 1, "datum should still exist");
-    assert_eq!(project_after.zero_datums[0].station_ref, StationRef::new(sec, 2),
-        "datum should have shifted from station 1 to station 2");
+    assert!(project_after.key_is_ref(&project_after.zero_datums[0].station_ref, StationRef::new(sec, 2)), "datum should have shifted from station 1 to station 2");
 }
 
 // ==========================================================================
@@ -11876,7 +11832,10 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
 
     // The remaining merge should be A:1 ↔ B:0
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_a, 1)), "A:1 should be in remaining merge");
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)), "B:0 should be in remaining merge");
 
@@ -12022,28 +11981,14 @@ fn test_triangle_topology_with_loop_closure() {
 
     // All merges reference valid stations
     for merge in &project.station_merges {
-        let valid_a = project.sections.iter().any(|s|
-            s.id == merge.station_a.section_id &&
-            (merge.station_a.station_index as usize) <= s.shots.len()
-        );
-        let valid_b = project.sections.iter().any(|s|
-            s.id == merge.station_b.section_id &&
-            (merge.station_b.station_index as usize) <= s.shots.len()
-        );
-        assert!(valid_a, "merge station_a {:?} should be valid", merge.station_a);
-        assert!(valid_b, "merge station_b {:?} should be valid", merge.station_b);
+        assert!(project.resolve_key(&merge.station_a).is_some(), "merge station_a {:?} should be valid", merge.station_a);
+        assert!(project.resolve_key(&merge.station_b).is_some(), "merge station_b {:?} should be valid", merge.station_b);
     }
 
     // Loop closure references valid stations
     let lc = &project.loop_closures[0];
-    assert!(project.sections.iter().any(|s|
-        s.id == lc.station_a.section_id &&
-        (lc.station_a.station_index as usize) <= s.shots.len()
-    ), "closure station_a should be valid");
-    assert!(project.sections.iter().any(|s|
-        s.id == lc.station_b.section_id &&
-        (lc.station_b.station_index as usize) <= s.shots.len()
-    ), "closure station_b should be valid");
+    assert!(project.resolve_key(&lc.station_a).is_some(), "closure station_a should be valid");
+    assert!(project.resolve_key(&lc.station_b).is_some(), "closure station_b should be valid");
 }
 
 // === Collaboration mode: empty-section name mapping ===

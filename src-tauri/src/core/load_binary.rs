@@ -32,8 +32,8 @@ use serde_bytes::ByteBuf;
 
 use crate::core::loading::{DisplaySettings, LoadProjectFullResult};
 use crate::models::{
-    ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosure, ProjectStats, ProjectWarning,
-    SectionId, ShotId, StationMerge, StationRef, SurveyDirection, ZeroDatum,
+    ClosureRef, FrozenShotRef, GpsCoordinates, LoopClosureWire, ProjectStats, ProjectWarning,
+    SectionId, ShotId, StationMergeWire, StationRef, SurveyDirection, ZeroDatumWire,
 };
 
 /// f32 sentinel encoding `None` for nullable numeric fields. `f32::NAN`
@@ -129,9 +129,9 @@ pub struct ProjectHeaderBinary {
     /// Section metadata in declaration order. `shot_offset` and `shot_count`
     /// index into the per-shot binary arrays.
     pub sections: Vec<SectionHeaderBinary>,
-    pub station_merges: Vec<StationMerge>,
-    pub zero_datums: Vec<ZeroDatum>,
-    pub loop_closures: Vec<LoopClosure>,
+    pub station_merges: Vec<StationMergeWire>,
+    pub zero_datums: Vec<ZeroDatumWire>,
+    pub loop_closures: Vec<LoopClosureWire>,
     pub section_offsets: Vec<(SectionId, (f64, f64))>,
     pub station_offsets: Vec<(StationRef, (f64, f64, f64))>,
     pub station_comments_map: Vec<(StationRef, String)>,
@@ -297,6 +297,23 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         }
     }
 
+    // Resolve the stored StationKey-based cross-references to their positional wire
+    // form (the frontend reasons by station_index) before moving the rest of
+    // `project` out.
+    let station_merges = project.station_merges.iter().map(|m| project.merge_to_wire(m)).collect();
+    let zero_datums = project.zero_datums.iter().map(|zd| project.datum_to_wire(zd)).collect();
+    let loop_closures = project.loop_closures.iter().map(|c| project.closure_to_wire(c)).collect();
+    let station_offsets = project
+        .station_offsets
+        .iter()
+        .map(|(k, v)| (project.resolve_key(k).unwrap_or_else(|| StationRef::new(k.section_id, 0)), *v))
+        .collect();
+    let station_comments_map = project
+        .station_comments
+        .iter()
+        .map(|(k, v)| (project.resolve_key(k).unwrap_or_else(|| StationRef::new(k.section_id, 0)), v.clone()))
+        .collect();
+
     let project_header = ProjectHeaderBinary {
         name: project.name,
         location: project.location,
@@ -309,12 +326,12 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         next_section_id: project.next_section_id,
         next_closure_id: project.next_closure_id,
         sections: sections_meta,
-        station_merges: project.station_merges,
-        zero_datums: project.zero_datums,
-        loop_closures: project.loop_closures,
+        station_merges,
+        zero_datums,
+        loop_closures,
         section_offsets: hashmap_to_pairs(project.section_offsets),
-        station_offsets: hashmap_to_pairs(project.station_offsets),
-        station_comments_map: hashmap_to_pairs(project.station_comments),
+        station_offsets,
+        station_comments_map,
         imported_file_hashes: project.imported_file_hashes,
         imported_section_hashes: project.imported_section_hashes,
         collab: project.collab,

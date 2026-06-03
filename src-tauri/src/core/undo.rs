@@ -1416,8 +1416,8 @@ mod tests {
     fn test_undo_data_closure_info_serialization() {
         let closure = LoopClosure {
             id: 1,
-            station_a: StationRef::new(1, 0),
-            station_b: StationRef::new(2, 3),
+            station_a: StationRef::new(1, 0).into(),
+            station_b: StationRef::new(2, 3).into(),
             path_length: 45.5,
             misclosure_distance: 1.2,
             error_percentage: 2.6,
@@ -1450,8 +1450,10 @@ mod tests {
         // Verify roundtrip
         match &restored.undo_data {
             UndoData::ClosureInfo { closure: restored_closure } => {
-                assert_eq!(restored_closure.station_a, StationRef::new(1, 0));
-                assert_eq!(restored_closure.station_b, StationRef::new(2, 3));
+                // Pure serialization roundtrip (no project / no reanchor): the
+                // transitional Index anchors survive verbatim, so compare keys directly.
+                assert_eq!(restored_closure.station_a, StationRef::new(1, 0).into());
+                assert_eq!(restored_closure.station_b, StationRef::new(2, 3).into());
                 assert!((restored_closure.path_length - 45.5).abs() < 1e-6);
                 assert!((restored_closure.misclosure_distance - 1.2).abs() < 1e-6);
                 assert!((restored_closure.error_percentage - 2.6).abs() < 1e-6);

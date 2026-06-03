@@ -40,6 +40,14 @@ impl std::fmt::Display for StationRef {
 pub enum StationAnchor {
     SectionStart,
     AfterShot(String),
+    /// Positional fallback: a raw station index. Used ONLY transitionally — when
+    /// loading a pre-anchor (v6) file's positional refs, and for test/construction
+    /// convenience — then canonicalized to `SectionStart`/`AfterShot` by the load
+    /// re-anchor pass. The library never compares or looks up with an `Index` key
+    /// against a stored (canonical) key; it builds keys via `Project::key_for_ref`
+    /// and compares via `Project::resolve_key`. A stray `Index` therefore can't
+    /// silently mismatch a canonical key at runtime.
+    Index(u32),
 }
 
 /// Stored, position-independent station reference: a section plus a
@@ -57,6 +65,34 @@ pub struct StationKey {
 impl StationKey {
     pub fn new(section_id: SectionId, anchor: StationAnchor) -> Self {
         Self { section_id, anchor }
+    }
+
+    /// A positional key (index 0 → `SectionStart`, else `Index`). Transitional /
+    /// test convenience; the library canonicalizes to `AfterShot` via
+    /// [`crate::models::Project::key_for_ref`].
+    pub fn positional(section_id: SectionId, station_index: u32) -> Self {
+        let anchor = if station_index == 0 {
+            StationAnchor::SectionStart
+        } else {
+            StationAnchor::Index(station_index)
+        };
+        Self { section_id, anchor }
+    }
+}
+
+impl From<StationRef> for StationKey {
+    fn from(r: StationRef) -> Self {
+        StationKey::positional(r.section_id, r.station_index)
+    }
+}
+
+impl std::fmt::Display for StationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.anchor {
+            StationAnchor::SectionStart => write!(f, "{}:start", self.section_id),
+            StationAnchor::AfterShot(uuid) => write!(f, "{}:after({uuid})", self.section_id),
+            StationAnchor::Index(i) => write!(f, "{}:{i}", self.section_id),
+        }
     }
 }
 
@@ -269,18 +305,39 @@ impl Station {
     }
 }
 
-/// Record of a station merge
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// Record of a station merge. Endpoints stored as position-independent
+/// [`StationKey`]s. Backend-only (no `TS`); the frontend/wire form is
+/// [`StationMergeWire`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationMerge {
+    pub station_a: StationKey,
+    pub station_b: StationKey,
+    pub merged_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Zero datum assignment (backend; wire form is [`ZeroDatumWire`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZeroDatum {
+    pub station_ref: StationKey,
+    pub gps: GpsCoordinates,
+}
+
+/// Positional wire form of [`StationMerge`] for the frontend (which reasons by
+/// `station_index`). ts-rs exports it as `StationMerge` so the generated TS and
+/// the frontend stay positional; the backend resolves the stored keys when encoding.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(rename = "StationMerge", export_to = "bindings/StationMerge.ts")]
+pub struct StationMergeWire {
     pub station_a: StationRef,
     pub station_b: StationRef,
     #[ts(type = "string")]
     pub merged_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Zero datum assignment
+/// Positional wire form of [`ZeroDatum`]; ts-rs exports it as `ZeroDatum`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct ZeroDatum {
+#[ts(rename = "ZeroDatum", export_to = "bindings/ZeroDatum.ts")]
+pub struct ZeroDatumWire {
     pub station_ref: StationRef,
     pub gps: GpsCoordinates,
 }
@@ -445,16 +502,17 @@ pub struct FrozenShotRef {
     pub shot_index: u32,
 }
 
-/// A detected loop closure in the survey
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// A detected loop closure in the survey. Endpoints stored as position-independent
+/// [`StationKey`]s. Backend-only (no `TS`); the wire form is [`LoopClosureWire`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopClosure {
     /// Unique identifier for this closure
     #[serde(default)]
     pub id: u64,
     /// First station in the closure (merge point A)
-    pub station_a: StationRef,
+    pub station_a: StationKey,
     /// Second station in the closure (merge point B)
-    pub station_b: StationRef,
+    pub station_b: StationKey,
     /// Total path length along the loop (meters)
     pub path_length: f64,
     /// Misclosure distance (meters) - how far apart the two stations are
@@ -469,6 +527,25 @@ pub struct LoopClosure {
     #[serde(default)]
     pub strategy: ClosureStrategy,
     /// Whether the closure endpoints have been aligned (post-adjustment or snap-to-merge)
+    #[serde(default)]
+    pub is_aligned: bool,
+}
+
+/// Positional wire form of [`LoopClosure`]; ts-rs exports it as `LoopClosure`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(rename = "LoopClosure", export_to = "bindings/LoopClosure.ts")]
+pub struct LoopClosureWire {
+    #[serde(default)]
+    pub id: u64,
+    pub station_a: StationRef,
+    pub station_b: StationRef,
+    pub path_length: f64,
+    pub misclosure_distance: f64,
+    pub error_percentage: f64,
+    pub horizontal_misclosure: f64,
+    pub vertical_misclosure: f64,
+    #[serde(default)]
+    pub strategy: ClosureStrategy,
     #[serde(default)]
     pub is_aligned: bool,
 }

@@ -351,12 +351,14 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         // returned Comment. `None` clears any prior entry so a round-trip
         // that deletes the unmarked lines also clears the station comment.
         let to = crate::models::StationRef::new(e.section_id, e.shot_index + 1);
-        match e.new_station_comment.as_deref().filter(|s| !s.is_empty()) {
-            Some(text) => {
-                project.station_comments.insert(to, text.to_string());
-            }
-            None => {
-                project.station_comments.remove(&to);
+        if let Some(key) = project.key_for_ref(to) {
+            match e.new_station_comment.as_deref().filter(|s| !s.is_empty()) {
+                Some(text) => {
+                    project.station_comments.insert(key, text.to_string());
+                }
+                None => {
+                    project.station_comments.remove(&key);
+                }
             }
         }
     }
@@ -439,7 +441,9 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             if let Some(idx) = shot_pos {
                 if let Some(text) = a.station_comment.as_deref().filter(|s| !s.is_empty()) {
                     let to = crate::models::StationRef::new(sid, idx + 1);
-                    project.station_comments.insert(to, text.to_string());
+                    if let Some(key) = project.key_for_ref(to) {
+                        project.station_comments.insert(key, text.to_string());
+                    }
                 }
             }
             last_add = Some((sid, a.after_shot_id, nid));
@@ -475,7 +479,9 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         for (shot_idx, sc_opt) in s.shot_station_comments.iter().enumerate() {
             if let Some(text) = sc_opt.as_deref().filter(|s| !s.is_empty()) {
                 let to = crate::models::StationRef::new(new_sid, shot_idx as u32 + 1);
-                project.station_comments.insert(to, text.to_string());
+                if let Some(key) = project.key_for_ref(to) {
+                    project.station_comments.insert(key, text.to_string());
+                }
             }
         }
     }

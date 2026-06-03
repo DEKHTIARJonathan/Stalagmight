@@ -177,6 +177,20 @@ fn format_station_with_name(
     }
 }
 
+/// Like [`format_station_with_name`] but for a stored [`StationKey`] (e.g. a
+/// captured loop closure in undo data), where no project is in scope to resolve
+/// the anchor to a positional index — the key's own `Display` is used.
+fn format_station_key_with_name(
+    key: &crate::models::StationKey,
+    section_names: &HashMap<SectionId, Option<String>>,
+) -> String {
+    if let Some(Some(name)) = section_names.get(&key.section_id) {
+        format!("{key} ({name})")
+    } else {
+        key.to_string()
+    }
+}
+
 /// Derive a compact detail string from just the command data (for batch sub-commands).
 /// Returns None for commands where no useful details can be extracted from the command alone.
 fn derive_command_details(
@@ -696,8 +710,8 @@ fn derive_preview_data(
                         old_value: String::new(),
                         new_value: format!(
                             "{} \u{2194} {}",
-                            format_station_with_name(&closure.station_a, section_names),
-                            format_station_with_name(&closure.station_b, section_names),
+                            format_station_key_with_name(&closure.station_a, section_names),
+                            format_station_key_with_name(&closure.station_b, section_names),
                         ),
                     },
                 ],

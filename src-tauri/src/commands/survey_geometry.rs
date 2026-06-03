@@ -180,9 +180,19 @@ fn get_survey_geometry_for_project(project: &Project) -> Result<SurveyGeometry, 
         .collect();
 
     // Find the zero-datum station's local coordinates (x0, y0)
-    // All other coordinates are relative to this point
+    // All other coordinates are relative to this point. Resolve the stored
+    // anchor to its current positional ref for the lookup into station_map.
+    let datum_ref =
+        project
+            .resolve_key(&zero_datum.station_ref)
+            .ok_or_else(|| SurveyGeometryError {
+                message: format!(
+                    "Zero datum station {} anchor no longer resolves",
+                    zero_datum.station_ref
+                ),
+            })?;
     let datum_station = station_map
-        .get(&zero_datum.station_ref)
+        .get(&datum_ref)
         .ok_or_else(|| SurveyGeometryError {
             message: format!(
                 "Zero datum station {} not found in computed stations",
@@ -444,7 +454,7 @@ mod tests {
             .id;
 
         project.zero_datums.push(ZeroDatum {
-            station_ref: StationRef::new(section_id, 3),
+            station_ref: StationRef::new(section_id, 3).into(),
             gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
         });
 

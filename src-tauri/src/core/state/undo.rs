@@ -197,10 +197,10 @@ impl AppState {
             // effect) — undo then restores the merge AND the converted closure AND
             // the original positions atomically.
             Command::UnmergeStations { station_ref } => {
-                let involved = project
-                    .station_merges
-                    .iter()
-                    .any(|m| m.station_a == *station_ref || m.station_b == *station_ref);
+                let involved = project.station_merges.iter().any(|m| {
+                    project.key_is_ref(&m.station_a, *station_ref)
+                        || project.key_is_ref(&m.station_b, *station_ref)
+                });
                 if involved {
                     match serde_json::to_string(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
@@ -219,8 +219,10 @@ impl AppState {
                 station_b,
             } => {
                 let merged = project.station_merges.iter().any(|m| {
-                    (m.station_a == *station_a && m.station_b == *station_b)
-                        || (m.station_a == *station_b && m.station_b == *station_a)
+                    (project.key_is_ref(&m.station_a, *station_a)
+                        && project.key_is_ref(&m.station_b, *station_b))
+                        || (project.key_is_ref(&m.station_a, *station_b)
+                            && project.key_is_ref(&m.station_b, *station_a))
                 });
                 if merged {
                     match serde_json::to_string(project) {
@@ -269,7 +271,7 @@ impl AppState {
                 let previous_gps = project
                     .zero_datums
                     .iter()
-                    .find(|zd| zd.station_ref == *station_ref)
+                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
                     .map(|zd| zd.gps);
 
                 // Capture section offsets for all connected sections
@@ -289,7 +291,7 @@ impl AppState {
                 let previous_gps = project
                     .zero_datums
                     .iter()
-                    .find(|zd| zd.station_ref == *station_ref)
+                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
                     .map(|zd| zd.gps);
 
                 // Capture section offsets for all connected sections
@@ -309,7 +311,9 @@ impl AppState {
                 station_ref,
                 comment: _,
             } => {
-                let previous_comment = project.station_comments.get(station_ref).cloned();
+                let previous_comment = project
+                    .key_for_ref(*station_ref)
+                    .and_then(|key| project.station_comments.get(&key).cloned());
                 UndoData::InverseCommand(Command::SetStationComment {
                     station_ref: *station_ref,
                     comment: previous_comment,
@@ -483,8 +487,10 @@ impl AppState {
                 } else {
                     // Capture the newly created closure from the project's loop_closures
                     if let Some(closure) = project.loop_closures.iter().find(|lc| {
-                        (lc.station_a == *station_a && lc.station_b == *station_b)
-                            || (lc.station_a == *station_b && lc.station_b == *station_a)
+                        (project.key_is_ref(&lc.station_a, *station_a)
+                            && project.key_is_ref(&lc.station_b, *station_b))
+                            || (project.key_is_ref(&lc.station_a, *station_b)
+                                && project.key_is_ref(&lc.station_b, *station_a))
                     }) {
                         UndoData::ClosureInfo {
                             closure: closure.clone(),
@@ -718,11 +724,15 @@ impl AppState {
                     match self.project.lock() {
                         Ok(mut proj_guard) => match proj_guard.as_mut() {
                             Some(project) => {
-                                project.station_merges.push(crate::models::StationMerge {
-                                    station_a: *station_a,
-                                    station_b: *station_b,
-                                    merged_at: chrono::Utc::now(),
-                                });
+                                if let (Some(key_a), Some(key_b)) =
+                                    (project.key_for_ref(*station_a), project.key_for_ref(*station_b))
+                                {
+                                    project.station_merges.push(crate::models::StationMerge {
+                                        station_a: key_a,
+                                        station_b: key_b,
+                                        merged_at: chrono::Utc::now(),
+                                    });
+                                }
                                 // Direct push bypassed Project::record_station_merge,
                                 // so the adjacency cache is stale. Drop it; the next
                                 // BFS will fall back to the linear scan until rebuilt.
@@ -800,24 +810,27 @@ impl AppState {
                             // Restore section offsets directly
                             project.restore_section_offsets(previous_offsets);
 
+                            // Stable stored identity for the datum's station.
+                            let datum_key = project.key_for_ref(*station_ref);
+
                             // Restore GPS datum state
                             if let Some(gps) = previous_gps {
                                 if let Some(existing) = project
                                     .zero_datums
                                     .iter_mut()
-                                    .find(|zd| zd.station_ref == *station_ref)
+                                    .find(|zd| Some(&zd.station_ref) == datum_key.as_ref())
                                 {
                                     existing.gps = *gps;
-                                } else {
+                                } else if let Some(key) = datum_key {
                                     project.zero_datums.push(crate::models::ZeroDatum {
-                                        station_ref: *station_ref,
+                                        station_ref: key,
                                         gps: *gps,
                                     });
                                 }
                             } else {
                                 project
                                     .zero_datums
-                                    .retain(|zd| zd.station_ref != *station_ref);
+                                    .retain(|zd| Some(&zd.station_ref) != datum_key.as_ref());
                             }
 
                             project.touch();
@@ -885,12 +898,14 @@ impl AppState {
                                 }
                             }
                             // Restore station offset
-                            match prev_offset {
-                                Some(offset) => {
-                                    project.station_offsets.insert(*station_ref, *offset);
-                                }
-                                None => {
-                                    project.station_offsets.remove(station_ref);
+                            if let Some(key) = project.key_for_ref(*station_ref) {
+                                match prev_offset {
+                                    Some(offset) => {
+                                        project.station_offsets.insert(key, *offset);
+                                    }
+                                    None => {
+                                        project.station_offsets.remove(&key);
+                                    }
                                 }
                             }
                             // Restore section offset

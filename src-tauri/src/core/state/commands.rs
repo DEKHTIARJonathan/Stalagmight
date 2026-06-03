@@ -3,8 +3,8 @@ use std::sync::Mutex;
 use crate::core::{Command, CommentHolder, CommandResult, UndoData, Validator};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
-    Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
-    ViolationSeverity, FEATURE_ID_STRIDE,
+    Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationKey,
+    StationRef, ViolationSeverity, FEATURE_ID_STRIDE,
 };
 
 use super::AppState;
@@ -610,33 +610,43 @@ impl AppState {
                     // Zero datums
                     for zd in &project.zero_datums {
                         if zd.station_ref.section_id == sid {
-                            anchor_indices.push(zd.station_ref.station_index);
+                            if let Some(sr) = project.resolve_key(&zd.station_ref) {
+                                anchor_indices.push(sr.station_index);
+                            }
                         }
                     }
                     // Station merges (only datum-backed partners)
                     for m in &project.station_merges {
-                        if m.station_a.section_id == sid {
-                            if project.has_datum_path_excluding(m.station_b.section_id, sid) {
-                                anchor_indices.push(m.station_a.station_index);
+                        if m.station_a.section_id == sid
+                            && project.has_datum_path_excluding(m.station_b.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&m.station_a) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
-                        if m.station_b.section_id == sid {
-                            if project.has_datum_path_excluding(m.station_a.section_id, sid) {
-                                anchor_indices.push(m.station_b.station_index);
+                        if m.station_b.section_id == sid
+                            && project.has_datum_path_excluding(m.station_a.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&m.station_b) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
                     }
                     // Aligned closures (only datum-backed partners)
                     for c in &project.loop_closures {
                         if !c.is_aligned { continue; }
-                        if c.station_a.section_id == sid {
-                            if project.has_datum_path_excluding(c.station_b.section_id, sid) {
-                                anchor_indices.push(c.station_a.station_index);
+                        if c.station_a.section_id == sid
+                            && project.has_datum_path_excluding(c.station_b.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&c.station_a) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
-                        if c.station_b.section_id == sid {
-                            if project.has_datum_path_excluding(c.station_a.section_id, sid) {
-                                anchor_indices.push(c.station_b.station_index);
+                        if c.station_b.section_id == sid
+                            && project.has_datum_path_excluding(c.station_a.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&c.station_b) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
                     }
@@ -673,17 +683,22 @@ impl AppState {
                     HashMap::new();
                 for &sid in &affected_section_ids {
                     if blocked_sections.contains(&sid) { continue; }
-                    if let Some(zd) = project.zero_datums.iter().find(|zd| zd.station_ref.section_id == sid) {
-                        if let Some(coords) = project.compute_station_raw_coords(zd.station_ref) {
+                    let datum_sr = project
+                        .zero_datums
+                        .iter()
+                        .find(|zd| zd.station_ref.section_id == sid)
+                        .and_then(|zd| project.resolve_key(&zd.station_ref));
+                    if let Some(sr) = datum_sr {
+                        if let Some(coords) = project.compute_station_raw_coords(sr) {
                             tracing::debug!(
                                 section_id = sid,
-                                anchor_station = zd.station_ref.station_index,
+                                anchor_station = sr.station_index,
                                 x = coords.x,
                                 y = coords.y,
                                 purpose = "zero datum stability",
                                 "Recorded anchor position before shot updates",
                             );
-                            anchor_positions.insert(sid, (zd.station_ref, coords));
+                            anchor_positions.insert(sid, (sr, coords));
                         }
                     }
                 }
@@ -855,7 +870,9 @@ impl AppState {
                 if let Some(project) = proj_guard.as_mut() {
                     for (station_index, comment) in &config.station_comments {
                         let station_ref = StationRef::new(section_id, *station_index);
-                        project.station_comments.insert(station_ref, comment.clone());
+                        if let Some(key) = project.key_for_ref(station_ref) {
+                            project.station_comments.insert(key, comment.clone());
+                        }
                     }
                 }
             }
@@ -1408,7 +1425,7 @@ impl AppState {
                     let merge_adj = project.build_merge_adjacency(&section_lookup);
                     let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
                     let datum_stations: std::collections::HashSet<_> =
-                        project.zero_datums.iter().map(|d| d.station_ref).collect();
+                        project.zero_datums.iter().filter_map(|d| project.resolve_key(&d.station_ref)).collect();
                     if project.is_shot_frozen(
                         section_id,
                         shot_index,
@@ -1646,11 +1663,19 @@ impl AppState {
     pub(super) fn unmerge_stations(&self, station_ref: StationRef) -> CommandResult {
         self.with_project_mut(|project| {
             // Find and unmerge all merges involving this station
-            let merges_to_remove: Vec<_> = project
+            let merges_to_remove: Vec<(StationRef, StationRef)> = project
                 .station_merges
                 .iter()
-                .filter(|m| m.station_a == station_ref || m.station_b == station_ref)
-                .map(|m| (m.station_a, m.station_b))
+                .filter(|m| {
+                    project.key_is_ref(&m.station_a, station_ref)
+                        || project.key_is_ref(&m.station_b, station_ref)
+                })
+                .filter_map(|m| {
+                    match (project.resolve_key(&m.station_a), project.resolve_key(&m.station_b)) {
+                        (Some(a), Some(b)) => Some((a, b)),
+                        _ => None,
+                    }
+                })
                 .collect();
 
             for (a, b) in merges_to_remove {
@@ -1760,10 +1785,14 @@ impl AppState {
 
             match comment {
                 Some(text) if !text.is_empty() => {
-                    project.station_comments.insert(station_ref, text);
+                    if let Some(key) = project.key_for_ref(station_ref) {
+                        project.station_comments.insert(key, text);
+                    }
                 }
                 _ => {
-                    project.station_comments.remove(&station_ref);
+                    if let Some(key) = project.key_for_ref(station_ref) {
+                        project.station_comments.remove(&key);
+                    }
                 }
             }
 
@@ -1864,7 +1893,9 @@ impl AppState {
                         station_ref.station_index
                     ));
                 }
-                Ok(project.station_comments.get(station_ref).cloned())
+                Ok(project
+                    .key_for_ref(*station_ref)
+                    .and_then(|key| project.station_comments.get(&key).cloned()))
             }
             CommentHolder::Shot {
                 section_id,
@@ -1891,10 +1922,14 @@ impl AppState {
             CommentHolder::Station { station_ref } => {
                 match comment {
                     Some(text) if !text.is_empty() => {
-                        project.station_comments.insert(*station_ref, text);
+                        if let Some(key) = project.key_for_ref(*station_ref) {
+                            project.station_comments.insert(key, text);
+                        }
                     }
                     _ => {
-                        project.station_comments.remove(station_ref);
+                        if let Some(key) = project.key_for_ref(*station_ref) {
+                            project.station_comments.remove(&key);
+                        }
                     }
                 }
                 Ok(())
@@ -2012,7 +2047,7 @@ impl AppState {
                     "Move offset has a non-finite (NaN/inf) value".to_string(),
                 );
             }
-            if project.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
+            if project.zero_datums.iter().any(|zd| project.key_is_ref(&zd.station_ref, station_ref))
                 && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
             {
                 return CommandResult::failure(
@@ -2021,7 +2056,10 @@ impl AppState {
             }
 
             // Incorporate any existing station offset
-            let existing = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
+            let existing = project
+                .key_for_ref(station_ref)
+                .and_then(|key| project.station_offsets.get(&key).copied())
+                .unwrap_or((0.0, 0.0, 0.0));
             let total_dx = existing.0 + offset.x;
             let total_dy = existing.1 + offset.y;
             let total_dz = existing.2 + offset.z;
@@ -2125,7 +2163,9 @@ impl AppState {
             }
 
             // Clear station offset (now incorporated into shot data)
-            project.station_offsets.remove(&station_ref);
+            if let Some(key) = project.key_for_ref(station_ref) {
+                project.station_offsets.remove(&key);
+            }
             project.touch();
 
             tracing::info!(
@@ -2293,6 +2333,20 @@ impl AppState {
             let direction = section.direction;
             let quality = section.quality;
 
+            // Stable-identity remap snapshot: resolve every stored cross-reference
+            // to its CURRENT positional ref BEFORE we mutate the section. The shots
+            // moved into section B get fresh UUIDs, so positional-then-reanchor is
+            // the sound way to carry refs across the split (anchors alone can't
+            // follow a shot whose UUID changes).
+            let split_station = (pos + 1) as u32;
+            let original_station_count = section.shots.len() as u32 + 1;
+            let old_refs: Vec<Option<StationRef>> = {
+                let p: &Project = project;
+                let mut out = Vec::new();
+                p.for_each_station_ref(|_label, key| out.push(p.resolve_key(&key)));
+                out
+            };
+
             // Step 3: Modify original section -> section A
             // Truncate in-place to preserve existing Shot IDs and next_shot_id
             let Some(section_mut) = project.get_section_mut(section_id) else {
@@ -2345,105 +2399,36 @@ impl AppState {
             // Set section B offset
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
 
-            // Step 6: Remap merge/closure/station_offset references
-            // Stations after split point belong to new section with adjusted indices.
-            // Original station indices: 0..pos are section A, pos+1..N are section B (shifted)
-            // The split position is the deleted shot. Stations in section B had indices
-            // pos+1 through N (N = original shot count). In section B, they become
-            // 0 through (N - pos - 1).
-            let split_station = pos + 1; // first station index that belongs to section B
-
-            // Original station count = shots_before + deleted_shot + shots_after + 1
-            let original_station_count = shots_before.len() + 1 + shots_after_len + 1;
-
-            // Remap station merges
-            for merge in &mut project.station_merges {
-                if merge.station_a.section_id == section_id
-                    && (merge.station_a.station_index as usize) >= split_station
-                    && (merge.station_a.station_index as usize) < original_station_count
-                {
-                    merge.station_a.section_id = new_id;
-                    merge.station_a.station_index -= split_station as u32;
-                }
-                if merge.station_b.section_id == section_id
-                    && (merge.station_b.station_index as usize) >= split_station
-                    && (merge.station_b.station_index as usize) < original_station_count
-                {
-                    merge.station_b.section_id = new_id;
-                    merge.station_b.station_index -= split_station as u32;
-                }
-            }
-
-            // Remap loop closures
-            for closure in &mut project.loop_closures {
-                if closure.station_a.section_id == section_id
-                    && (closure.station_a.station_index as usize) >= split_station
-                    && (closure.station_a.station_index as usize) < original_station_count
-                {
-                    closure.station_a.section_id = new_id;
-                    closure.station_a.station_index -= split_station as u32;
-                }
-                if closure.station_b.section_id == section_id
-                    && (closure.station_b.station_index as usize) >= split_station
-                    && (closure.station_b.station_index as usize) < original_station_count
-                {
-                    closure.station_b.section_id = new_id;
-                    closure.station_b.station_index -= split_station as u32;
-                }
-            }
-
-            // Remap station offsets
-            let offsets_to_remap: Vec<(StationRef, (f64, f64, f64))> = project
-                .station_offsets
+            // Step 6: Remap every cross-reference across the split.
+            // Stations whose positional index moved into section B (index in
+            // [split_station, original_station_count)) become section B refs with
+            // index -= split_station; everything else stays put. We re-derive each
+            // ref's stable key from its NEW positional home against the now-final
+            // structure (section B's shots carry fresh UUIDs). `old_refs` was
+            // captured before truncation, in `for_each_station_ref` order; the
+            // `new_keys` Vec is consumed by `map_station_refs` in that same order.
+            let _ = shots_after_len;
+            let new_keys: Vec<Option<StationKey>> = old_refs
                 .iter()
-                .filter(|(sr, _)| {
-                    sr.section_id == section_id
-                        && (sr.station_index as usize) >= split_station
-                        && (sr.station_index as usize) < original_station_count
+                .map(|old_ref| {
+                    let sr = (*old_ref)?;
+                    let new_ref = if sr.section_id == section_id
+                        && sr.station_index >= split_station
+                        && sr.station_index < original_station_count
+                    {
+                        StationRef::new(new_id, sr.station_index - split_station)
+                    } else {
+                        sr
+                    };
+                    project.key_for_ref(new_ref)
                 })
-                .map(|(sr, v)| (*sr, *v))
                 .collect();
-
-            for (old_ref, offset_val) in offsets_to_remap {
-                project.station_offsets.remove(&old_ref);
-                let new_ref = StationRef {
-                    section_id: new_id,
-                    station_index: old_ref.station_index - split_station as u32,
-                };
-                project.station_offsets.insert(new_ref, offset_val);
-            }
-
-            // Remap station comments
-            let comments_to_remap: Vec<(StationRef, String)> = project
-                .station_comments
-                .iter()
-                .filter(|(sr, _)| {
-                    sr.section_id == section_id
-                        && (sr.station_index as usize) >= split_station
-                        && (sr.station_index as usize) < original_station_count
-                })
-                .map(|(sr, v)| (*sr, v.clone()))
-                .collect();
-
-            for (old_ref, comment_val) in comments_to_remap {
-                project.station_comments.remove(&old_ref);
-                let new_ref = StationRef {
-                    section_id: new_id,
-                    station_index: old_ref.station_index - split_station as u32,
-                };
-                project.station_comments.insert(new_ref, comment_val);
-            }
-
-            // Remap zero datums
-            for zd in &mut project.zero_datums {
-                if zd.station_ref.section_id == section_id
-                    && (zd.station_ref.station_index as usize) >= split_station
-                    && (zd.station_ref.station_index as usize) < original_station_count
-                {
-                    zd.station_ref.section_id = new_id;
-                    zd.station_ref.station_index -= split_station as u32;
-                }
-            }
+            let mut remap_i = 0usize;
+            project.map_station_refs(|old_key| {
+                let next = new_keys.get(remap_i).cloned().flatten();
+                remap_i += 1;
+                next.unwrap_or(old_key)
+            });
 
             // The split can strand a section so its only attachment is a loop
             // closure — that is a merge, not a loop. Convert it now (issue #8)
@@ -2576,18 +2561,10 @@ impl AppState {
             project.remove_section_offset(section_id);
 
             // Remove station offsets referencing this section
-            let station_offset_keys: Vec<StationRef> = project
-                .station_offsets
-                .keys()
-                .filter(|sr| sr.section_id == section_id)
-                .copied()
-                .collect();
-            for key in station_offset_keys {
-                project.station_offsets.remove(&key);
-            }
+            project.station_offsets.retain(|key, _| key.section_id != section_id);
 
             // Remove station comments referencing this section
-            project.station_comments.retain(|sr, _| sr.section_id != section_id);
+            project.station_comments.retain(|key, _| key.section_id != section_id);
 
             // Remove zero datums referencing this section
             project.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
