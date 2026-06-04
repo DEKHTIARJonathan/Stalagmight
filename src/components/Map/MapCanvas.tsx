@@ -351,10 +351,6 @@ export default function MapCanvas() {
     cancelPlacementMode,
     confirmPlacement,
     showToast,
-    sectionsPanelOpen,
-    sectionsPanelWidth,
-    detailPanelOpen,
-    detailPanelWidth,
     requestZoomToSection,
     clearZoomToSectionRequest,
     requestPanToShot,
@@ -2244,26 +2240,14 @@ export default function MapCanvas() {
     }
   }, [tileReloadGeneration, mapLoaded, showSatellite]);
 
-  // Shared padding helper: computes { top, bottom, left, right } with 10% margin
-  // and optional panel offsets
-  const calcPadding = useCallback(
-    (
-      container: HTMLElement,
-      panels?: { sectionsPanelOpen: boolean; sectionsPanelWidth: number; detailPanelOpen: boolean; detailPanelWidth: number }
-    ) => {
-      const marginX = Math.round(container.clientWidth * 0.1);
-      const marginY = Math.round(container.clientHeight * 0.1);
-      const leftPanel = panels?.sectionsPanelOpen ? panels.sectionsPanelWidth : 0;
-      const rightPanel = panels?.detailPanelOpen ? panels.detailPanelWidth : 0;
-      return {
-        top: marginY,
-        bottom: marginY,
-        left: marginX + leftPanel,
-        right: marginX + rightPanel,
-      };
-    },
-    []
-  );
+  // 10% margins on all sides. The map is the central flex column (already
+  // sized to exclude the side panels), so no panel offsets are needed — adding
+  // them double-counts the panel widths and squeezes the fit (see #64).
+  const calcPadding = useCallback((container: HTMLElement) => {
+    const marginX = Math.round(container.clientWidth * 0.1);
+    const marginY = Math.round(container.clientHeight * 0.1);
+    return { top: marginY, bottom: marginY, left: marginX, right: marginX };
+  }, []);
 
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback((options?: { snap?: boolean }) => {
@@ -2304,6 +2288,37 @@ export default function MapCanvas() {
         return;
       }
 
+      // Fit to *rendered* geometry: endpoints of drawn shots plus zero-datum
+      // stations, falling back to all stations when nothing matches. When
+      // reference shots are hidden, a long ref/jump connector or a ref-only
+      // station shouldn't inflate the bounds and shrink the section (mirrors
+      // the export, which never draws reference shots). But when reference
+      // shots are *visible* (the default), they're drawn — so include them, or
+      // a visible connector could be left off-screen.
+      const refShotsVisible = getEffectiveShowReferenceShots(showShots, showReferenceShots);
+      const byIndex = new Map<number, (typeof sectionStations)[number]>();
+      for (const s of sectionStations) byIndex.set(s.station_ref.station_index, s);
+      const section = project?.sections.find((s) => s.id === sectionId);
+      const rendered: typeof sectionStations = [];
+      const seenIdx = new Set<number>();
+      const includeIdx = (idx: number) => {
+        if (seenIdx.has(idx)) return;
+        const st = byIndex.get(idx);
+        if (st) {
+          rendered.push(st);
+          seenIdx.add(idx);
+        }
+      };
+      section?.shots.forEach((shot, i) => {
+        if (!refShotsVisible && shot.is_reference) return;
+        includeIdx(i);
+        includeIdx(i + 1);
+      });
+      for (const s of sectionStations) {
+        if (s.is_zero_datum) includeIdx(s.station_ref.station_index);
+      }
+      const fitStations = rendered.length > 0 ? rendered : sectionStations;
+
       // Stop any running animation before starting a new one
       map.current.stop();
 
@@ -2314,18 +2329,17 @@ export default function MapCanvas() {
       const animationConfig = config.map.animation;
       const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
 
-      // Calculate padding: 10% margin on all sides plus panel offsets
+      // Padding: 10% margins only. The map container is the central flex
+      // column, so it already excludes the side panels — adding the panel
+      // widths here double-counts and squeezes the section into a sliver
+      // (e.g. a 730px map minus 250+300px panels left ~34px usable). Matches
+      // fitToBounds.
       const container = map.current.getContainer();
-      const padding = calcPadding(container, {
-        sectionsPanelOpen,
-        sectionsPanelWidth,
-        detailPanelOpen,
-        detailPanelWidth,
-      });
+      const padding = calcPadding(container);
 
       // Single station: center at point_zoom level
-      if (sectionStations.length === 1) {
-        const station = sectionStations[0]!;
+      if (fitStations.length === 1) {
+        const station = fitStations[0]!;
         const mapCoords = metersToMapCoords(station.coordinates.x, station.coordinates.y, gpsOrigin);
 
         map.current.easeTo({
@@ -2338,7 +2352,7 @@ export default function MapCanvas() {
       }
 
       // Multiple stations: calculate bounds and fit
-      const coords = sectionStations.map((s) => s.coordinates);
+      const coords = fitStations.map((s) => s.coordinates);
       const bounds = getBounds(coords);
 
       // Handle zero-area bounds (all stations at same XY) like single-station case
@@ -2357,40 +2371,20 @@ export default function MapCanvas() {
       const sw = metersToMapCoords(bounds.minX, bounds.minY, gpsOrigin);
       const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
-      // Skip-zoom-in: if section already fits in usable viewport and occupies ≥30%,
-      // just pan/center without zooming
-      const usableWidth = Math.max(1, container.clientWidth - padding.left - padding.right);
-      const usableHeight = Math.max(1, container.clientHeight - padding.top - padding.bottom);
-      const swScreen = map.current.project(sw as [number, number]);
-      const neScreen = map.current.project(ne as [number, number]);
-      const screenWidth = Math.abs(neScreen.x - swScreen.x);
-      const screenHeight = Math.abs(neScreen.y - swScreen.y);
-      const ratioX = screenWidth / usableWidth;
-      const ratioY = screenHeight / usableHeight;
-
-      const fitsInViewport = ratioX <= 1.0 && ratioY <= 1.0;
-      const occupiesEnough = ratioX >= 0.3 || ratioY >= 0.3;
-
-      if (fitsInViewport && occupiesEnough) {
-        // Section already visible and large enough — center without re-zooming
-        const centerLng = (sw[0] + ne[0]) / 2;
-        const centerLat = (sw[1] + ne[1]) / 2;
-        map.current.easeTo({
-          center: [centerLng, centerLat],
-          padding,
-          duration: animationDuration,
-        });
-      } else {
-        // Section too large or too small — use fitBounds
-        map.current.fitBounds([sw, ne], {
-          padding,
-          linear: true,
-          duration: animationDuration,
-          maxZoom: config.map.zoom_max ?? 22,
-        });
-      }
+      // Always fit the section's bounds. fitBounds depends only on the bounds,
+      // padding and container — not the live (possibly mid-animation) camera —
+      // so rapidly clicking between different sections can't drift the zoom.
+      // (The previous skip-zoom-in heuristic read the transitional camera via
+      // map.project() and accumulated across interrupted animations.) Re-fitting
+      // an already-framed section is idempotent (same target zoom).
+      map.current.fitBounds([sw, ne], {
+        padding,
+        linear: true,
+        duration: animationDuration,
+        maxZoom: config.map.zoom_max ?? 22,
+      });
     },
-    [stations, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth, calcPadding]
+    [stations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
