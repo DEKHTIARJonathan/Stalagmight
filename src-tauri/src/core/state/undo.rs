@@ -557,6 +557,17 @@ impl AppState {
         };
         let result = self.undo_inner();
         if result.success {
+            // Reconcile derived offsets after the restore. For snapshot-restore
+            // undos (Merge/Move/Delete/Repair) the restored `before` is already a
+            // valid aligned state, so realign_merges early-returns (no-op) — EXCEPT
+            // undo-of-Repair, whose `before` carries the >=tolerance drift Repair
+            // healed. There, reconcile re-derives those offsets: the undo reverts the
+            // STRUCTURAL repair (dropped dangling refs / converted closures come back)
+            // while keeping geometry valid, rather than re-introducing broken derived
+            // offsets the user can't act on. Offsets are derived state (re-solved on
+            // every load), so this is the intended contract, not a loss. (A
+            // sub-tolerance offset change is below realign_merges' threshold, so the
+            // `before` snapshot's offsets are preserved exactly there.)
             self.reconcile_geometry();
         }
         result

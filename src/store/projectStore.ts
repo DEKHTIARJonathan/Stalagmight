@@ -343,6 +343,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     if (result.success) {
       await get().refreshProjectState();
       set({ isDirty: true });
+      // A command can RESOLVE (or surface) an integrity issue — e.g. removing a
+      // drifted loop closure clears its banner entry — so re-check, mirroring
+      // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
+      // may be an autosave (which skips its own post-save re-check to avoid churn),
+      // so without this the banner/dialog can keep showing an already-fixed issue
+      // until a manual save or reload.
+      await get().checkProjectIntegrity();
     }
     return result;
   };
@@ -1031,9 +1038,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'check project structural integrity after load',
       });
       const cur = get();
-      if ((cur.project?.file_path ?? null) !== pathAtStart || cur.loading.clientOpId !== opAtStart) {
+      if (
+        cur.project === null ||
+        (cur.project.file_path ?? null) !== pathAtStart ||
+        cur.loading.clientOpId !== opAtStart
+      ) {
         // Project switched/closed mid-check — drop this stale result so it can't
-        // clobber the new project's integrity state.
+        // clobber the new project's integrity state. The explicit project===null
+        // check is needed for the UNSAVED case: file_path stays null and
+        // closeProject doesn't bump clientOpId, so without it a late result would
+        // repopulate the banner with no project loaded (leaking onto the global view).
         return [];
       }
       const issues = result.messages;

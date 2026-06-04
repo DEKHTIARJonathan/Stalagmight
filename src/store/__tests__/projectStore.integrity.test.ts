@@ -28,6 +28,10 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
       return undefined;
     });
     useProjectStore.setState({
+      // checkProjectIntegrity now drops its result if no project is loaded (the
+      // stale-result guard), and in the real app it only ever runs with a project
+      // open — so give these dismissal-lifecycle tests a loaded project by default.
+      project: { file_path: '/test.stalx' } as never,
       integrityIssues: [],
       integrityDismissed: false,
       integritySaveBlocked: false,
@@ -85,7 +89,10 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     expect(useProjectStore.getState().integrityDismissed).toBe(false);
 
     // Opening a different project whose check returns the IDENTICAL message must
-    // show its banner (dismissal did not leak).
+    // show its banner (dismissal did not leak). A real load installs the new
+    // project before its integrity check runs — without a project loaded the check
+    // now drops its result.
+    useProjectStore.setState({ project: { file_path: '/other.stalx' } as never });
     await useProjectStore.getState().checkProjectIntegrity();
     expect(useProjectStore.getState().integrityIssues).toEqual([msg]);
     expect(useProjectStore.getState().integrityDismissed).toBe(false);
@@ -232,6 +239,56 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     await checkA;
 
     // B's state is untouched — the stale A result was dropped.
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+    expect(useProjectStore.getState().integritySaveBlocked).toBe(false);
+  });
+
+  it('re-checks integrity after a mutating command so the banner cannot go stale', async () => {
+    // Removing a drifted loop closure resolves its integrity issue. executeCommand
+    // must re-check integrity so the banner clears — refreshProjectState does not,
+    // and the next save may be an autosave (which skips its own post-save re-check).
+    useProjectStore.setState({
+      project: { file_path: '/p.stalx' } as never,
+      integrityIssues: ['drifted aligned loop closure'],
+      integrityDismissed: false,
+      integritySaveBlocked: false,
+    });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'remove_loop_closure') return { success: true };
+      if (command === 'get_project_state') return null; // refreshProjectState
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      return undefined; // refreshUndoState / refreshWarnings — best-effort
+    });
+
+    await useProjectStore.getState().removeLoopClosure(1n);
+
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+  });
+
+  it('drops a stale integrity result when an UNSAVED project is closed mid-check', async () => {
+    // Unsaved project (file_path null); a check is in flight; the user closes it.
+    // closeProject does not bump clientOpId and file_path stays null, so the result
+    // must be dropped via the project===null guard — otherwise it leaks the banner
+    // onto the no-project global view.
+    useProjectStore.setState({
+      project: { file_path: null } as never,
+      loading: { ...useProjectStore.getState().loading, clientOpId: 1 },
+      integrityIssues: [],
+      integritySaveBlocked: false,
+    });
+
+    let resolveCheck!: (v: { messages: string[]; save_blocked: boolean }) => void;
+    invokeIpcMock.mockImplementationOnce(
+      () => new Promise((r) => { resolveCheck = r as typeof resolveCheck; }),
+    );
+    const check = useProjectStore.getState().checkProjectIntegrity();
+
+    // Close: project → null, integrity reset, clientOpId unchanged.
+    useProjectStore.setState({ project: null, integrityIssues: [], integritySaveBlocked: false });
+
+    resolveCheck({ messages: ['stale issue'], save_blocked: true });
+    await check;
+
     expect(useProjectStore.getState().integrityIssues).toEqual([]);
     expect(useProjectStore.getState().integritySaveBlocked).toBe(false);
   });
