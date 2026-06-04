@@ -214,6 +214,14 @@ interface ProjectStore {
    * banner stays shown and non-dismissable so the Repair entry point can't be
    * hidden on a project that can't be saved. */
   integritySaveBlocked: boolean;
+  /** Whether the "Review & Repair" integrity dialog is open. Lifted here (not
+   * App-local) so a blocked manual save can route the user straight to Repair
+   * instead of showing a generic error window. */
+  integrityDialogOpen: boolean;
+  /** Open the Review & Repair integrity dialog. */
+  openIntegrityDialog: () => void;
+  /** Close the Review & Repair integrity dialog. */
+  closeIntegrityDialog: () => void;
   /** Re-check the open project's structural integrity, updating integrityIssues. */
   checkProjectIntegrity: () => Promise<string[]>;
   /** Repair structural integrity; returns {fixed, remaining} and refreshes
@@ -362,6 +370,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
     } finally {
       await get().refreshProjectState();
+      // Undo/redo can change which cross-references resolve — e.g. undoing a
+      // Repair restores the dropped dangling refs, redoing a delete removes a
+      // station an offset anchored on — so re-check integrity, otherwise the
+      // banner and save-block go stale (showing clean while the project isn't).
+      await get().checkProjectIntegrity();
     }
     return result;
   };
@@ -378,6 +391,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   integrityIssues: [],
   integrityDismissed: false,
   integritySaveBlocked: false,
+  integrityDialogOpen: false,
   config: null,
   loading: { ...initialLoadingState },
   error: null,
@@ -556,6 +570,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           integrityIssues: [],
           integrityDismissed: false,
           integritySaveBlocked: false,
+          integrityDialogOpen: false,
         });
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
@@ -711,6 +726,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         integrityIssues: [],
         integrityDismissed: false,
         integritySaveBlocked: false,
+        integrityDialogOpen: false,
       });
 
       // Apply display settings from backend (defaults for new project)
@@ -852,7 +868,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false });
+        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
       }
       return result;
     } finally {
@@ -1023,6 +1039,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // issue set actually changes. Keeping the issues populated also lets the
   // Review & Repair dialog still open them.
   dismissIntegrityIssues: () => set({ integrityDismissed: true }),
+
+  openIntegrityDialog: () => set({ integrityDialogOpen: true }),
+  closeIntegrityDialog: () => set({ integrityDialogOpen: false }),
 
   removeFromRecentProjects: async (path: string) => {
     try {

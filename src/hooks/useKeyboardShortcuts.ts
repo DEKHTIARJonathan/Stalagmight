@@ -7,6 +7,7 @@ import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import { getErrorMessage } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
+import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -655,7 +656,13 @@ export function useKeyboardShortcuts() {
         case 'save':
           event.preventDefault();
           if (project) {
-            saveProject();
+            void saveProject().then((result) => {
+              if (result && !result.success) {
+                // A save blocked by integrity issues is not a "real" error —
+                // route to Review & Repair instead of an error window.
+                surfaceSaveFailure(result.error, openDialog);
+              }
+            });
             maybeShowToast(action);
           }
           break;
@@ -688,8 +695,8 @@ export function useKeyboardShortcuts() {
 
                   const store = useProjectStore.getState();
                   const result = await store.saveProject(finalPath);
-                  if (result && !result.success && result.error) {
-                    openDialog('error', { message: result.error, title: 'Save Failed' });
+                  if (result && !result.success) {
+                    surfaceSaveFailure(result.error, openDialog);
                   }
                 }
               } catch (e) {

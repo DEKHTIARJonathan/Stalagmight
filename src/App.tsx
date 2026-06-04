@@ -30,8 +30,10 @@ function App() {
   const checkProjectIntegrity = useProjectStore((s) => s.checkProjectIntegrity);
   const repairProjectIntegrity = useProjectStore((s) => s.repairProjectIntegrity);
   const dismissIntegrityIssues = useProjectStore((s) => s.dismissIntegrityIssues);
+  const integrityDialogOpen = useProjectStore((s) => s.integrityDialogOpen);
+  const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
+  const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
   const [repairingIntegrity, setRepairingIntegrity] = useState(false);
-  const [showIntegrityDialog, setShowIntegrityDialog] = useState(false);
   const {
     view,
     setView,
@@ -422,7 +424,7 @@ function App() {
       // Close the dialog only when fully clean; if issues remain the banner
       // re-populates (checkProjectIntegrity ran) so the user can act on them.
       if (remaining === 0) {
-        setShowIntegrityDialog(false);
+        closeIntegrityDialog();
       }
     } finally {
       setRepairingIntegrity(false);
@@ -444,7 +446,7 @@ function App() {
             {integritySaveBlocked && ' Saving is paused until you repair them.'}
           </span>
           <button
-            onClick={() => setShowIntegrityDialog(true)}
+            onClick={() => openIntegrityDialog()}
             className="px-3 py-1 rounded bg-accent text-white text-xs"
             data-testid="integrity-review-button"
           >
@@ -466,14 +468,14 @@ function App() {
       )}
 
       {/* Integrity details + repair dialog */}
-      {showIntegrityDialog && integrityIssues.length > 0 && (
+      {integrityDialogOpen && integrityIssues.length > 0 && (
         <div
           className="fixed inset-0 z-[1000] bg-overlay flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="integrity-dialog-title"
           data-testid="integrity-dialog"
-          onClick={() => !repairingIntegrity && setShowIntegrityDialog(false)}
+          onClick={() => !repairingIntegrity && closeIntegrityDialog()}
         >
           <div
             className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[80vh] flex flex-col"
@@ -502,7 +504,7 @@ function App() {
             </div>
             <div className="px-4 py-3 border-t border-border flex justify-end gap-2">
               <button
-                onClick={() => setShowIntegrityDialog(false)}
+                onClick={() => closeIntegrityDialog()}
                 disabled={repairingIntegrity}
                 className="px-3 py-1.5 rounded border border-border text-sm hover:bg-background disabled:opacity-50"
                 data-testid="integrity-dialog-cancel"

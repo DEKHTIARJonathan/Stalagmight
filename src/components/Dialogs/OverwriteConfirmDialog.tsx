@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { surfaceSaveFailure } from '../../utils/saveFeedback';
 
 export default function OverwriteConfirmDialog() {
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
@@ -26,7 +27,7 @@ export default function OverwriteConfirmDialog() {
       if (result && !result.success && result.error) {
         trackDialogComplete('confirm-overwrite');
         closeDialog();
-        showDialog('error', { message: result.error, title: 'Save Failed' });
+        surfaceSaveFailure(result.error, showDialog);
       } else {
         trackDialogComplete('confirm-overwrite');
         closeDialog();

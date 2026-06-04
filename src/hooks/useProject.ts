@@ -5,6 +5,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { getErrorMessage } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
+import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -79,7 +80,7 @@ export function useProject() {
 
       const result = await store.saveProject(finalPath);
       if (result && !result.success && result.error) {
-        openDialog('error', { message: result.error, title: 'Save Failed' });
+        surfaceSaveFailure(result.error, openDialog);
       }
       return result;
     }
@@ -91,8 +92,8 @@ export function useProject() {
       ? await store.saveProject()
       : await handleSaveProjectAs();
 
-    if (result && !result.success && result.error) {
-      openDialog('error', { message: result.error, title: 'Save Failed' });
+    if (result && !result.success) {
+      surfaceSaveFailure(result.error, openDialog);
     }
     return result;
   }, [store, handleSaveProjectAs, openDialog]);

@@ -123,4 +123,31 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     await useProjectStore.getState().checkProjectIntegrity();
     expect(useProjectStore.getState().integritySaveBlocked).toBe(false);
   });
+
+  it('re-checks integrity after undo so the banner is not stale', async () => {
+    // Start clean (e.g. just after a Repair).
+    issues = [];
+    saveBlocked = false;
+    await useProjectStore.getState().checkProjectIntegrity();
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+
+    // Undoing the Repair restores the dangling ref: the next integrity check
+    // reports it, and undo must re-run that check (otherwise the banner stays
+    // stale showing "clean" while the project is broken).
+    issues = ['Merge anchor no longer resolves in section 0'];
+    saveBlocked = true;
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'undo') return { success: true };
+      if (command === 'get_project_state') return null; // refreshProjectState
+      if (command === 'check_project_integrity') return { messages: issues, save_blocked: saveBlocked };
+      return undefined;
+    });
+
+    await useProjectStore.getState().undo();
+
+    expect(useProjectStore.getState().integrityIssues).toEqual([
+      'Merge anchor no longer resolves in section 0',
+    ]);
+    expect(useProjectStore.getState().integritySaveBlocked).toBe(true);
+  });
 });
