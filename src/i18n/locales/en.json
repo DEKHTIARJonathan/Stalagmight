@@ -1385,7 +1385,36 @@
     },
     "recent": {
       "title": "Recent projects",
-      "hint": "Click to select, double-click to open, right-click for options."
+      "hint": "Click to select, double-click to open, right-click for options.",
+      "countFiltered": "Showing {{shown}} of {{total}}",
+      "noResults": "No projects match \"{{term}}\".",
+      "density": {
+        "label": "View",
+        "cards": "Card view",
+        "table": "Table view"
+      },
+      "columns": {
+        "name": "Name",
+        "path": "Path",
+        "sections": "Sections",
+        "length": "Length",
+        "edited": "Edited"
+      },
+      "sortByColumn": "Sort by {{column}}",
+      "missing": {
+        "notFound": "File not found",
+        "remove": "Remove"
+      },
+      "sort": {
+        "label": "Sort by",
+        "lastOpened": "Last opened",
+        "lastEdited": "Last edited",
+        "name": "Name",
+        "sections": "Section count",
+        "length": "Total length",
+        "ascending": "Ascending",
+        "descending": "Descending"
+      }
     },
     "status": {
       "systems": "Systems: {{countFormatted}}",
@@ -1477,6 +1506,13 @@
         "bounds": "Bounds"
       },
       "boundsValue": "N {{north}}, S {{south}}, E {{east}}, W {{west}}",
+      "rename": {
+        "editAria": "Rename {{name}}",
+        "inputAria": "Project name",
+        "save": "Save name",
+        "cancel": "Cancel rename",
+        "failed": "Failed to rename project"
+      },
       "actions": {
         "openProject": "Open project",
         "openProjectAria": "Open {{name}}",
@@ -1488,7 +1524,7 @@
     },
     "systemCard": {
       "length": "Length",
-      "modified": "Modified {{date}}",
+      "modified": "Edited {{relative}}",
       "sections": "Sections"
     },
     "tooltip": {

@@ -1125,6 +1125,7 @@ pub fn run() {
             commands::project::get_project_state,
             commands::project::list_recent_projects,
             commands::project::remove_from_recent_projects,
+            commands::project::set_project_name_for_path,
             commands::project::merge_projects,
             commands::project::load_project_full,
             commands::project::load_project_full_binary,

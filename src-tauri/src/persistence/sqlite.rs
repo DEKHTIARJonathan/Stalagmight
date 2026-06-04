@@ -2490,6 +2490,21 @@ impl Database {
         Ok(())
     }
 
+    /// Rename the project's display name without rewriting the whole project.
+    /// A targeted `UPDATE` on the single `project` row (mirrors
+    /// [`save_collab_state`](Self::save_collab_state)); leaves `modified_at`
+    /// untouched so a rename doesn't reorder the recent list by edit time.
+    pub fn save_project_name(&self, name: &str) -> Result<()> {
+        let affected = self
+            .conn
+            .execute("UPDATE project SET name = ?1 WHERE id = 1", params![name])
+            .context("Failed to update project name")?;
+        if affected == 0 {
+            anyhow::bail!("No project row to rename");
+        }
+        Ok(())
+    }
+
     /// Load imported file hashes from database
     fn load_imported_file_hashes(&self) -> Result<Vec<String>> {
         let mut hashes = Vec::new();

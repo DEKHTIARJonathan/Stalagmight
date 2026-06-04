@@ -301,6 +301,8 @@ interface ProjectStore {
   // Collaboration mode
   setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
   setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
+  /** Rename a recent project's display name by path (project need not be open). */
+  setProjectNameForPath: (path: string, name: string) => Promise<CommandResult>;
   getCollabState: () => Promise<CollabState | null>;
   detectCollabChanges: () => Promise<CollabChangeSet | null>;
   applyCollabChanges: () => Promise<CommandResult>;
@@ -1173,8 +1175,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'update recent projects list', fields: { path } }
       );
       if (result.success) {
-        // Refresh the list after removal
-        await get().loadRecentProjects();
+        // Refresh both the loaded list and the config after removal. The config
+        // refresh matters for "missing" recents (paths in config.general
+        // .recent_projects that didn't load): those rows are derived from config,
+        // so without this the removed path lingers and the row re-renders.
+        await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
       }
       return result;
     } catch (e) {
@@ -1552,6 +1557,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'set_collab_enabled_for_path',
       { path, enabled },
       { purpose: 'toggle collaboration mode for a recent project', fields: { path } }
+    );
+  },
+
+  setProjectNameForPath: async (path: string, name: string) => {
+    return executeCommand(
+      'set_project_name_for_path',
+      { path, name },
+      { purpose: 'rename a recent project', fields: { path } }
     );
   },
 
