@@ -399,6 +399,11 @@ export default function GlobalView() {
     [listItems, searchTerm]
   );
   const isSearching = searchTerm.trim().length > 0;
+  // Gate the tabs and content area on the combined count (loaded + missing) so
+  // an all-missing recent list still renders its removable rows instead of the
+  // EmptyState — otherwise the user can never clear those entries. (The metadata
+  // panel stays gated on loaded projects, since missing rows aren't selectable.)
+  const hasRecentItems = listItems.length > 0;
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
@@ -441,8 +446,8 @@ export default function GlobalView() {
         </div>
       </header>
 
-      {/* Tabs - only show if there are projects */}
-      {recentProjects.length > 0 && (
+      {/* Tabs - only show if there are projects (loaded or missing) */}
+      {hasRecentItems && (
         <div className="flex items-center justify-between border-b border-border px-4">
           <div className="flex">
             <button
@@ -542,7 +547,7 @@ export default function GlobalView() {
       <main className="flex-1 overflow-hidden flex">
         {/* Main content area - disabled during loading */}
         <div className={`flex-1 overflow-hidden ${loading.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
-          {recentProjects.length === 0 ? (
+          {!hasRecentItems ? (
             <div className="h-full overflow-auto p-6">
               <EmptyState
                 onImport={handleImportDmp}

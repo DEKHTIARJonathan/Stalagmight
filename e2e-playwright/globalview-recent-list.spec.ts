@@ -139,4 +139,30 @@ test.describe('GlobalView Recent Projects — search, table view, missing files'
     await expect(page.getByTestId(`system-row-missing-${GHOST}`)).toBeVisible();
     await expect(page.getByTestId(`system-row-missing-${GHOST}`)).toContainText('File not found');
   });
+
+  test('surfaces missing entries (not the empty state) when every recent file is missing', async ({ page }) => {
+    // Reproduce the all-missing case: config still references a path, but the
+    // loaded list is empty. Without gating on the combined count the UI would
+    // fall back to the EmptyState and the user could never clear the entry.
+    await page.waitForFunction(() => Boolean(
+      (window as unknown as { __E2E_TEST__?: { projectStore?: { getState: () => { config: unknown } } } })
+        .__E2E_TEST__?.projectStore?.getState().config
+    ));
+    await page.evaluate((ghost) => {
+      const store = (window as unknown as {
+        __E2E_TEST__: { projectStore: {
+          getState: () => { config: { general: Record<string, unknown> }; setConfig: (c: unknown) => void };
+          setState: (partial: { recentProjects: unknown[] }) => void;
+        } };
+      }).__E2E_TEST__.projectStore;
+      const state = store.getState();
+      state.setConfig({ ...state.config, general: { ...state.config.general, recent_projects: [ghost] } });
+      store.setState({ recentProjects: [] });
+    }, GHOST);
+
+    // The missing entry is reachable and the EmptyState is not shown.
+    await expect(page.getByTestId(`system-card-missing-${GHOST}`)).toBeVisible();
+    await expect(page.getByTestId('empty-state-new-project')).toHaveCount(0);
+    await expect(page.getByTestId(`system-card-missing-remove-${GHOST}`)).toBeVisible();
+  });
 });

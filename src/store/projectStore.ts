@@ -930,8 +930,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'update recent projects list', fields: { path } }
       );
       if (result.success) {
-        // Refresh the list after removal
-        await get().loadRecentProjects();
+        // Refresh both the loaded list and the config after removal. The config
+        // refresh matters for "missing" recents (paths in config.general
+        // .recent_projects that didn't load): those rows are derived from config,
+        // so without this the removed path lingers and the row re-renders.
+        await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
       }
       return result;
     } catch (e) {

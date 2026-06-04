@@ -346,6 +346,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // Collaboration-mode IPC commands (Ariane sibling .tml workflow).
     "command.set_collab_enabled",
     "command.set_collab_enabled_for_path",
+    "command.set_project_name_for_path",
     "command.get_collab_state",
     "command.detect_collab_changes",
     "command.apply_collab_changes",
