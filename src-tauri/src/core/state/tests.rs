@@ -679,6 +679,101 @@ fn redo_batch_preserves_orphan_closure_to_merge_conversion() {
 }
 
 #[test]
+fn update_shot_reconciles_datum_less_merge() {
+    // Editing a shot upstream of a merge in a group with NO zero datum used to
+    // leave the merge drifted: UpdateShot was misclassified INERT (skipping the
+    // reconcile epilogue) and the bespoke realign_after_shot_edit no-ops without a
+    // datum. UpdateShot is now geometry-affecting, so the reconcile heals the
+    // datum-less group in the same command.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("NoDatum".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![test_shot_data(5.0)], ..Default::default() })
+        .id;
+    // Merge A:2 (after both shots) ↔ B:0, with NO zero datum anywhere.
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project.resolve_offsets();
+    assert!(project.check_merge_alignment().is_empty(), "starts aligned");
+    state.set_project_for_tests(project);
+
+    // Edit shot 0 in A (upstream of the merge station) — a big length change moves
+    // A:2 well beyond the 5 cm reporting tolerance.
+    let shot0 = state.get_project_state().unwrap().get_section(a).unwrap().shots[0].id;
+    let updates = ShotUpdates { length: Some(9.0), ..Default::default() };
+    let result = state.execute(Command::UpdateShot { section_id: a, shot_id: shot0, updates });
+    assert!(result.success, "{:?}", result.error);
+
+    assert!(
+        state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a shot edit must reconcile the datum-less merge, not leave it drifted"
+    );
+}
+
+#[test]
+fn repair_noop_on_clean_project_reports_unchanged() {
+    // A repair that finds nothing to fix must not report `changed` (which the
+    // frontend dirties on) or push a spurious undo entry. This depends on
+    // resolve_offsets() no longer touch()ing an already-consistent project — if it
+    // did, the snapshot's modified_at would differ every time and `changed` would
+    // be permanently true.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Clean".to_string(), None);
+    project
+        .add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    project.resolve_offsets();
+    state.set_project_for_tests(project);
+
+    let result = state.repair_open_project_integrity();
+    assert_eq!(result.fixed, 0);
+    assert!(!result.changed, "a no-op repair must not report changed");
+    assert_eq!(state.get_undo_stack().len(), 0, "a no-op repair adds no undo entry");
+}
+
+#[test]
+fn save_remints_duplicate_shot_uuids_before_persisting() {
+    // A within-section duplicate shot UUID is Critical (resolve_key snaps
+    // AfterShot(uuid) to the FIRST match), but the unresolvable-cross-reference save
+    // gate doesn't catch it (the ref still resolves, just to the wrong shot). The
+    // save path re-mints the duplicate first so unique UUIDs reach disk — lossless,
+    // so it auto-heals rather than blocking.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Dup".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Force a within-section duplicate.
+    let dup = project.get_section(a).unwrap().shots[0].uuid.clone().unwrap();
+    project.get_section_mut(a).unwrap().shots[1].uuid = Some(dup.clone());
+    assert!(project.has_critical_integrity_violations(), "dup UUID is Critical");
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("dup")), false);
+    assert!(result.success, "save auto-heals dup UUIDs rather than blocking: {:?}", result.error);
+
+    // The persisted (and in-memory) project now has unique UUIDs, no Critical.
+    let saved = state.get_project_state().unwrap();
+    let uuids: Vec<_> =
+        saved.get_section(a).unwrap().shots.iter().filter_map(|s| s.uuid.clone()).collect();
+    let mut uniq = uuids.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uuids.len(), uniq.len(), "duplicate shot UUID re-minted before persist");
+    assert!(!saved.has_critical_integrity_violations());
+}
+
+#[test]
 fn test_open_project_fails_on_invalid_file() {
     let temp_dir = TempDir::new().unwrap();
     let invalid_path = temp_dir.path().join("invalid.stalx");

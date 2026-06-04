@@ -326,6 +326,18 @@ impl AppState {
         // a different set, leaving the .stalx and the .tml disagreeing
         // about every shot's identity until the next reload.
         project.ensure_shot_uuids();
+        // Re-mint any within-section duplicate shot UUID before refs are resolved
+        // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
+        // the FIRST matching shot, so a ref anchored on a later duplicate would be
+        // written to the wrong station — duplicate_shot_uuid is a Critical violation
+        // that the unresolvable-cross-reference save gate below does NOT catch (the
+        // ref still resolves, just to the wrong shot). Re-minting is lossless and
+        // non-destructive: the kept (first) occurrence keeps its UUID so refs
+        // anchored on it stay faithful, and it clears the Critical so the heal isn't
+        // re-detected on the next load. (Mirrors the load-path dedup in
+        // redrive_offsets_after_load; non-destructive, unlike dropping a dangling
+        // ref, so unlike those it is safe to auto-heal on save rather than block.)
+        project.ensure_unique_shot_uuids();
 
         // Refuse to persist a project with unresolvable cross-references (a
         // station an endpoint anchors on was deleted). Writing them would collapse

@@ -7168,12 +7168,24 @@ impl Project {
     /// the reporting tolerance before the re-solve.
     pub fn resolve_offsets(&mut self) -> usize {
         let before = self.check_merge_alignment().len();
+        // Snapshot the derived offsets so we can tell whether the re-solve actually
+        // moved anything — including SUB-tolerance changes the `before`/`after`
+        // misalignment count can't see (that is the whole reason this re-cascades
+        // unconditionally). Comparing the count alone would miss them.
+        let offsets_before = self.section_offsets.clone();
         let seeds = self.realign_seeds();
         let was_deferred = self.cascade_deferred;
         self.cascade_deferred = false;
         self.cascade_connection_offsets(&seeds);
         self.cascade_deferred = was_deferred;
-        self.touch();
+        // Only stamp a modification when the re-solve genuinely changed an offset.
+        // Opening a byte-clean project re-solves to the identical offsets, and
+        // touch()ing there would bump `modified_at` for a project the user never
+        // edited — a later no-edit save would then persist a bogus timestamp, and
+        // it would make a no-op integrity Repair look like a real change.
+        if self.section_offsets != offsets_before {
+            self.touch();
+        }
         before.saturating_sub(self.check_merge_alignment().len())
     }
 }

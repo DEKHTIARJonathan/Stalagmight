@@ -6294,6 +6294,38 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
 }
 
 #[test]
+fn resolve_offsets_does_not_touch_when_already_consistent() {
+    // Opening a byte-clean project re-solves to identical offsets; resolve_offsets
+    // must NOT bump modified_at then — otherwise a later no-edit save persists a
+    // bogus timestamp and a no-op integrity Repair looks like a real change.
+    let mut project = Project::new("Clean".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0)).unwrap();
+    // First solve makes the offsets consistent (and legitimately touches).
+    project.resolve_offsets();
+    assert!(project.check_merge_alignment().is_empty());
+    let stamp = project.modified_at;
+
+    // A second re-solve of the already-consistent project changes no offset, so it
+    // must leave modified_at exactly as it was (no touch).
+    let healed = project.resolve_offsets();
+    assert_eq!(healed, 0, "nothing to heal");
+    assert_eq!(project.modified_at, stamp, "resolve_offsets must not touch a clean project");
+
+    // And a genuine drift still touches (offsets change → modified_at advances).
+    project.adjust_section_offset(b, 10.0, -4.0);
+    let pre = project.modified_at;
+    let healed2 = project.resolve_offsets();
+    assert_eq!(healed2, 1, "the injected drift is healed");
+    assert_ne!(project.modified_at, pre, "a real re-solve touches");
+}
+
+#[test]
 fn check_merge_alignment_detects_and_realign_fixes_drift() {
     // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
     let mut project = Project::new("Drift".to_string(), None);

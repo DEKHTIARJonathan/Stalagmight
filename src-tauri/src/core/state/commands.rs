@@ -139,7 +139,6 @@ impl AppState {
             | OpenProject { .. }
             | SaveProject { .. }
             | CloseProject
-            | UpdateShot { .. }
             | UpdateSectionMetadata { .. }
             | SetShotReference { .. }
             | RepairIntegrity => INERT,
@@ -157,8 +156,13 @@ impl AppState {
             UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
 
             // Everything else shifts geometry but keeps refs valid and connectivity
-            // intact, so it needs only the reconcile.
+            // intact, so it needs only the reconcile. UpdateShot belongs here too: a
+            // length/azimuth/depth edit moves stations, and its bespoke
+            // realign_after_shot_edit no-ops on a merge group with no zero datum, so
+            // without the reconcile epilogue a shot edit upstream of a datum-less
+            // merge would leave the partners drifted until a later load/repair.
             CreateSection { .. }
+            | UpdateShot { .. }
             | MergeStations { .. }
             | CreateLoopClosure { .. }
             | RemoveLoopClosure { .. }
@@ -3094,6 +3098,16 @@ mod integrity_capability_tests {
             caps(&Command::MoveSection {
                 section_id: 1,
                 offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+            (true, false, false)
+        );
+        // UpdateShot shifts geometry (a measurement edit moves stations) but keeps
+        // refs valid and connectivity intact — it must reconcile, not be inert.
+        assert_eq!(
+            caps(&Command::UpdateShot {
+                section_id: 1,
+                shot_id: 0,
+                updates: ShotUpdates::default(),
             }),
             (true, false, false)
         );
