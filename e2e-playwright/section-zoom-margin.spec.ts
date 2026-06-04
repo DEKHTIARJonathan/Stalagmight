@@ -342,7 +342,9 @@ test.describe('Section zoom margin', () => {
     // Precondition: section must NOT satisfy margins after panning off-target
     await assertSectionOffScreen(page, sectionId);
 
-    // Find the section row and double-click it to trigger zoom-to-section
+    // Double-click the row: #50 enters section-focus mode (collapses the side
+    // panels, opens the data table) and re-fits the section to the enlarged map.
+    // Margins must still hold against the post-collapse viewport.
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.dblclick();
@@ -401,10 +403,11 @@ test.describe('Section zoom margin', () => {
     assertMargins(result, MIN_MARGIN_PCT);
   });
 
-  test('skip zoom-in when section already visible keeps section in viewport with margin', async ({ page }) => {
+  test('re-fitting an already-framed section keeps it in viewport with margin', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
 
-    // First, zoom to the section to get it visible and properly positioned
+    // First, zoom to the section to get it visible and properly positioned.
+    // (#50: double-click also enters section-focus mode and collapses the panel.)
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.dblclick();
@@ -420,8 +423,16 @@ test.describe('Section zoom margin', () => {
       return map?.getZoom() ?? 0;
     });
 
-    // Trigger zoom-to-section again (should skip zoom-in, only center)
-    await sectionRow.dblclick();
+    // Re-fire the same zoom request via the store. We can't double-click the row
+    // again because focus mode has collapsed the panel — but this exercises the
+    // same fitToSection path and verifies re-fitting an already-framed section
+    // (now in the focus-mode viewport) doesn't jump the zoom.
+    await page.evaluate((secId) => {
+      const ui = (window as unknown as {
+        __E2E_TEST__?: { uiStore?: { getState: () => { triggerZoomToSection: (id: number) => void } } };
+      }).__E2E_TEST__?.uiStore;
+      ui?.getState().triggerZoomToSection(secId);
+    }, sectionId);
 
     // Wait for second animation to complete
     await expect.poll(

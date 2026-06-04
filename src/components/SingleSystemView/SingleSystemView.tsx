@@ -52,6 +52,8 @@ export default function SingleSystemView() {
     detailPanelWidth,
     dataTableOpen,
     dataTableHeight,
+    focusedSectionId,
+    exitSectionFocus,
     toggleSectionsPanel,
     toggleDetailPanel,
     toggleDataTable,
@@ -66,6 +68,8 @@ export default function SingleSystemView() {
     detailPanelWidth: s.detailPanelWidth,
     dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
+    focusedSectionId: s.focusedSectionId,
+    exitSectionFocus: s.exitSectionFocus,
     toggleSectionsPanel: s.toggleSectionsPanel,
     toggleDetailPanel: s.toggleDetailPanel,
     toggleDataTable: s.toggleDataTable,
@@ -74,6 +78,13 @@ export default function SingleSystemView() {
     setDataTableHeight: s.setDataTableHeight,
     savePanelSizes: s.savePanelSizes,
   })));
+
+  // #50: name shown in place of the project name while focused on one section.
+  const focusedSectionName =
+    focusedSectionId !== null
+      ? project?.sections.find((s) => s.id === focusedSectionId)?.name
+          ?? t('sections.defaultName', { id: focusedSectionId })
+      : null;
 
   const sectionsPanelOpenedByOnboardingRef = useRef(false);
   const detailPanelOpenedByOnboardingRef = useRef(false);
@@ -180,6 +191,8 @@ export default function SingleSystemView() {
       {/* Toolbar */}
       <Toolbar
         projectName={project.name}
+        focusedSectionName={focusedSectionName}
+        onExitFocus={exitSectionFocus}
         onBack={handleCloseProject}
         onSave={handleSaveProject}
         onImport={handleImportDmp}
@@ -252,6 +265,10 @@ export default function SingleSystemView() {
           {/* Data table */}
           {dataTableOpen ? (
             <ResizablePanel
+              // Re-seed the panel's uncontrolled size when entering/leaving
+              // section-focus mode (#50) so the ~30% focus height applies even
+              // if the table was already open.
+              key={focusedSectionId !== null ? 'data-table-focus' : 'data-table'}
               direction="vertical"
               defaultSize={dataTableHeight}
               minSize={100}

@@ -8,6 +8,7 @@ import {
   BugIcon,
   ChevronDownIcon,
   HandIcon,
+  MapIcon,
   SelectToolIcon,
   ZoomToolIcon,
   DrawToolIcon,
@@ -29,6 +30,10 @@ import { defaultConfig } from '../../types/config';
 
 interface ToolbarProps {
   projectName: string;
+  /** When in section-focus mode (#50), the focused section's name. */
+  focusedSectionName: string | null;
+  /** Exit section-focus mode and restore the multi-section layout. */
+  onExitFocus: () => void;
   onBack: () => void;
   onSave: () => void;
   onImport: () => void;
@@ -129,6 +134,8 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
 
 export default function Toolbar({
   projectName,
+  focusedSectionName,
+  onExitFocus,
   onBack,
   onSave,
   onImport,
@@ -204,8 +211,23 @@ export default function Toolbar({
         </UndoHistoryDropdown>
       </div>
 
-      {/* Center - project name */}
-      <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
+      {/* Center - project name, or focused section name (#50). In focus mode the
+          map icon hints that double-clicking the name returns to the full map. */}
+      {focusedSectionName !== null ? (
+        <button
+          type="button"
+          onDoubleClick={onExitFocus}
+          title={t('sections.focus.exitHint')}
+          aria-label={t('sections.focus.ariaLabel', { name: focusedSectionName })}
+          className="flex items-center gap-1.5 font-medium text-accent hover:text-accent/80 transition-colors"
+          data-testid="toolbar-section-focus-name"
+        >
+          <MapIcon size={14} aria-hidden="true" />
+          <span className="truncate max-w-[40vw]">{focusedSectionName}</span>
+        </button>
+      ) : (
+        <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
+      )}
 
       {/* Right section - tools and display menu */}
       <div className="flex items-center gap-2">

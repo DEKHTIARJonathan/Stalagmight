@@ -1680,7 +1680,7 @@
     "actions": {
       "add": "Add section",
       "delete": "Delete section",
-      "zoom": "Double-click to zoom (Ctrl+G)"
+      "zoom": "Click to zoom · double-click to focus this section"
     },
     "ariaList": "Sections list",
     "confirmDelete": "Delete this section?",
@@ -1688,6 +1688,10 @@
     "empty": {
       "action": "Import data",
       "message": "No sections yet."
+    },
+    "focus": {
+      "ariaLabel": "Focused on section {{name}}. Double-click to return to the full view.",
+      "exitHint": "Double-click to return to the full view"
     },
     "stats": "Shots: {{shots}} | {{length}}",
     "title": "Sections"

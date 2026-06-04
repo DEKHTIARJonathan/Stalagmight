@@ -178,6 +178,13 @@ interface UIStore {
     dataTableHeight?: number
   ) => Promise<void>;
 
+  // Section focus mode (#50): double-clicking a section collapses both side
+  // panels and opens the data table so the screen is dedicated to one section.
+  // Exiting restores the layout captured at entry.
+  focusedSectionId: SectionId | null;
+  enterSectionFocus: (sectionId: SectionId, dataTableHeight: number) => void;
+  exitSectionFocus: () => void;
+
   // Map state
   mapCenter: [number, number];
   mapZoom: number;
@@ -334,10 +341,29 @@ export type DisplayToggleKey =
   | 'showShotComments'
   | 'showDevStats';
 
+/**
+ * Layout captured when entering section-focus mode (#50), restored on exit.
+ * Module-level (not store state) since it's internal bookkeeping the UI never
+ * reads. Re-focusing a different section while already focused keeps the
+ * original snapshot, so exiting always returns to the pre-focus layout.
+ */
+let focusLayoutSnapshot:
+  | {
+      sectionsPanelOpen: boolean;
+      detailPanelOpen: boolean;
+      dataTableOpen: boolean;
+      dataTableHeight: number;
+    }
+  | null = null;
+
 export const useUIStore = create<UIStore>((set) => ({
   // View state
   view: 'global',
   setView: (view) => {
+    // Section-focus mode (#50) is single-view, single-project scoped: drop it on
+    // any view switch so a stale focus can't outlive the view or project that
+    // opened it. No-op when not focused; restores the pre-focus panel layout.
+    useUIStore.getState().exitSectionFocus();
     setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
     if (view === 'single') {
       void advanceProjectSeq();
@@ -529,6 +555,37 @@ export const useUIStore = create<UIStore>((set) => ({
     } catch (e) {
       console.error('Failed to save panel sizes:', e);
     }
+  },
+
+  // Section focus mode (#50)
+  focusedSectionId: null,
+  enterSectionFocus: (focusedSectionId, dataTableHeight) => {
+    const s = useUIStore.getState();
+    // Snapshot the layout only on first entry; re-focusing another section
+    // while already focused must not overwrite the pre-focus layout.
+    if (s.focusedSectionId === null) {
+      focusLayoutSnapshot = {
+        sectionsPanelOpen: s.sectionsPanelOpen,
+        detailPanelOpen: s.detailPanelOpen,
+        dataTableOpen: s.dataTableOpen,
+        dataTableHeight: s.dataTableHeight,
+      };
+    }
+    // Set the focus height directly (not via savePanelSizes) so the temporary
+    // focus layout is never persisted to the user's panel config.
+    set({
+      focusedSectionId,
+      sectionsPanelOpen: false,
+      detailPanelOpen: false,
+      dataTableOpen: true,
+      dataTableHeight,
+    });
+  },
+  exitSectionFocus: () => {
+    if (useUIStore.getState().focusedSectionId === null) return;
+    const snap = focusLayoutSnapshot;
+    focusLayoutSnapshot = null;
+    set({ focusedSectionId: null, ...(snap ?? {}) });
   },
 
   // Map state

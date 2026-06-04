@@ -16,10 +16,20 @@ interface SectionsPanelProps {
   sections: Section[];
 }
 
+// #50: after entering focus mode the side panels collapse and the map grows;
+// fitToSection reads the container size at call time, so re-fit once the new
+// layout has settled (a couple of frames + MapLibre's resize observer).
+const SECTION_FOCUS_REFIT_DELAY_MS = 180;
+// Focus-mode data-table height as a fraction of the viewport, clamped to the
+// ResizablePanel's [min, max] for the data table.
+const SECTION_FOCUS_TABLE_FRACTION = 0.3;
+const SECTION_FOCUS_TABLE_MIN = 100;
+const SECTION_FOCUS_TABLE_MAX = 500;
+
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore(
+  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, triggerZoomToSection, enterSectionFocus } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       setSelection: s.setSelection,
@@ -30,6 +40,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       setHoveredSectionId: s.setHoveredSectionId,
       openDialog: s.openDialog,
       triggerZoomToSection: s.triggerZoomToSection,
+      enterSectionFocus: s.enterSectionFocus,
     }))
   );
 
@@ -181,13 +192,22 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
     // Ensure selection happens (in case mouseDown was prevented)
     handleSectionClick(section, e);
-    // Trigger zoom to section. Note: single-click already zooms (#64), so a
-    // double-click fires this redundantly — harmless because fitToSection is
-    // idempotent (it stops any running animation). This stays until #50
-    // reassigns double-click to panel-expand.
-    setSource('sections-panel');
-    triggerZoomToSection(section.id);
-  }, [handleSectionClick, triggerZoomToSection]);
+    // #50: dedicate the screen to this section — collapse both side panels and
+    // open the data table to ~30% of the viewport.
+    const focusHeight = Math.round(
+      Math.min(
+        Math.max(window.innerHeight * SECTION_FOCUS_TABLE_FRACTION, SECTION_FOCUS_TABLE_MIN),
+        SECTION_FOCUS_TABLE_MAX,
+      ),
+    );
+    enterSectionFocus(section.id, focusHeight);
+    // Re-fit after the collapsed layout settles so the section fills the now
+    // larger map (the first fit ran against the pre-collapse container size).
+    window.setTimeout(() => {
+      setSource('sections-panel');
+      triggerZoomToSection(section.id);
+    }, SECTION_FOCUS_REFIT_DELAY_MS);
+  }, [handleSectionClick, enterSectionFocus, triggerZoomToSection]);
 
   const handleDeleteDoubleClick = useCallback((e: React.MouseEvent) => {
     // Stop propagation to prevent row zoom
