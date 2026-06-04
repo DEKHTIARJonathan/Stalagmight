@@ -351,10 +351,6 @@ export default function MapCanvas() {
     cancelPlacementMode,
     confirmPlacement,
     showToast,
-    sectionsPanelOpen,
-    sectionsPanelWidth,
-    detailPanelOpen,
-    detailPanelWidth,
     requestZoomToSection,
     clearZoomToSectionRequest,
     requestPanToShot,
@@ -2246,24 +2242,14 @@ export default function MapCanvas() {
 
   // Shared padding helper: computes { top, bottom, left, right } with 10% margin
   // and optional panel offsets
-  const calcPadding = useCallback(
-    (
-      container: HTMLElement,
-      panels?: { sectionsPanelOpen: boolean; sectionsPanelWidth: number; detailPanelOpen: boolean; detailPanelWidth: number }
-    ) => {
-      const marginX = Math.round(container.clientWidth * 0.1);
-      const marginY = Math.round(container.clientHeight * 0.1);
-      const leftPanel = panels?.sectionsPanelOpen ? panels.sectionsPanelWidth : 0;
-      const rightPanel = panels?.detailPanelOpen ? panels.detailPanelWidth : 0;
-      return {
-        top: marginY,
-        bottom: marginY,
-        left: marginX + leftPanel,
-        right: marginX + rightPanel,
-      };
-    },
-    []
-  );
+  // 10% margins on all sides. The map is the central flex column (already
+  // sized to exclude the side panels), so no panel offsets are needed — adding
+  // them double-counts the panel widths and squeezes the fit (see #64).
+  const calcPadding = useCallback((container: HTMLElement) => {
+    const marginX = Math.round(container.clientWidth * 0.1);
+    const marginY = Math.round(container.clientHeight * 0.1);
+    return { top: marginY, bottom: marginY, left: marginX, right: marginX };
+  }, []);
 
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback((options?: { snap?: boolean }) => {
@@ -2342,14 +2328,13 @@ export default function MapCanvas() {
       const animationConfig = config.map.animation;
       const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
 
-      // Calculate padding: 10% margin on all sides plus panel offsets
+      // Padding: 10% margins only. The map container is the central flex
+      // column, so it already excludes the side panels — adding the panel
+      // widths here double-counts and squeezes the section into a sliver
+      // (e.g. a 730px map minus 250+300px panels left ~34px usable). Matches
+      // fitToBounds.
       const container = map.current.getContainer();
-      const padding = calcPadding(container, {
-        sectionsPanelOpen,
-        sectionsPanelWidth,
-        detailPanelOpen,
-        detailPanelWidth,
-      });
+      const padding = calcPadding(container);
 
       // Single station: center at point_zoom level
       if (fitStations.length === 1) {
@@ -2398,7 +2383,7 @@ export default function MapCanvas() {
         maxZoom: config.map.zoom_max ?? 22,
       });
     },
-    [stations, project?.sections, config, gpsOrigin, sectionsPanelOpen, sectionsPanelWidth, detailPanelOpen, detailPanelWidth, calcPadding]
+    [stations, project?.sections, config, gpsOrigin, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
