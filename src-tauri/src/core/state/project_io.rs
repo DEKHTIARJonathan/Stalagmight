@@ -339,6 +339,33 @@ impl AppState {
         // ref, so unlike those it is safe to auto-heal on save rather than block.)
         project.ensure_unique_shot_uuids();
 
+        // Drop section_offsets for sections that no longer exist. An orphan entry
+        // (a section removed via a path that bypassed cleanup) is dead data, and the
+        // SQLite section_offsets row carries a FOREIGN KEY to sections(id) — writing
+        // it aborts the ENTIRE save with a generic FK error rather than routing the
+        // user to Repair. Lossless (matches repair_structural_integrity), so heal on
+        // save. (orphan_section_offset is Critical but the save gate below only sees
+        // station cross-refs, not section_offsets.)
+        let existing_sections: std::collections::HashSet<SectionId> =
+            project.sections.iter().map(|s| s.id).collect();
+        project
+            .section_offsets
+            .retain(|sid, _| existing_sections.contains(sid));
+
+        // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
+        // be stored in a `REAL NOT NULL` column (SQLite coerces it to NULL → the
+        // INSERT aborts the whole save), and an inf would persist and only be
+        // neutralized on the next load. The load path already sanitizes, so mirror
+        // it here so a save can neither abort nor write unusable geometry.
+        // (non_finite_geometry is a detect-only Critical that Repair can't auto-fix,
+        // so blocking the save would strand the user; neutralizing matches the load
+        // round-trip — the value was already unusable.)
+        for section in &mut project.sections {
+            for shot in &mut section.shots {
+                shot.sanitize_non_finite();
+            }
+        }
+
         // Refuse to persist a project with unresolvable cross-references (a
         // station an endpoint anchors on was deleted). Writing them would collapse
         // the ref to a phantom (section, 0) and can collide on the

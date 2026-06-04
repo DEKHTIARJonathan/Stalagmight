@@ -294,6 +294,17 @@ impl AppState {
     /// detect-only and need manual attention (a drifted aligned loop closure to
     /// recompute/remove; non-finite shot geometry to correct).
     pub fn repair_open_project_integrity(&self) -> IntegrityRepairResult {
+        // Serialize against execute()/undo()/redo() for the WHOLE operation. Repair
+        // captures before_snapshot, mutates, and pushes a snapshot-pair undo across
+        // several independent project locks; without command_lock a concurrent
+        // command could commit a mutation in the window between before_snapshot and
+        // repair's own mutation, so undoing the Repair would restore a stale `before`
+        // and silently drop that command's changes. Deadlock-safe: none of the
+        // helpers repair calls take command_lock (execute holds it while calling the
+        // same capture/snapshot/undo helpers).
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return IntegrityRepairResult { fixed: 0, remaining: 0, changed: false };
+        };
         // Count over the full violation set before repairing. Locks the project
         // internally, so it must run with no project guard held.
         let before = self.integrity_violation_messages().len();

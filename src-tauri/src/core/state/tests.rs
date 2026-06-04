@@ -774,6 +774,116 @@ fn save_remints_duplicate_shot_uuids_before_persisting() {
 }
 
 #[test]
+fn restore_snapshot_canonicalizes_legacy_index_anchors() {
+    // A snapshot persisted by a PRE-ANCHOR build can carry positional Index
+    // anchors (undo/redo history is persisted and reloaded across builds, and the
+    // back-compat StationKey deserializer accepts the legacy shape). Restoring it
+    // must canonicalize to AfterShot — otherwise a later shot insert/delete won't
+    // shift the ref and the merge/datum/comment silently points at the wrong station.
+    let mut project = Project::new("Legacy".to_string(), None);
+    let s = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0), test_shot_data(3.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // A station offset stored in the legacy positional (Index) form.
+    project
+        .station_offsets
+        .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
+    let snapshot = serde_json::to_string(&project).unwrap();
+
+    let mut slot: Option<Project> = None;
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+    let restored = slot.unwrap();
+
+    // No Index anchor survives into the live project after restore.
+    let mut saw_index = false;
+    restored.for_each_station_ref(|_label, key| {
+        if matches!(key.anchor, StationAnchor::Index(_)) {
+            saw_index = true;
+        }
+    });
+    assert!(!saw_index, "restore_snapshot_into must canonicalize legacy Index anchors");
+}
+
+#[test]
+fn repair_serializes_under_command_lock() {
+    // Repair must hold command_lock for its whole duration so a concurrent command
+    // can't slip a mutation between repair's before-snapshot and its own mutation
+    // (which would make undo-of-repair drop that command). Verify by holding the
+    // lock and asserting repair blocks until it's released.
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let state = Arc::new(AppState::new().unwrap());
+    let mut project = Project::new("LockRepair".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    state.set_project_for_tests(project);
+
+    let guard = state.command_lock.lock().unwrap();
+    let state2 = Arc::clone(&state);
+    let (tx, rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let _ = tx.send(state2.repair_open_project_integrity());
+    });
+    // While we hold command_lock, repair must block (no result arrives).
+    assert!(
+        rx.recv_timeout(Duration::from_millis(150)).is_err(),
+        "repair ran without acquiring command_lock"
+    );
+    drop(guard);
+    // Once released, repair completes.
+    let result = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("repair completes after command_lock is released");
+    handle.join().unwrap();
+    assert_eq!(result.fixed, 0);
+}
+
+#[test]
+fn save_drops_orphan_section_offset() {
+    // A section_offsets entry for a section that no longer exists has a dangling
+    // SQLite FK; persisting it aborts the WHOLE save with a generic error. It must
+    // be dropped on save instead (the cross-reference gate doesn't see section_offsets).
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Orphan".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    project.section_offsets.insert(99999, (5.0, 6.0)); // no such section
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("orphan")), false);
+    assert!(result.success, "orphan section_offset must not abort the save: {:?}", result.error);
+    let saved = state.get_project_state().unwrap();
+    assert!(
+        saved.section_offsets.keys().all(|sid| saved.get_section(*sid).is_some()),
+        "orphan section_offsets must be dropped on save"
+    );
+}
+
+#[test]
+fn save_sanitizes_non_finite_geometry() {
+    // A non-finite shot value would abort the save (NaN → NULL in a NOT NULL
+    // column) or persist garbage (inf); it must be sanitized on save instead.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("NonFinite".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    project.sections[0].shots[0].length = f64::NAN;
+    assert!(!project.sections[0].shots[0].all_finite());
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("nonfinite")), false);
+    assert!(result.success, "non-finite geometry must be sanitized, not abort the save: {:?}", result.error);
+    let saved = state.get_project_state().unwrap();
+    assert!(saved.sections[0].shots[0].all_finite(), "non-finite geometry sanitized on save");
+}
+
+#[test]
 fn test_open_project_fails_on_invalid_file() {
     let temp_dir = TempDir::new().unwrap();
     let invalid_path = temp_dir.path().join("invalid.stalx");

@@ -257,6 +257,22 @@ impl AppState {
             Ok(mut restored) => {
                 restored.rebuild_section_index();
                 restored.rebuild_merge_adjacency();
+                // A snapshot blob persisted by a PRE-ANCHOR build can carry
+                // transitional positional `Index` cross-reference anchors (undo/redo
+                // history is persisted to SQLite and reloaded across sessions, and the
+                // back-compat StationKey deserializer accepts the legacy
+                // `{section_id, station_index}` shape). The live-model invariant is
+                // "no Index anchors": a later shot insert/delete only shifts
+                // AfterShot/SectionStart refs, so a live Index ref would silently start
+                // resolving to the wrong station. Canonicalize here — the same step
+                // the load path runs (`redrive_offsets_after_load`) — so every restore
+                // is safe regardless of snapshot provenance. Anchors only (NOT a
+                // re-solve), so the restored geometry is preserved exactly; both calls
+                // are idempotent on already-canonical same-session snapshots. Runs
+                // after the cache rebuilds because `reanchor_station_refs` resolves
+                // refs through the section index.
+                restored.ensure_unique_shot_uuids();
+                restored.reanchor_station_refs();
                 *slot = Some(restored);
                 true
             }
