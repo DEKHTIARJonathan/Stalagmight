@@ -26,7 +26,10 @@ export const SOURCE_NAMES: readonly string[] = [
 /** Event base names indexed by event_id (u16). */
 export const EVENT_NAMES: readonly string[] = [
   // ── Commands (0-92) ──
-  'command.adjust_loop_closures',
+  // Tombstone: `adjust_loop_closures` was removed when closure adjustment became
+  // a non-destructive display mode. Slot retained so later IDs stay stable
+  // (append-only registry). Keep in sync with registry.rs.
+  '_removed.command.adjust_loop_closures',
   'command.attempt_repair',
   'command.calculate_file_hash',
   'command.can_redo',

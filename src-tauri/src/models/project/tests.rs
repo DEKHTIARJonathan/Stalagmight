@@ -3801,6 +3801,167 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
     }
 }
 
+// ── Non-destructive closure-adjusted view ─────────────────────────
+
+/// Build a project with two paths from a shared, datum-anchored origin to a
+/// near-shared endpoint that disagree by ~0.2 m, joined by a loop closure.
+/// Measured: the loop is open. Adjusted: it should close.
+fn looped_project_with_misclosure() -> (Project, SectionId, SectionId) {
+    let mut project = Project::new("AdjustedView".to_string(), None);
+
+    // Path A: origin → east 10 → north 10  (A:2 = (10, 10))
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    // Path B: origin → north 10 → east 10.2  (B:2 = (10.2, 10))
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.2, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(a, 2),
+            StationRef::new(b, 2),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+
+    (project, a, b)
+}
+
+fn station_coords(stations: &[Station], sr: StationRef) -> Coordinates {
+    stations
+        .iter()
+        .find(|s| s.station_ref == sr)
+        .unwrap_or_else(|| panic!("station {sr:?} not found"))
+        .coordinates
+}
+
+fn shot_geometry(project: &Project) -> Vec<(f64, f64, f64)> {
+    project
+        .sections
+        .iter()
+        .flat_map(|s| {
+            s.shots
+                .iter()
+                .map(|sh| (sh.azimuth_in, sh.azimuth_out, sh.length))
+        })
+        .collect()
+}
+
+#[test]
+fn compute_adjusted_closes_loop_without_mutating_measured() {
+    let (project, a, b) = looped_project_with_misclosure();
+    let config = ClosureAdjustmentConfig::default();
+
+    let shots_before = shot_geometry(&project);
+    let measured = project.compute_station_coordinates();
+    let adjusted = project.compute_adjusted_station_coordinates(&config);
+
+    // 1. Non-destructive: deriving the adjusted view must not rewrite measured shots.
+    assert_eq!(
+        shots_before,
+        shot_geometry(&project),
+        "deriving the adjusted view must not mutate measured shot geometry"
+    );
+
+    // 2. Measured view: the loop is open (~0.2 m misclosure).
+    let m_a2 = station_coords(&measured, StationRef::new(a, 2));
+    let m_b2 = station_coords(&measured, StationRef::new(b, 2));
+    let measured_misclosure = ((m_a2.x - m_b2.x).powi(2) + (m_a2.y - m_b2.y).powi(2)).sqrt();
+    assert!(
+        measured_misclosure > 0.1,
+        "measured loop should be open, got {measured_misclosure}"
+    );
+
+    // 3. Adjusted view: the loop closes (endpoints ~coincident).
+    let adj_a2 = station_coords(&adjusted, StationRef::new(a, 2));
+    let adj_b2 = station_coords(&adjusted, StationRef::new(b, 2));
+    let adjusted_misclosure = ((adj_a2.x - adj_b2.x).powi(2) + (adj_a2.y - adj_b2.y).powi(2)).sqrt();
+    assert!(
+        adjusted_misclosure < 1e-3,
+        "adjusted loop should close, got {adjusted_misclosure}"
+    );
+
+    // 4. The zero datum is fixed in both views.
+    let m_a0 = station_coords(&measured, StationRef::new(a, 0));
+    let adj_a0 = station_coords(&adjusted, StationRef::new(a, 0));
+    assert!(
+        (m_a0.x - adj_a0.x).abs() < 1e-9 && (m_a0.y - adj_a0.y).abs() < 1e-9,
+        "zero datum must not move in the adjusted view"
+    );
+}
+
+#[test]
+fn compute_adjusted_is_deterministic_and_keeps_measured_stable() {
+    let (project, _a, _b) = looped_project_with_misclosure();
+    let config = ClosureAdjustmentConfig::default();
+
+    let measured_before = project.compute_station_coordinates();
+    let adjusted1 = project.compute_adjusted_station_coordinates(&config);
+    let adjusted2 = project.compute_adjusted_station_coordinates(&config);
+    let measured_after = project.compute_station_coordinates();
+
+    // Re-solving from intact measured data is deterministic (no compounding).
+    assert_eq!(adjusted1.len(), adjusted2.len());
+    for (s1, s2) in adjusted1.iter().zip(adjusted2.iter()) {
+        assert_eq!(s1.station_ref, s2.station_ref);
+        assert!((s1.coordinates.x - s2.coordinates.x).abs() < 1e-9);
+        assert!((s1.coordinates.y - s2.coordinates.y).abs() < 1e-9);
+    }
+
+    // The measured view is unaffected by having derived the adjusted view.
+    assert_eq!(measured_before.len(), measured_after.len());
+    for (s1, s2) in measured_before.iter().zip(measured_after.iter()) {
+        assert!((s1.coordinates.x - s2.coordinates.x).abs() < 1e-9);
+        assert!((s1.coordinates.y - s2.coordinates.y).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn compute_adjusted_equals_measured_without_closures() {
+    let mut project = Project::new("NoClosures".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            shot(90.0, 90.0, 10.0, 0.0, 0.0),
+        ],
+        ..Default::default()
+    });
+    let config = ClosureAdjustmentConfig::default();
+
+    let measured = project.compute_station_coordinates();
+    let adjusted = project.compute_adjusted_station_coordinates(&config);
+
+    assert_eq!(measured.len(), adjusted.len());
+    for (m, a) in measured.iter().zip(adjusted.iter()) {
+        assert!((m.coordinates.x - a.coordinates.x).abs() < 1e-12);
+        assert!((m.coordinates.y - a.coordinates.y).abs() < 1e-12);
+        assert!((m.coordinates.z - a.coordinates.z).abs() < 1e-12);
+    }
+}
+
 // ── Frozen shot tests ─────────────────────────────────────────────
 
 #[test]

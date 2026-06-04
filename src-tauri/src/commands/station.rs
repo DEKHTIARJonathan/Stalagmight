@@ -61,31 +61,6 @@ pub(crate) fn remove_loop_closure_impl(
     state.execute(Command::RemoveLoopClosure { closure_id })
 }
 
-/// Adjust loop closures for a connected component (batch)
-#[tauri::command]
-pub fn adjust_loop_closures(
-    state: State<AppState>,
-    anchor_station: StationRef,
-    method: ClosureStrategy,
-) -> CommandResult {
-    adjust_loop_closures_impl(
-        state.inner(),
-        anchor_station,
-        method,
-    )
-}
-
-pub(crate) fn adjust_loop_closures_impl(
-    state: &AppState,
-    anchor_station: StationRef,
-    method: ClosureStrategy,
-) -> CommandResult {
-    state.execute(Command::AdjustLoopClosures {
-        anchor_station,
-        method,
-    })
-}
-
 /// Merge two stations
 #[tauri::command]
 pub fn merge_stations(

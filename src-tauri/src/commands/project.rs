@@ -102,6 +102,28 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
     })
 }
 
+/// Get closure-adjusted station coordinates for the current project.
+///
+/// This is the lazy counterpart to [`get_project_state`], whose `stations` are
+/// always the raw *measured* geometry. The frontend calls this only when the
+/// user switches the display to the closure-adjusted view. The adjustment is
+/// derived non-destructively (the measured project is never mutated) and the
+/// result is memoized in [`AppState`], so the heavy solve runs at most once per
+/// data/config version. Runs on a blocking thread to keep the UI responsive on
+/// large surveys.
+///
+/// Returns the measured coordinates verbatim when there are no eligible
+/// closures, and an empty vec when no project is open.
+#[tauri::command]
+pub async fn get_adjusted_stations(app_handle: tauri::AppHandle) -> Vec<Station> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        state.inner().get_adjusted_stations().unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Get list of recent projects
 #[tauri::command]
 pub fn list_recent_projects(state: State<AppState>) -> Vec<ProjectMetadata> {

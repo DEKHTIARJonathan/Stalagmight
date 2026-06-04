@@ -108,17 +108,6 @@ fn shot_data_with_depth(length: f64, depth_in: f64, depth_out: f64) -> ShotData 
     }
 }
 
-fn shot_data_with_azimuth(length: f64, azimuth: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
-
 fn create_project(app: &tauri::App<MockRuntime>) {
     let result = project::create_project(
         state(app),
@@ -1460,59 +1449,6 @@ fn test_unmerge_stations_removes_merge() {
     );
     let result = station::unmerge_stations(state(&app), StationRef::new(0, 1));
     assert_success(&result);
-}
-
-#[test]
-fn test_adjust_loop_closures_fails_without_closures() {
-    let app = app_with_state();
-    create_project(&app);
-    let section_id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-
-    let result = station::adjust_loop_closures(
-        state(&app),
-        StationRef::new(section_id, 0),
-        ClosureStrategy::LeastSquaresWeighted,
-    );
-    assert_failure_contains(&result, "No eligible loop closures");
-}
-
-#[test]
-fn test_adjust_loop_closures_aligns_closure() {
-    let app = app_with_state();
-    create_project(&app);
-    let section_a = create_section_with_shots(&app, vec![shot_data_with_azimuth(10.0, 90.0)]);
-    let section_b = create_section_with_shots(&app, vec![shot_data_with_azimuth(10.0, 0.0)]);
-
-    assert_success(&station::merge_stations(
-        state(&app),
-        StationRef::new(section_a, 0),
-        StationRef::new(section_b, 0),
-    ));
-
-    let closure_result = station::create_loop_closure(
-        state(&app),
-        StationRef::new(section_a, 1),
-        StationRef::new(section_b, 1),
-        ClosureStrategy::Batch,
-    );
-    assert_success(&closure_result);
-
-    let before = project::get_project_state(state(&app)).expect("project state");
-    let closure_before = before.project.loop_closures.first().unwrap();
-    let misclosure_before = closure_before.misclosure_distance;
-
-    let adjust_result = station::adjust_loop_closures(
-        state(&app),
-        StationRef::new(section_a, 0),
-        ClosureStrategy::LeastSquaresWeighted,
-    );
-    assert_success(&adjust_result);
-
-    let after = project::get_project_state(state(&app)).expect("project state");
-    let closure_after = after.project.loop_closures.first().unwrap();
-    assert!(closure_after.is_aligned);
-    assert!(closure_after.misclosure_distance <= misclosure_before + 1e-6);
-    assert!(closure_after.misclosure_distance < 1e-3);
 }
 
 #[test]

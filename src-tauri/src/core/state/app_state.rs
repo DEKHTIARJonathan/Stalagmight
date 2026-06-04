@@ -7,7 +7,7 @@ use tauri::AppHandle;
 
 use crate::cache::TileCache;
 use crate::config::Config;
-use crate::models::{Project, StationAnchor};
+use crate::models::{Project, Station, StationAnchor};
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
 use crate::TileFetchStats;
@@ -37,6 +37,17 @@ impl<T> FromProjectLockError for Result<T, String> {
     fn no_project() -> Self {
         Err("No project open".to_string())
     }
+}
+
+/// Transient, never-persisted cache of the closure-adjusted station coordinates
+/// for the current project. Keyed on the project's `modified_at` (nanoseconds)
+/// plus a hash of the closure-adjustment config, and cleared on every
+/// command/undo/redo so the adjusted display view always re-derives from
+/// current measured data.
+pub(super) struct AdjustedStationsCache {
+    pub(super) version: i64,
+    pub(super) config_hash: u64,
+    pub(super) stations: Vec<Station>,
 }
 
 /// Application state managed by Tauri
@@ -77,6 +88,9 @@ pub struct AppState {
     pub(super) app_handle: Mutex<Option<AppHandle>>,
     /// Active loading cancellation token (if any load operation is in progress)
     pub(super) active_loading: Mutex<Option<Arc<AtomicBool>>>,
+    /// Memoized closure-adjusted station coordinates for the display-mode toggle.
+    /// See [`AdjustedStationsCache`]. Transient; never persisted.
+    pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
 }
 
 impl AppState {
@@ -121,6 +135,7 @@ impl AppState {
             tile_fetch_stats: Arc::new(TileFetchStats::new()),
             app_handle: Mutex::new(None),
             active_loading: Mutex::new(None),
+            adjusted_cache: Mutex::new(None),
         })
     }
 
@@ -227,6 +242,74 @@ impl AppState {
             return R::no_project();
         };
         f(project)
+    }
+
+    // === Closure-adjusted geometry (non-destructive derived view) ===
+
+    /// Compute (or return cached) closure-adjusted station coordinates for the
+    /// current project. Non-destructive: the measured project is never mutated —
+    /// the adjustment runs on a throwaway clone (see
+    /// [`Project::compute_adjusted_station_coordinates`]) and only the resulting
+    /// coordinates are returned.
+    ///
+    /// The result is memoized in a transient cache keyed on the project's
+    /// `modified_at` + closure-adjustment config and cleared on every
+    /// command/undo/redo, so repeatedly toggling to the adjusted display view is
+    /// cheap while any edit forces a fresh re-solve from intact measured data.
+    /// Returns `None` if no project is open.
+    pub fn get_adjusted_stations(&self) -> Option<Vec<Station>> {
+        let config = self.get_config();
+        let ca = &config.closure_adjustment;
+        let config_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            ca.base_sigma_length_m.to_bits().hash(&mut h);
+            ca.base_sigma_azimuth_deg.to_bits().hash(&mut h);
+            ca.base_sigma_depth_m.to_bits().hash(&mut h);
+            h.finish()
+        };
+
+        // Cheap project-version read under a short lock.
+        let version = {
+            let guard = self.project.lock().ok()?;
+            guard
+                .as_ref()?
+                .modified_at
+                .timestamp_nanos_opt()
+                .unwrap_or(0)
+        };
+
+        if let Ok(cache) = self.adjusted_cache.lock() {
+            if let Some(entry) = cache.as_ref() {
+                if entry.version == version && entry.config_hash == config_hash {
+                    return Some(entry.stations.clone());
+                }
+            }
+        }
+
+        // Miss: clone the project out and solve without holding the project lock
+        // (the solve is CPU-heavy and runs on a blocking thread). Re-read the
+        // version from the clone so the cache key matches exactly the data solved.
+        let project = self.get_project_state()?;
+        let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
+        let stations = project.compute_adjusted_station_coordinates(&config.closure_adjustment);
+
+        if let Ok(mut cache) = self.adjusted_cache.lock() {
+            *cache = Some(AdjustedStationsCache {
+                version: solved_version,
+                config_hash,
+                stations: stations.clone(),
+            });
+        }
+        Some(stations)
+    }
+
+    /// Drop any cached closure-adjusted coordinates. Called from every
+    /// command/undo/redo path so the adjusted view never serves stale geometry.
+    pub(super) fn invalidate_adjusted_cache(&self) {
+        if let Ok(mut cache) = self.adjusted_cache.lock() {
+            *cache = None;
+        }
     }
 
     // === Snapshot helpers for snapshot-based undo ===

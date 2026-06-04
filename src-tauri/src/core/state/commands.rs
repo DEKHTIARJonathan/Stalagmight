@@ -174,7 +174,6 @@ impl AppState {
             | MergeStations { .. }
             | CreateLoopClosure { .. }
             | RemoveLoopClosure { .. }
-            | AdjustLoopClosures { .. }
             | SetZeroDatum { .. }
             | RemoveZeroDatum { .. }
             | MoveSection { .. }
@@ -381,6 +380,8 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        // Any mutation invalidates the derived closure-adjusted view.
+        self.invalidate_adjusted_cache();
         tracing::info!(
             command = ?cmd.description(),
             purpose = "apply user action",
@@ -485,10 +486,6 @@ impl AppState {
             Command::RemoveLoopClosure { closure_id } => {
                 self.remove_loop_closure(*closure_id)
             }
-            Command::AdjustLoopClosures {
-                anchor_station,
-                method,
-            } => self.adjust_loop_closures(*anchor_station, *method),
             Command::SetZeroDatum {
                 station_ref,
                 coordinates,
@@ -1789,45 +1786,6 @@ impl AppState {
                     "Failed to remove loop closure"
                 );
                 CommandResult::failure(e)
-            }
-        })
-    }
-
-    pub(super) fn adjust_loop_closures(
-        &self,
-        anchor_station: StationRef,
-        method: ClosureStrategy,
-    ) -> CommandResult {
-        let config = self.get_config();
-        self.with_project_mut(|project| {
-            let mut working = project.clone();
-
-            match working.adjust_loop_closures(
-                anchor_station,
-                method,
-                &config.closure_adjustment,
-            ) {
-                Ok(()) => {
-                    working.touch();
-                    *project = working;
-                    tracing::debug!(
-                        ?anchor_station,
-                        ?method,
-                        purpose = "reduce misclosure error",
-                        "Loop closures adjusted"
-                    );
-                    CommandResult::success()
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        ?anchor_station,
-                        ?method,
-                        error = %e,
-                        purpose = "reduce misclosure error",
-                        "Failed to adjust loop closures"
-                    );
-                    CommandResult::failure(e)
-                }
             }
         })
     }

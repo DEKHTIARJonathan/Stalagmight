@@ -27,7 +27,11 @@ pub(super) const SOURCE_NAMES: &[&str] = &[
 /// Keep in sync with `telemetry-worker/src/registry.ts`.
 pub(super) const EVENT_NAMES: &[&str] = &[
     // ── Commands (0-92) ──
-    "command.adjust_loop_closures",
+    // Tombstone: the `adjust_loop_closures` command was removed when closure
+    // adjustment became a non-destructive display mode. The slot is retained so
+    // all later event IDs stay stable (append-only registry); the name no longer
+    // starts with "command." so it is excluded from the command-coverage check.
+    "_removed.command.adjust_loop_closures",
     "command.attempt_repair",
     "command.calculate_file_hash",
     "command.can_redo",
@@ -468,7 +472,7 @@ mod tests {
     #[test]
     fn event_map_lookup() {
         let map = event_map();
-        assert_eq!(map.get("command.adjust_loop_closures"), Some(&0));
+        assert_eq!(map.get("_removed.command.adjust_loop_closures"), Some(&0));
         assert_eq!(map.get("command.update_shot"), Some(&92));
         assert_eq!(map.get("action.tool.select"), Some(&103));
         assert_eq!(map.get("dwell.placement"), Some(&285));

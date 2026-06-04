@@ -151,7 +151,6 @@ fn get_command_type(command: &Command) -> String {
         Command::UnmergeStationPair { .. } => "unmerge_station_pair".to_string(),
         Command::CreateLoopClosure { .. } => "create_loop_closure".to_string(),
         Command::RemoveLoopClosure { .. } => "remove_loop_closure".to_string(),
-        Command::AdjustLoopClosures { .. } => "adjust_loop_closures".to_string(),
         Command::SetZeroDatum { .. } => "set_zero_datum".to_string(),
         Command::RemoveZeroDatum { .. } => "remove_zero_datum".to_string(),
         Command::SetStationComment { .. } => "set_station_comment".to_string(),
@@ -222,9 +221,6 @@ fn derive_command_details(
         }
         Command::RemoveLoopClosure { closure_id } => {
             Some(format!("Closure #{closure_id}"))
-        }
-        Command::AdjustLoopClosures { method, .. } => {
-            Some(format!("Method: {}", method.as_str()))
         }
         Command::SetShotReference { is_reference, .. } => {
             Some(format!("Reference: {is_reference}"))
