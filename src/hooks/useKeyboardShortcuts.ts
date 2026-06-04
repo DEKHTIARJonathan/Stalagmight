@@ -718,6 +718,8 @@ export function useKeyboardShortcuts() {
 
         case 'import_dmp': {
           event.preventDefault();
+          // GUARD: the closure-adjusted view is read-only — imports add sections.
+          if (useUIStore.getState().geometryMode === 'closureAdjusted') return;
           // Context-aware import (DMP + TML/TMLU)
           (async () => {
             try {

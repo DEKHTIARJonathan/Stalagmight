@@ -199,6 +199,16 @@ function App() {
     const isGpx = lowerPath.endsWith('.gpx');
     const currentProject = useProjectStore.getState().project;
 
+    // The closure-adjusted view is read-only: importing into an open project adds
+    // sections (a mutation), so reject a drop onto an open project while it's active.
+    if (currentProject && useUIStore.getState().geometryMode === 'closureAdjusted') {
+      openDialog('error', {
+        title: 'Import',
+        message: 'Switch to the Measured view to import — the closure-adjusted view is read-only.',
+      });
+      return;
+    }
+
     // TML and Compass are full-survey imports that always create a new project,
     // so they are only accepted from the home screen.
     if ((isTml || isCompass) && currentProject) {

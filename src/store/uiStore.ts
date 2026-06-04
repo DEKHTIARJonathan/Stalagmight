@@ -699,10 +699,11 @@ export const useUIStore = create<UIStore>((set) => ({
       showDepthGradient: settings.showDepthGradient ?? state.showDepthGradient,
       showStationComments: settings.showStationComments ?? state.showStationComments,
       gridSpacing: settings.gridSpacing ?? state.gridSpacing,
-      // The typed DisplaySettings struct doesn't carry geometryMode, so a project
-      // loaded through this path has no saved preference: reset to the measured
-      // default instead of inheriting the previous project's mode.
-      geometryMode: GEOMETRY_MODE_DEFAULT,
+      // Restore the saved geometry mode ("remember last used"). The backend
+      // defaults geometryMode to "measured" for projects with no saved
+      // preference, so a load is authoritative and never inherits the previous
+      // project's mode.
+      geometryMode: settings.geometryMode === 'closureAdjusted' ? 'closureAdjusted' : GEOMETRY_MODE_DEFAULT,
     }));
     trackDisplayState(useUIStore.getState());
   },

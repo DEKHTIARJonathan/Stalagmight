@@ -197,6 +197,10 @@ pub struct DisplaySettings {
     pub show_depth_gradient: bool,
     pub show_station_comments: bool,
     pub grid_spacing: f64,
+    /// Geometry display mode ("measured" | "closureAdjusted"). Carried here so a
+    /// project reopened through the typed load path restores the saved mode
+    /// ("remember last used") instead of always defaulting to measured.
+    pub geometry_mode: String,
 }
 
 impl Default for DisplaySettings {
@@ -215,6 +219,7 @@ impl Default for DisplaySettings {
             show_depth_gradient: false,
             show_station_comments: false,
             grid_spacing: 10.0,
+            geometry_mode: "measured".to_string(),
         }
     }
 }
@@ -239,6 +244,11 @@ impl DisplaySettings {
             show_depth_gradient: map.get("showDepthGradient").is_some_and(|s| s == "true"),
             show_station_comments: map.get("showStationComments").is_some_and(|s| s == "true"),
             grid_spacing: map.get("gridSpacing").and_then(|s| s.parse().ok()).unwrap_or(10.0),
+            geometry_mode: map
+                .get("geometryMode")
+                .filter(|s| s.as_str() == "measured" || s.as_str() == "closureAdjusted")
+                .cloned()
+                .unwrap_or_else(|| "measured".to_string()),
         }
     }
 }
@@ -814,6 +824,27 @@ mod tests {
         assert!(settings.show_satellite, "showSatellite should be true");
         assert!(settings.show_depth_gradient, "showDepthGradient should be true");
         assert!((settings.grid_spacing - 25.5).abs() < 0.001, "gridSpacing should be 25.5");
+    }
+
+    #[test]
+    fn test_display_settings_geometry_mode() {
+        // Default (absent) and invalid values fall back to "measured".
+        assert_eq!(DisplaySettings::default().geometry_mode, "measured");
+        assert_eq!(
+            DisplaySettings::from_stored(&HashMap::new()).geometry_mode,
+            "measured"
+        );
+        let mut bad = HashMap::new();
+        bad.insert("geometryMode".to_string(), "bogus".to_string());
+        assert_eq!(DisplaySettings::from_stored(&bad).geometry_mode, "measured");
+
+        // A saved closureAdjusted preference round-trips (remember last used).
+        let mut saved = HashMap::new();
+        saved.insert("geometryMode".to_string(), "closureAdjusted".to_string());
+        assert_eq!(
+            DisplaySettings::from_stored(&saved).geometry_mode,
+            "closureAdjusted"
+        );
     }
 
     #[test]
