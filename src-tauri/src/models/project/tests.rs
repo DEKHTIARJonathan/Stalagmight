@@ -6326,6 +6326,37 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
 }
 
 #[test]
+fn section_has_zero_datum_ignores_dangling_datum() {
+    // A corrupt project can be opened with a DANGLING zero datum (anchor shot
+    // deleted) so the user can repair it. It must NOT count as a real anchor — else
+    // a merge picks the phantom-anchored section as the fixed group and shifts the
+    // world coordinate system around a station that doesn't resolve.
+    let mut project = Project::new("DanglingDatum".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.ensure_shot_uuids();
+    // A dangling datum: anchored on a shot UUID that no shot carries.
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())),
+        gps: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+
+    assert!(
+        !project.section_has_zero_datum(a),
+        "a dangling zero datum must not count as a merge anchor"
+    );
+    // Sanity: it is flagged as a dangling cross-reference.
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .any(|v| v.category == "dangling_zero_datum_ref"),
+        "dangling datum should be flagged by the integrity check"
+    );
+}
+
+#[test]
 fn check_merge_alignment_detects_and_realign_fixes_drift() {
     // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
     let mut project = Project::new("Drift".to_string(), None);

@@ -402,4 +402,28 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     await useProjectStore.getState().saveProject('/p.stalx', false);
     expect(getProjectStateCalled).toBe(false);
   });
+
+  it('re-checks integrity after an AUTOSAVE that healed the project', async () => {
+    // The save path auto-heals dup UUIDs / orphan offsets on autosave too. Even on
+    // autosave we must re-check when the project entered the save flagged, or the
+    // banner stays stale after the heal silently cleared it.
+    useProjectStore.setState({
+      project: { file_path: '/p.stalx' } as never,
+      integrityIssues: ['duplicate shot UUID'],
+      integrityDismissed: false,
+      integritySaveBlocked: false,
+    });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'save_project') return { success: true };
+      if (command === 'get_project_state') return null; // refreshProjectState
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      return undefined;
+    });
+
+    await useProjectStore.getState().saveProject('/p.stalx', true); // isAutosave
+    // checkProjectIntegrity is fire-and-forget; let it resolve.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+  });
 });

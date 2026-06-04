@@ -867,8 +867,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Don't let geometric corruption persist silently: re-check after save so
       // drifted merges surface in the integrity banner this session, not only on
-      // the next load. (Skip on autosave to avoid churn.)
-      if (!isAutosave) {
+      // the next load. Skip on a clean autosave to avoid churn — BUT still re-check
+      // when the project entered the save flagged (hadIntegrityIssues), because the
+      // save path auto-heals some issues (duplicate UUIDs / orphan offsets) on
+      // autosave too; without this the banner/dialog would stay stale after an
+      // autosave silently cleared them.
+      if (!isAutosave || hadIntegrityIssues) {
         void get().checkProjectIntegrity();
       }
     } else {

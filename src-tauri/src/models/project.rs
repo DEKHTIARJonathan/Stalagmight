@@ -2193,10 +2193,20 @@ impl Project {
         }
     }
 
-    /// Check if a section is connected to a zero datum (directly or through merges only)
+    /// Check if a section is connected to a zero datum (directly or through merges only).
+    ///
+    /// Counts only datums that still RESOLVE: a corrupt project can be opened with a
+    /// dangling zero datum (anchor shot deleted) so the user can repair it, and a
+    /// dangling datum is not a real anchor. Counting it would let a merge pick the
+    /// phantom-anchored section as the fixed group and shift the world coordinate
+    /// system around a station that doesn't exist. (Mirrors find_connected_zero_datum
+    /// and the other zero-datum sites, which all filter via resolve_key.)
     fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
         let merged = self.get_merged_section_ids(section_id);
-        self.zero_datums.iter().any(|zd| merged.contains(&zd.station_ref.section_id))
+        self.zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .any(|sr| merged.contains(&sr.section_id))
     }
 
     /// Get all stations colocated with the given station (via merges and aligned closures).
@@ -4525,9 +4535,14 @@ impl Project {
         // Apply offset to all sections in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
         let moving_sections = self.get_merged_section_ids(moving_section_id);
-        let moving_has_zero_datum = moving_sections
+        // Resolve-aware (a dangling datum is not a real anchor — matching
+        // section_has_zero_datum), so a deleted-anchor datum can't trigger a
+        // spurious "merge would move a zero datum" alarm.
+        let moving_has_zero_datum = self
+            .zero_datums
             .iter()
-            .any(|sid| self.zero_datums.iter().any(|zd| zd.station_ref.section_id == *sid));
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .any(|sr| moving_sections.contains(&sr.section_id));
         if moving_has_zero_datum && (offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9) {
             error!(
                 moving_section_id,
