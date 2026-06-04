@@ -421,9 +421,13 @@ function App() {
           ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
           : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
       useUIStore.getState().showToast(message, 'integrity-repair');
-      // Close the dialog only when fully clean; if issues remain the banner
-      // re-populates (checkProjectIntegrity ran) so the user can act on them.
-      if (remaining === 0) {
+      // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
+      // (the same integrityIssues the banner and the dialog render-gate use) rather
+      // than the point-in-time `remaining` — a command or undo that interleaved
+      // during the repair's awaits could have changed the real issue set, and
+      // repairProjectIntegrity awaits its post-repair checkProjectIntegrity before
+      // resolving, so integrityIssues is already fresh here.
+      if (useProjectStore.getState().integrityIssues.length === 0) {
         closeIntegrityDialog();
       }
     } finally {

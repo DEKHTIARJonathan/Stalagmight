@@ -292,4 +292,55 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     expect(useProjectStore.getState().integrityIssues).toEqual([]);
     expect(useProjectStore.getState().integritySaveBlocked).toBe(false);
   });
+
+  it('drops a superseded integrity check (last-issued-wins on the same project)', async () => {
+    // Two checks overlap on the SAME project (e.g. a manual save's fire-and-forget
+    // check racing a Repair's check). The earlier-issued one resolving LAST must
+    // not clobber the newer result — the project-identity guard can't tell them
+    // apart, so the monotonic sequence does.
+    useProjectStore.setState({
+      project: { file_path: '/p.stalx' } as never,
+      loading: { ...useProjectStore.getState().loading, clientOpId: 1 },
+      integrityIssues: [],
+      integritySaveBlocked: false,
+    });
+
+    let resolveFirst!: (v: { messages: string[]; save_blocked: boolean }) => void;
+    invokeIpcMock.mockImplementationOnce(
+      () => new Promise((r) => { resolveFirst = r as typeof resolveFirst; }),
+    );
+    const first = useProjectStore.getState().checkProjectIntegrity(); // call A (older)
+
+    // Call B (newer) resolves immediately with the truth (clean).
+    invokeIpcMock.mockImplementationOnce(async () => ({ messages: [], save_blocked: false }));
+    await useProjectStore.getState().checkProjectIntegrity();
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+
+    // A now resolves with a STALE pre-repair result — must be dropped (superseded).
+    resolveFirst({ messages: ['stale pre-repair issue'], save_blocked: true });
+    await first;
+
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+    expect(useProjectStore.getState().integritySaveBlocked).toBe(false);
+  });
+
+  it('closes the integrity dialog when the last issue clears', async () => {
+    // The dialog flag must not linger true once issues are gone, or it could pop
+    // the modal back open when a later issue reappears.
+    useProjectStore.setState({
+      project: { file_path: '/p.stalx' } as never,
+      integrityIssues: ['some issue'],
+      integrityDialogOpen: true,
+      integritySaveBlocked: false,
+    });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      return undefined;
+    });
+
+    await useProjectStore.getState().checkProjectIntegrity();
+
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+    expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
+  });
 });

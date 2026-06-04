@@ -84,6 +84,12 @@ const initialLoadingState: LoadingState = {
 // Separate client operation ID for race detection (independent of backend loading ID)
 let clientOpIdCounter = 0;
 
+// Monotonic sequence so overlapping fire-and-forget integrity checks are
+// last-issued-wins: an earlier check that resolves after a newer one was started
+// must not clobber the newer result (e.g. a manual save's check racing a Repair's
+// check on the same project, where the project-identity guard can't tell them apart).
+let integrityCheckSeq = 0;
+
 /**
  * Parsed error from Tauri backend.
  */
@@ -1033,21 +1039,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // close (project → null).
     const pathAtStart = get().project?.file_path ?? null;
     const opAtStart = get().loading.clientOpId;
+    const mySeq = ++integrityCheckSeq;
     try {
       const result = await invokeIpc<IntegrityCheckResult>('check_project_integrity', undefined, {
         purpose: 'check project structural integrity after load',
       });
       const cur = get();
       if (
+        mySeq !== integrityCheckSeq ||
         cur.project === null ||
         (cur.project.file_path ?? null) !== pathAtStart ||
         cur.loading.clientOpId !== opAtStart
       ) {
-        // Project switched/closed mid-check — drop this stale result so it can't
-        // clobber the new project's integrity state. The explicit project===null
-        // check is needed for the UNSAVED case: file_path stays null and
-        // closeProject doesn't bump clientOpId, so without it a late result would
-        // repopulate the banner with no project loaded (leaking onto the global view).
+        // Drop this result if it has been superseded. Two ways:
+        // 1. A NEWER check was issued after this one started (last-issued-wins) —
+        //    so an earlier check can't clobber a fresher result even on the SAME
+        //    project (e.g. a save's fire-and-forget check racing a Repair's check,
+        //    which the project-identity guard below can't tell apart).
+        // 2. The project switched/closed mid-check. The explicit project===null
+        //    check is needed for the UNSAVED case: file_path stays null and
+        //    closeProject doesn't bump clientOpId, so without it a late result would
+        //    repopulate the banner with no project loaded (leaking onto the global view).
         return [];
       }
       const issues = result.messages;
@@ -1066,6 +1078,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           integrityIssues: issues,
           integritySaveBlocked: result.save_blocked,
           integrityDismissed: unchanged ? state.integrityDismissed : false,
+          // Keep the Review & Repair dialog flag consistent with what's actually
+          // rendered (the dialog gate is integrityDialogOpen && issues.length > 0).
+          // When the last issue clears — via Repair or a command that resolved it —
+          // close the dialog explicitly, so the flag can't linger true-but-hidden
+          // and pop the dialog back open if a later issue reappears.
+          integrityDialogOpen: issues.length === 0 ? false : state.integrityDialogOpen,
         };
       });
       return issues;
