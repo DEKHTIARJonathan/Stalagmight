@@ -150,4 +150,55 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     ]);
     expect(useProjectStore.getState().integritySaveBlocked).toBe(true);
   });
+
+  it('marks the project dirty after a repair that actually changed it', async () => {
+    // A repair that changed the project leaves unsaved edits: the store must go
+    // dirty so auto-save runs and the close prompt fires. Otherwise a project that
+    // was clean (isDirty false) when the user clicked Repair still looks "saved"
+    // and the fix is silently lost on close/reopen.
+    useProjectStore.setState({ isDirty: false });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'repair_project_integrity') return { fixed: 2, remaining: 0, changed: true };
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      return undefined; // refreshProjectState / refreshUndoState are best-effort here
+    });
+
+    const result = await useProjectStore.getState().repairProjectIntegrity();
+
+    expect(result).toEqual({ fixed: 2, remaining: 0, changed: true });
+    expect(useProjectStore.getState().isDirty).toBe(true);
+  });
+
+  it('dirties on a silent sub-tolerance repair (changed but fixed === 0)', async () => {
+    // The repair always re-solves offsets, healing sub-reporting-tolerance drift
+    // that was never counted as a violation — so fixed can be 0 while the project
+    // genuinely changed. Keying on `changed` (not `fixed`) still dirties here, so
+    // the silent fix is auto-saved / prompted on close instead of being lost.
+    useProjectStore.setState({ isDirty: false });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'repair_project_integrity') return { fixed: 0, remaining: 0, changed: true };
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      return undefined;
+    });
+
+    await useProjectStore.getState().repairProjectIntegrity();
+
+    expect(useProjectStore.getState().isDirty).toBe(true);
+  });
+
+  it('does not dirty the project after a true no-op repair', async () => {
+    // changed === false is the backend "nothing was mutated" signal — don't
+    // spuriously dirty a project the repair left byte-identical (so the close
+    // prompt doesn't fire on an unchanged project).
+    useProjectStore.setState({ isDirty: false });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'repair_project_integrity') return { fixed: 0, remaining: 1, changed: false };
+      if (command === 'check_project_integrity') return { messages: ['detect-only'], save_blocked: false };
+      return undefined;
+    });
+
+    await useProjectStore.getState().repairProjectIntegrity();
+
+    expect(useProjectStore.getState().isDirty).toBe(false);
+  });
 });

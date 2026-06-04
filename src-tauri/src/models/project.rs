@@ -7076,6 +7076,13 @@ impl Project {
         // Normalize any closure that is really a sole-bridge attachment into a
         // merge before solving, so a file persisted in that state (e.g. a section
         // stranded by an older delete) opens correctly.
+        // De-duplicate shot UUIDs BEFORE re-anchoring: if a section persisted two
+        // shots sharing a UUID, canonicalizing a positional Index(i) ref to
+        // AfterShot(uuid) would later resolve to the FIRST match, silently moving
+        // a ref off the duplicate it was meant to target (and Repair couldn't
+        // recover the intended endpoint). Re-minting the duplicate first gives the
+        // second station its own UUID so the re-anchor stays faithful.
+        self.ensure_unique_shot_uuids();
         // Upgrade any positional (Index) ref from an older file to the stable
         // shot-UUID anchor now that shots (with UUIDs) are loaded.
         self.reanchor_station_refs();

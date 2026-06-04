@@ -597,6 +597,88 @@ fn repair_open_project_integrity_is_undoable_and_redoable() {
 }
 
 #[test]
+fn redo_batch_preserves_orphan_closure_to_merge_conversion() {
+    // A single user Batch can strand a sole-bridge closure: two otherwise
+    // unconnected sections joined only by a freshly-created closure. The
+    // post-command epilogue converts that closure into a merge (#8 — closures are
+    // only for true loops). Previously execute_batch captured its redo snapshot
+    // BEFORE that conversion ran (the conversion happened only in execute()'s outer
+    // epilogue, after the snapshot), so undo→redo restored the UN-converted closure
+    // — redo only reconciles geometry, it does not re-run the conversion — silently
+    // losing the merge. The conversion now runs inside execute_batch before the
+    // snapshot, so redo preserves it.
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Batch".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            name: Some("A".to_string()),
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            name: Some("B".to_string()),
+            shots: vec![test_shot_data(3.0), test_shot_data(4.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    state.set_project_for_tests(project);
+
+    // One atomic batch: give each section a datum (so the otherwise-unconnected
+    // pair is allowed a closure), then close A1↔B1. With no other path between them
+    // the closure is a sole bridge and the epilogue converts it to a merge.
+    let result = state.execute(Command::Batch {
+        commands: vec![
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(a, 0),
+                coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+            },
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(b, 0),
+                coordinates: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+            },
+            Command::CreateLoopClosure {
+                station_a: StationRef::new(a, 1),
+                station_b: StationRef::new(b, 1),
+                closure_strategy: ClosureStrategy::default(),
+            },
+        ],
+    });
+    assert!(result.success, "batch should succeed: {:?}", result.error);
+
+    let after_execute = state.get_project_state().unwrap();
+    assert_eq!(
+        after_execute.loop_closures.len(),
+        0,
+        "the sole-bridge closure must be converted to a merge"
+    );
+    assert_eq!(after_execute.station_merges.len(), 1, "exactly one merge after conversion");
+
+    // Undo returns to the pre-batch topology (no merge, no closure).
+    assert!(state.undo().success);
+    let after_undo = state.get_project_state().unwrap();
+    assert_eq!(after_undo.loop_closures.len(), 0);
+    assert_eq!(after_undo.station_merges.len(), 0);
+
+    // Redo must restore the CONVERTED topology (the merge), not the raw closure.
+    assert!(state.redo().success);
+    let after_redo = state.get_project_state().unwrap();
+    assert_eq!(
+        after_redo.loop_closures.len(),
+        0,
+        "redo must not resurrect the un-converted closure"
+    );
+    assert_eq!(
+        after_redo.station_merges.len(),
+        1,
+        "redo must preserve the closure→merge conversion"
+    );
+}
+
+#[test]
 fn test_open_project_fails_on_invalid_file() {
     let temp_dir = TempDir::new().unwrap();
     let invalid_path = temp_dir.path().join("invalid.stalx");

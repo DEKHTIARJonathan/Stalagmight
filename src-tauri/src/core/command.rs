@@ -210,10 +210,18 @@ pub struct CommandResult {
 /// per-operation counters that mix different units. `remaining` is whatever the
 /// repair could not auto-fix (detect-only: a drifted aligned loop closure to
 /// recompute/remove, or non-finite shot geometry to correct by hand).
+///
+/// `changed` is true when the repair actually mutated the project (an undo entry
+/// was recorded). It is a STRICTLY broader signal than `fixed > 0`: the repair
+/// always re-solves offsets, which heals sub-reporting-tolerance drift that never
+/// counted as a violation — so `fixed` can be 0 while the project genuinely
+/// changed. The frontend dirties the project on `changed` (not `fixed`) so that
+/// silent sub-tolerance fixes are still auto-saved / prompted on close.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct IntegrityRepairResult {
     pub fixed: u32,
     pub remaining: u32,
+    pub changed: bool,
 }
 
 /// Result of a structural-integrity check. `messages` is the human-readable

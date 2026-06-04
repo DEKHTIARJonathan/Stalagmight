@@ -6236,6 +6236,64 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
 }
 
 #[test]
+fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
+    // Regression: when a loaded section already has two shots sharing a UUID, the
+    // load-time canonicalization of positional Index anchors to AfterShot(uuid)
+    // MUST run after de-duplicating UUIDs. Otherwise a ref at the station after the
+    // SECOND duplicate canonicalizes to AfterShot(dup), which resolve_key resolves
+    // to the FIRST duplicate — silently moving the ref off its endpoint and
+    // defeating Repair.
+    let mut project = Project::new("Dup".to_string(), None);
+    let s = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+                shot(0.0, 0.0, 1.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Force a duplicate: shots[0] and shots[1] share a UUID, as a corrupt/legacy
+    // file could persist. (ensure_unique keeps the first and re-mints the second.)
+    let dup = project.get_section(s).unwrap().shots[0].uuid.clone().unwrap();
+    project.get_section_mut(s).unwrap().shots[1].uuid = Some(dup.clone());
+
+    // A station offset stored in the legacy positional form at station 2 — the
+    // station immediately AFTER the second duplicate shot.
+    project
+        .station_offsets
+        .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
+
+    project.redrive_offsets_after_load();
+
+    // The offset must still resolve to station 2, not collapse onto station 1.
+    let (key, _) = project
+        .station_offsets
+        .iter()
+        .next()
+        .expect("offset survived load");
+    assert!(
+        project.key_is_ref(key, StationRef::new(s, 2)),
+        "offset ref must stay on station 2 after dedup+reanchor, resolved to {:?}",
+        project.resolve_key(key)
+    );
+    // And the duplicate was actually repaired (no two shots share a UUID).
+    let uuids: Vec<_> = project
+        .get_section(s)
+        .unwrap()
+        .shots
+        .iter()
+        .filter_map(|sh| sh.uuid.clone())
+        .collect();
+    let mut uniq = uuids.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uuids.len(), uniq.len(), "duplicate shot UUID repaired on load");
+}
+
+#[test]
 fn check_merge_alignment_detects_and_realign_fixes_drift() {
     // Two sections, A0-A1 and B0-B1, with A1 merged to B0.
     let mut project = Project::new("Drift".to_string(), None);

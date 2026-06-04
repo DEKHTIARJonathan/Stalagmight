@@ -304,7 +304,7 @@ impl AppState {
                 Err(poisoned) => poisoned.into_inner(),
             };
             let Some(project) = guard.as_mut() else {
-                return IntegrityRepairResult { fixed: 0, remaining: 0 };
+                return IntegrityRepairResult { fixed: 0, remaining: 0, changed: false };
             };
             // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
             project.repair_structural_integrity();
@@ -324,9 +324,16 @@ impl AppState {
         // a spurious history entry. Undo restores the pre-repair (corrupt) state —
         // which the save guard still refuses to persist — and redo re-applies the
         // fix; both go through the snapshot-pair restore, never re-executing.
+        //
+        // `changed` mirrors that same before != after condition: it is the honest
+        // "the project was mutated" signal the frontend dirties on. It is broader
+        // than `fixed > 0` because resolve_offsets() above heals sub-tolerance drift
+        // that never registered as a counted violation (fixed == 0, yet changed).
+        let mut changed = false;
         if let Some(before_json) = before_snapshot {
             if let Ok(after_json) = self.capture_project_snapshot() {
                 if before_json != after_json {
+                    changed = true;
                     self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
                 }
             }
@@ -334,6 +341,7 @@ impl AppState {
         IntegrityRepairResult {
             fixed: before.saturating_sub(after) as u32,
             remaining: after as u32,
+            changed,
         }
     }
 
@@ -2370,6 +2378,16 @@ impl AppState {
         {
             return failure;
         }
+
+        // Finalize structural side-effects BEFORE snapshotting for redo, mirroring
+        // the per-command epilogue in execute(). A batch that strands a sole-bridge
+        // closure must have the closure→merge conversion (and the offset reconcile)
+        // baked into the after-snapshot; otherwise undo→redo restores the
+        // pre-conversion topology — redo only reconciles geometry, it does NOT
+        // re-run the conversion — and the merge is silently lost. Both calls are
+        // idempotent, so the outer epilogue in execute() re-running them is a no-op.
+        self.convert_orphan_closures_in_open_project();
+        self.reconcile_geometry();
 
         if push_undo {
             // Capture after-snapshot for redo support; failure means rollback

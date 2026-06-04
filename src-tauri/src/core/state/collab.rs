@@ -409,44 +409,60 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             Some((lsid, lafter, lnew)) if lsid == sid && lafter == a.after_shot_id => Some(lnew),
             _ => None,
         };
+        // Adopt the collaborator's UUID on the inserted shot so the next Ariane
+        // round-trip still matches via tier-1 — but only if it's free in this
+        // section. A duplicate would make AfterShot anchors mis-resolve (resolve_key
+        // takes the first match), and stamping it could even displace an EXISTING
+        // shot's identity if the new shot sorts ahead of it; on collision keep the
+        // fresh UUID the insert mints.
+        //
+        // Compute it BEFORE inserting and plumb it INTO the insert rather than
+        // post-patching: the prepend path (insert_shot_before, pos == 0) re-anchors
+        // this section's `SectionStart` refs to the new first shot's UUID, so
+        // overwriting the UUID *after* the insert would leave those refs pointing at
+        // the discarded fresh UUID — orphaning a start-station datum/merge/closure
+        // (critical → the whole collab apply rolls back) or offset/comment (a
+        // dangling ref that later blocks saving). Passing forced_uuid makes the
+        // re-anchor use the final UUID, so no orphan is ever created.
+        let uuid_to_adopt = a.uuid.as_ref().and_then(|u| {
+            let free = project.get_section(sid).map_or(true, |s| {
+                s.shots.iter().all(|sh| sh.uuid.as_deref() != Some(u.as_str()))
+            });
+            free.then(|| u.clone())
+        });
         let new_id = if let Some(anchor) = chained.or(a.after_shot_id) {
-            project.insert_shot_after(sid, anchor, a.data.clone(), None, None).map(|s| s.id)
+            project
+                .insert_shot_after(sid, anchor, a.data.clone(), None, uuid_to_adopt.clone())
+                .map(|s| s.id)
         } else {
             let first = project
                 .get_section(sid)
                 .and_then(|s| s.shots.first().map(|sh| sh.id));
             match first {
-                Some(fid) => project.insert_shot_before(sid, fid, a.data.clone(), None, None).map(|s| s.id),
-                None => project.add_shot(sid, a.data.clone()).map(|s| s.id),
+                Some(fid) => project
+                    .insert_shot_before(sid, fid, a.data.clone(), None, uuid_to_adopt.clone())
+                    .map(|s| s.id),
+                // Empty section: add_shot takes no forced-uuid param, but an empty
+                // section has no SectionStart re-anchor either, so stamping the UUID
+                // after the add can't orphan anything.
+                None => {
+                    let id = project.add_shot(sid, a.data.clone()).map(|s| s.id);
+                    if let (Some(nid), Some(u)) = (id, uuid_to_adopt.clone()) {
+                        if let Some(section) = project.get_section_mut(sid) {
+                            if let Some(shot) = section.shots.iter_mut().find(|s| s.id == nid) {
+                                shot.uuid = Some(u);
+                            }
+                        }
+                    }
+                    id
+                }
             }
         };
         if let Some(nid) = new_id {
-            // Preserve the collaborator's UUID on the inserted shot so
-            // the next Ariane round-trip still matches via tier-1.  We
-            // post-patch instead of plumbing a uuid parameter through
-            // the Project insert/add path because those methods do
-            // significant offset / station-ref bookkeeping we don't
-            // want to fork.
-            // Only adopt the collaborator's UUID if it's free in this section.
-            // A duplicate would make AfterShot anchors mis-resolve (resolve_key
-            // takes the first match), and stamping it could even displace an
-            // EXISTING shot's identity if the new shot sorts ahead of it — so on
-            // collision keep the fresh UUID the insert already minted.
-            let uuid_to_adopt = a.uuid.as_ref().and_then(|u| {
-                let free = project.get_section(sid).map_or(true, |s| {
-                    s.shots.iter().all(|sh| sh.uuid.as_deref() != Some(u.as_str()))
-                });
-                free.then(|| u.clone())
-            });
-            let mut shot_pos: Option<u32> = None;
-            if let Some(section) = project.get_section_mut(sid) {
-                if let Some((idx, shot)) = section.shots.iter_mut().enumerate().find(|(_, s)| s.id == nid) {
-                    if let Some(uuid) = uuid_to_adopt {
-                        shot.uuid = Some(uuid);
-                    }
-                    shot_pos = Some(idx as u32);
-                }
-            }
+            let shot_pos = project
+                .get_section(sid)
+                .and_then(|s| s.shots.iter().position(|sh| sh.id == nid))
+                .map(|i| i as u32);
             // Attach the inserted shot's station-portion of Comment to its
             // `to` station — the same shot+1 convention used at export time.
             if let Some(idx) = shot_pos {
@@ -670,6 +686,49 @@ mod tests {
         // The original shot kept its UUID; the inserted one did not steal it.
         assert_eq!(p.sections[0].shots[0].uuid.as_deref(), Some(existing_uuid.as_str()));
         assert!(!p.has_critical_integrity_violations());
+    }
+
+    #[test]
+    fn apply_front_insert_preserves_section_start_datum() {
+        // Regression for the collab-prepend UUID-orphan bug. A front-insert
+        // (after_shot_id == None) of a new first shot carrying a collaborator UUID
+        // used to: (1) mint a FRESH UUID inside insert_shot_before and re-anchor the
+        // section's SectionStart refs to AfterShot(fresh_uuid), then (2) overwrite
+        // the shot's UUID with the collaborator UUID — orphaning the just-re-anchored
+        // refs. With a station-0 zero datum that made the entire apply roll back as
+        // critical corruption (and with a start offset/comment it left a dangling ref
+        // that blocked the next save). The collaborator UUID is now plumbed INTO the
+        // insert, so the SectionStart re-anchor uses the final UUID and nothing dangles.
+        let mut p = proj_abcd();
+        p.ensure_shot_uuids();
+        let sid = p.sections[0].id;
+        // Zero datum on station 0 → stored as a SectionStart anchor.
+        assert!(p
+            .set_zero_datum(
+                crate::models::StationRef::new(sid, 0),
+                crate::models::GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+            )
+            .unwrap());
+
+        let mut cs = CollabChangeSet::empty();
+        // position 0, after_shot_id None ⇒ front-insert; UUID free in section.
+        let mut entry = added(sid, 0, None, 5.0);
+        entry.uuid = Some("ariane-front-uuid".into());
+        cs.shots_added.push(entry);
+        let warnings = apply_changeset(&mut p, &cs);
+
+        // The new first shot adopted the collaborator UUID...
+        assert_eq!(
+            p.sections[0].shots[0].uuid.as_deref(),
+            Some("ariane-front-uuid"),
+        );
+        // ...and the start-station datum is NOT orphaned: no critical violation and
+        // no unresolvable cross-reference that would later block saving.
+        assert!(
+            !p.has_critical_integrity_violations(),
+            "front-insert must not orphan the SectionStart datum: {warnings:?}"
+        );
+        assert!(!p.has_unresolvable_cross_references());
     }
 
     #[test]

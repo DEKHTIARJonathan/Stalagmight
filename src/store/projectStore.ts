@@ -1058,10 +1058,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // non-finite shot geometry — fix the data), so reflect the TRUE post-repair
       // state instead of clearing the banner on issues that still exist.
       await get().checkProjectIntegrity();
+      // A repair that actually changed the project leaves unsaved edits: mark the
+      // store dirty so auto-save runs and the close prompt fires. Otherwise a
+      // project that was clean (isDirty false) when the user clicked Repair still
+      // looks "saved", and the fix is silently lost on close/reopen.
+      //
+      // Key on `result.changed`, NOT `result.fixed > 0`: the repair always
+      // re-solves offsets, which heals sub-tolerance drift that never counted as a
+      // violation, so a genuine fix can report fixed === 0. `changed` is the
+      // backend's honest "the snapshot was mutated" signal (the same condition
+      // under which it records the undo entry), so it dirties on those silent
+      // fixes too while still leaving a true no-op repair clean.
+      if (result.changed) {
+        set({ isDirty: true });
+      }
       return result;
     } catch (e) {
       console.error('Failed to repair project integrity:', e);
-      return { fixed: 0, remaining: 0 };
+      return { fixed: 0, remaining: 0, changed: false };
     }
   },
 
