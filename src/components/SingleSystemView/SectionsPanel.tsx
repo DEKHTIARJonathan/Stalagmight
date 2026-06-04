@@ -178,7 +178,10 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
     // Ensure selection happens (in case mouseDown was prevented)
     handleSectionClick(section, e);
-    // Trigger zoom to section
+    // Trigger zoom to section. Note: single-click already zooms (#64), so a
+    // double-click fires this redundantly — harmless because fitToSection is
+    // idempotent (it stops any running animation). This stays until #50
+    // reassigns double-click to panel-expand.
     setSource('sections-panel');
     triggerZoomToSection(section.id);
   }, [handleSectionClick, triggerZoomToSection]);

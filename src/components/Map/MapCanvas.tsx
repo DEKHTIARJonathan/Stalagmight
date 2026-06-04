@@ -2240,8 +2240,6 @@ export default function MapCanvas() {
     }
   }, [tileReloadGeneration, mapLoaded, showSatellite]);
 
-  // Shared padding helper: computes { top, bottom, left, right } with 10% margin
-  // and optional panel offsets
   // 10% margins on all sides. The map is the central flex column (already
   // sized to exclude the side panels), so no panel offsets are needed — adding
   // them double-counts the panel widths and squeezes the fit (see #64).
@@ -2290,11 +2288,14 @@ export default function MapCanvas() {
         return;
       }
 
-      // Fit to *rendered* geometry only: endpoints of non-reference shots plus
-      // zero-datum stations. Reference shots aren't drawn, so a long ref
-      // connector or ref-only station must not inflate the bounds and shrink
-      // the section on screen (mirrors the export bounds logic in image.rs).
-      // Falls back to all section stations when nothing non-reference renders.
+      // Fit to *rendered* geometry: endpoints of drawn shots plus zero-datum
+      // stations, falling back to all stations when nothing matches. When
+      // reference shots are hidden, a long ref/jump connector or a ref-only
+      // station shouldn't inflate the bounds and shrink the section (mirrors
+      // the export, which never draws reference shots). But when reference
+      // shots are *visible* (the default), they're drawn — so include them, or
+      // a visible connector could be left off-screen.
+      const refShotsVisible = getEffectiveShowReferenceShots(showShots, showReferenceShots);
       const byIndex = new Map<number, (typeof sectionStations)[number]>();
       for (const s of sectionStations) byIndex.set(s.station_ref.station_index, s);
       const section = project?.sections.find((s) => s.id === sectionId);
@@ -2309,7 +2310,7 @@ export default function MapCanvas() {
         }
       };
       section?.shots.forEach((shot, i) => {
-        if (shot.is_reference) return;
+        if (!refShotsVisible && shot.is_reference) return;
         includeIdx(i);
         includeIdx(i + 1);
       });
@@ -2383,7 +2384,7 @@ export default function MapCanvas() {
         maxZoom: config.map.zoom_max ?? 22,
       });
     },
-    [stations, project?.sections, config, gpsOrigin, calcPadding]
+    [stations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
