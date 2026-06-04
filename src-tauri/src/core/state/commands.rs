@@ -1,10 +1,13 @@
 use std::sync::Mutex;
 
-use crate::core::{Command, CommentHolder, CommandResult, UndoData, Validator};
+use crate::core::{
+    Command, CommentHolder, CommandResult, IntegrityCheckResult, IntegrityRepairResult, UndoData,
+    Validator,
+};
 use crate::models::{
     shot_display_position, ClosureStrategy, ConnectivityResult, Coordinates, GpsCoordinates,
-    Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationRef,
-    FEATURE_ID_STRIDE,
+    Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates, StationKey,
+    StationRef, ViolationSeverity, FEATURE_ID_STRIDE,
 };
 
 use super::AppState;
@@ -69,7 +72,309 @@ impl<'a> Drop for CascadeDeferGuard<'a> {
     }
 }
 
+/// The integrity-relevant capabilities of a [`Command`], declared in ONE place
+/// ([`AppState::command_integrity`]). The `execute()` epilogue reads these flags
+/// instead of three separate hand-maintained allow/deny lists, so a new command
+/// variant can't silently skip an integrity step.
+#[derive(Debug, Clone, Copy)]
+struct CommandIntegrity {
+    /// Can drift section offsets (move merged partners out of alignment) and so
+    /// needs the post-command geometry reconcile. Pure metadata/lifecycle edits
+    /// cannot, so they skip it.
+    affects_geometry: bool,
+    /// Can introduce a dangling/out-of-range cross-reference — by removing a
+    /// referenced entity or renumbering station indices — and so needs the
+    /// (expensive) whole-project rollback snapshot to reject corruption at the
+    /// source. Geometry-only commands add valid refs or shift offsets but cannot
+    /// dangle a reference, so they skip the serialize.
+    can_dangle_refs: bool,
+    /// Can REMOVE connectivity and strand a section so its only attachment is a
+    /// loop closure — which must then be converted to a merge (issue #8). Commands
+    /// that add or keep connectivity are excluded (a move must leave an inert
+    /// closure independent).
+    can_orphan_closures: bool,
+}
+
 impl AppState {
+    /// Declare every command's integrity-relevant capabilities in one exhaustive
+    /// match, so adding a [`Command`] variant FORCES a decision here (the compiler
+    /// rejects a non-exhaustive match) rather than silently defaulting across three
+    /// separate allow/deny lists — where a miss fails open: a skipped rollback
+    /// snapshot commits corruption, a missing reconcile leaves merges drifted, and
+    /// a missing orphan-closure conversion leaves a phantom loop closure.
+    fn command_integrity(cmd: &Command) -> CommandIntegrity {
+        use Command::*;
+        // Named profiles keep the table readable; every variant maps to exactly one.
+        const INERT: CommandIntegrity = CommandIntegrity {
+            affects_geometry: false,
+            can_dangle_refs: false,
+            can_orphan_closures: false,
+        };
+        const GEOMETRY_ONLY: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: false,
+            can_orphan_closures: false,
+        };
+        const REMOVES: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: true,
+            can_orphan_closures: true,
+        };
+        const CREATE_SHOT: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: true,
+            can_orphan_closures: false,
+        };
+        const UNMERGE: CommandIntegrity = CommandIntegrity {
+            affects_geometry: true,
+            can_dangle_refs: false,
+            can_orphan_closures: true,
+        };
+        match cmd {
+            // Lifecycle + pure metadata edits: touch no geometry and no refs.
+            // RepairIntegrity never runs through execute() (it records its own
+            // snapshot-pair undo and returns failure here), so its flags are never
+            // read; grouped here as it disturbs nothing.
+            CreateProject { .. }
+            | OpenProject { .. }
+            | SaveProject { .. }
+            | CloseProject
+            | UpdateSectionMetadata { .. }
+            | SetShotReference { .. }
+            // Station comments are metadata keyed by station identity; they are
+            // never geometry-derived and can never introduce merge drift, so they
+            // must NOT run the reconcile epilogue. Classifying them GEOMETRY_ONLY
+            // would heal an already-drifted project as a side effect of a comment
+            // edit, while their undo (restore the previous comment) does not invert
+            // that geometry change — an asymmetric undo.
+            | SetStationComment { .. }
+            | MoveComment { .. }
+            | RepairIntegrity => INERT,
+
+            // Remove an entity / renumber stations: can dangle refs AND strand a
+            // section behind a sole-bridge closure.
+            DeleteSection { .. } | DeleteShot { .. } | Batch { .. } | MergeProjects { .. } => REMOVES,
+
+            // Inserting a shot renumbers later stations (can dangle a positional
+            // ref) but cannot strand a section.
+            CreateShot { .. } => CREATE_SHOT,
+
+            // Unmerge removes connectivity (can strand a section) but adds no
+            // dangling reference.
+            UnmergeStations { .. } | UnmergeStationPair { .. } => UNMERGE,
+
+            // Everything else shifts geometry but keeps refs valid and connectivity
+            // intact, so it needs only the reconcile. UpdateShot belongs here too: a
+            // length/azimuth/depth edit moves stations, and its bespoke
+            // realign_after_shot_edit no-ops on a merge group with no zero datum, so
+            // without the reconcile epilogue a shot edit upstream of a datum-less
+            // merge would leave the partners drifted until a later load/repair.
+            CreateSection { .. }
+            | UpdateShot { .. }
+            | MergeStations { .. }
+            | CreateLoopClosure { .. }
+            | RemoveLoopClosure { .. }
+            | AdjustLoopClosures { .. }
+            | SetZeroDatum { .. }
+            | RemoveZeroDatum { .. }
+            | MoveSection { .. }
+            | MoveSegment { .. }
+            | MoveStation { .. }
+            | ApplyCollabChanges => GEOMETRY_ONLY,
+        }
+    }
+
+    /// Convert any sole-bridge loop closures in the open project to merges.
+    fn convert_orphan_closures_in_open_project(&self) {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return;
+        };
+        let converted = project.convert_orphan_closures_to_merges();
+        if converted > 0 {
+            tracing::info!(
+                converted,
+                purpose = "enforce closures-are-loops invariant",
+                "Converted sole-bridge loop closures to merges after a removal"
+            );
+        }
+    }
+
+    /// True iff the open project currently holds a Critical integrity violation.
+    pub(super) fn project_has_critical(&self) -> bool {
+        self.project
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
+            .unwrap_or(false)
+    }
+
+    /// Integrity gate shared by [`Self::execute`] and [`Self::execute_batch`]: if
+    /// the project was clean before (`!pre_had_critical`) but the command made it
+    /// Critical, roll back to `snapshot` and return the standard "blocked"
+    /// failure; otherwise return `None` and let the caller proceed. Corruption
+    /// must be rejected BEFORE any undo entry is pushed, or a later undo+redo
+    /// would reinstate the corrupt state the guard rejected (#1).
+    fn guard_introduced_corruption(
+        &self,
+        pre_had_critical: bool,
+        snapshot: &str,
+        cmd_desc: &str,
+    ) -> Option<CommandResult> {
+        if pre_had_critical || !self.project_has_critical() {
+            return None;
+        }
+        self.rollback_project(snapshot);
+        tracing::error!(
+            command = cmd_desc,
+            purpose = "block corruption at the source",
+            "Rejected command that would corrupt survey structure; rolled back"
+        );
+        Some(CommandResult::failure(
+            "Blocked: this action would corrupt the survey structure \
+             (it leaves dangling references). No changes were made."
+                .to_string(),
+        ))
+    }
+
+    /// Shared structural-edit epilogue for the custom `execute_*` paths that
+    /// bypass [`Self::execute`]'s gated epilogue (collab apply, TML import).
+    /// Converts sole-bridge closures to merges and reconciles derived offsets,
+    /// then reports whether this edit INTRODUCED a CRITICAL integrity violation
+    /// (dangling ref / out-of-range index / non-finite geometry). A caller that
+    /// captured a pre-edit snapshot rolls back to it when this returns `true`,
+    /// giving these paths the same "block corruption at the source" guarantee the
+    /// standard command path gets (#integrity Root 4).
+    ///
+    /// `pre_had_critical` is the project's critical state BEFORE the edit. Matching
+    /// `guard_introduced_corruption` / `execute`, an already-critical project (one
+    /// opened with a dangling ref or non-finite shot — permitted; the banner offers
+    /// Repair) does not block an otherwise-clean collab apply / import: only NEWLY
+    /// introduced corruption rolls back.
+    pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
+        self.convert_orphan_closures_in_open_project();
+        self.reconcile_geometry();
+        if pre_had_critical {
+            return false;
+        }
+        self.project
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
+            .unwrap_or(false)
+    }
+
+    /// Structural-integrity violation messages for the open project, critical
+    /// first. Empty when the project is sound or none is open. Used by the
+    /// load-time "warn and offer repair" surface.
+    pub fn integrity_violation_messages(&self) -> Vec<String> {
+        self.integrity_check().messages
+    }
+
+    /// Full integrity check for the open project: the violation messages
+    /// (critical first; empty = sound) plus whether the project is currently
+    /// save-blocked (has unresolvable cross-references — the exact condition that
+    /// refuses both manual and auto-save). The frontend uses `save_blocked` to keep
+    /// the integrity banner non-dismissable while saving is blocked, so the Repair
+    /// entry point can't be hidden on a project that can't be saved.
+    pub fn integrity_check(&self) -> IntegrityCheckResult {
+        let Some(project) = self.get_project_state() else {
+            return IntegrityCheckResult::default();
+        };
+        // Structural (dangling refs) + geometric (drifted merges + stale,
+        // still-marked-closed loop closures) + topological (a closure that is
+        // really a sole-bridge merge).
+        let mut violations = project.check_structural_integrity();
+        violations.extend(project.check_merge_alignment());
+        violations.extend(project.check_closure_alignment());
+        violations.extend(project.check_orphan_closures());
+        violations.sort_by_key(|v| match v.severity {
+            ViolationSeverity::Critical => 0,
+            ViolationSeverity::Warning => 1,
+        });
+        IntegrityCheckResult {
+            save_blocked: project.has_unresolvable_cross_references(),
+            messages: violations.into_iter().map(|v| v.message).collect(),
+        }
+    }
+
+    /// Repair the open project's integrity: drop dangling refs/orphans, re-mint
+    /// duplicate shot UUIDs, then re-cascade section offsets so drifted merges
+    /// line up again. Returns `{ fixed, remaining }` measured as the change in
+    /// the FULL violation set (the same set the banner counts), so the reported
+    /// numbers match what the user sees. `remaining > 0` means some issues are
+    /// detect-only and need manual attention (a drifted aligned loop closure to
+    /// recompute/remove; non-finite shot geometry to correct).
+    pub fn repair_open_project_integrity(&self) -> IntegrityRepairResult {
+        // Serialize against execute()/undo()/redo() for the WHOLE operation. Repair
+        // captures before_snapshot, mutates, and pushes a snapshot-pair undo across
+        // several independent project locks; without command_lock a concurrent
+        // command could commit a mutation in the window between before_snapshot and
+        // repair's own mutation, so undoing the Repair would restore a stale `before`
+        // and silently drop that command's changes. Deadlock-safe: none of the
+        // helpers repair calls take command_lock (execute holds it while calling the
+        // same capture/snapshot/undo helpers).
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return IntegrityRepairResult { fixed: 0, remaining: 0, changed: false };
+        };
+        // Count over the full violation set before repairing. Locks the project
+        // internally, so it must run with no project guard held.
+        let before = self.integrity_violation_messages().len();
+        // Snapshot the project BEFORE mutating so the repair can be undone: it
+        // drops dangling refs, re-mints duplicate UUIDs and re-cascades offsets,
+        // all reversible by restoring this snapshot. (capture locks the project
+        // internally, so take it with no guard held.)
+        let before_snapshot = self.capture_project_snapshot().ok();
+        {
+            let mut guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(project) = guard.as_mut() else {
+                return IntegrityRepairResult { fixed: 0, remaining: 0, changed: false };
+            };
+            // Drop dangling refs/orphans and re-mint duplicate shot UUIDs.
+            project.repair_structural_integrity();
+            // Dropping refs may have cleared the adjacency cache; rebuild before
+            // the cascade walks the merge graph.
+            project.rebuild_merge_adjacency();
+            // Turn any sole-bridge closure into a merge (a closure is only a
+            // loop), then re-derive offsets. Repair is an explicit "fix my
+            // project" action, so use the zero-trust re-solve that never honors a
+            // persisted offset.
+            project.convert_orphan_closures_to_merges();
+            project.resolve_offsets();
+        } // release the guard before re-measuring (integrity_violation_messages re-locks)
+        let after = self.integrity_violation_messages().len();
+        // Record an undo entry (before -> after) so the user can revert the repair.
+        // Only when it actually changed the project, so a no-op repair doesn't add
+        // a spurious history entry. Undo restores the pre-repair (corrupt) state —
+        // which the save guard still refuses to persist — and redo re-applies the
+        // fix; both go through the snapshot-pair restore, never re-executing.
+        //
+        // `changed` mirrors that same before != after condition: it is the honest
+        // "the project was mutated" signal the frontend dirties on. It is broader
+        // than `fixed > 0` because resolve_offsets() above heals sub-tolerance drift
+        // that never registered as a counted violation (fixed == 0, yet changed).
+        let mut changed = false;
+        if let Some(before_json) = before_snapshot {
+            if let Ok(after_json) = self.capture_project_snapshot() {
+                if before_json != after_json {
+                    changed = true;
+                    self.push_snapshot_undo(Command::RepairIntegrity, before_json, after_json);
+                }
+            }
+        }
+        IntegrityRepairResult {
+            fixed: before.saturating_sub(after) as u32,
+            remaining: after as u32,
+            changed,
+        }
+    }
+
     /// Execute a command and return the result
     pub fn execute(&self, cmd: Command) -> CommandResult {
         // Serialize all command execution to prevent concurrent interleaving
@@ -88,6 +393,30 @@ impl AppState {
         } else {
             UndoData::None
         };
+
+        // The command's integrity capabilities, computed once and read by the
+        // epilogue below (snapshot / orphan-closure conversion / reconcile).
+        let integrity = Self::command_integrity(&cmd);
+
+        // Snapshot before a ref-removing/renumbering command so a result that
+        // introduces dangling references can be rejected and rolled back —
+        // corruption must not enter through the command path (#17). Only those
+        // commands can dangle a ref, so geometry-only commands (moves, merges,
+        // datums) skip the expensive whole-project serialize (#8).
+        // Batch owns its own snapshot + integrity guard inside execute_batch
+        // (which must reject corruption BEFORE pushing its undo entry, #1), so it
+        // is excluded here to avoid a redundant whole-project serialize and a
+        // double rollback.
+        let integrity_snapshot =
+            if integrity.can_dangle_refs && !matches!(cmd, Command::Batch { .. }) {
+                self.capture_project_snapshot().ok()
+            } else {
+                None
+            };
+        // If the project is ALREADY corrupt (loaded that way), don't block — the
+        // user repairs via the banner. We only reject commands that newly
+        // introduce corruption into a clean project.
+        let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
 
         let result = match &cmd {
             Command::CreateProject { name, location } => {
@@ -197,7 +526,44 @@ impl AppState {
                 *archive_originals,
             ),
             Command::ApplyCollabChanges => self.apply_collab_changes(),
+            // Never routed here: repair is applied via `repair_project_integrity`,
+            // which records its own snapshot-pair undo entry. Present only for match
+            // exhaustiveness.
+            Command::RepairIntegrity => CommandResult::failure(
+                "RepairIntegrity is applied via repair_project_integrity, not execute()"
+                    .to_string(),
+            ),
         };
+
+        // Block corruption at the source: if a structural command left the
+        // project with dangling references, roll back to the pre-command
+        // snapshot and reject it rather than committing (and later persisting)
+        // a corrupt state (#17).
+        if result.success && !pre_had_critical {
+            if let Some(snapshot) = &integrity_snapshot {
+                if let Some(failure) =
+                    self.guard_introduced_corruption(pre_had_critical, snapshot, &cmd.description())
+                {
+                    return failure;
+                }
+            }
+        }
+
+        // A command that REMOVES connectivity (delete shot/section, unmerge) can
+        // strand a section so its only attachment is a loop closure — which is
+        // then a merge, not a loop. Convert before reconciling offsets so the new
+        // merge is solved immediately (#8). Scoped to removal commands so a move
+        // still leaves an inert closure independent.
+        if result.success && integrity.can_orphan_closures {
+            self.convert_orphan_closures_in_open_project();
+        }
+
+        // Treat section offsets as derived: after any structural command,
+        // reconcile geometry so no command path can leave merged stations
+        // drifted (a no-op when nothing moved; skipped during bulk import).
+        if result.success && integrity.affects_geometry {
+            self.reconcile_geometry();
+        }
 
         // Push to undo stack if successful and undoable.
         // Batch commands handle their own undo push inside execute_batch()
@@ -353,6 +719,7 @@ impl AppState {
         );
 
         // Take a project snapshot BEFORE any modifications
+        let pre_had_critical = self.project_has_critical();
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
             Err(result) => return result,
@@ -415,33 +782,43 @@ impl AppState {
                     // Zero datums
                     for zd in &project.zero_datums {
                         if zd.station_ref.section_id == sid {
-                            anchor_indices.push(zd.station_ref.station_index);
+                            if let Some(sr) = project.resolve_key(&zd.station_ref) {
+                                anchor_indices.push(sr.station_index);
+                            }
                         }
                     }
                     // Station merges (only datum-backed partners)
                     for m in &project.station_merges {
-                        if m.station_a.section_id == sid {
-                            if project.has_datum_path_excluding(m.station_b.section_id, sid) {
-                                anchor_indices.push(m.station_a.station_index);
+                        if m.station_a.section_id == sid
+                            && project.has_datum_path_excluding(m.station_b.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&m.station_a) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
-                        if m.station_b.section_id == sid {
-                            if project.has_datum_path_excluding(m.station_a.section_id, sid) {
-                                anchor_indices.push(m.station_b.station_index);
+                        if m.station_b.section_id == sid
+                            && project.has_datum_path_excluding(m.station_a.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&m.station_b) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
                     }
                     // Aligned closures (only datum-backed partners)
                     for c in &project.loop_closures {
                         if !c.is_aligned { continue; }
-                        if c.station_a.section_id == sid {
-                            if project.has_datum_path_excluding(c.station_b.section_id, sid) {
-                                anchor_indices.push(c.station_a.station_index);
+                        if c.station_a.section_id == sid
+                            && project.has_datum_path_excluding(c.station_b.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&c.station_a) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
-                        if c.station_b.section_id == sid {
-                            if project.has_datum_path_excluding(c.station_a.section_id, sid) {
-                                anchor_indices.push(c.station_b.station_index);
+                        if c.station_b.section_id == sid
+                            && project.has_datum_path_excluding(c.station_a.section_id, sid)
+                        {
+                            if let Some(sr) = project.resolve_key(&c.station_b) {
+                                anchor_indices.push(sr.station_index);
                             }
                         }
                     }
@@ -478,17 +855,22 @@ impl AppState {
                     HashMap::new();
                 for &sid in &affected_section_ids {
                     if blocked_sections.contains(&sid) { continue; }
-                    if let Some(zd) = project.zero_datums.iter().find(|zd| zd.station_ref.section_id == sid) {
-                        if let Some(coords) = project.compute_station_raw_coords(zd.station_ref) {
+                    let datum_sr = project
+                        .zero_datums
+                        .iter()
+                        .find(|zd| zd.station_ref.section_id == sid)
+                        .and_then(|zd| project.resolve_key(&zd.station_ref));
+                    if let Some(sr) = datum_sr {
+                        if let Some(coords) = project.compute_station_raw_coords(sr) {
                             tracing::debug!(
                                 section_id = sid,
-                                anchor_station = zd.station_ref.station_index,
+                                anchor_station = sr.station_index,
                                 x = coords.x,
                                 y = coords.y,
                                 purpose = "zero datum stability",
                                 "Recorded anchor position before shot updates",
                             );
-                            anchor_positions.insert(sid, (zd.station_ref, coords));
+                            anchor_positions.insert(sid, (sr, coords));
                         }
                     }
                 }
@@ -660,7 +1042,9 @@ impl AppState {
                 if let Some(project) = proj_guard.as_mut() {
                     for (station_index, comment) in &config.station_comments {
                         let station_ref = StationRef::new(section_id, *station_index);
-                        project.station_comments.insert(station_ref, comment.clone());
+                        if let Some(key) = project.key_for_ref(station_ref) {
+                            project.station_comments.insert(key, comment.clone());
+                        }
                     }
                 }
             }
@@ -922,6 +1306,24 @@ impl AppState {
             }
         }
 
+        // Block corruption at the source: convert sole-bridge closures, reconcile
+        // derived offsets, and reject the whole import if it produced critical
+        // corruption (dangling refs / non-finite geometry) rather than committing
+        // and later persisting it. This custom path bypasses execute()'s guard, so
+        // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
+        if self.finalize_structural_edit(pre_had_critical) {
+            self.rollback_project(&before_snapshot);
+            tracing::error!(
+                purpose = "block corruption at the source",
+                "TML import would corrupt survey structure; rolled back, nothing imported"
+            );
+            return CommandResult::failure(
+                "Blocked: the imported data would corrupt the survey structure \
+                 (dangling references or invalid geometry). Nothing was imported."
+                    .to_string(),
+            );
+        }
+
         // Capture after-snapshot for redo support
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
             Ok(s) => s,
@@ -959,6 +1361,15 @@ impl AppState {
             return CommandResult::failure(format!(
                 "Section exceeds maximum shots per section (limit = {max_shots})"
             ));
+        }
+
+        // Reject non-finite geometry before it reaches the coordinate path (NaN/
+        // inf slips past the zero/negative-length checks below). This is the
+        // import/create-and-merge ingest path, alongside create_shot/update_shot.
+        if data.shots.iter().any(|s| !s.all_finite()) {
+            return CommandResult::failure(
+                "Section has a shot with a non-finite (NaN/inf) value".to_string(),
+            );
         }
 
         // Validate shots using the section_id that will be assigned
@@ -1050,6 +1461,12 @@ impl AppState {
             );
         }
 
+        // Reject non-finite geometry before it reaches the coordinate path
+        // (NaN/inf slips past zero/negative-length checks and poisons offsets).
+        if !data.all_finite() {
+            return CommandResult::failure("Shot has a non-finite (NaN/inf) value".to_string());
+        }
+
         let config = self.config.lock().ok();
 
         let Ok(mut proj_guard) = self.project.lock() else {
@@ -1109,9 +1526,9 @@ impl AppState {
         }
 
         let shot = if let Some(before_id) = before_shot_id {
-            project.insert_shot_before(section_id, before_id, data)
+            project.insert_shot_before(section_id, before_id, data, None, None)
         } else if let Some(after_id) = after_shot_id {
-            project.insert_shot_after(section_id, after_id, data)
+            project.insert_shot_after(section_id, after_id, data, None, None)
         } else {
             project.add_shot(section_id, data)
         };
@@ -1149,6 +1566,11 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        // Reject non-finite geometry before it reaches the coordinate path.
+        if !updates.all_finite() {
+            return CommandResult::failure("Shot update has a non-finite (NaN/inf) value".to_string());
+        }
+
         // Validate resulting length (disallow zero/negative)
         if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
             if let Some((shot_index, existing)) = section.shots.iter().enumerate().find(|(_, s)| s.id == shot_id) {
@@ -1175,7 +1597,7 @@ impl AppState {
                     let merge_adj = project.build_merge_adjacency(&section_lookup);
                     let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
                     let datum_stations: std::collections::HashSet<_> =
-                        project.zero_datums.iter().map(|d| d.station_ref).collect();
+                        project.zero_datums.iter().filter_map(|d| project.resolve_key(&d.station_ref)).collect();
                     if project.is_shot_frozen(
                         section_id,
                         shot_index,
@@ -1413,11 +1835,19 @@ impl AppState {
     pub(super) fn unmerge_stations(&self, station_ref: StationRef) -> CommandResult {
         self.with_project_mut(|project| {
             // Find and unmerge all merges involving this station
-            let merges_to_remove: Vec<_> = project
+            let merges_to_remove: Vec<(StationRef, StationRef)> = project
                 .station_merges
                 .iter()
-                .filter(|m| m.station_a == station_ref || m.station_b == station_ref)
-                .map(|m| (m.station_a, m.station_b))
+                .filter(|m| {
+                    project.key_is_ref(&m.station_a, station_ref)
+                        || project.key_is_ref(&m.station_b, station_ref)
+                })
+                .filter_map(|m| {
+                    match (project.resolve_key(&m.station_a), project.resolve_key(&m.station_b)) {
+                        (Some(a), Some(b)) => Some((a, b)),
+                        _ => None,
+                    }
+                })
                 .collect();
 
             for (a, b) in merges_to_remove {
@@ -1527,10 +1957,14 @@ impl AppState {
 
             match comment {
                 Some(text) if !text.is_empty() => {
-                    project.station_comments.insert(station_ref, text);
+                    if let Some(key) = project.key_for_ref(station_ref) {
+                        project.station_comments.insert(key, text);
+                    }
                 }
                 _ => {
-                    project.station_comments.remove(&station_ref);
+                    if let Some(key) = project.key_for_ref(station_ref) {
+                        project.station_comments.remove(&key);
+                    }
                 }
             }
 
@@ -1631,7 +2065,9 @@ impl AppState {
                         station_ref.station_index
                     ));
                 }
-                Ok(project.station_comments.get(station_ref).cloned())
+                Ok(project
+                    .key_for_ref(*station_ref)
+                    .and_then(|key| project.station_comments.get(&key).cloned()))
             }
             CommentHolder::Shot {
                 section_id,
@@ -1658,10 +2094,14 @@ impl AppState {
             CommentHolder::Station { station_ref } => {
                 match comment {
                     Some(text) if !text.is_empty() => {
-                        project.station_comments.insert(*station_ref, text);
+                        if let Some(key) = project.key_for_ref(*station_ref) {
+                            project.station_comments.insert(key, text);
+                        }
                     }
                     _ => {
-                        project.station_comments.remove(station_ref);
+                        if let Some(key) = project.key_for_ref(*station_ref) {
+                            project.station_comments.remove(&key);
+                        }
                     }
                 }
                 Ok(())
@@ -1692,33 +2132,27 @@ impl AppState {
     }
 
     pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
-        self.with_project_mut(|project| {
-            if !project.sections.iter().any(|s| s.id == section_id) {
-                return CommandResult::failure("Section not found".to_string());
-            }
-
-            if project.section_has_direct_datum(section_id)
-                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-            {
-                return CommandResult::failure(
-                    "Cannot move a section that directly holds a zero datum".to_string(),
-                );
-            }
-
-            project.adjust_section_offset(section_id, offset.x, offset.y);
-            project.touch();
-            tracing::debug!(
-                ?section_id,
-                ?offset,
-                purpose = "reposition section for alignment",
-                "Section moved"
-            );
-            CommandResult::success()
-        })
+        // "Adjust Position" on a section moves the WHOLE rigid group it belongs to
+        // (its merge partners and aligned-closure-connected sections), not just this
+        // one section. A merged section is rigidly bound to its partner: moving it
+        // alone would shove its merged station off the partner's, and the
+        // post-command geometry reconcile would then either snap it back (silently
+        // discarding the move when this isn't the group's min-id anchor) or drag the
+        // partner along. Moving the rigid group as one body keeps every merge aligned,
+        // so the move sticks. For a standalone section the rigid group is just itself,
+        // so this is identical to the previous single-section move. Delegating to
+        // `move_segment` also upgrades the datum guard from "this section holds a
+        // datum" to "the group holds a datum" (a partner's datum now blocks too).
+        self.move_segment(section_id, offset)
     }
 
     pub(super) fn move_segment(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
         self.with_project_mut(|project| {
+            if !offset.is_finite() {
+                return CommandResult::failure(
+                    "Move offset must be finite (no NaN/inf)".to_string(),
+                );
+            }
             // Validate section exists
             if !project.sections.iter().any(|s| s.id == section_id) {
                 return CommandResult::failure("Section not found".to_string());
@@ -1761,7 +2195,15 @@ impl AppState {
 
     pub(super) fn move_station(&self, station_ref: StationRef, offset: Coordinates) -> CommandResult {
         self.with_project_mut(|project| {
-            if project.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
+            // Reject a non-finite offset: move_station recomputes and writes raw
+            // shot geometry (length/azimuth/depth) from it, and the only numeric
+            // guard below is `new_len <= 0.0`, which is false for NaN and inf.
+            if !offset.x.is_finite() || !offset.y.is_finite() || !offset.z.is_finite() {
+                return CommandResult::failure(
+                    "Move offset has a non-finite (NaN/inf) value".to_string(),
+                );
+            }
+            if project.zero_datums.iter().any(|zd| project.key_is_ref(&zd.station_ref, station_ref))
                 && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
             {
                 return CommandResult::failure(
@@ -1770,7 +2212,10 @@ impl AppState {
             }
 
             // Incorporate any existing station offset
-            let existing = project.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
+            let existing = project
+                .key_for_ref(station_ref)
+                .and_then(|key| project.station_offsets.get(&key).copied())
+                .unwrap_or((0.0, 0.0, 0.0));
             let total_dx = existing.0 + offset.x;
             let total_dy = existing.1 + offset.y;
             let total_dz = existing.2 + offset.z;
@@ -1801,7 +2246,7 @@ impl AppState {
                 let new_depth_out = shot.depth_out + total_dz;
                 let new_dz = new_depth_out - shot.depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-                if new_len <= 0.0 {
+                if new_len <= 0.0 || !new_len.is_finite() {
                     return CommandResult::failure("Move would create zero-length shot".to_string());
                 }
                 let new_azi = if new_horizontal > 1e-9 {
@@ -1825,7 +2270,7 @@ impl AppState {
                 let new_depth_in = shot.depth_in + total_dz;
                 let new_dz = shot.depth_out - new_depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
-                if new_len <= 0.0 {
+                if new_len <= 0.0 || !new_len.is_finite() {
                     return CommandResult::failure("Move would create zero-length shot".to_string());
                 }
                 let new_azi = if new_horizontal > 1e-9 {
@@ -1874,7 +2319,9 @@ impl AppState {
             }
 
             // Clear station offset (now incorporated into shot data)
-            project.station_offsets.remove(&station_ref);
+            if let Some(key) = project.key_for_ref(station_ref) {
+                project.station_offsets.remove(&key);
+            }
             project.touch();
 
             tracing::info!(
@@ -1921,6 +2368,11 @@ impl AppState {
             }
         }
 
+        // Whether the project was ALREADY corrupt before the batch (loaded that
+        // way) — captured against the pre-batch state so the guard below only
+        // rejects corruption the batch itself introduces.
+        let pre_had_critical = self.project_has_critical();
+
         // Capture pre-batch snapshot for rollback on partial failure and undo
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
@@ -1946,6 +2398,27 @@ impl AppState {
             }
             section_ids.extend(result.section_ids);
         }
+
+        // Block corruption at the source — BEFORE pushing the undo entry. The
+        // sub-commands ran via execute_without_undo (no per-command guard), so a
+        // batch can strand a dangling reference; if we pushed the snapshot pair
+        // first (as before) a later undo+redo would reinstate the corrupt state.
+        // #1
+        if let Some(failure) =
+            self.guard_introduced_corruption(pre_had_critical, &before_snapshot, "Batch")
+        {
+            return failure;
+        }
+
+        // Finalize structural side-effects BEFORE snapshotting for redo, mirroring
+        // the per-command epilogue in execute(). A batch that strands a sole-bridge
+        // closure must have the closure→merge conversion (and the offset reconcile)
+        // baked into the after-snapshot; otherwise undo→redo restores the
+        // pre-conversion topology — redo only reconciles geometry, it does NOT
+        // re-run the conversion — and the merge is silently lost. Both calls are
+        // idempotent, so the outer epilogue in execute() re-running them is a no-op.
+        self.convert_orphan_closures_in_open_project();
+        self.reconcile_geometry();
 
         if push_undo {
             // Capture after-snapshot for redo support; failure means rollback
@@ -2042,6 +2515,20 @@ impl AppState {
             let direction = section.direction;
             let quality = section.quality;
 
+            // Stable-identity remap snapshot: resolve every stored cross-reference
+            // to its CURRENT positional ref BEFORE we mutate the section. The shots
+            // moved into section B get fresh UUIDs, so positional-then-reanchor is
+            // the sound way to carry refs across the split (anchors alone can't
+            // follow a shot whose UUID changes).
+            let split_station = (pos + 1) as u32;
+            let original_station_count = section.shots.len() as u32 + 1;
+            let old_refs: Vec<Option<StationRef>> = {
+                let p: &Project = project;
+                let mut out = Vec::new();
+                p.for_each_station_ref(|_label, key| out.push(p.resolve_key(&key)));
+                out
+            };
+
             // Step 3: Modify original section -> section A
             // Truncate in-place to preserve existing Shot IDs and next_shot_id
             let Some(section_mut) = project.get_section_mut(section_id) else {
@@ -2094,109 +2581,61 @@ impl AppState {
             // Set section B offset
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
 
-            // Step 6: Remap merge/closure/station_offset references
-            // Stations after split point belong to new section with adjusted indices.
-            // Original station indices: 0..pos are section A, pos+1..N are section B (shifted)
-            // The split position is the deleted shot. Stations in section B had indices
-            // pos+1 through N (N = original shot count). In section B, they become
-            // 0 through (N - pos - 1).
-            let split_station = pos + 1; // first station index that belongs to section B
-
-            // Original station count = shots_before + deleted_shot + shots_after + 1
-            let original_station_count = shots_before.len() + 1 + shots_after_len + 1;
-
-            // Remap station merges
-            for merge in &mut project.station_merges {
-                if merge.station_a.section_id == section_id
-                    && (merge.station_a.station_index as usize) >= split_station
-                    && (merge.station_a.station_index as usize) < original_station_count
-                {
-                    merge.station_a.section_id = new_id;
-                    merge.station_a.station_index -= split_station as u32;
-                }
-                if merge.station_b.section_id == section_id
-                    && (merge.station_b.station_index as usize) >= split_station
-                    && (merge.station_b.station_index as usize) < original_station_count
-                {
-                    merge.station_b.section_id = new_id;
-                    merge.station_b.station_index -= split_station as u32;
-                }
-            }
-
-            // Remap loop closures
-            for closure in &mut project.loop_closures {
-                if closure.station_a.section_id == section_id
-                    && (closure.station_a.station_index as usize) >= split_station
-                    && (closure.station_a.station_index as usize) < original_station_count
-                {
-                    closure.station_a.section_id = new_id;
-                    closure.station_a.station_index -= split_station as u32;
-                }
-                if closure.station_b.section_id == section_id
-                    && (closure.station_b.station_index as usize) >= split_station
-                    && (closure.station_b.station_index as usize) < original_station_count
-                {
-                    closure.station_b.section_id = new_id;
-                    closure.station_b.station_index -= split_station as u32;
-                }
-            }
-
-            // Remap station offsets
-            let offsets_to_remap: Vec<(StationRef, (f64, f64, f64))> = project
-                .station_offsets
+            // Step 6: Remap every cross-reference across the split.
+            // Stations whose positional index moved into section B (index in
+            // [split_station, original_station_count)) become section B refs with
+            // index -= split_station; everything else stays put. We re-derive each
+            // ref's stable key from its NEW positional home against the now-final
+            // structure (section B's shots carry fresh UUIDs). `old_refs` was
+            // captured before truncation, in `for_each_station_ref` order; the
+            // `new_keys` Vec is consumed by `map_station_refs` in that same order.
+            let _ = shots_after_len;
+            let new_keys: Vec<Option<StationKey>> = old_refs
                 .iter()
-                .filter(|(sr, _)| {
-                    sr.section_id == section_id
-                        && (sr.station_index as usize) >= split_station
-                        && (sr.station_index as usize) < original_station_count
+                .map(|old_ref| {
+                    let sr = (*old_ref)?;
+                    let new_ref = if sr.section_id == section_id
+                        && sr.station_index >= split_station
+                        && sr.station_index < original_station_count
+                    {
+                        StationRef::new(new_id, sr.station_index - split_station)
+                    } else {
+                        sr
+                    };
+                    project.key_for_ref(new_ref)
                 })
-                .map(|(sr, v)| (*sr, *v))
                 .collect();
+            let mut remap_i = 0usize;
+            project.map_station_refs(|old_key| {
+                let next = new_keys.get(remap_i).cloned().flatten();
+                remap_i += 1;
+                next.unwrap_or(old_key)
+            });
+            // `new_keys` was built 1:1 from `old_refs` (a for_each_station_ref pass)
+            // and is consumed positionally here; the alignment is only valid if
+            // map_station_refs visits the same refs in the same order. Assert it so
+            // a future divergence fails loudly in debug rather than silently
+            // re-anchoring a cross-reference onto the wrong station.
+            debug_assert_eq!(
+                remap_i,
+                new_keys.len(),
+                "split-section remap: map_station_refs visited a different number of \
+                 refs than were captured in old_refs — traversal order diverged"
+            );
 
-            for (old_ref, offset_val) in offsets_to_remap {
-                project.station_offsets.remove(&old_ref);
-                let new_ref = StationRef {
-                    section_id: new_id,
-                    station_index: old_ref.station_index - split_station as u32,
-                };
-                project.station_offsets.insert(new_ref, offset_val);
-            }
-
-            // Remap station comments
-            let comments_to_remap: Vec<(StationRef, String)> = project
-                .station_comments
-                .iter()
-                .filter(|(sr, _)| {
-                    sr.section_id == section_id
-                        && (sr.station_index as usize) >= split_station
-                        && (sr.station_index as usize) < original_station_count
-                })
-                .map(|(sr, v)| (*sr, v.clone()))
-                .collect();
-
-            for (old_ref, comment_val) in comments_to_remap {
-                project.station_comments.remove(&old_ref);
-                let new_ref = StationRef {
-                    section_id: new_id,
-                    station_index: old_ref.station_index - split_station as u32,
-                };
-                project.station_comments.insert(new_ref, comment_val);
-            }
-
-            // Remap zero datums
-            for zd in &mut project.zero_datums {
-                if zd.station_ref.section_id == section_id
-                    && (zd.station_ref.station_index as usize) >= split_station
-                    && (zd.station_ref.station_index as usize) < original_station_count
-                {
-                    zd.station_ref.section_id = new_id;
-                    zd.station_ref.station_index -= split_station as u32;
-                }
-            }
+            // The split can strand a section so its only attachment is a loop
+            // closure — that is a merge, not a loop. Convert it now (issue #8)
+            // so it's fixed immediately, not only on the next reload.
+            project.convert_orphan_closures_to_merges();
 
             project.touch();
             new_id
         };
+
+        // This custom path bypasses execute()'s reconcile; re-derive offsets here
+        // (after the orphan-closure conversion above) and before the after-snapshot
+        // so undo/redo and the saved file reflect the normalized topology.
+        self.reconcile_geometry();
 
         // Step 7: Take AFTER snapshot
         let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
@@ -2315,18 +2754,10 @@ impl AppState {
             project.remove_section_offset(section_id);
 
             // Remove station offsets referencing this section
-            let station_offset_keys: Vec<StationRef> = project
-                .station_offsets
-                .keys()
-                .filter(|sr| sr.section_id == section_id)
-                .copied()
-                .collect();
-            for key in station_offset_keys {
-                project.station_offsets.remove(&key);
-            }
+            project.station_offsets.retain(|key, _| key.section_id != section_id);
 
             // Remove station comments referencing this section
-            project.station_comments.retain(|sr, _| sr.section_id != section_id);
+            project.station_comments.retain(|key, _| key.section_id != section_id);
 
             // Remove zero datums referencing this section
             project.zero_datums.retain(|zd| zd.station_ref.section_id != section_id);
@@ -2340,14 +2771,7 @@ impl AppState {
                     purpose = "remove single-shot section",
                     "remove_section returned None after validation; rolling back"
                 );
-                match serde_json::from_str::<Project>(&before_snapshot) {
-                    Ok(restored) => *proj_guard = Some(restored),
-                    Err(e) => tracing::error!(
-                        purpose = "remove single-shot section",
-                        reason = %e,
-                        "Failed to rollback from before_snapshot"
-                    ),
-                }
+                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(format!("Section {section_id} not found during removal"));
             }
 
@@ -2368,19 +2792,11 @@ impl AppState {
                         reason = %e,
                         "Failed to serialize after snapshot; rolling back"
                     );
-                    match serde_json::from_str::<Project>(&before_snapshot) {
-                        Ok(restored) => {
-                            *proj_guard = Some(restored);
-                            tracing::info!(
-                                purpose = "restore after snapshot failure",
-                                "Successfully rolled back after snapshot failure"
-                            );
-                        }
-                        Err(re) => tracing::error!(
+                    if Self::restore_snapshot_into(&mut proj_guard, &before_snapshot) {
+                        tracing::info!(
                             purpose = "restore after snapshot failure",
-                            reason = %re,
-                            "Failed to rollback from before_snapshot"
-                        ),
+                            "Successfully rolled back after snapshot failure"
+                        );
                     }
                     return CommandResult::failure(format!("Failed to serialize after snapshot: {e}"));
                 }
@@ -2390,14 +2806,7 @@ impl AppState {
                     purpose = "restore after mutation failure",
                     "Project became None after mutation; rolling back"
                 );
-                match serde_json::from_str::<Project>(&before_snapshot) {
-                    Ok(restored) => *proj_guard = Some(restored),
-                    Err(e) => tracing::error!(
-                        purpose = "restore after mutation failure",
-                        reason = %e,
-                        "Failed to rollback from before_snapshot"
-                    ),
-                }
+                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure("No project after mutation".to_string());
             }
         };
@@ -2660,5 +3069,88 @@ impl AppState {
             result.sort_unstable();
             Ok(result)
         })
+    }
+}
+
+#[cfg(test)]
+mod integrity_capability_tests {
+    use super::*;
+    use crate::models::{Coordinates, ShotData, StationRef};
+
+    /// Locks the integrity-capability table (one command per profile). The
+    /// exhaustive match in `command_integrity` makes a new variant a *compile*
+    /// error; this guards against an existing variant being moved to the wrong
+    /// profile — especially the REMOVES group, where dropping `can_dangle_refs`
+    /// would skip the rollback snapshot and let corruption be committed.
+    #[test]
+    fn command_integrity_profiles_are_stable() {
+        let caps = |cmd: &Command| {
+            let i = AppState::command_integrity(cmd);
+            (i.affects_geometry, i.can_dangle_refs, i.can_orphan_closures)
+        };
+
+        // INERT (no geometry, no refs).
+        assert_eq!(caps(&Command::CloseProject), (false, false, false));
+        assert_eq!(
+            caps(&Command::SaveProject { path: None, is_autosave: false }),
+            (false, false, false)
+        );
+        // RepairIntegrity never runs through execute(); it is classified INERT.
+        assert_eq!(caps(&Command::RepairIntegrity), (false, false, false));
+        // Comment edits are metadata-only — INERT, so a comment edit can't run the
+        // reconcile epilogue (which would heal a drifted project with no undo).
+        assert_eq!(
+            caps(&Command::SetStationComment { station_ref: StationRef::new(1, 0), comment: None }),
+            (false, false, false)
+        );
+        assert_eq!(
+            caps(&Command::MoveComment {
+                source: CommentHolder::Station { station_ref: StationRef::new(1, 0) },
+                target: CommentHolder::Station { station_ref: StationRef::new(1, 1) },
+                swap: false,
+            }),
+            (false, false, false)
+        );
+
+        // REMOVES (can dangle refs AND orphan a closure → needs rollback snapshot
+        // + reconcile + orphan-closure conversion).
+        assert_eq!(caps(&Command::DeleteSection { section_id: 1 }), (true, true, true));
+        assert_eq!(caps(&Command::Batch { commands: vec![] }), (true, true, true));
+
+        // CREATE_SHOT (renumbers stations → can dangle, but cannot orphan).
+        assert_eq!(
+            caps(&Command::CreateShot {
+                section_id: 1,
+                shot: ShotData::default(),
+                after_shot_id: None,
+                before_shot_id: None,
+            }),
+            (true, true, false)
+        );
+
+        // UNMERGE (removes connectivity → can orphan, but adds no dangling ref).
+        assert_eq!(
+            caps(&Command::UnmergeStations { station_ref: StationRef::new(1, 0) }),
+            (true, false, true)
+        );
+
+        // GEOMETRY_ONLY (shifts offsets only).
+        assert_eq!(
+            caps(&Command::MoveSection {
+                section_id: 1,
+                offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+            (true, false, false)
+        );
+        // UpdateShot shifts geometry (a measurement edit moves stations) but keeps
+        // refs valid and connectivity intact — it must reconcile, not be inert.
+        assert_eq!(
+            caps(&Command::UpdateShot {
+                section_id: 1,
+                shot_id: 0,
+                updates: ShotUpdates::default(),
+            }),
+            (true, false, false)
+        );
     }
 }

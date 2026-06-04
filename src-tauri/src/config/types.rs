@@ -1440,6 +1440,13 @@ impl Config {
 
     /// Get the config file path
     pub fn config_path() -> Result<PathBuf> {
+        // Tests redirect the config path to a temp dir (see
+        // `crate::test_helpers::isolated_config`) so they never read or pollute
+        // the developer's real `~/.config/stalagmight/config.toml`.
+        #[cfg(test)]
+        if let Some(dir) = crate::test_helpers::config_path_override() {
+            return Ok(dir.join("config.toml"));
+        }
         if let Some(dir) = crate::app_dirs::config_dir() {
             return Ok(dir.join("config.toml"));
         }

@@ -10,7 +10,7 @@ use std::path::Path;
 
 use crate::models::{
     ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot,
-    StationMerge, StationRef, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
+    StationKey, StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 
@@ -1305,15 +1305,32 @@ impl Database {
             }
         }
 
-        // Save station merges
+        // Save station merges. Cross-references are stored as stable
+        // `StationKey` anchors in memory but persisted positionally (resolved
+        // against the current shots) — the on-disk format stays positional, like
+        // the binary IPC wire; load reconstructs anchors and re-anchors them.
+        // A dangling endpoint is SKIPPED, never collapsed to (section, 0): the
+        // app-layer save gate already blocks this, but the persistence layer must
+        // not crash (PK collision) or write a phantom for any path that reaches
+        // it directly (collab sibling write, salvage).
         for merge in &project.station_merges {
+            let (Some(a), Some(b)) = (
+                project.resolve_key(&merge.station_a),
+                project.resolve_key(&merge.station_b),
+            ) else {
+                tracing::warn!(
+                    purpose = "skip dangling merge on save",
+                    "Dropping a station merge whose endpoint no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO station_merges (station_a_section, station_a_index, station_b_section, station_b_index, merged_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
-                    merge.station_a.section_id,
-                    merge.station_a.station_index,
-                    merge.station_b.section_id,
-                    merge.station_b.station_index,
+                    a.section_id,
+                    a.station_index,
+                    b.section_id,
+                    b.station_index,
                     merge.merged_at.to_rfc3339()
                 ],
             )?;
@@ -1321,11 +1338,18 @@ impl Database {
 
         // Save zero datums
         for zd in &project.zero_datums {
+            let Some(sr) = project.resolve_key(&zd.station_ref) else {
+                tracing::warn!(
+                    purpose = "skip dangling zero datum on save",
+                    "Dropping a zero datum whose station no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
-                    zd.station_ref.section_id,
-                    zd.station_ref.station_index,
+                    sr.section_id,
+                    sr.station_index,
                     zd.gps.latitude,
                     zd.gps.longitude,
                     zd.gps.depth_reference
@@ -1342,18 +1366,32 @@ impl Database {
         }
 
         // Save station offsets
-        for (station_ref, (offset_x, offset_y, offset_z)) in &project.station_offsets {
+        for (key, (offset_x, offset_y, offset_z)) in &project.station_offsets {
+            let Some(sr) = project.resolve_key(key) else {
+                tracing::warn!(
+                    purpose = "skip orphan station offset on save",
+                    "Dropping a station offset whose station no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![station_ref.section_id, station_ref.station_index, offset_x, offset_y, offset_z],
+                params![sr.section_id, sr.station_index, offset_x, offset_y, offset_z],
             )?;
         }
 
         // Save station comments
-        for (station_ref, comment) in &project.station_comments {
+        for (key, comment) in &project.station_comments {
+            let Some(sr) = project.resolve_key(key) else {
+                tracing::warn!(
+                    purpose = "skip orphan station comment on save",
+                    "Dropping a station comment whose station no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
-                params![station_ref.section_id, station_ref.station_index, comment],
+                params![sr.section_id, sr.station_index, comment],
             )?;
         }
 
@@ -1419,13 +1457,23 @@ impl Database {
         for lc in &project.loop_closures {
             let closure_id_i64 = i64::try_from(lc.id)
                 .map_err(|_| anyhow::anyhow!("Closure ID {} exceeds i64 range", lc.id))?;
+            let (Some(a), Some(b)) = (
+                project.resolve_key(&lc.station_a),
+                project.resolve_key(&lc.station_b),
+            ) else {
+                tracing::warn!(
+                    purpose = "skip dangling loop closure on save",
+                    "Dropping a loop closure whose endpoint no longer resolves"
+                );
+                continue;
+            };
             tx.execute(
                 "INSERT INTO loop_closures (station_a_section, station_a_index, station_b_section, station_b_index, path_length, misclosure_distance, error_percentage, horizontal_misclosure, vertical_misclosure, closure_id, strategy, is_aligned) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
-                    lc.station_a.section_id,
-                    lc.station_a.station_index,
-                    lc.station_b.section_id,
-                    lc.station_b.station_index,
+                    a.section_id,
+                    a.station_index,
+                    b.section_id,
+                    b.station_index,
                     lc.path_length,
                     lc.misclosure_distance,
                     lc.error_percentage,
@@ -1799,14 +1847,32 @@ impl Database {
                     ))
                 })?;
 
+                let mut sanitized_shots = 0usize;
                 for row in shot_rows {
-                    let (section_id, shot) = row?;
+                    let (section_id, mut shot) = row?;
+                    // Neutralize geometry corrupt-on-disk at the load boundary: a
+                    // single non-finite (NaN/inf) value would otherwise propagate
+                    // through the offset cascade and break the whole survey. The
+                    // degenerate-but-finite result is localized and visible. (Our own
+                    // save can't write NaN — SQLite coerces it to NULL, which the
+                    // NOT NULL columns reject — so this guards inf, hand-edited DBs,
+                    // and any future nullable geometry column.)
+                    if shot.sanitize_non_finite() {
+                        sanitized_shots += 1;
+                    }
                     if let Some(&idx) = section_by_id.get(&section_id) {
                         sections[idx].shots.push(shot);
                     }
                     // (rows for unknown sections are silently dropped —
                     // matches the legacy `WHERE section_id = ?` filter
                     // which never returned orphan rows in the first place.)
+                }
+                if sanitized_shots > 0 {
+                    tracing::warn!(
+                        sanitized_shots,
+                        purpose = "block corruption at the source",
+                        "Replaced non-finite (NaN/inf) shot geometry with finite defaults on load"
+                    );
                 }
 
                 // Advance each section's next_shot_id past its loaded
@@ -1838,9 +1904,12 @@ impl Database {
                 let (a_sec, a_idx, b_sec, b_idx, merged_at_str) = merge_row?;
                 let merged_at =
                     chrono::DateTime::parse_from_rfc3339(&merged_at_str)?.with_timezone(&Utc);
+                // Persisted positionally; load as transitional Index anchors,
+                // which `reanchor_station_refs` (run on the load path) canonicalizes
+                // to stable shot-UUID anchors once shots are present.
                 station_merges.push(StationMerge {
-                    station_a: StationRef::new(a_sec, a_idx),
-                    station_b: StationRef::new(b_sec, b_idx),
+                    station_a: StationKey::positional(a_sec, a_idx),
+                    station_b: StationKey::positional(b_sec, b_idx),
                     merged_at,
                 });
             }
@@ -1865,7 +1934,7 @@ impl Database {
             for zd_row in zd_rows {
                 let (section_id, station_index, lat, lon, depth) = zd_row?;
                 zero_datums.push(ZeroDatum {
-                    station_ref: StationRef::new(section_id, station_index),
+                    station_ref: StationKey::positional(section_id, station_index),
                     gps: GpsCoordinates {
                         latitude: lat,
                         longitude: lon,
@@ -1889,9 +1958,33 @@ impl Database {
                 ))
             })?;
 
+            let mut sanitized_offsets = 0usize;
             for offset_row in offset_rows {
-                let (section_id, offset_x, offset_y) = offset_row?;
+                let (section_id, mut offset_x, mut offset_y) = offset_row?;
+                // Sanitize non-finite (NaN/inf) section offsets at the load boundary,
+                // mirroring the per-shot sanitize above. section_offsets is the one
+                // geometry field with no finite guard, and resolve_offsets never
+                // adjusts a component ANCHOR's own offset, so a non-finite anchor/
+                // floating offset from a corrupt or hand-edited DB would survive the
+                // load and poison every world coordinate for that component. Coerce
+                // to 0.0 so the subsequent re-solve can re-derive a finite position.
+                if !offset_x.is_finite() || !offset_y.is_finite() {
+                    if !offset_x.is_finite() {
+                        offset_x = 0.0;
+                    }
+                    if !offset_y.is_finite() {
+                        offset_y = 0.0;
+                    }
+                    sanitized_offsets += 1;
+                }
                 section_offsets.insert(section_id, (offset_x, offset_y));
+            }
+            if sanitized_offsets > 0 {
+                tracing::warn!(
+                    sanitized_offsets,
+                    purpose = "block corruption at the source",
+                    "Replaced non-finite (NaN/inf) section offset with 0.0 on load"
+                );
             }
         }
 
@@ -2246,8 +2339,8 @@ impl Database {
             };
             Ok(LoopClosure {
                 id,
-                station_a: StationRef::new(row.get(0)?, row.get(1)?),
-                station_b: StationRef::new(row.get(2)?, row.get(3)?),
+                station_a: StationKey::positional(row.get(0)?, row.get(1)?),
+                station_b: StationKey::positional(row.get(2)?, row.get(3)?),
                 path_length: row.get(4)?,
                 misclosure_distance: row.get(5)?,
                 error_percentage: row.get(6)?,
@@ -2266,7 +2359,7 @@ impl Database {
     }
 
     /// Load station offsets from database
-    fn load_station_offsets(&self) -> Result<HashMap<StationRef, (f64, f64, f64)>> {
+    fn load_station_offsets(&self) -> Result<HashMap<StationKey, (f64, f64, f64)>> {
         let mut offsets = HashMap::new();
 
         // Check if table exists (for backwards compatibility with older files)
@@ -2297,7 +2390,7 @@ impl Database {
         for row in rows {
             let (section_id, station_index, offset_x, offset_y, offset_z) = row?;
             offsets.insert(
-                StationRef::new(section_id, station_index),
+                StationKey::positional(section_id, station_index),
                 (offset_x, offset_y, offset_z),
             );
         }
@@ -2305,7 +2398,7 @@ impl Database {
         Ok(offsets)
     }
 
-    fn load_station_comments(&self) -> Result<HashMap<StationRef, String>> {
+    fn load_station_comments(&self) -> Result<HashMap<StationKey, String>> {
         let mut comments = HashMap::new();
 
         // Check if table exists (for backwards compatibility with older files)
@@ -2334,7 +2427,7 @@ impl Database {
         for row in rows {
             let (section_id, station_index, comment) = row?;
             comments.insert(
-                StationRef::new(section_id, station_index),
+                StationKey::positional(section_id, station_index),
                 comment,
             );
         }

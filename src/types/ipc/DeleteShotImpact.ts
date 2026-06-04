@@ -4,4 +4,4 @@ import type { ClosureUpdate } from "./ClosureUpdate";
 import type { StationPair } from "./StationPair";
 import type { StationRef } from "./StationRef";
 
-export interface DeleteShotImpact { removed_station: StationRef, removed_merges: Array<StationPair>, removed_closures: Array<ClosurePair>, replacement_merges: Array<StationPair>, replacement_closure_updates: Array<ClosureUpdate>, merge_rewire_skipped: boolean, closure_rewire_skipped: boolean, shift_blocked: boolean, shift_blocked_reasons: Array<string>, }
+export interface DeleteShotImpact { removed_station: StationRef, removed_merges: Array<StationPair>, removed_closures: Array<ClosurePair>, replacement_merges: Array<StationPair>, replacement_closure_updates: Array<ClosureUpdate>, closure_to_merge: Array<StationPair>, merge_rewire_skipped: boolean, closure_rewire_skipped: boolean, shift_blocked: boolean, shift_blocked_reasons: Array<string>, }

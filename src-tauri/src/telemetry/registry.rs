@@ -360,6 +360,9 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.save-permission",
     "dialog-cancel.save-permission",
     "dwell.dialog.save-permission",
+    // Structural-integrity IPC commands (check + repair).
+    "command.check_project_integrity",
+    "command.repair_project_integrity",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -482,7 +485,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 311);
+        assert_eq!(EVENT_NAMES.len(), 313);
     }
 
     #[test]

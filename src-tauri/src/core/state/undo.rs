@@ -1,6 +1,6 @@
 use crate::core::{Command, CommandResult, UndoData};
 use crate::models::{
-    ClosureStrategy, Coordinates, LoopClosure, Project, Section, SectionData, SectionId,
+    ClosureStrategy, Section, SectionData, SectionId,
     SectionUpdates, Shot, ShotData, ShotId, ShotUpdates,
 };
 
@@ -157,55 +157,57 @@ impl AppState {
                 is_reference: !*is_reference,
             }),
 
-            // For merge, store the info to unmerge + section offsets to restore positions
+            // Merge can shift sections BEYOND the two merge groups: after aligning
+            // the groups, cascade_connection_offsets re-anchors any section reachable
+            // through an ALIGNED loop closure (cascade phase 2), and such a section is
+            // in neither merge group. A lightweight MergeInfo only restores the two
+            // groups' offsets, so that external section stays drifted on undo — and
+            // realign_merges() cannot self-heal it (it checks merge alignment only,
+            // never closures). So capture a full before/after pair (like
+            // Delete/Unmerge); undo then restores EVERY section_offset the cascade
+            // could have touched.
             Command::MergeStations {
                 station_a,
                 station_b,
             } => {
-                // Capture section offsets for both merge groups before the merge moves them
-                let mut previous_offsets = std::collections::HashMap::new();
-                let sections_a = project.get_merged_section_ids(station_a.section_id);
-                let sections_b = project.get_merged_section_ids(station_b.section_id);
-                for section_id in sections_a.into_iter().chain(sections_b.into_iter()) {
-                    previous_offsets
-                        .insert(section_id, project.section_offsets.get(&section_id).copied());
-                }
-
-                UndoData::MergeInfo {
-                    station_a: *station_a,
-                    station_b: *station_b,
-                    removed_closures: Vec::new(),
-                    previous_offsets,
+                if project.get_section(station_a.section_id).is_some()
+                    && project.get_section(station_b.section_id).is_some()
+                {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
                 }
             }
 
             // For unmerge, we need to know which stations to re-merge
             // Also capture closures that will be removed during unmerge
+            // Unmerge removes a merge edge, which can strand a section so its sole
+            // remaining bridge is a loop closure — execute() then converts that
+            // closure into a merge and re-derives offsets (#8). A lightweight
+            // UnmergeInfo can only re-create the removed merge; it cannot reverse
+            // that conversion (the closure would stay a merge, forming a cycle) or
+            // restore the pre-unmerge offsets. So capture a full before/after pair
+            // (matching DeleteShot/DeleteSection, which trigger the same side
+            // effect) — undo then restores the merge AND the converted closure AND
+            // the original positions atomically.
             Command::UnmergeStations { station_ref } => {
-                // Find all merges involving this station
-                let merges: Vec<_> = project
-                    .station_merges
-                    .iter()
-                    .filter(|m| m.station_a == *station_ref || m.station_b == *station_ref)
-                    .map(|m| (m.station_a, m.station_b))
-                    .collect();
-
-                if let Some((a, b)) = merges.first() {
-                    // Capture closures that will be removed during unmerge
-                    let closures_to_remove: Vec<LoopClosure> = project
-                        .loop_closures
-                        .iter()
-                        .filter(|lc| {
-                            (lc.station_a == *a && lc.station_b == *b)
-                                || (lc.station_a == *b && lc.station_b == *a)
-                        })
-                        .cloned()
-                        .collect();
-
-                    UndoData::UnmergeInfo {
-                        station_a: *a,
-                        station_b: *b,
-                        removed_closures: closures_to_remove,
+                let involved = project.station_merges.iter().any(|m| {
+                    project.key_is_ref(&m.station_a, *station_ref)
+                        || project.key_is_ref(&m.station_b, *station_ref)
+                });
+                if involved {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
                     }
                 } else {
                     UndoData::None
@@ -216,20 +218,22 @@ impl AppState {
                 station_a,
                 station_b,
             } => {
-                let closures_to_remove: Vec<LoopClosure> = project
-                    .loop_closures
-                    .iter()
-                    .filter(|lc| {
-                        (lc.station_a == *station_a && lc.station_b == *station_b)
-                            || (lc.station_a == *station_b && lc.station_b == *station_a)
-                    })
-                    .cloned()
-                    .collect();
-
-                UndoData::UnmergeInfo {
-                    station_a: *station_a,
-                    station_b: *station_b,
-                    removed_closures: closures_to_remove,
+                let merged = project.station_merges.iter().any(|m| {
+                    (project.key_is_ref(&m.station_a, *station_a)
+                        && project.key_is_ref(&m.station_b, *station_b))
+                        || (project.key_is_ref(&m.station_a, *station_b)
+                            && project.key_is_ref(&m.station_b, *station_a))
+                });
+                if merged {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
                 }
             }
 
@@ -267,7 +271,7 @@ impl AppState {
                 let previous_gps = project
                     .zero_datums
                     .iter()
-                    .find(|zd| zd.station_ref == *station_ref)
+                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
                     .map(|zd| zd.gps);
 
                 // Capture section offsets for all connected sections
@@ -287,7 +291,7 @@ impl AppState {
                 let previous_gps = project
                     .zero_datums
                     .iter()
-                    .find(|zd| zd.station_ref == *station_ref)
+                    .find(|zd| project.key_is_ref(&zd.station_ref, *station_ref))
                     .map(|zd| zd.gps);
 
                 // Capture section offsets for all connected sections
@@ -307,7 +311,9 @@ impl AppState {
                 station_ref,
                 comment: _,
             } => {
-                let previous_comment = project.station_comments.get(station_ref).cloned();
+                let previous_comment = project
+                    .key_for_ref(*station_ref)
+                    .and_then(|key| project.station_comments.get(&key).cloned());
                 UndoData::InverseCommand(Command::SetStationComment {
                     station_ref: *station_ref,
                     comment: previous_comment,
@@ -315,19 +321,14 @@ impl AppState {
             }
 
             // Move commands use inverse commands
-            Command::MoveSection { section_id, offset } => {
-                // Inverse is moving back by negative offset
-                UndoData::InverseCommand(Command::MoveSection {
-                    section_id: *section_id,
-                    offset: Coordinates::new(-offset.x, -offset.y, -offset.z),
-                })
-            }
-
-            Command::MoveSegment { section_id, offset } => {
-                // Capture affected sections and their previous offsets at execution time
-                // so that undo/redo is correct even if the connectivity graph changes later.
-                // Filter to existing sections to avoid stale merges/closures referencing
-                // deleted sections (matches move_segment() filtering).
+            // MoveSection and MoveSegment both move the whole rigid-connected group
+            // (MoveSection delegates to move_segment), so both capture every affected
+            // section and its previous offset at execution time — undo/redo stays
+            // correct even if the connectivity graph changes later. Filter to existing
+            // sections to avoid stale merges/closures referencing deleted sections
+            // (matches move_segment()'s own filtering).
+            Command::MoveSection { section_id, offset }
+            | Command::MoveSegment { section_id, offset } => {
                 let existing: std::collections::HashSet<SectionId> =
                     project.sections.iter().map(|s| s.id).collect();
                 let connected: Vec<SectionId> = project
@@ -346,32 +347,26 @@ impl AppState {
                 }
             }
 
+            // MoveStation rewrites the raw geometry of the two adjacent shots and can,
+            // through reconcile, re-anchor sections connected by merges/aligned closures.
+            // A lightweight StationMoveInfo captured only azimuth/length/depth of two
+            // shots and one section offset — it dropped pitch/lrud/temperature and any
+            // re-cascaded section. Capture a full before/after pair (like Merge/Unmerge)
+            // so undo restores every field and every offset the move could have touched.
             Command::MoveStation {
                 station_ref,
                 offset: _,
             } => {
-                // Capture adjacent shot data and station offset before execution
-                let section = project.sections.iter().find(|s| s.id == station_ref.section_id);
-                match section {
-                    Some(section) => {
-                        let idx = station_ref.station_index as usize;
-                        let prev_shot_before = if idx > 0 {
-                            section.shots.get(idx - 1).map(|s| (s.id, s.to_shot_data()))
-                        } else {
-                            None
-                        };
-                        let prev_shot_after = section.shots.get(idx).map(|s| (s.id, s.to_shot_data()));
-                        let prev_offset = project.station_offsets.get(station_ref).copied();
-                        let prev_section_offset = project.section_offsets.get(&station_ref.section_id).copied();
-                        UndoData::StationMoveInfo {
-                            station_ref: *station_ref,
-                            prev_shot_before,
-                            prev_shot_after,
-                            prev_offset,
-                            prev_section_offset,
-                        }
+                if project.get_section(station_ref.section_id).is_some() {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
                     }
-                    None => UndoData::None,
+                } else {
+                    UndoData::None
                 }
             }
 
@@ -415,6 +410,7 @@ impl AppState {
 
             Command::CreateShot {
                 section_id,
+                after_shot_id,
                 before_shot_id,
                 ..
             } => {
@@ -455,6 +451,9 @@ impl AppState {
                             shot_data: shot.to_shot_data(),
                             position,
                             station_shift_from,
+                            after_shot_id: *after_shot_id,
+                            before_shot_id: *before_shot_id,
+                            uuid: shot.uuid.clone(),
                         }
                     } else {
                         undo_data
@@ -484,8 +483,10 @@ impl AppState {
                 } else {
                     // Capture the newly created closure from the project's loop_closures
                     if let Some(closure) = project.loop_closures.iter().find(|lc| {
-                        (lc.station_a == *station_a && lc.station_b == *station_b)
-                            || (lc.station_a == *station_b && lc.station_b == *station_a)
+                        (project.key_is_ref(&lc.station_a, *station_a)
+                            && project.key_is_ref(&lc.station_b, *station_b))
+                            || (project.key_is_ref(&lc.station_a, *station_b)
+                                && project.key_is_ref(&lc.station_b, *station_a))
                     }) {
                         UndoData::ClosureInfo {
                             closure: closure.clone(),
@@ -496,9 +497,16 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/AdjustLoopClosures: fill in the "after" snapshot now that removal/adjustment is done
+            // DeleteSection/DeleteShot/Merge/Unmerge/MoveStation/AdjustLoopClosures:
+            // fill in the "after" snapshot now that the mutation (and any cascade
+            // re-anchoring, orphan-closure conversion, and offset reconcile triggered
+            // in execute()) is done.
             Command::DeleteSection { .. }
             | Command::DeleteShot { .. }
+            | Command::MergeStations { .. }
+            | Command::UnmergeStations { .. }
+            | Command::UnmergeStationPair { .. }
+            | Command::MoveStation { .. }
             | Command::AdjustLoopClosures { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match serde_json::to_string(project) {
@@ -533,6 +541,9 @@ impl AppState {
                 | Command::MergeProjects { .. }
                 // Pushes its own snapshot-pair undo inside apply_collab_changes.
                 | Command::ApplyCollabChanges
+                // Records its own snapshot-pair undo inside repair_open_project_integrity;
+                // never routed through execute() anyway.
+                | Command::RepairIntegrity
         )
     }
 
@@ -544,7 +555,53 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        self.undo_inner()
+        let result = self.undo_inner();
+        if result.success {
+            // Reconcile derived offsets after the restore. For snapshot-restore
+            // undos (Merge/Move/Delete/Repair) the restored `before` is already a
+            // valid aligned state, so realign_merges early-returns (no-op) — EXCEPT
+            // undo-of-Repair, whose `before` carries the >=tolerance drift Repair
+            // healed. There, reconcile re-derives those offsets: the undo reverts the
+            // STRUCTURAL repair (dropped dangling refs / converted closures come back)
+            // while keeping geometry valid, rather than re-introducing broken derived
+            // offsets the user can't act on. Offsets are derived state (re-solved on
+            // every load), so this is the intended contract, not a loss. (A
+            // sub-tolerance offset change is below realign_merges' threshold, so the
+            // `before` snapshot's offsets are preserved exactly there.)
+            self.reconcile_geometry();
+        }
+        result
+    }
+
+    /// Re-derive section offsets so merged stations stay colocated, healing any
+    /// drift a just-completed operation left behind.
+    ///
+    /// Section offsets are treated as *derived* state: rather than trust every
+    /// forward / undo / redo path to maintain them perfectly by hand (the source
+    /// of the redo-desync and cascade-propagation bugs), the command layer
+    /// reconciles them once after each user action. It is a no-op when nothing
+    /// drifted (the common case — an `O(shots + merges)` check thanks to the
+    /// coordinate precompute) and is skipped during the bulk-import loop
+    /// (`cascade_deferred`), so it doesn't reintroduce the per-mutation cost.
+    pub(super) fn reconcile_geometry(&self) {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return;
+        };
+        if project.cascade_deferred {
+            return;
+        }
+        let fixed = project.realign_merges();
+        if fixed > 0 {
+            tracing::warn!(
+                fixed,
+                purpose = "self-heal derived geometry",
+                "Re-aligned drifted station merges after an operation"
+            );
+        }
     }
 
     /// Undo implementation (caller must hold command_lock)
@@ -614,9 +671,13 @@ impl AppState {
                 shot_id,
                 shot_data,
                 position,
+                uuid,
             } => {
                 // Restore deleted shot at its original position with original ID
-                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position)
+                // and original UUID. (Live DeleteShot now captures a full
+                // ProjectSnapshotPair; this path serves legacy persisted entries,
+                // where `uuid` is None and a fresh one is minted.)
+                self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position, uuid.clone())
             }
 
             UndoData::CreatedShotSnapshot {
@@ -677,11 +738,15 @@ impl AppState {
                     match self.project.lock() {
                         Ok(mut proj_guard) => match proj_guard.as_mut() {
                             Some(project) => {
-                                project.station_merges.push(crate::models::StationMerge {
-                                    station_a: *station_a,
-                                    station_b: *station_b,
-                                    merged_at: chrono::Utc::now(),
-                                });
+                                if let (Some(key_a), Some(key_b)) =
+                                    (project.key_for_ref(*station_a), project.key_for_ref(*station_b))
+                                {
+                                    project.station_merges.push(crate::models::StationMerge {
+                                        station_a: key_a,
+                                        station_b: key_b,
+                                        merged_at: chrono::Utc::now(),
+                                    });
+                                }
                                 // Direct push bypassed Project::record_station_merge,
                                 // so the adjacency cache is stale. Drop it; the next
                                 // BFS will fall back to the linear scan until rebuilt.
@@ -759,24 +824,27 @@ impl AppState {
                             // Restore section offsets directly
                             project.restore_section_offsets(previous_offsets);
 
+                            // Stable stored identity for the datum's station.
+                            let datum_key = project.key_for_ref(*station_ref);
+
                             // Restore GPS datum state
                             if let Some(gps) = previous_gps {
                                 if let Some(existing) = project
                                     .zero_datums
                                     .iter_mut()
-                                    .find(|zd| zd.station_ref == *station_ref)
+                                    .find(|zd| Some(&zd.station_ref) == datum_key.as_ref())
                                 {
                                     existing.gps = *gps;
-                                } else {
+                                } else if let Some(key) = datum_key {
                                     project.zero_datums.push(crate::models::ZeroDatum {
-                                        station_ref: *station_ref,
+                                        station_ref: key,
                                         gps: *gps,
                                     });
                                 }
                             } else {
                                 project
                                     .zero_datums
-                                    .retain(|zd| zd.station_ref != *station_ref);
+                                    .retain(|zd| Some(&zd.station_ref) != datum_key.as_ref());
                             }
 
                             project.touch();
@@ -844,12 +912,14 @@ impl AppState {
                                 }
                             }
                             // Restore station offset
-                            match prev_offset {
-                                Some(offset) => {
-                                    project.station_offsets.insert(*station_ref, *offset);
-                                }
-                                None => {
-                                    project.station_offsets.remove(station_ref);
+                            if let Some(key) = project.key_for_ref(*station_ref) {
+                                match prev_offset {
+                                    Some(offset) => {
+                                        project.station_offsets.insert(key, *offset);
+                                    }
+                                    None => {
+                                        project.station_offsets.remove(&key);
+                                    }
                                 }
                             }
                             // Restore section offset
@@ -871,39 +941,31 @@ impl AppState {
             }
 
             UndoData::ProjectSnapshot(json) => {
-                // Restore entire project
-                match serde_json::from_str::<Project>(json.as_str()) {
-                    Ok(mut project) => match self.project.lock() {
-                        Ok(mut proj) => {
-                            // serde skips the transient caches; rebuild
-                            // so subsequent get_section /
-                            // get_merged_section_ids stay O(1)/O(group)
-                            // instead of degrading to the linear scan.
-                            // Mirrors AppState::rollback_project.
-                            project.rebuild_section_index();
-                            project.rebuild_merge_adjacency();
-                            *proj = Some(project);
+                // Restore entire project (caches rebuilt centrally; see
+                // AppState::restore_snapshot_into).
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        if Self::restore_snapshot_into(&mut proj, json.as_str()) {
                             CommandResult::success()
+                        } else {
+                            CommandResult::failure("Failed to parse project snapshot".to_string())
                         }
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
+                    }
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
 
             UndoData::ProjectSnapshotPair { before, after: _ } => {
-                // Restore the "before" snapshot for undo
-                match serde_json::from_str::<Project>(before.as_str()) {
-                    Ok(mut project) => match self.project.lock() {
-                        Ok(mut proj) => {
-                            project.rebuild_section_index();
-                            project.rebuild_merge_adjacency();
-                            *proj = Some(project);
+                // Restore the "before" snapshot for undo.
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        if Self::restore_snapshot_into(&mut proj, before.as_str()) {
                             CommandResult::success()
+                        } else {
+                            CommandResult::failure("Failed to parse project snapshot".to_string())
                         }
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    },
-                    Err(_) => CommandResult::failure("Failed to parse project snapshot".to_string()),
+                    }
+                    Err(_) => CommandResult::failure("Failed to lock project".to_string()),
                 }
             }
 
@@ -943,7 +1005,11 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        self.redo_inner()
+        let result = self.redo_inner();
+        if result.success {
+            self.reconcile_geometry();
+        }
+        result
     }
 
     /// Redo implementation (caller must hold command_lock)
@@ -965,20 +1031,16 @@ impl AppState {
         // IMPORTANT: No early returns after the pop — all paths flow through the epilogue.
         let result = match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => {
-                match serde_json::from_str::<Project>(after.as_str()) {
-                    Ok(mut project) => match self.project.lock() {
-                        Ok(mut proj) => {
-                            // Same rebuild as the undo path above —
-                            // serde drops the transient lookup caches.
-                            project.rebuild_section_index();
-                            project.rebuild_merge_adjacency();
-                            *proj = Some(project);
+                match self.project.lock() {
+                    Ok(mut proj) => {
+                        if Self::restore_snapshot_into(&mut proj, after.as_str()) {
                             CommandResult::success()
+                        } else {
+                            CommandResult::failure("Failed to parse project snapshot".to_string())
                         }
-                        Err(_) => CommandResult::failure("Failed to lock project".to_string()),
-                    },
+                    }
                     Err(_) => {
-                        CommandResult::failure("Failed to parse project snapshot".to_string())
+                        CommandResult::failure("Failed to lock project".to_string())
                     }
                 }
             }
@@ -994,28 +1056,91 @@ impl AppState {
                 shot_id,
                 shot_data,
                 position,
-                station_shift_from,
+                after_shot_id,
+                before_shot_id,
+                uuid,
+                ..
             } => {
-                // Redo CreateShot by restoring from snapshot to preserve original ID
-                let result = self.restore_shot(*section_id, *shot_id, shot_data.clone(), *position);
-                if result.success && *station_shift_from < u32::MAX {
-                    // Apply station ref shift for redo (mirrors what insert_shot_before/after does)
-                    if let Ok(mut proj_guard) = self.project.lock() {
-                        if let Some(project) = proj_guard.as_mut() {
-                            project.shift_station_refs(*section_id, *station_shift_from, 1);
-                            // For insert_before at pos=0, also adjust this section's
-                            // offset to keep existing stations at the same visual position
-                            if *position == 0 && *station_shift_from == 0 {
-                                let (dx, dy) = Project::shot_displacement(shot_data);
-                                if dx != 0.0 || dy != 0.0 {
-                                    let current = project.section_offsets.get(section_id).copied().unwrap_or((0.0, 0.0));
-                                    project.section_offsets.insert(*section_id, (current.0 - dx, current.1 - dy));
-                                }
+                // Redo by re-running the SAME insert the forward command did, with
+                // the original id AND uuid forced — so the ref-shift, offset and
+                // cascade are identical to the forward path and can't drift (this
+                // is the single-source-of-truth that prevents the redo-misalignment
+                // bug), and the shot keeps its stable collaboration identity (a
+                // fresh uuid here would dangle every AfterShot anchor and break the
+                // Ariane tier-1 match). `uuid` is None for shots created before this
+                // field existed (legacy persisted undo entries) — falls back to a
+                // fresh mint, matching the old behavior.
+                // Append (no anchor) does no geometry maintenance, so a plain
+                // restore is exact there.
+                let mut guard = match self.project.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let Some(project) = guard.as_mut() else {
+                    return CommandResult::failure("No project open".to_string());
+                };
+                let ok = if let Some(before_id) = before_shot_id {
+                    project
+                        .insert_shot_before(*section_id, *before_id, shot_data.clone(), Some(*shot_id), uuid.clone())
+                        .is_some()
+                } else if let Some(after_id) = after_shot_id {
+                    project
+                        .insert_shot_after(*section_id, *after_id, shot_data.clone(), Some(*shot_id), uuid.clone())
+                        .is_some()
+                } else {
+                    // Both anchors absent. For a CURRENT entry this is an append to an
+                    // empty section (exact via a raw insert). But a LEGACY persisted
+                    // entry (written by a pre-anchor build, reloaded after upgrade) has
+                    // both anchors None even for a prepend / mid-section insert, so route
+                    // through the proper insert helper using the captured position — which
+                    // re-anchors SectionStart on a prepend and cascades offsets on a
+                    // mid-insert — instead of a raw insert that would mis-place anchored
+                    // tails or start-station refs.
+                    let section_len = project.get_section(*section_id).map_or(0, |s| s.shots.len());
+                    let pos = (*position).min(section_len);
+                    if pos == 0 && section_len > 0 {
+                        // Prepend before the current first shot.
+                        let first_id = project
+                            .get_section(*section_id)
+                            .and_then(|s| s.shots.first().map(|sh| sh.id));
+                        match first_id {
+                            Some(fid) => project
+                                .insert_shot_before(*section_id, fid, shot_data.clone(), Some(*shot_id), uuid.clone())
+                                .is_some(),
+                            None => false,
+                        }
+                    } else if pos < section_len {
+                        // Mid-section: insert after the shot currently at pos-1.
+                        let prev_id = project
+                            .get_section(*section_id)
+                            .and_then(|s| s.shots.get(pos - 1).map(|sh| sh.id));
+                        match prev_id {
+                            Some(pid) => project
+                                .insert_shot_after(*section_id, pid, shot_data.clone(), Some(*shot_id), uuid.clone())
+                                .is_some(),
+                            None => false,
+                        }
+                    } else {
+                        // True append (pos == len) or empty section: a raw insert is
+                        // exact — no station shift or SectionStart re-anchor is needed.
+                        let id = *shot_id;
+                        if let Some(section) = project.get_section_mut(*section_id) {
+                            if id >= section.next_shot_id {
+                                section.next_shot_id = id + 1;
                             }
+                            section.shots.insert(pos, Shot::with_uuid(id, shot_data.clone(), uuid.clone()));
+                            project.touch();
+                            true
+                        } else {
+                            false
                         }
                     }
+                };
+                if ok {
+                    CommandResult::success()
+                } else {
+                    CommandResult::failure("Failed to redo shot creation".to_string())
                 }
-                result
             }
             UndoData::SegmentMoveInfo {
                 affected_sections,
@@ -1235,6 +1360,7 @@ impl AppState {
         original_shot_id: ShotId,
         data: ShotData,
         position: usize,
+        uuid: Option<String>,
     ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
@@ -1248,8 +1374,10 @@ impl AppState {
             return CommandResult::failure(format!("Section {section_id} not found"));
         };
 
-        // Create shot with original ID
-        let shot = Shot::new(original_shot_id, data);
+        // Recreate the shot with its original ID and UUID so cross-references and
+        // Ariane matching keep anchoring on the same identity. `uuid: None`
+        // (legacy entry) mints a fresh one.
+        let shot = Shot::with_uuid(original_shot_id, data, uuid);
 
         // Update next_shot_id if needed to avoid collisions
         if original_shot_id >= section.next_shot_id {

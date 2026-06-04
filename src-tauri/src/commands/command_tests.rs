@@ -11,7 +11,6 @@ use crate::test_helpers::TestDb;
 use chrono::NaiveDate;
 use std::path::PathBuf;
 use std::{env, fs};
-use std::sync::{Mutex, OnceLock};
 use tauri::test::{mock_app, MockRuntime};
 use tauri::{Manager, State};
 use tempfile::{NamedTempFile, TempDir};
@@ -32,16 +31,12 @@ fn state(app: &tauri::App<MockRuntime>) -> State<'_, AppState> {
     app.state::<AppState>()
 }
 
-fn config_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
 fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
-    // Use unwrap_or_else to recover from a poisoned mutex (e.g. a prior test panicked
-    // while holding the lock). This prevents cascading failures across tests.
-    let _guard = config_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    f()
+    // Serialize config-touching tests AND redirect the config path to a fresh
+    // temp dir, so they neither race each other nor read/pollute the real
+    // ~/.config/stalagmight/config.toml. (Shared with test_get_config and any
+    // other config-touching test via the same process-global lock.)
+    crate::test_helpers::with_isolated_config(f)
 }
 
 fn with_restored_config<T>(app: &tauri::App<MockRuntime>, f: impl FnOnce() -> T) -> T {
@@ -681,6 +676,47 @@ fn test_project_lifecycle_persists_undo_and_state() {
 }
 
 #[test]
+fn test_get_project_state_emits_positional_wire_refs() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        create_project(&app);
+        let section_a = create_section_with_shots(&app, vec![shot_data(10.0), shot_data(5.0)]);
+        let section_b = create_section_with_shots(&app, vec![shot_data(7.0)]);
+        // Merge two AfterShot stations across sections so the wire form must
+        // resolve a non-trivial positional index.
+        assert_success(&station::merge_stations(
+            state(&app),
+            StationRef::new(section_a, 1),
+            StationRef::new(section_b, 1),
+        ));
+
+        let project_state = project::get_project_state(state(&app)).expect("project state");
+
+        // The IPC payload (ProjectState) must carry the positional StationRef
+        // wire shape: `station_index` present, no StationKey `anchor`.
+        let ipc = serde_json::to_value(&project_state).unwrap();
+        let merge = &ipc["project"]["station_merges"][0];
+        assert!(
+            merge["station_a"]["station_index"].is_number(),
+            "wire merge endpoint must expose station_index, got: {merge}"
+        );
+        assert!(
+            merge["station_a"].get("anchor").is_none(),
+            "wire merge endpoint must NOT expose the StationKey anchor, got: {merge}"
+        );
+
+        // Regression guard: the raw Project serde (the undo snapshot path) must
+        // STILL emit the lossless StationKey form. The two encodings diverge by
+        // design — only the IPC view is positional.
+        let raw = serde_json::to_string(&project_state.project).unwrap();
+        assert!(
+            raw.contains("anchor"),
+            "raw Project serde must keep StationKey anchors for undo snapshots"
+        );
+    });
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn test_open_project_updates_recent_projects_when_config_save_fails() {
     use std::os::unix::fs::PermissionsExt;
@@ -691,7 +727,11 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         return;
     }
 
-    with_config_lock(|| {
+    // Serialize against other config-touching tests, but DON'T redirect the
+    // config path to a temp dir — this test drives config_path() itself by
+    // pointing XDG_CONFIG_HOME at a read-only dir to force a save failure.
+    let _config_guard = crate::test_helpers::config_lock_guard();
+    {
         let readonly_dir = TempDir::new().unwrap();
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o555);
@@ -731,7 +771,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(readonly_dir.path(), perms).unwrap();
-    });
+    }
 }
 
 /// macOS sibling of the Linux test above. On macOS the `directories` crate ignores
@@ -748,7 +788,9 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         return;
     }
 
-    with_config_lock(|| {
+    // Lock-only (no temp-dir override): this test drives config_path() via HOME.
+    let _config_guard = crate::test_helpers::config_lock_guard();
+    {
         let readonly_dir = TempDir::new().unwrap();
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o555);
@@ -790,7 +832,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(readonly_dir.path(), perms).unwrap();
-    });
+    }
 }
 
 #[test]

@@ -27,6 +27,10 @@ export function useAutoSave(): AutoSaveState {
   // Track whether we initiated the save so we can distinguish our own
   // isDirty→false from a manual Ctrl+S save.
   const savingRef = useRef(false);
+  // Paused after a save-blocking failure (unresolvable cross-references): retrying
+  // on every edit is futile and noisy, so we stop attempting until the project is
+  // no longer save-blocked (e.g. the user runs Repair), then resume automatically.
+  const pausedRef = useRef(false);
 
   const clearAllTimers = useCallback(() => {
     if (debounceRef.current) {
@@ -73,8 +77,22 @@ export function useAutoSave(): AutoSaveState {
         state.config?.general?.auto_save_interval_seconds ?? 30;
       const hasProject = state.project != null;
 
+      // --- Resume after a save-block clears ---
+      // Auto-save pauses itself after a save-blocking failure (see the fire
+      // handler below). Resume the moment the project stops being save-blocked —
+      // i.e. the integrity issues were resolved (Repair) — so the next pending
+      // edit saves normally.
+      if (
+        pausedRef.current &&
+        prevState.integritySaveBlocked &&
+        !state.integritySaveBlocked
+      ) {
+        pausedRef.current = false;
+      }
+
       // --- Project closed ---
       if (!hasProject) {
+        pausedRef.current = false;
         clearAllTimers();
         savingRef.current = false;
 
@@ -98,6 +116,11 @@ export function useAutoSave(): AutoSaveState {
 
         // If we're already executing a save, don't restart timers
         if (savingRef.current) return;
+
+        // Paused after a save-blocking failure — don't keep retrying a save that
+        // will just fail again. The status stays "didn't run — not saved" until
+        // the resume check above fires (issues resolved).
+        if (pausedRef.current) return;
 
         const seconds = intervalSeconds;
 
@@ -151,7 +174,24 @@ export function useAutoSave(): AutoSaveState {
           // subscriber above to flash "saved".  On failure we handle here.
           if (!result.success) {
             savingRef.current = false;
-            flash('error', 3000);
+            // Auto-save must never persist a broken project, so the backend
+            // refuses the save when the project has unresolvable cross-references.
+            // Surface that auto-save did NOT run *persistently* (not a transient
+            // flash) so the user knows their changes are not on disk; the integrity
+            // banner shows how to fix it (Repair).
+            // When the failure is the integrity save-block, PAUSE auto-save rather
+            // than retry on every edit — it would just fail again. It resumes via
+            // the check at the top of the subscriber once the block clears. (The
+            // failure branch of saveProject awaits checkProjectIntegrity, so this
+            // flag is fresh here.)
+            if (useProjectStore.getState().integritySaveBlocked) {
+              pausedRef.current = true;
+            }
+            if (flashRef.current) {
+              clearTimeout(flashRef.current);
+              flashRef.current = null;
+            }
+            setStatus('error');
           }
         }, seconds * 1000);
       }

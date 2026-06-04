@@ -25,6 +25,121 @@ impl std::fmt::Display for StationRef {
     }
 }
 
+/// Position-independent identity of a station within a section.
+///
+/// A station is the boundary between two shots; `SectionStart` is the boundary
+/// before the first shot (station index 0) and `AfterShot(uuid)` is the boundary
+/// after the shot with that stable UUID (station index = that shot's position + 1).
+/// Unlike a positional `station_index`, this survives inserting/deleting other
+/// shots in the section, so it is the *stored* form of a station reference
+/// (see [`StationKey`]). It is resolved to a transient positional [`StationRef`]
+/// at the geometry/IPC boundary.
+// Internal identity types — NOT crossing IPC (the wire ref stays positional
+// `StationRef`), so no `TS` derive; serde is for in-memory project (de)serialization.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StationAnchor {
+    SectionStart,
+    AfterShot(String),
+    /// Positional fallback: a raw station index. Used ONLY transitionally — when
+    /// loading a pre-anchor (v6) file's positional refs, and for test/construction
+    /// convenience — then canonicalized to `SectionStart`/`AfterShot` by the load
+    /// re-anchor pass. The library never compares or looks up with an `Index` key
+    /// against a stored (canonical) key; it builds keys via `Project::key_for_ref`
+    /// and compares via `Project::resolve_key`. A stray `Index` therefore can't
+    /// silently mismatch a canonical key at runtime.
+    Index(u32),
+}
+
+/// Stored, position-independent station reference: a section plus a
+/// [`StationAnchor`]. This is what cross-references (merges, closures, datums,
+/// station offsets/comments) persist and hold in memory, so an insert/delete of
+/// an unrelated shot never has to rewrite them and a reference can never silently
+/// point at the wrong in-range station. The solver/IPC use the transient
+/// positional [`StationRef`], obtained via `Project::resolve_key`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct StationKey {
+    pub section_id: SectionId,
+    pub anchor: StationAnchor,
+}
+
+// Backward-compatible deserialization: accept BOTH the current
+// `{section_id, anchor}` shape AND the legacy positional `{section_id,
+// station_index}` shape written by pre-anchor builds. The legacy shape appears
+// in persisted data that embeds a serialized `Project` or `StationMerge`/
+// `LoopClosure`/`ZeroDatum`/offset/comment key — most importantly the
+// `undo_stack` snapshot blobs, which are NOT re-encoded through the positional
+// wire form. Without this, opening an old project after upgrading would fail to
+// deserialize every legacy undo entry and silently drop the undo history. A
+// legacy positional ref maps to a transitional `SectionStart`/`Index` anchor,
+// which the resolve layer tolerates and the load re-anchor pass canonicalizes.
+//
+// NOTE: this `Compat` shim distinguishes the two shapes by FIELD NAME, so it only
+// works for self-describing formats (JSON — what the undo blobs and offset/comment
+// maps use). If a future code path serializes a `StationKey` through a
+// non-self-describing format (bincode/postcard/positional msgpack), this manual
+// impl must be revisited — there is no such path today (the binary IPC/SQLite
+// routes use the positional `StationRef` wire types, never `StationKey`).
+impl<'de> Deserialize<'de> for StationKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Compat {
+            section_id: SectionId,
+            #[serde(default)]
+            anchor: Option<StationAnchor>,
+            #[serde(default)]
+            station_index: Option<u32>,
+        }
+        let c = Compat::deserialize(deserializer)?;
+        match (c.anchor, c.station_index) {
+            // Current shape — the anchor is authoritative.
+            (Some(anchor), _) => Ok(StationKey {
+                section_id: c.section_id,
+                anchor,
+            }),
+            // Legacy positional shape — map index to a transitional anchor.
+            (None, Some(index)) => Ok(StationKey::positional(c.section_id, index)),
+            (None, None) => Err(<D::Error as serde::de::Error>::missing_field("anchor")),
+        }
+    }
+}
+
+impl StationKey {
+    pub fn new(section_id: SectionId, anchor: StationAnchor) -> Self {
+        Self { section_id, anchor }
+    }
+
+    /// A positional key (index 0 → `SectionStart`, else `Index`). Transitional /
+    /// test convenience; the library canonicalizes to `AfterShot` via
+    /// [`crate::models::Project::key_for_ref`].
+    pub fn positional(section_id: SectionId, station_index: u32) -> Self {
+        let anchor = if station_index == 0 {
+            StationAnchor::SectionStart
+        } else {
+            StationAnchor::Index(station_index)
+        };
+        Self { section_id, anchor }
+    }
+}
+
+impl From<StationRef> for StationKey {
+    fn from(r: StationRef) -> Self {
+        StationKey::positional(r.section_id, r.station_index)
+    }
+}
+
+impl std::fmt::Display for StationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.anchor {
+            StationAnchor::SectionStart => write!(f, "{}:start", self.section_id),
+            StationAnchor::AfterShot(uuid) => write!(f, "{}:after({uuid})", self.section_id),
+            StationAnchor::Index(i) => write!(f, "{}:{i}", self.section_id),
+        }
+    }
+}
+
 /// GPS coordinates in WGS84 format
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 pub struct GpsCoordinates {
@@ -115,6 +230,23 @@ pub struct Coordinates {
 impl Coordinates {
     pub fn new(x: f64, y: f64, z: f64) -> Self {
         Self { x, y, z }
+    }
+
+    /// True if all three components are finite (no NaN/±inf).
+    pub fn is_finite(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
+    }
+
+    /// Construct only if every component is finite. Use at ingest boundaries
+    /// (offsets/moves) so a non-finite value can't enter coordinate computation,
+    /// where it silently poisons every downstream distance/alignment comparison.
+    pub fn new_checked(x: f64, y: f64, z: f64) -> Result<Self, String> {
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            return Err(format!(
+                "Coordinates must be finite, got ({x}, {y}, {z})"
+            ));
+        }
+        Ok(Self { x, y, z })
     }
 
     /// Calculate distance to another coordinate
@@ -217,18 +349,39 @@ impl Station {
     }
 }
 
-/// Record of a station merge
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// Record of a station merge. Endpoints stored as position-independent
+/// [`StationKey`]s. Backend-only (no `TS`); the frontend/wire form is
+/// [`StationMergeWire`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StationMerge {
+    pub station_a: StationKey,
+    pub station_b: StationKey,
+    pub merged_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Zero datum assignment (backend; wire form is [`ZeroDatumWire`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZeroDatum {
+    pub station_ref: StationKey,
+    pub gps: GpsCoordinates,
+}
+
+/// Positional wire form of [`StationMerge`] for the frontend (which reasons by
+/// `station_index`). ts-rs exports it as `StationMerge` so the generated TS and
+/// the frontend stay positional; the backend resolves the stored keys when encoding.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(rename = "StationMerge", export_to = "bindings/StationMerge.ts")]
+pub struct StationMergeWire {
     pub station_a: StationRef,
     pub station_b: StationRef,
     #[ts(type = "string")]
     pub merged_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Zero datum assignment
+/// Positional wire form of [`ZeroDatum`]; ts-rs exports it as `ZeroDatum`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct ZeroDatum {
+#[ts(rename = "ZeroDatum", export_to = "bindings/ZeroDatum.ts")]
+pub struct ZeroDatumWire {
     pub station_ref: StationRef,
     pub gps: GpsCoordinates,
 }
@@ -393,16 +546,17 @@ pub struct FrozenShotRef {
     pub shot_index: u32,
 }
 
-/// A detected loop closure in the survey
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+/// A detected loop closure in the survey. Endpoints stored as position-independent
+/// [`StationKey`]s. Backend-only (no `TS`); the wire form is [`LoopClosureWire`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopClosure {
     /// Unique identifier for this closure
     #[serde(default)]
     pub id: u64,
     /// First station in the closure (merge point A)
-    pub station_a: StationRef,
+    pub station_a: StationKey,
     /// Second station in the closure (merge point B)
-    pub station_b: StationRef,
+    pub station_b: StationKey,
     /// Total path length along the loop (meters)
     pub path_length: f64,
     /// Misclosure distance (meters) - how far apart the two stations are
@@ -417,6 +571,25 @@ pub struct LoopClosure {
     #[serde(default)]
     pub strategy: ClosureStrategy,
     /// Whether the closure endpoints have been aligned (post-adjustment or snap-to-merge)
+    #[serde(default)]
+    pub is_aligned: bool,
+}
+
+/// Positional wire form of [`LoopClosure`]; ts-rs exports it as `LoopClosure`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(rename = "LoopClosure", export_to = "bindings/LoopClosure.ts")]
+pub struct LoopClosureWire {
+    #[serde(default)]
+    pub id: u64,
+    pub station_a: StationRef,
+    pub station_b: StationRef,
+    pub path_length: f64,
+    pub misclosure_distance: f64,
+    pub error_percentage: f64,
+    pub horizontal_misclosure: f64,
+    pub vertical_misclosure: f64,
+    #[serde(default)]
+    pub strategy: ClosureStrategy,
     #[serde(default)]
     pub is_aligned: bool,
 }

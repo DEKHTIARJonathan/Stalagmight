@@ -357,4 +357,7 @@ export const EVENT_NAMES: readonly string[] = [
   'action.dialog.save-permission',
   'dialog-cancel.save-permission',
   'dwell.dialog.save-permission',
+  // Structural-integrity IPC commands (check + repair).
+  'command.check_project_integrity',
+  'command.repair_project_integrity',
 ];

@@ -9,7 +9,7 @@ use crate::core::{Command, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
-    StationRef, SurveyDirection,
+    StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -229,8 +229,8 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
 
     project.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(section_id, 0),
-        station_b: StationRef::new(section_id, 1),
+        station_a: StationRef::new(section_id, 0).into(),
+        station_b: StationRef::new(section_id, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.1,
         error_percentage: 5.0,
@@ -306,15 +306,15 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     project_a.section_offsets.insert(section_a, (1.0, 2.0));
     project_a
         .station_offsets
-        .insert(StationRef::new(section_a, 0), (0.5, -0.5, 1.0));
+        .insert(StationRef::new(section_a, 0).into(), (0.5, -0.5, 1.0));
     let gps_a = GpsCoordinates::new(10.0, 20.0, 0.0).unwrap();
     project_a
         .store_zero_datum_without_repositioning(StationRef::new(section_a, 0), gps_a)
         .unwrap();
     project_a.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(section_a, 0),
-        station_b: StationRef::new(section_a, 1),
+        station_a: StationRef::new(section_a, 0).into(),
+        station_b: StationRef::new(section_a, 1).into(),
         path_length: 1.0,
         misclosure_distance: 0.1,
         error_percentage: 10.0,
@@ -335,15 +335,15 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     project_b.section_offsets.insert(section_b, (3.0, 4.0));
     project_b
         .station_offsets
-        .insert(StationRef::new(section_b, 0), (-1.0, 1.5, 0.0));
+        .insert(StationRef::new(section_b, 0).into(), (-1.0, 1.5, 0.0));
     let gps_b = GpsCoordinates::new(-5.0, 40.0, 2.0).unwrap();
     project_b
         .store_zero_datum_without_repositioning(StationRef::new(section_b, 0), gps_b)
         .unwrap();
     project_b.loop_closures.push(LoopClosure {
         id: 0,
-        station_a: StationRef::new(section_b, 0),
-        station_b: StationRef::new(section_b, 1),
+        station_a: StationRef::new(section_b, 0).into(),
+        station_b: StationRef::new(section_b, 1).into(),
         path_length: 2.0,
         misclosure_distance: 0.2,
         error_percentage: 10.0,
@@ -392,16 +392,12 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     assert_eq!(merged.section_offsets.get(&merged_section_b), Some(&(3.0, 4.0)));
 
     assert_eq!(
-        merged
-            .station_offsets
-            .get(&StationRef::new(merged_section_a, 0)),
-        Some(&(0.5, -0.5, 1.0))
+        merged.station_offset_for_ref(StationRef::new(merged_section_a, 0)),
+        Some((0.5, -0.5, 1.0))
     );
     assert_eq!(
-        merged
-            .station_offsets
-            .get(&StationRef::new(merged_section_b, 0)),
-        Some(&(-1.0, 1.5, 0.0))
+        merged.station_offset_for_ref(StationRef::new(merged_section_b, 0)),
+        Some((-1.0, 1.5, 0.0))
     );
 
     assert!(merged
@@ -426,6 +422,694 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     assert!(merged.loop_closures.iter().any(|c| {
         c.station_a.section_id == merged_section_b && c.station_b.section_id == merged_section_b
     }));
+}
+
+#[test]
+fn test_merge_projects_preserves_station_comments() {
+    // merge_projects remaps every sibling cross-reference collection; station
+    // comments must be carried over too (they were previously dropped silently
+    // while offsets/datums/merges/closures were all copied).
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut project_a = Project::new("A".to_string(), None);
+    let section_a = project_a
+        .add_section(SectionData {
+            name: Some("Section A".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    project_a.ensure_shot_uuids();
+    let key_a = project_a.key_for_ref(StationRef::new(section_a, 0)).unwrap();
+    project_a
+        .station_comments
+        .insert(key_a, "junction with main line".to_string());
+
+    let mut project_b = Project::new("B".to_string(), None);
+    let section_b = project_b
+        .add_section(SectionData {
+            name: Some("Section B".to_string()),
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project_b.ensure_shot_uuids();
+    let key_b = project_b.key_for_ref(StationRef::new(section_b, 1)).unwrap();
+    project_b
+        .station_comments
+        .insert(key_b, "sump start".to_string());
+
+    let source_a = temp_dir.path().join("a.stalx");
+    let source_b = temp_dir.path().join("b.stalx");
+    Database::open(&source_a).unwrap().save_project(&project_a).unwrap();
+    Database::open(&source_b).unwrap().save_project(&project_b).unwrap();
+
+    let state = AppState::new().unwrap();
+    let output_path = temp_dir.path().join("merged-output.stalx");
+    let result = state.execute(Command::MergeProjects {
+        source_paths: vec![source_a, source_b],
+        output_path: output_path.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+
+    let merged = Database::open_existing(&output_path).unwrap().load_project().unwrap();
+    let merged_section_a = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Section A"))
+        .unwrap()
+        .id;
+    let merged_section_b = merged
+        .sections
+        .iter()
+        .find(|s| s.name.as_deref() == Some("Section B"))
+        .unwrap()
+        .id;
+
+    assert_eq!(
+        merged
+            .station_comment_for_ref(StationRef::new(merged_section_a, 0))
+            .map(String::as_str),
+        Some("junction with main line"),
+        "section A's station comment must survive the merge"
+    );
+    assert_eq!(
+        merged
+            .station_comment_for_ref(StationRef::new(merged_section_b, 1))
+            .map(String::as_str),
+        Some("sump start"),
+        "section B's station comment must survive the merge"
+    );
+}
+
+#[test]
+fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
+    // Auto-save must NEVER persist a broken project: a save with unresolvable
+    // cross-references is refused (no file written) for BOTH manual and auto-save,
+    // so corruption never reaches disk. The user is told it didn't run and restores
+    // integrity via Repair, after which saves resume.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Dangle".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            name: Some("Main".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Dangling station offset: anchors a shot UUID that doesn't exist.
+    let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
+    project.station_offsets.insert(dangling, (1.0, 2.0, 3.0));
+    assert!(project.has_unresolvable_cross_references());
+    state.set_project_for_tests(project);
+
+    let stalx = temp_dir.path().join("dangle.stalx");
+
+    // Manual save is blocked and writes nothing.
+    let manual = state.execute(Command::SaveProject {
+        path: Some(stalx.clone()),
+        is_autosave: false,
+    });
+    assert!(!manual.success, "manual save must block on dangling refs");
+    assert!(!stalx.exists(), "a blocked manual save must not write a file");
+
+    // Auto-save is ALSO blocked — it must never persist a broken project.
+    let auto = state.execute(Command::SaveProject {
+        path: Some(stalx.clone()),
+        is_autosave: true,
+    });
+    assert!(
+        !auto.success,
+        "auto-save must also block on dangling refs (never persist a broken project)"
+    );
+    assert!(!stalx.exists(), "a blocked auto-save must not write a file either");
+}
+
+#[test]
+fn repair_open_project_integrity_is_undoable_and_redoable() {
+    // Repair drops dangling refs / re-cascades offsets; it must record an undo
+    // entry so the user can revert it. Undo restores the pre-repair (corrupt)
+    // state, redo re-applies the fix — both via the snapshot pair.
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Repairable".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            name: Some("Main".to_string()),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Dangling station offset → unresolvable cross-reference (corrupt project).
+    let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
+    project.station_offsets.insert(dangling, (1.0, 2.0, 3.0));
+    assert!(project.has_unresolvable_cross_references());
+    state.set_project_for_tests(project);
+
+    // Repair fixes it AND records exactly one undo entry.
+    let result = state.repair_open_project_integrity();
+    assert!(result.fixed >= 1, "repair should report at least one fix");
+    assert!(
+        !state.get_project_state().unwrap().has_unresolvable_cross_references(),
+        "repair drops the dangling ref"
+    );
+    assert_eq!(state.get_undo_stack().len(), 1, "repair records one undo entry");
+
+    // Undo restores the pre-repair (corrupt) state.
+    assert!(state.undo().success, "repair must be undoable");
+    assert!(
+        state.get_project_state().unwrap().has_unresolvable_cross_references(),
+        "undo brings the dangling ref back"
+    );
+
+    // Redo re-applies the repair.
+    assert!(state.redo().success, "repair must be redoable");
+    assert!(
+        !state.get_project_state().unwrap().has_unresolvable_cross_references(),
+        "redo re-drops the dangling ref"
+    );
+}
+
+#[test]
+fn redo_batch_preserves_orphan_closure_to_merge_conversion() {
+    // A single user Batch can strand a sole-bridge closure: two otherwise
+    // unconnected sections joined only by a freshly-created closure. The
+    // post-command epilogue converts that closure into a merge (#8 — closures are
+    // only for true loops). Previously execute_batch captured its redo snapshot
+    // BEFORE that conversion ran (the conversion happened only in execute()'s outer
+    // epilogue, after the snapshot), so undo→redo restored the UN-converted closure
+    // — redo only reconciles geometry, it does not re-run the conversion — silently
+    // losing the merge. The conversion now runs inside execute_batch before the
+    // snapshot, so redo preserves it.
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Batch".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            name: Some("A".to_string()),
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            name: Some("B".to_string()),
+            shots: vec![test_shot_data(3.0), test_shot_data(4.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    state.set_project_for_tests(project);
+
+    // One atomic batch: give each section a datum (so the otherwise-unconnected
+    // pair is allowed a closure), then close A1↔B1. With no other path between them
+    // the closure is a sole bridge and the epilogue converts it to a merge.
+    let result = state.execute(Command::Batch {
+        commands: vec![
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(a, 0),
+                coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+            },
+            Command::SetZeroDatum {
+                station_ref: StationRef::new(b, 0),
+                coordinates: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+            },
+            Command::CreateLoopClosure {
+                station_a: StationRef::new(a, 1),
+                station_b: StationRef::new(b, 1),
+                closure_strategy: ClosureStrategy::default(),
+            },
+        ],
+    });
+    assert!(result.success, "batch should succeed: {:?}", result.error);
+
+    let after_execute = state.get_project_state().unwrap();
+    assert_eq!(
+        after_execute.loop_closures.len(),
+        0,
+        "the sole-bridge closure must be converted to a merge"
+    );
+    assert_eq!(after_execute.station_merges.len(), 1, "exactly one merge after conversion");
+
+    // Undo returns to the pre-batch topology (no merge, no closure).
+    assert!(state.undo().success);
+    let after_undo = state.get_project_state().unwrap();
+    assert_eq!(after_undo.loop_closures.len(), 0);
+    assert_eq!(after_undo.station_merges.len(), 0);
+
+    // Redo must restore the CONVERTED topology (the merge), not the raw closure.
+    assert!(state.redo().success);
+    let after_redo = state.get_project_state().unwrap();
+    assert_eq!(
+        after_redo.loop_closures.len(),
+        0,
+        "redo must not resurrect the un-converted closure"
+    );
+    assert_eq!(
+        after_redo.station_merges.len(),
+        1,
+        "redo must preserve the closure→merge conversion"
+    );
+}
+
+#[test]
+fn update_shot_reconciles_datum_less_merge() {
+    // Editing a shot upstream of a merge in a group with NO zero datum used to
+    // leave the merge drifted: UpdateShot was misclassified INERT (skipping the
+    // reconcile epilogue) and the bespoke realign_after_shot_edit no-ops without a
+    // datum. UpdateShot is now geometry-affecting, so the reconcile heals the
+    // datum-less group in the same command.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("NoDatum".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![test_shot_data(5.0)], ..Default::default() })
+        .id;
+    // Merge A:2 (after both shots) ↔ B:0, with NO zero datum anywhere.
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project.resolve_offsets();
+    assert!(project.check_merge_alignment().is_empty(), "starts aligned");
+    state.set_project_for_tests(project);
+
+    // Edit shot 0 in A (upstream of the merge station) — a big length change moves
+    // A:2 well beyond the 5 cm reporting tolerance.
+    let shot0 = state.get_project_state().unwrap().get_section(a).unwrap().shots[0].id;
+    let updates = ShotUpdates { length: Some(9.0), ..Default::default() };
+    let result = state.execute(Command::UpdateShot { section_id: a, shot_id: shot0, updates });
+    assert!(result.success, "{:?}", result.error);
+
+    assert!(
+        state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a shot edit must reconcile the datum-less merge, not leave it drifted"
+    );
+}
+
+#[test]
+fn repair_noop_on_clean_project_reports_unchanged() {
+    // A repair that finds nothing to fix must not report `changed` (which the
+    // frontend dirties on) or push a spurious undo entry. This depends on
+    // resolve_offsets() no longer touch()ing an already-consistent project — if it
+    // did, the snapshot's modified_at would differ every time and `changed` would
+    // be permanently true.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Clean".to_string(), None);
+    project
+        .add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    project.resolve_offsets();
+    state.set_project_for_tests(project);
+
+    let result = state.repair_open_project_integrity();
+    assert_eq!(result.fixed, 0);
+    assert!(!result.changed, "a no-op repair must not report changed");
+    assert_eq!(state.get_undo_stack().len(), 0, "a no-op repair adds no undo entry");
+}
+
+#[test]
+fn save_remints_duplicate_shot_uuids_before_persisting() {
+    // A within-section duplicate shot UUID is Critical (resolve_key snaps
+    // AfterShot(uuid) to the FIRST match), but the unresolvable-cross-reference save
+    // gate doesn't catch it (the ref still resolves, just to the wrong shot). The
+    // save path re-mints the duplicate first so unique UUIDs reach disk — lossless,
+    // so it auto-heals rather than blocking.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Dup".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Force a within-section duplicate.
+    let dup = project.get_section(a).unwrap().shots[0].uuid.clone().unwrap();
+    project.get_section_mut(a).unwrap().shots[1].uuid = Some(dup.clone());
+    assert!(project.has_critical_integrity_violations(), "dup UUID is Critical");
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("dup")), false);
+    assert!(result.success, "save auto-heals dup UUIDs rather than blocking: {:?}", result.error);
+
+    // The persisted (and in-memory) project now has unique UUIDs, no Critical.
+    let saved = state.get_project_state().unwrap();
+    let uuids: Vec<_> =
+        saved.get_section(a).unwrap().shots.iter().filter_map(|s| s.uuid.clone()).collect();
+    let mut uniq = uuids.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uuids.len(), uniq.len(), "duplicate shot UUID re-minted before persist");
+    assert!(!saved.has_critical_integrity_violations());
+}
+
+#[test]
+fn restore_snapshot_canonicalizes_legacy_index_anchors() {
+    // A snapshot persisted by a PRE-ANCHOR build can carry positional Index
+    // anchors (undo/redo history is persisted and reloaded across builds, and the
+    // back-compat StationKey deserializer accepts the legacy shape). Restoring it
+    // must canonicalize to AfterShot — otherwise a later shot insert/delete won't
+    // shift the ref and the merge/datum/comment silently points at the wrong station.
+    let mut project = Project::new("Legacy".to_string(), None);
+    let s = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0), test_shot_data(3.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // A station offset stored in the legacy positional (Index) form.
+    project
+        .station_offsets
+        .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
+    let snapshot = serde_json::to_string(&project).unwrap();
+
+    let mut slot: Option<Project> = None;
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+    let restored = slot.unwrap();
+
+    // No Index anchor survives into the live project after restore.
+    let mut saw_index = false;
+    restored.for_each_station_ref(|_label, key| {
+        if matches!(key.anchor, StationAnchor::Index(_)) {
+            saw_index = true;
+        }
+    });
+    assert!(!saw_index, "restore_snapshot_into must canonicalize legacy Index anchors");
+}
+
+#[test]
+fn repair_serializes_under_command_lock() {
+    // Repair must hold command_lock for its whole duration so a concurrent command
+    // can't slip a mutation between repair's before-snapshot and its own mutation
+    // (which would make undo-of-repair drop that command). Verify by holding the
+    // lock and asserting repair blocks until it's released.
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let state = Arc::new(AppState::new().unwrap());
+    let mut project = Project::new("LockRepair".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    state.set_project_for_tests(project);
+
+    let guard = state.command_lock.lock().unwrap();
+    let state2 = Arc::clone(&state);
+    let (tx, rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let _ = tx.send(state2.repair_open_project_integrity());
+    });
+    // While we hold command_lock, repair must block (no result arrives).
+    assert!(
+        rx.recv_timeout(Duration::from_millis(150)).is_err(),
+        "repair ran without acquiring command_lock"
+    );
+    drop(guard);
+    // Once released, repair completes.
+    let result = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("repair completes after command_lock is released");
+    handle.join().unwrap();
+    assert_eq!(result.fixed, 0);
+}
+
+#[test]
+fn save_drops_orphan_section_offset() {
+    // A section_offsets entry for a section that no longer exists has a dangling
+    // SQLite FK; persisting it aborts the WHOLE save with a generic error. It must
+    // be dropped on save instead (the cross-reference gate doesn't see section_offsets).
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Orphan".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    project.section_offsets.insert(99999, (5.0, 6.0)); // no such section
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("orphan")), false);
+    assert!(result.success, "orphan section_offset must not abort the save: {:?}", result.error);
+    let saved = state.get_project_state().unwrap();
+    assert!(
+        saved.section_offsets.keys().all(|sid| saved.get_section(*sid).is_some()),
+        "orphan section_offsets must be dropped on save"
+    );
+}
+
+#[test]
+fn save_sanitizes_non_finite_geometry() {
+    // A non-finite shot value would abort the save (NaN → NULL in a NOT NULL
+    // column) or persist garbage (inf); it must be sanitized on save instead.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("NonFinite".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    project.sections[0].shots[0].length = f64::NAN;
+    assert!(!project.sections[0].shots[0].all_finite());
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("nonfinite")), false);
+    assert!(result.success, "non-finite geometry must be sanitized, not abort the save: {:?}", result.error);
+    let saved = state.get_project_state().unwrap();
+    assert!(saved.sections[0].shots[0].all_finite(), "non-finite geometry sanitized on save");
+}
+
+#[test]
+fn save_sanitizes_non_finite_section_offset() {
+    // section_offsets is the one geometry field with no finite guard. A non-finite
+    // offset (corrupt/hand-edited DB, or an inf round-trip) would abort the save
+    // (NaN → NULL) or persist and poison the component's world coords. It must be
+    // sanitized on save, mirroring the shot sanitize and the load-boundary guard.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("NonFiniteOffset".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() })
+        .id;
+    project.ensure_shot_uuids();
+    project.section_offsets.insert(a, (f64::NAN, f64::INFINITY));
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("nf_offset")), false);
+    assert!(
+        result.success,
+        "a non-finite section offset must be sanitized, not abort the save: {:?}",
+        result.error
+    );
+    let saved = state.get_project_state().unwrap();
+    let off = saved.section_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
+    assert!(off.0.is_finite() && off.1.is_finite(), "section offset sanitized on save");
+}
+
+#[test]
+fn blocked_save_does_not_mutate_non_finite_geometry() {
+    // A save refused for a dangling cross-reference must NOT first run the
+    // destructive non-finite sanitize on the live project — that mutation has no
+    // undo entry, so a refused save would silently lose the user's shot values.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("BlockedNoMutate".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() })
+        .id;
+    project.ensure_shot_uuids();
+    // A dangling station offset → unresolvable cross-reference (save-blocking).
+    project
+        .station_offsets
+        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())), (1.0, 2.0, 3.0));
+    // ...and a non-finite shot the (now later) sanitize would otherwise destroy.
+    project.sections[0].shots[0].length = f64::NAN;
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("blocked")), false);
+    assert!(!result.success, "save must be blocked by the dangling cross-reference");
+    // The gate runs BEFORE the destructive sanitize, so the live shot is untouched.
+    let unsaved = state.get_project_state().unwrap();
+    assert!(
+        !unsaved.sections[0].shots[0].all_finite(),
+        "a refused save must not destructively sanitize the live project"
+    );
+}
+
+#[test]
+fn undo_of_duplicate_uuid_repair_restores_the_duplicates() {
+    // The pre-repair state of a duplicate_shot_uuid repair is a CURRENT snapshot
+    // that intentionally holds duplicate UUIDs. Undo must restore it EXACTLY —
+    // restore_snapshot_into must not re-dedup a non-legacy (no Index anchor)
+    // snapshot, or the repair can't be reverted.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("DupRepairUndo".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // A within-section duplicate UUID: a current corrupt state (AfterShot anchors).
+    let dup = project.get_section(a).unwrap().shots[0].uuid.clone().unwrap();
+    project.get_section_mut(a).unwrap().shots[1].uuid = Some(dup.clone());
+    assert!(project.has_critical_integrity_violations());
+    state.set_project_for_tests(project);
+
+    // Repair re-mints the duplicate (now unique) and records the dup state as undo `before`.
+    let r = state.repair_open_project_integrity();
+    assert!(r.changed, "repair changed the project");
+    assert!(
+        !state.get_project_state().unwrap().has_critical_integrity_violations(),
+        "repair deduped the UUIDs"
+    );
+
+    // Undo must restore the duplicate-UUID state EXACTLY (and its warning).
+    assert!(state.undo().success);
+    let after_undo = state.get_project_state().unwrap();
+    let uuids: Vec<_> = after_undo
+        .get_section(a)
+        .unwrap()
+        .shots
+        .iter()
+        .filter_map(|s| s.uuid.clone())
+        .collect();
+    assert_eq!(uuids[0], uuids[1], "undo restored the duplicate UUID exactly");
+    assert!(
+        after_undo.has_critical_integrity_violations(),
+        "the duplicate_shot_uuid warning is back after undo"
+    );
+}
+
+#[test]
+fn restore_snapshot_mints_null_uuids_before_reanchor() {
+    // A legacy (pre-v6) snapshot can carry shots with uuid:null AND positional Index
+    // anchors. restore must MINT the missing UUIDs before re-anchoring —
+    // ensure_unique only dedups EXISTING UUIDs — or key_for_ref can't canonicalize
+    // the Index anchor and it stays live (the gap S4 closes in the P1 fix).
+    let mut project = Project::new("LegacyNullUuid".to_string(), None);
+    let s = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0), test_shot_data(3.0)],
+            ..Default::default()
+        })
+        .id;
+    // Force legacy null UUIDs (pre-v6 files load with NULL uuid columns).
+    for shot in &mut project.get_section_mut(s).unwrap().shots {
+        shot.uuid = None;
+    }
+    // A station offset stored in the legacy positional (Index) form.
+    project
+        .station_offsets
+        .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
+    let snapshot = serde_json::to_string(&project).unwrap();
+
+    let mut slot: Option<Project> = None;
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+    let restored = slot.unwrap();
+
+    // No Index anchor survives: the null UUIDs were minted, so reanchor could
+    // canonicalize Index → AfterShot.
+    let mut saw_index = false;
+    restored.for_each_station_ref(|_label, key| {
+        if matches!(key.anchor, StationAnchor::Index(_)) {
+            saw_index = true;
+        }
+    });
+    assert!(!saw_index, "restore must mint null UUIDs so Index anchors canonicalize");
+}
+
+#[test]
+fn finalize_structural_edit_ignores_pre_existing_critical() {
+    // A project opened ALREADY critical (e.g. a dangling cross-reference) must not
+    // have an otherwise-clean collab apply / import rolled back: finalize signals a
+    // rollback only for NEWLY introduced corruption, matching execute()'s guard.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("AlreadyCritical".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    // Inject a non-finite shot value → non_finite_geometry (a Critical violation).
+    project.sections[0].shots[0].length = f64::NAN;
+    assert!(project.has_critical_integrity_violations());
+    state.set_project_for_tests(project);
+
+    // pre_had_critical = true: do NOT signal rollback (the corruption pre-existed).
+    assert!(
+        !state.finalize_structural_edit(true),
+        "must not block an otherwise-clean edit on an already-critical project"
+    );
+    // pre_had_critical = false (clean before): DOES signal rollback (corruption present).
+    assert!(
+        state.finalize_structural_edit(false),
+        "must block when this edit introduced the critical violation"
+    );
+}
+
+#[test]
+fn redo_legacy_prepend_createshot_reanchors_section_start() {
+    // A CreateShot undo entry persisted by a PRE-anchor build has after_shot_id /
+    // before_shot_id == None even for a prepend, so redo used to hit a raw insert
+    // that skipped the SectionStart re-anchor — leaving a station-0 datum pointing at
+    // the newly-prepended station instead of the original first station. Redo now
+    // routes a legacy (anchor-less) entry through the insert helper by position.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("LegacyRedo".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Zero datum on station 0 → stored as a SectionStart anchor.
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(45.0, -73.0, 100.0).unwrap())
+        .unwrap();
+    state.set_project_for_tests(project);
+
+    // A LEGACY redo entry: prepend (position 0) with NO anchor fields, as a
+    // pre-anchor build would have persisted it.
+    let entry = UndoEntry {
+        command: Command::CreateShot {
+            section_id: a,
+            shot: test_shot_data(5.0),
+            after_shot_id: None,
+            before_shot_id: None,
+        },
+        undo_data: UndoData::CreatedShotSnapshot {
+            section_id: a,
+            shot_id: 999,
+            shot_data: test_shot_data(5.0),
+            position: 0,
+            station_shift_from: 0,
+            after_shot_id: None,
+            before_shot_id: None,
+            uuid: Some("prep-uuid".to_string()),
+        },
+        timestamp: None,
+    };
+    state.undo_stack.lock().unwrap().push_redo(entry);
+    assert!(state.redo().success, "legacy prepend redo");
+
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(restored.get_section(a).unwrap().shots.len(), 3, "prepend re-applied");
+    assert_eq!(
+        restored.get_section(a).unwrap().shots[0].uuid.as_deref(),
+        Some("prep-uuid"),
+    );
+    // The station-0 datum must still resolve to the ORIGINAL first station (now
+    // index 1), not the freshly-prepended station (index 0).
+    let datum_key = restored.zero_datums[0].station_ref.clone();
+    let resolved = restored.resolve_key(&datum_key).expect("datum still resolves");
+    assert_eq!(
+        resolved.station_index, 1,
+        "SectionStart datum re-anchored to the original first station after a legacy prepend redo"
+    );
 }
 
 #[test]
@@ -637,6 +1321,768 @@ fn test_create_section() {
     assert_eq!(project.sections.len(), 1);
     assert_eq!(project.sections[0].name, Some("Section A".to_string()));
     assert_eq!(project.sections[0].shots.len(), 2);
+}
+
+#[test]
+fn unmerge_converts_orphaned_bridge_closure() {
+    // Deleting the merge that was a loop's other path strands the section onto
+    // the closure — which must then become a merge (same #8 principle as delete).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    let closure = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(closure.success, "{:?}", closure.error);
+    assert_eq!(state.get_project_state().unwrap().loop_closures.len(), 1);
+
+    // Delete the merge that closed the loop's other path.
+    let r = state.execute(Command::UnmergeStationPair {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let p = state.get_project_state().unwrap();
+    assert!(
+        p.loop_closures.is_empty(),
+        "unmerge should convert the now-sole-bridge closure to a merge: {:?}",
+        p.loop_closures
+    );
+    assert!(p.check_orphan_closures().is_empty());
+}
+
+#[test]
+fn shot_sanitize_non_finite_neutralizes_geometry() {
+    // The load-boundary sanitizer (used by the SQLite loader) replaces non-finite
+    // core fields with 0.0 and non-finite optional fields with None.
+    use crate::models::ShotData;
+    let mut shot = crate::models::Shot::new(
+        1,
+        ShotData {
+            azimuth_in: 1.0,
+            azimuth_out: 1.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        },
+    );
+    shot.length = f64::NAN;
+    shot.depth_out = f64::INFINITY;
+    shot.pitch_in = Some(f64::NEG_INFINITY);
+    shot.left = Some(2.0); // finite optional stays
+
+    assert!(shot.sanitize_non_finite(), "must report a change");
+    assert!(shot.all_finite(), "result must be finite");
+    assert_eq!(shot.length, 0.0);
+    assert_eq!(shot.depth_out, 0.0);
+    assert_eq!(shot.pitch_in, None);
+    assert_eq!(shot.left, Some(2.0), "finite optional preserved");
+    assert!(!shot.sanitize_non_finite(), "already-finite shot reports no change");
+}
+
+#[test]
+fn coordinates_new_checked_rejects_non_finite() {
+    assert!(Coordinates::new_checked(1.0, 2.0, 3.0).is_ok());
+    assert!(Coordinates::new_checked(f64::NAN, 0.0, 0.0).is_err());
+    assert!(Coordinates::new_checked(0.0, f64::INFINITY, 0.0).is_err());
+    assert!(Coordinates::new_checked(0.0, 0.0, f64::NEG_INFINITY).is_err());
+}
+
+#[test]
+fn move_section_and_segment_reject_non_finite_offset() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let nan = Coordinates::new(f64::NAN, 0.0, 0.0);
+    assert!(!state.execute(Command::MoveSection { section_id: a, offset: nan }).success);
+    assert!(!state.execute(Command::MoveSegment { section_id: a, offset: nan }).success);
+    // A finite move still works.
+    assert!(state
+        .execute(Command::MoveSegment {
+            section_id: a,
+            offset: Coordinates::new(1.0, 2.0, 0.0),
+        })
+        .success);
+}
+
+#[test]
+fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
+    // A merge is rejected only when the two sections are already RIGIDLY connected
+    // (merges or ALIGNED closures). An inert (unaligned) closure does not constrain
+    // them, so merging across one — the first real link — must be allowed; the old
+    // connectivity walk followed inert closures and wrongly rejected it, forcing the
+    // sole-bridge-closure-that-should-be-a-merge bug (catalog #8).
+    fn setup(aligned: bool) -> (AppState, SectionId, SectionId) {
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+        let a = state
+            .execute(Command::CreateSection {
+                name: Some("A".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#111111".to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![test_shot_data(5.0)],
+            })
+            .section_id
+            .unwrap();
+        let b = state
+            .execute(Command::CreateSection {
+                name: Some("B".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#222222".to_string(),
+                direction: Some(SurveyDirection::In),
+                shots: vec![test_shot_data(5.0)],
+            })
+            .section_id
+            .unwrap();
+        // Inject a single closure A0 <-> B1 between the otherwise-unconnected sections.
+        {
+            let mut g = state.project.lock().unwrap();
+            let p = g.as_mut().unwrap();
+            let id = p.next_closure_id;
+            p.loop_closures.push(LoopClosure {
+                id,
+                station_a: StationRef::new(a, 0).into(),
+                station_b: StationRef::new(b, 1).into(),
+                path_length: 10.0,
+                misclosure_distance: 0.1,
+                error_percentage: 1.0,
+                horizontal_misclosure: 0.08,
+                vertical_misclosure: 0.06,
+                strategy: ClosureStrategy::default(),
+                is_aligned: aligned,
+            });
+            p.next_closure_id += 1;
+        }
+        (state, a, b)
+    }
+
+    // Inert closure → the merge is the first rigid link → ALLOWED, result sound.
+    let (state, a, b) = setup(false);
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "merge across an inert closure must be allowed: {:?}", r.error);
+    assert!(!state.get_project_state().unwrap().has_critical_integrity_violations());
+
+    // Aligned closure → already rigidly connected → merge REJECTED (would be a cycle).
+    let (state2, a2, b2) = setup(true);
+    let r2 = state2.execute(Command::MergeStations {
+        station_a: StationRef::new(a2, 1),
+        station_b: StationRef::new(b2, 0),
+    });
+    assert!(
+        !r2.success,
+        "merge across an aligned closure must be rejected (rigid cycle — use a loop closure)"
+    );
+}
+
+#[test]
+fn restore_snapshot_into_rebuilds_transient_caches() {
+    // The single restore chokepoint must rebuild the serde-skipped lookup caches
+    // (section_index_cache, merge_adjacency_cache), so no rollback/undo/redo path
+    // can install a project with an empty/stale cache that silently mis-resolves a
+    // section or merge group (catalog #14/#39).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(a, 2),
+            station_b: StationRef::new(b, 0),
+        })
+        .success);
+
+    let snapshot = match state.capture_project_snapshot() {
+        Ok(s) => s,
+        Err(e) => panic!("snapshot failed: {e:?}"),
+    };
+
+    // Deserialize into a fresh slot via the chokepoint; serde drops the caches, so
+    // restore_snapshot_into must repopulate them.
+    let mut slot: Option<Project> = None;
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+    let p = slot.expect("restored");
+    assert!(!p.section_index_cache.is_empty(), "section index cache must be rebuilt");
+    assert!(
+        !p.merge_adjacency_cache.is_empty(),
+        "merge adjacency cache must be rebuilt so get_merged_section_ids stays O(group)"
+    );
+    // Sanity: the rebuilt index resolves both sections.
+    assert!(p.get_section(a).is_some() && p.get_section(b).is_some());
+}
+
+#[test]
+fn undo_unmerge_restores_converted_closure_and_position() {
+    // The orphan-closure conversion unmerge triggers is a structural side-effect;
+    // undo must reverse it completely — the re-created merge AND the
+    // closure-that-became-a-merge AND the original section position must all come
+    // back, with no leftover merge cycle. (User report: undoing the unmerge left
+    // the converted merge in place and the geometry shifted.)
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+
+    // Snapshot the pre-unmerge state we expect undo to restore exactly.
+    let before = state.get_project_state().unwrap();
+    let offset_before = before.section_offset(b);
+    let merges_before = before.station_merges.len();
+    assert_eq!(before.loop_closures.len(), 1);
+
+    // Unmerge → closure becomes a merge, section B repositions onto A0.
+    let r = state.execute(Command::UnmergeStationPair {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let converted = state.get_project_state().unwrap();
+    assert!(
+        converted.loop_closures.is_empty(),
+        "closure should have converted to a merge"
+    );
+    let offset_converted = converted.section_offset(b);
+    assert!(
+        (offset_converted.0 - offset_before.0).abs() > 1e-9
+            || (offset_converted.1 - offset_before.1).abs() > 1e-9,
+        "precondition: conversion must actually move B, else the position check is vacuous"
+    );
+
+    // Undo → merge, closure, and position all come back.
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(
+        restored.loop_closures.len(),
+        1,
+        "undo must turn the converted merge back into a closure"
+    );
+    assert_eq!(
+        restored.station_merges.len(),
+        merges_before,
+        "undo must restore exactly the original merge — no leftover cycle"
+    );
+    assert!(
+        restored.check_orphan_closures().is_empty(),
+        "with the merge restored the closure is no longer a sole bridge"
+    );
+    assert!(
+        !restored.has_critical_integrity_violations(),
+        "restored state must be structurally clean"
+    );
+    let offset_restored = restored.section_offset(b);
+    assert!(
+        (offset_restored.0 - offset_before.0).abs() < 1e-9
+            && (offset_restored.1 - offset_before.1).abs() < 1e-9,
+        "undo must reset section position: before={offset_before:?} after={offset_restored:?}"
+    );
+
+    // Redo → back to the converted state.
+    let re = state.redo();
+    assert!(re.success, "{:?}", re.error);
+    let redone = state.get_project_state().unwrap();
+    assert!(
+        redone.loop_closures.is_empty(),
+        "redo must re-apply the closure→merge conversion"
+    );
+    assert!(redone.check_orphan_closures().is_empty());
+    let offset_redone = redone.section_offset(b);
+    assert!(
+        (offset_redone.0 - offset_converted.0).abs() < 1e-9
+            && (offset_redone.1 - offset_converted.1).abs() < 1e-9,
+        "redo must restore the converted position"
+    );
+}
+
+#[test]
+fn undo_unmerge_singular_restores_converted_closure_and_position() {
+    // Same round-trip as the pair variant, but via the singular Command::UnmergeStations
+    // (which removes ALL merges on a station). It shares the conversion + snapshot path,
+    // so this guards against the two unmerge variants diverging.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+
+    let offset_before = state.get_project_state().unwrap().section_offset(b);
+
+    // Singular unmerge of the merged station strands B onto the closure.
+    let r = state.execute(Command::UnmergeStations {
+        station_ref: StationRef::new(a, 2),
+    });
+    assert!(r.success, "{:?}", r.error);
+    let converted = state.get_project_state().unwrap();
+    assert!(converted.loop_closures.is_empty(), "closure should have converted to a merge");
+
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(restored.loop_closures.len(), 1, "undo reverts the converted merge to a closure");
+    assert!(restored.check_orphan_closures().is_empty());
+    assert!(!restored.has_critical_integrity_violations());
+    let offset_restored = restored.section_offset(b);
+    assert!(
+        (offset_restored.0 - offset_before.0).abs() < 1e-9
+            && (offset_restored.1 - offset_before.1).abs() < 1e-9,
+        "undo must reset position: before={offset_before:?} after={offset_restored:?}"
+    );
+}
+
+#[test]
+fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
+    // A merge re-anchors not just the two merge groups but any section reachable
+    // through an ALIGNED loop closure (cascade phase 2). The old lightweight MergeInfo
+    // undo captured only the two groups' offsets, so such an external section stayed
+    // drifted on undo — and realign_merges() can't self-heal closure drift (it inspects
+    // merges only). With the full-snapshot undo, undo must restore EVERY section the
+    // cascade could touch.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let z = state
+        .execute(Command::CreateSection {
+            name: Some("Z".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#333333".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Anchor A to GPS so the merge moves the B side (and, via the aligned closure, Z).
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(45.0, 90.0, 0.0).unwrap(),
+    });
+
+    // Inject an ALIGNED loop closure B.1 <-> Z.0 (no merge). Z is reachable from the
+    // rest only through this aligned closure, so the cascade re-anchors it on merge.
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        let closure_id = project.next_closure_id;
+        project.loop_closures.push(LoopClosure {
+            id: closure_id,
+            station_a: StationRef::new(b, 1).into(),
+            station_b: StationRef::new(z, 0).into(),
+            path_length: 10.0,
+            misclosure_distance: 0.1,
+            error_percentage: 1.0,
+            horizontal_misclosure: 0.08,
+            vertical_misclosure: 0.06,
+            strategy: ClosureStrategy::default(),
+            is_aligned: true,
+        });
+        project.next_closure_id += 1;
+    }
+
+    let z_before = state.get_project_state().unwrap().section_offset(z);
+
+    // Merge A.1 <-> B.0: A holds the datum, so B (and Z via the aligned closure) move.
+    let r = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 1),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    let z_merged = state.get_project_state().unwrap().section_offset(z);
+    assert!(
+        (z_merged.0 - z_before.0).abs() > 1e-6 || (z_merged.1 - z_before.1).abs() > 1e-6,
+        "precondition: the merge cascade must re-anchor Z (else vacuous): \
+         before={z_before:?} merged={z_merged:?}"
+    );
+
+    // Undo must restore Z exactly — not just the two merge groups.
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let z_restored = state.get_project_state().unwrap().section_offset(z);
+    assert!(
+        (z_restored.0 - z_before.0).abs() < 1e-9 && (z_restored.1 - z_before.1).abs() < 1e-9,
+        "undo must restore the aligned-closure section outside the merge groups: \
+         before={z_before:?} after_undo={z_restored:?}"
+    );
+}
+
+#[test]
+fn undo_move_station_restores_pitch_and_adjacent_shots() {
+    // MoveStation rewrites the two adjacent shots' raw geometry including pitch.
+    // The old lightweight StationMoveInfo undo restored azimuth/length/depth but
+    // NOT pitch_in/pitch_out, so undo left pitch corrupted. Full-snapshot undo must
+    // restore every field.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // test_shot_data leaves pitch unset (None). Capture the adjacent shots' state.
+    let before = state.get_project_state().unwrap();
+    let sec_before = before.get_section(a).unwrap();
+    let shot0_before = sec_before.shots[0].clone();
+    let shot1_before = sec_before.shots[1].clone();
+    assert_eq!(shot0_before.pitch_in, None);
+    assert_eq!(shot1_before.pitch_in, None);
+
+    // Move station 1 (the boundary between shot 0 and shot 1).
+    let r = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(a, 1),
+        offset: Coordinates::new(2.0, 3.0, 1.5),
+    });
+    assert!(r.success, "{:?}", r.error);
+
+    // Precondition: the move set pitch on the adjacent shots (so undo has work to do).
+    let moved = state.get_project_state().unwrap();
+    let sec_moved = moved.get_section(a).unwrap();
+    assert!(
+        sec_moved.shots[0].pitch_in.is_some() || sec_moved.shots[1].pitch_in.is_some(),
+        "precondition: the move must set pitch on an adjacent shot"
+    );
+
+    // Undo must restore pitch (the bug) and every other field exactly.
+    let u = state.undo();
+    assert!(u.success, "{:?}", u.error);
+    let restored = state.get_project_state().unwrap();
+    let sec_r = restored.get_section(a).unwrap();
+    assert_eq!(sec_r.shots[0].pitch_in, shot0_before.pitch_in, "pitch_in[0] restored");
+    assert_eq!(sec_r.shots[0].pitch_out, shot0_before.pitch_out, "pitch_out[0] restored");
+    assert_eq!(sec_r.shots[1].pitch_in, shot1_before.pitch_in, "pitch_in[1] restored");
+    assert_eq!(sec_r.shots[1].pitch_out, shot1_before.pitch_out, "pitch_out[1] restored");
+    assert!((sec_r.shots[0].length - shot0_before.length).abs() < 1e-9, "length[0] restored");
+    assert!((sec_r.shots[1].depth_in - shot1_before.depth_in).abs() < 1e-9, "depth_in[1] restored");
+    assert!((sec_r.shots[0].azimuth_in - shot0_before.azimuth_in).abs() < 1e-9, "azimuth_in[0] restored");
+}
+
+#[test]
+fn split_converts_orphaned_bridge_closure_immediately() {
+    // The split path bypasses execute()'s reconcile; confirm it still converts a
+    // closure that the split strands as a section's sole bridge (the reported
+    // "not transformed immediately on split" bug).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    // Section A: 3 shots → stations 0..3 (so we can split at the middle shot).
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    // B hangs off A's last station; a closure A0=B1 closes the loop.
+    state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 3),
+        station_b: StationRef::new(b, 0),
+    });
+    let closure = state.execute(Command::CreateLoopClosure {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 1),
+        closure_strategy: ClosureStrategy::default(),
+    });
+    assert!(closure.success, "{:?}", closure.error);
+    assert_eq!(state.get_project_state().unwrap().loop_closures.len(), 1);
+
+    // Split A at its MIDDLE shot — the loop's path through A breaks, leaving the
+    // closure as the only connection between A's first half and B.
+    let mid = state.get_project_state().unwrap().sections[0].shots[1].id;
+    let r = state.execute_delete_shot_and_split(a, mid, "A-1".to_string(), "A-2".to_string());
+    assert!(r.success, "{:?}", r.error);
+
+    let p = state.get_project_state().unwrap();
+    assert!(
+        p.loop_closures.is_empty(),
+        "split should immediately convert the orphaned closure to a merge: {:?}",
+        p.loop_closures
+    );
+    assert!(p.check_orphan_closures().is_empty());
+}
+
+#[test]
+fn create_section_rejects_non_finite_geometry() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let mut bad = test_shot_data(5.0);
+    bad.length = f64::NAN;
+    let r = state.execute(Command::CreateSection {
+        name: None,
+        surveyor: None,
+        date: None,
+        color: "#ffffff".to_string(),
+        direction: None,
+        shots: vec![bad],
+    });
+    assert!(!r.success, "create_section must reject non-finite geometry");
+    assert_eq!(state.get_project_state().unwrap().sections.len(), 0, "nothing committed");
+}
+
+#[test]
+fn move_station_rejects_non_finite_offset() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#ffffff".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let r = state.execute(Command::MoveStation {
+        station_ref: StationRef::new(a, 1),
+        offset: Coordinates::new(f64::INFINITY, 0.0, 0.0),
+    });
+    assert!(!r.success, "move_station must reject a non-finite offset");
+    let p = state.get_project_state().unwrap();
+    assert!(p.sections[0].shots[0].all_finite(), "shot geometry left untouched");
+}
+
+#[test]
+fn redo_insert_shot_keeps_merged_stations_aligned() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Align".to_string(), location: None });
+
+    // Section A (id 0): two shots → stations A0, A1, A2.
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        })
+        .section_id
+        .unwrap();
+    // Section B (id 1): one shot → stations B0, B1.
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#222222".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Anchor A at a zero datum, then merge B0 onto A2 (B hangs off A's tail).
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(a, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    let merge = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 2),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merge.success, "{:?}", merge.error);
+
+    let aligned =
+        |state: &AppState| state.get_project_state().unwrap().check_merge_alignment().is_empty();
+    assert!(aligned(&state), "merge should start aligned");
+
+    // Insert a shot after A's first shot (between A1 and A2): shifts the tail and
+    // the merge point. The forward path cascades B back into alignment.
+    let after_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+    let ins = state.execute(Command::CreateShot {
+        section_id: a,
+        shot: test_shot_data(6.0),
+        after_shot_id: Some(after_id),
+        before_shot_id: None,
+    });
+    assert!(ins.success, "{:?}", ins.error);
+    assert!(aligned(&state), "forward insert should stay aligned");
+
+    // Undo (already correct) then redo — redo used to omit the offset cascade and
+    // leave B drifted tens of metres. The post-history reconcile must prevent it.
+    assert!(state.undo().success);
+    assert!(aligned(&state), "undo should stay aligned");
+    assert!(state.redo().success);
+    assert!(aligned(&state), "redo must not desync the merge geometry");
 }
 
 #[test]
@@ -995,8 +2441,8 @@ fn test_delete_shot_rewires_merges() {
 
     let project_after = state.get_project_state().unwrap();
     let has_merge_bc = project_after.station_merges.iter().any(|m| {
-        (m.station_a == StationRef::new(sec_b, 0) && m.station_b == StationRef::new(sec_c, 0))
-            || (m.station_a == StationRef::new(sec_c, 0) && m.station_b == StationRef::new(sec_b, 0))
+        (project_after.key_is_ref(&m.station_a, StationRef::new(sec_b, 0)) && project_after.key_is_ref(&m.station_b, StationRef::new(sec_c, 0)))
+            || (project_after.key_is_ref(&m.station_a, StationRef::new(sec_c, 0)) && project_after.key_is_ref(&m.station_b, StationRef::new(sec_b, 0)))
     });
     assert!(has_merge_bc, "Expected replacement merge between B:0 and C:0");
 }
@@ -1495,12 +2941,17 @@ fn test_is_undoable_commands() {
 
 #[test]
 fn test_get_config() {
-    let state = AppState::new().unwrap();
-    let config = state.get_config();
+    // Isolate the config path to a fresh temp dir so this default-value
+    // assertion can't read a value left in the real config file by a
+    // config-writing test (which previously made this fail with 42 vs 100).
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        let config = state.get_config();
 
-    // Should have default values
-    assert!(config.general.auto_save);
-    assert_eq!(config.general.undo_history_limit, 100);
+        // Should have default values
+        assert!(config.general.auto_save);
+        assert_eq!(config.general.undo_history_limit, 100);
+    });
 }
 
 #[test]
@@ -2075,6 +3526,84 @@ fn test_move_section_undo_redo() {
 }
 
 #[test]
+fn move_section_moves_the_whole_merged_group_and_sticks() {
+    // A merged section is rigidly bound to its partner: "Adjust Position"
+    // (MoveSection) must move the WHOLE merge group together so the merge stays
+    // aligned and the move isn't snapped back by the post-command reconcile — not
+    // shove one member off the other (finding #6).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Merged".to_string(),
+        location: None,
+    });
+
+    let mk = |name: &str, color: &str| Command::CreateSection {
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: color.to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    };
+    let a = state.execute(mk("A", "#ff0000")).section_id.unwrap();
+    let b = state.execute(mk("B", "#00ff00")).section_id.unwrap();
+
+    // Merge A:0 with B:0 → A and B are now one rigid group.
+    let merge = state.execute(Command::MergeStations {
+        station_a: StationRef::new(a, 0),
+        station_b: StationRef::new(b, 0),
+    });
+    assert!(merge.success, "merge failed: {:?}", merge.error);
+    assert!(
+        state
+            .get_project_state()
+            .unwrap()
+            .get_rigid_connected_section_ids(a)
+            .contains(&b),
+        "A and B must be one rigid group after the merge"
+    );
+
+    // Offsets right after the merge (the merge/reconcile may have set them to align).
+    let off = |st: &AppState, id| {
+        st.get_project_state()
+            .unwrap()
+            .section_offsets
+            .get(&id)
+            .copied()
+            .unwrap_or((0.0, 0.0))
+    };
+    let a_before = off(&state, a);
+    let b_before = off(&state, b);
+
+    // Move section A — the whole group must translate by the same offset and STICK.
+    let r = state.execute(Command::MoveSection {
+        section_id: a,
+        offset: Coordinates::new(10.0, 20.0, 0.0),
+    });
+    assert!(r.success);
+
+    assert_eq!(
+        off(&state, a),
+        (a_before.0 + 10.0, a_before.1 + 20.0),
+        "the moved section translated and the move stuck (not reverted by reconcile)"
+    );
+    assert_eq!(
+        off(&state, b),
+        (b_before.0 + 10.0, b_before.1 + 20.0),
+        "the merge partner translated by the same offset (moved as a rigid group)"
+    );
+
+    // Undo restores both; redo re-applies to both.
+    assert!(state.undo().success);
+    assert_eq!(off(&state, a), a_before, "undo restores the moved section");
+    assert_eq!(off(&state, b), b_before, "undo restores the merge partner too");
+
+    assert!(state.redo().success);
+    assert_eq!(off(&state, a), (a_before.0 + 10.0, a_before.1 + 20.0));
+    assert_eq!(off(&state, b), (b_before.0 + 10.0, b_before.1 + 20.0));
+}
+
+#[test]
 fn test_move_nonexistent_section() {
     let state = AppState::new().unwrap();
 
@@ -2297,8 +3826,8 @@ fn test_execute_merge_stations_command() {
     // Verify merge was recorded
     assert_eq!(project.station_merges.len(), 1);
     let merge = &project.station_merges[0];
-    assert_eq!(merge.station_a, station_a);
-    assert_eq!(merge.station_b, station_b);
+    assert!(project.key_is_ref(&merge.station_a, station_a));
+    assert!(project.key_is_ref(&merge.station_b, station_b));
 
     // Verify section offsets were updated - one section should have an offset
     // (the moving section gets an offset to align with the anchor)
@@ -2341,7 +3870,7 @@ fn test_execute_set_zero_datum_command() {
     assert_eq!(project.zero_datums.len(), 1);
 
     let datum = &project.zero_datums[0];
-    assert_eq!(datum.station_ref, station_ref);
+    assert!(project.key_is_ref(&datum.station_ref, station_ref));
     assert!((datum.gps.latitude - 48.8584).abs() < 0.0001);
     assert!((datum.gps.longitude - 2.2945).abs() < 0.0001);
     assert!((datum.gps.depth_reference - 35.0).abs() < 0.0001);
@@ -2950,8 +4479,8 @@ fn test_undo_merge_stations() {
     // Verify merge was created
     let project_after = state.get_project_state().unwrap();
     assert_eq!(project_after.station_merges.len(), 1);
-    assert_eq!(project_after.station_merges[0].station_a, station_a);
-    assert_eq!(project_after.station_merges[0].station_b, station_b);
+    assert!(project_after.key_is_ref(&project_after.station_merges[0].station_a, station_a));
+    assert!(project_after.key_is_ref(&project_after.station_merges[0].station_b, station_b));
 
     // Undo the merge
     let result = state.undo();
@@ -3735,7 +5264,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         let gps = project
             .zero_datums
             .iter()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| project.key_is_ref(&zd.station_ref, station_ref))
             .map(|zd| zd.gps);
         (offsets, gps)
     };
@@ -3766,7 +5295,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         let current_gps = project
             .zero_datums
             .iter()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| project.key_is_ref(&zd.station_ref, station_ref))
             .map(|zd| zd.gps)
             .unwrap();
         assert!(
@@ -3787,7 +5316,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         let gps = project
             .zero_datums
             .iter()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| project.key_is_ref(&zd.station_ref, station_ref))
             .map(|zd| zd.gps);
         (offsets, gps)
     };
@@ -3979,12 +5508,13 @@ fn test_undo_create_loop_closure_has_closure_info() {
     });
 
     // Check undo stack has ClosureInfo data
+    let proj = state.get_project_state().unwrap();
     let stack = state.undo_stack.lock().unwrap();
     let undo_data = stack.peek_undo_data().unwrap();
     match undo_data {
         UndoData::ClosureInfo { closure } => {
-            assert_eq!(closure.station_a, StationRef::new(section_a, 0));
-            assert_eq!(closure.station_b, StationRef::new(section_b, 1));
+            assert!(proj.key_is_ref(&closure.station_a, StationRef::new(section_a, 0)));
+            assert!(proj.key_is_ref(&closure.station_b, StationRef::new(section_b, 1)));
             assert!(closure.path_length > 0.0);
         }
         other => panic!("Expected ClosureInfo, got {:?}", other.variant_name()),
@@ -4083,8 +5613,8 @@ fn test_undo_unmerge_restores_removed_closures() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: 1,
-            station_a: merge_station_a,
-            station_b: merge_station_b,
+            station_a: merge_station_a.into(),
+            station_b: merge_station_b.into(),
             path_length: 15.0,
             misclosure_distance: 0.3,
             error_percentage: 2.0,
@@ -4127,8 +5657,8 @@ fn test_undo_unmerge_restores_removed_closures() {
             "Closure should be restored after undo of unmerge"
         );
         let restored_closure = &project.loop_closures[0];
-        assert_eq!(restored_closure.station_a, merge_station_a);
-        assert_eq!(restored_closure.station_b, merge_station_b);
+        assert!(project.key_is_ref(&restored_closure.station_a, merge_station_a));
+        assert!(project.key_is_ref(&restored_closure.station_b, merge_station_b));
         assert!((restored_closure.path_length - 15.0).abs() < 1e-6);
     }
 }
@@ -4176,7 +5706,7 @@ fn test_move_station_updates_shot_data() {
     let shot = &project.get_section(section_id).unwrap().shots[0];
     assert!((shot.length - 15.0).abs() < 1e-6, "Length should be 15.0, got {}", shot.length);
     assert!((shot.azimuth_in - 90.0).abs() < 1e-6, "Azimuth should still be 90°");
-    assert!(!project.station_offsets.contains_key(&station_ref), "Station offset should be cleared");
+    assert!(!project.station_offset_for_ref(station_ref).is_some(), "Station offset should be cleared");
 
     // Second move: (0, 10, 3) — shot vector becomes (15, 10, 3)
     let result = state.execute(Command::MoveStation {
@@ -5434,8 +6964,8 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(c, 1),
-            station_b: StationRef::new(b, 0),
+            station_a: StationRef::new(c, 1).into(),
+            station_b: StationRef::new(b, 0).into(),
             path_length: 8.0,
             misclosure_distance: 0.2,
             error_percentage: 2.5,
@@ -5556,8 +7086,8 @@ fn test_transitive_closures_in_computed_stations() {
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
             id: closure_id,
-            station_a: StationRef::new(a, 2), // A.2 (merged with B.0)
-            station_b: StationRef::new(c, 1), // C.1 (not merged with anything)
+            station_a: StationRef::new(a, 2).into(), // A.2 (merged with B.0)
+            station_b: StationRef::new(c, 1).into(), // C.1 (not merged with anything)
             path_length: 20.0,
             misclosure_distance: 0.5,
             error_percentage: 2.5,
@@ -5685,8 +7215,8 @@ fn test_transitive_closures_serialization_preserves_data() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(a, 1),
-            station_b: StationRef::new(c, 1),
+            station_a: StationRef::new(a, 1).into(),
+            station_b: StationRef::new(c, 1).into(),
             path_length: 15.0,
             misclosure_distance: 0.3,
             error_percentage: 2.0,
@@ -5968,8 +7498,8 @@ fn test_move_segment_unaligned_closure_independent() {
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
             id: closure_id,
-            station_a: StationRef::new(sid_a, 1),
-            station_b: StationRef::new(sid_b, 0),
+            station_a: StationRef::new(sid_a, 1).into(),
+            station_b: StationRef::new(sid_b, 0).into(),
             path_length: 10.0,
             misclosure_distance: 0.1,
             error_percentage: 1.0,
@@ -6052,8 +7582,8 @@ fn test_move_segment_aligned_closure_connectivity() {
         let closure_id = project.next_closure_id;
         project.loop_closures.push(LoopClosure {
             id: closure_id,
-            station_a: StationRef::new(sid_a, 1),
-            station_b: StationRef::new(sid_b, 0),
+            station_a: StationRef::new(sid_a, 1).into(),
+            station_b: StationRef::new(sid_b, 0).into(),
             path_length: 10.0,
             misclosure_distance: 0.1,
             error_percentage: 1.0,
@@ -6557,9 +8087,11 @@ fn test_split_remaps_merges() {
     // (original index 3, split_station = 2, so new index = 3 - 2 = 1)
     let proj = state.get_project_state().unwrap();
     let has_remapped_merge = proj.station_merges.iter().any(|m| {
-        (m.station_a.section_id == new_section_id && m.station_a.station_index == 1
+        let a = proj.resolve_key(&m.station_a);
+        let b = proj.resolve_key(&m.station_b);
+        (a.is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
             && m.station_b.section_id == section_b_id)
-        || (m.station_b.section_id == new_section_id && m.station_b.station_index == 1
+        || (b.is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
             && m.station_a.section_id == section_b_id)
     });
     assert!(has_remapped_merge, "Merge should be remapped to new section with adjusted index");
@@ -6620,14 +8152,27 @@ fn test_split_remaps_closures() {
     assert!(result.success);
     let new_section_id = result.section_id.unwrap();
 
-    // Closure should be remapped: station_a was (sec_a_id, 4) -> (new_section_id, 1)
-    // (split_station = 3, so 4 - 3 = 1)
+    // The closure's A-side is remapped: (sec_a_id, 4) -> (new_section_id, 1)
+    // (split_station = 3, so 4 - 3 = 1). But the split detaches new_section so
+    // that closure is now its ONLY connection to B — a sole bridge is a merge,
+    // not a loop (#8), so it is converted. Assert it was remapped AND merged.
     let proj = state.get_project_state().unwrap();
-    let has_remapped_closure = proj.loop_closures.iter().any(|lc| {
-        (lc.station_a.section_id == new_section_id && lc.station_a.station_index == 1)
-        || (lc.station_b.section_id == new_section_id && lc.station_b.station_index == 1)
+    assert!(
+        proj.loop_closures.is_empty(),
+        "the orphaned (sole-bridge) closure should have been converted to a merge: {:?}",
+        proj.loop_closures
+    );
+    let has_remapped_merge = proj.station_merges.iter().any(|m| {
+        proj.resolve_key(&m.station_a)
+            .is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
+            || proj.resolve_key(&m.station_b)
+                .is_some_and(|sr| sr.section_id == new_section_id && sr.station_index == 1)
     });
-    assert!(has_remapped_closure, "Closure should be remapped to new section with adjusted index");
+    assert!(
+        has_remapped_merge,
+        "the remapped closure should have become a merge on the new section: {:?}",
+        proj.station_merges
+    );
 }
 
 #[test]
@@ -6652,7 +8197,7 @@ fn test_split_remaps_station_offsets() {
     // Directly insert a station offset for station 3 (simulates legacy offset data)
     {
         let mut proj = state.get_project_state().unwrap();
-        proj.station_offsets.insert(StationRef::new(section_id, 3), (1.0, 2.0, 3.0));
+        proj.station_offsets.insert(StationRef::new(section_id, 3).into(), (1.0, 2.0, 3.0));
         state.set_project_for_tests(proj);
     }
 
@@ -6672,7 +8217,7 @@ fn test_split_remaps_station_offsets() {
     // split_station = 2, so 3 - 2 = 1
     let proj = state.get_project_state().unwrap();
     let new_ref = StationRef::new(new_section_id, 1);
-    let offset = proj.station_offsets.get(&new_ref);
+    let offset = proj.station_offset_for_ref(new_ref);
     assert!(offset.is_some(), "Station offset should be remapped to new section");
     let (ox, oy, oz) = offset.unwrap();
     assert!((ox - 1.0).abs() < 0.001);
@@ -6681,7 +8226,7 @@ fn test_split_remaps_station_offsets() {
 
     // Old ref should not exist
     let old_ref = StationRef::new(section_id, 3);
-    assert!(!proj.station_offsets.contains_key(&old_ref), "Old station offset should be removed");
+    assert!(!proj.station_offset_for_ref(old_ref).is_some(), "Old station offset should be removed");
 }
 
 #[test]
@@ -7049,7 +8594,7 @@ fn test_delete_last_shot_cleans_up_station_offsets() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         let station_ref = StationRef::new(section_id, 0);
-        project.station_offsets.insert(station_ref, (1.0, 2.0, 3.0));
+        project.station_offsets.insert(station_ref.into(), (1.0, 2.0, 3.0));
     }
 
     let shot_id = {
@@ -7097,8 +8642,8 @@ fn test_delete_last_shot_cleans_up_closures() {
         let project = proj_guard.as_mut().unwrap();
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(section_a_id, 0),
-            station_b: StationRef::new(section_b_id, 1),
+            station_a: StationRef::new(section_a_id, 0).into(),
+            station_b: StationRef::new(section_b_id, 1).into(),
             path_length: 10.0,
             misclosure_distance: 0.5,
             error_percentage: 5.0,
@@ -7167,12 +8712,12 @@ fn test_delete_last_shot_undo_restores_references() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         // Note: merge already sets section_offsets, so add station offset
-        project.station_offsets.insert(StationRef::new(section_a_id, 0), (1.0, 2.0, 3.0));
+        project.station_offsets.insert(StationRef::new(section_a_id, 0).into(), (1.0, 2.0, 3.0));
         // Add a closure referencing section A
         project.loop_closures.push(LoopClosure {
             id: project.next_closure_id,
-            station_a: StationRef::new(section_a_id, 0),
-            station_b: StationRef::new(section_b_id, 1),
+            station_a: StationRef::new(section_a_id, 0).into(),
+            station_b: StationRef::new(section_b_id, 1).into(),
             path_length: 10.0,
             misclosure_distance: 0.5,
             error_percentage: 5.0,
@@ -7282,7 +8827,7 @@ fn test_delete_section_undo_restores_relationships() {
     // Directly insert a station offset for sec_a:0 (MoveStation now modifies shot data directly)
     {
         let mut proj = state.get_project_state().unwrap();
-        proj.station_offsets.insert(StationRef::new(sec_a, 0), (1.0, 2.0, 0.0));
+        proj.station_offsets.insert(StationRef::new(sec_a, 0).into(), (1.0, 2.0, 0.0));
         state.set_project_for_tests(proj);
     }
 
@@ -7418,8 +8963,8 @@ fn test_insert_before_shifts_station_merge() {
     // Verify initial merge is at station 0 of both sections
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.station_merges.len(), 1);
-    assert_eq!(proj.station_merges[0].station_a, StationRef::new(sec_a, 0));
-    assert_eq!(proj.station_merges[0].station_b, StationRef::new(sec_b, 0));
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)));
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)));
 
     // Get first shot ID of section A
     let first_shot_id = proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
@@ -7436,16 +8981,8 @@ fn test_insert_before_shifts_station_merge() {
     // Verify merge shifted: station_a should now be station 1 of A (not 0)
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.station_merges.len(), 1);
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 1),
-        "Merge station_a should shift from 0 to 1 after insert_before"
-    );
-    assert_eq!(
-        proj.station_merges[0].station_b,
-        StationRef::new(sec_b, 0),
-        "Merge station_b (different section) should not shift"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 1)), "Merge station_a should shift from 0 to 1 after insert_before");
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)), "Merge station_b (different section) should not shift");
 }
 
 #[test]
@@ -7474,7 +9011,7 @@ fn test_insert_before_shifts_zero_datum() {
     assert!(zd_result.success);
 
     let proj = state.get_project_state().unwrap();
-    assert_eq!(proj.zero_datums[0].station_ref, StationRef::new(sec_id, 0));
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_id, 0)));
 
     // Get first shot ID
     let first_shot_id = proj.sections[0].shots[0].id;
@@ -7490,11 +9027,7 @@ fn test_insert_before_shifts_zero_datum() {
 
     // Verify zero datum shifted to station 1
     let proj = state.get_project_state().unwrap();
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_id, 1),
-        "Zero datum should shift from station 0 to station 1 after insert_before"
-    );
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_id, 1)), "Zero datum should shift from station 0 to station 1 after insert_before");
 }
 
 #[test]
@@ -7520,13 +9053,13 @@ fn test_insert_before_shifts_station_offset() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         project.station_offsets.insert(
-            StationRef::new(sec_id, 0),
+            StationRef::new(sec_id, 0).into(),
             (1.0, 2.0, 3.0),
         );
     }
 
     let proj = state.get_project_state().unwrap();
-    assert!(proj.station_offsets.contains_key(&StationRef::new(sec_id, 0)));
+    assert!(proj.station_offset_for_ref(StationRef::new(sec_id, 0)).is_some());
 
     // Get first shot ID
     let first_shot_id = proj.sections[0].shots[0].id;
@@ -7543,12 +9076,12 @@ fn test_insert_before_shifts_station_offset() {
     // Verify station offset key shifted from station 0 to station 1
     let proj = state.get_project_state().unwrap();
     assert!(
-        !proj.station_offsets.contains_key(&StationRef::new(sec_id, 0)),
+        !proj.station_offset_for_ref(StationRef::new(sec_id, 0)).is_some(),
         "Station offset at old index 0 should be gone"
     );
     assert_eq!(
-        proj.station_offsets.get(&StationRef::new(sec_id, 1)),
-        Some(&(1.0, 2.0, 3.0)),
+        proj.station_offset_for_ref(StationRef::new(sec_id, 1)),
+        Some((1.0, 2.0, 3.0)),
         "Station offset should have moved to station 1"
     );
 }
@@ -7608,32 +9141,28 @@ fn test_insert_before_shifts_loop_closure() {
 
     // Check the merge that was at station 0 of A
     let merge_a0 = proj.station_merges.iter().find(|m|
-        m.station_b == StationRef::new(sec_b, 0)
+        proj.key_is_ref(&m.station_b, StationRef::new(sec_b, 0))
     ).unwrap();
-    assert_eq!(
-        merge_a0.station_a,
-        StationRef::new(sec_a, 1),
-        "Merge at original station 0 should shift to station 1"
-    );
+    assert!(proj.key_is_ref(&merge_a0.station_a, StationRef::new(sec_a, 1)), "Merge at original station 0 should shift to station 1");
 
     // Check the merge that was at station 2 of A (now station 3)
     let merge_a2 = proj.station_merges.iter().find(|m|
-        m.station_b == StationRef::new(sec_c, 0) || m.station_a == StationRef::new(sec_c, 0)
+        proj.key_is_ref(&m.station_b, StationRef::new(sec_c, 0))
+            || proj.key_is_ref(&m.station_a, StationRef::new(sec_c, 0))
     ).unwrap();
     let a_ref = if merge_a2.station_a.section_id == sec_a {
-        merge_a2.station_a
+        merge_a2.station_a.clone()
     } else {
-        merge_a2.station_b
+        merge_a2.station_b.clone()
     };
-    assert_eq!(
-        a_ref,
-        StationRef::new(sec_a, 3),
+    assert!(
+        proj.key_is_ref(&a_ref, StationRef::new(sec_a, 3)),
         "Merge at original station 2 should shift to station 3"
     );
 
     // Loop closure refs should NOT have changed (they reference sec_b and sec_c, not sec_a)
-    assert_eq!(proj.loop_closures[0].station_a, StationRef::new(sec_b, 2));
-    assert_eq!(proj.loop_closures[0].station_b, StationRef::new(sec_c, 1));
+    assert!(proj.key_is_ref(&proj.loop_closures[0].station_a, StationRef::new(sec_b, 2)));
+    assert!(proj.key_is_ref(&proj.loop_closures[0].station_b, StationRef::new(sec_c, 1)));
 }
 
 #[test]
@@ -7654,7 +9183,7 @@ fn test_insert_before_undo_restores_refs() {
 
     // Verify merge shifted
     let proj = state.get_project_state().unwrap();
-    assert_eq!(proj.station_merges[0].station_a, StationRef::new(sec_a, 1));
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 1)));
 
     // Undo the insert
     let undo_result = state.undo();
@@ -7662,16 +9191,8 @@ fn test_insert_before_undo_restores_refs() {
 
     // Verify merge returned to original position
     let proj = state.get_project_state().unwrap();
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 0),
-        "Merge should return to station 0 after undo"
-    );
-    assert_eq!(
-        proj.station_merges[0].station_b,
-        StationRef::new(sec_b, 0),
-        "Merge station_b should still be station 0 of B"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)), "Merge should return to station 0 after undo");
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)), "Merge station_b should still be station 0 of B");
 }
 
 #[test]
@@ -7700,16 +9221,8 @@ fn test_insert_before_redo_shifts_refs_again() {
 
     // Verify merge shifted back to station 1
     let proj = state.get_project_state().unwrap();
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 1),
-        "Merge should shift to station 1 after redo"
-    );
-    assert_eq!(
-        proj.station_merges[0].station_b,
-        StationRef::new(sec_b, 0),
-        "Merge station_b should stay at station 0 of B"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 1)), "Merge should shift to station 1 after redo");
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_b, StationRef::new(sec_b, 0)), "Merge station_b should stay at station 0 of B");
 }
 
 #[test]
@@ -7721,7 +9234,7 @@ fn test_insert_after_only_shifts_refs_beyond() {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
         project.station_offsets.insert(
-            StationRef::new(sec_a, 1),
+            StationRef::new(sec_a, 1).into(),
             (5.0, 6.0, 7.0),
         );
     }
@@ -7742,15 +9255,11 @@ fn test_insert_after_only_shifts_refs_beyond() {
     let proj = state.get_project_state().unwrap();
 
     // Station merge at sec_a station 0 should NOT shift (0 < 2)
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 0),
-        "Merge at station 0 should not shift for insert_after shot 0"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)), "Merge at station 0 should not shift for insert_after shot 0");
 
     // Station offset at station 1 should NOT shift (1 < 2)
     assert!(
-        proj.station_offsets.contains_key(&StationRef::new(sec_a, 1)),
+        proj.station_offset_for_ref(StationRef::new(sec_a, 1)).is_some(),
         "Station offset at station 1 should not shift for insert_after shot 0"
     );
 }
@@ -7784,11 +9293,7 @@ fn test_delete_shot_undo_redo_with_snapshot() {
         "Merges referencing deleted station should be removed"
     );
     // Zero datum was at station 2, should shift to station 1
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_a, 1),
-        "Zero datum should shift from station 2 to station 1 after delete shot 0"
-    );
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_a, 1)), "Zero datum should shift from station 2 to station 1 after delete shot 0");
 
     // Undo the delete — should restore via ProjectSnapshotPair
     let undo_result = state.undo();
@@ -7796,16 +9301,8 @@ fn test_delete_shot_undo_redo_with_snapshot() {
 
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots.len(), 2);
-    assert_eq!(
-        proj.station_merges[0].station_a,
-        StationRef::new(sec_a, 0),
-        "Merge should be at station 0 after undo"
-    );
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_a, 2),
-        "Zero datum should be at station 2 after undo"
-    );
+    assert!(proj.key_is_ref(&proj.station_merges[0].station_a, StationRef::new(sec_a, 0)), "Merge should be at station 0 after undo");
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_a, 2)), "Zero datum should be at station 2 after undo");
 
     // Redo the delete
     let redo_result = state.redo();
@@ -7813,11 +9310,7 @@ fn test_delete_shot_undo_redo_with_snapshot() {
 
     let proj = state.get_project_state().unwrap();
     assert_eq!(proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots.len(), 1);
-    assert_eq!(
-        proj.zero_datums[0].station_ref,
-        StationRef::new(sec_a, 1),
-        "Zero datum should be at station 1 after redo"
-    );
+    assert!(proj.key_is_ref(&proj.zero_datums[0].station_ref, StationRef::new(sec_a, 1)), "Zero datum should be at station 1 after redo");
 }
 
 // === Section offset adjustment tests for insert_before at pos=0 ===
@@ -9950,14 +11443,14 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
     assert_eq!(merges.len(), 2, "Should still have two merge edges");
 
     let has_a1_b1 = merges.iter().any(|m| {
-        (m.station_a == StationRef::new(a, 1) && m.station_b == StationRef::new(b, 1))
-        || (m.station_a == StationRef::new(b, 1) && m.station_b == StationRef::new(a, 1))
+        (proj.key_is_ref(&m.station_a, StationRef::new(a, 1)) && proj.key_is_ref(&m.station_b, StationRef::new(b, 1)))
+        || (proj.key_is_ref(&m.station_a, StationRef::new(b, 1)) && proj.key_is_ref(&m.station_b, StationRef::new(a, 1)))
     });
     assert!(has_a1_b1, "After insert-before-0 in B, merge should be A.1↔B.1, got: {:?}", merges);
 
     let has_b2_c0 = merges.iter().any(|m| {
-        (m.station_a == StationRef::new(b, 2) && m.station_b == StationRef::new(c, 0))
-        || (m.station_a == StationRef::new(c, 0) && m.station_b == StationRef::new(b, 2))
+        (proj.key_is_ref(&m.station_a, StationRef::new(b, 2)) && proj.key_is_ref(&m.station_b, StationRef::new(c, 0)))
+        || (proj.key_is_ref(&m.station_a, StationRef::new(c, 0)) && proj.key_is_ref(&m.station_b, StationRef::new(b, 2)))
     });
     assert!(has_b2_c0, "After insert-before-0 in B, merge should be B.2↔C.0, got: {:?}", merges);
 
@@ -10284,17 +11777,17 @@ fn test_set_station_comment_set_update_remove() {
     assert!(state.execute(Command::SetStationComment {
         station_ref: station, comment: Some("marker A".to_string()),
     }).success);
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("marker A"));
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("marker A"));
     // Update
     state.execute(Command::SetStationComment { station_ref: station, comment: Some("marker B".to_string()) });
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("marker B"));
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("marker B"));
     // Remove via None
     state.execute(Command::SetStationComment { station_ref: station, comment: None });
-    assert!(!state.get_project_state().unwrap().station_comments.contains_key(&station), "None removes comment");
+    assert!(!state.get_project_state().unwrap().station_comment_for_ref(station).is_some(), "None removes comment");
     // Remove via empty string
     state.execute(Command::SetStationComment { station_ref: station, comment: Some("temp".to_string()) });
     state.execute(Command::SetStationComment { station_ref: station, comment: Some(String::new()) });
-    assert!(!state.get_project_state().unwrap().station_comments.contains_key(&station), "empty string removes comment");
+    assert!(!state.get_project_state().unwrap().station_comment_for_ref(station).is_some(), "empty string removes comment");
 }
 
 #[test]
@@ -10333,9 +11826,9 @@ fn test_station_comment_survives_unrelated_undo_redo() {
         shots: vec![test_shot_data(2.0)],
     });
     assert!(state.undo().success);
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("keep me"), "survives undo");
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("keep me"), "survives undo");
     assert!(state.redo().success);
-    assert_eq!(state.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("keep me"), "survives redo");
+    assert_eq!(state.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("keep me"), "survives redo");
 }
 
 #[test]
@@ -10354,7 +11847,7 @@ fn test_station_comment_persists_across_save_open() {
     assert!(state.save_project(Some(save_path.clone()), false).success);
     let state2 = AppState::new().unwrap();
     assert!(state2.open_project(save_path).success);
-    assert_eq!(state2.get_project_state().unwrap().station_comments.get(&station).map(String::as_str), Some("persisted note"),
+    assert_eq!(state2.get_project_state().unwrap().station_comment_for_ref(station).map(String::as_str), Some("persisted note"),
         "comment survives save/open");
 }
 
@@ -10378,8 +11871,8 @@ fn test_move_comment_transfers_between_stations() {
     });
     assert!(r.success, "MoveComment should succeed");
     let proj = state.get_project_state().unwrap();
-    assert!(!proj.station_comments.contains_key(&src), "source has no comment after move");
-    assert_eq!(proj.station_comments.get(&tgt).map(String::as_str), Some("source text"), "target has comment");
+    assert!(!proj.station_comment_for_ref(src).is_some(), "source has no comment after move");
+    assert_eq!(proj.station_comment_for_ref(tgt).map(String::as_str), Some("source text"), "target has comment");
 }
 
 #[test]
@@ -10402,8 +11895,8 @@ fn test_move_comment_swap_exchanges_comments() {
         swap: true,
     }).success);
     let proj = state.get_project_state().unwrap();
-    assert_eq!(proj.station_comments.get(&s1).map(String::as_str), Some("beta"));
-    assert_eq!(proj.station_comments.get(&s2).map(String::as_str), Some("alpha"));
+    assert_eq!(proj.station_comment_for_ref(s1).map(String::as_str), Some("beta"));
+    assert_eq!(proj.station_comment_for_ref(s2).map(String::as_str), Some("alpha"));
 }
 
 // === Import hash tracking tests ===
@@ -10638,18 +12131,21 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
     // Verify merges
     assert_eq!(project_after.station_merges.len(), 1, "merge should survive save/open");
     let m = &project_after.station_merges[0];
-    let merge_stations: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_stations: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_stations.contains(&StationRef::new(sec_a, 2)));
     assert!(merge_stations.contains(&StationRef::new(sec_b, 0)));
 
     // Verify zero datums
     assert_eq!(project_after.zero_datums.len(), 1, "datum should survive save/open");
-    assert_eq!(project_after.zero_datums[0].station_ref, StationRef::new(sec_a, 0));
+    assert!(project_after.key_is_ref(&project_after.zero_datums[0].station_ref, StationRef::new(sec_a, 0)));
     assert!((project_after.zero_datums[0].gps.latitude - 45.5).abs() < 1e-6);
 
     // Verify station comments
     assert_eq!(
-        project_after.station_comments.get(&StationRef::new(sec_b, 1)).map(String::as_str),
+        project_after.station_comment_for_ref(StationRef::new(sec_b, 1)).map(String::as_str),
         Some("junction marker"),
         "comment should survive save/open"
     );
@@ -10757,7 +12253,10 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
     // The merge should now reference A:3 (shifted from A:2) and B:0 (unchanged)
     assert_eq!(project_after.station_merges.len(), 1, "merge should still exist");
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)),
         "B:0 should be unchanged in merge");
     assert!(merge_refs.contains(&StationRef::new(sec_a, 3)),
@@ -10814,7 +12313,10 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
     // which creates a new station at index 2, shifting old station 2 to 3
     let project_after = state.get_project_state().unwrap();
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_a, 1)),
         "A:1 should remain unchanged since insertion is after it");
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)),
@@ -10862,19 +12364,15 @@ fn test_delete_mid_shot_splits_section_with_merge_intact() {
     // no merge should reference a nonexistent station
     let project_after = state.get_project_state().unwrap();
     for merge in &project_after.station_merges {
-        let sa = merge.station_a;
-        let sb = merge.station_b;
-        let valid_a = project_after.sections.iter().any(|s|
-            s.id == sa.section_id && (sa.station_index as usize) <= s.shots.len());
-        let valid_b = project_after.sections.iter().any(|s|
-            s.id == sb.section_id && (sb.station_index as usize) <= s.shots.len());
-        assert!(valid_a, "merge station_a {:?} references valid station", sa);
-        assert!(valid_b, "merge station_b {:?} references valid station", sb);
+        let valid_a = project_after.resolve_key(&merge.station_a).is_some();
+        let valid_b = project_after.resolve_key(&merge.station_b).is_some();
+        assert!(valid_a, "merge station_a {:?} references valid station", merge.station_a);
+        assert!(valid_b, "merge station_b {:?} references valid station", merge.station_b);
     }
 
     // The merge to B:0 should still exist (connected to one of the split fragments)
     let b_in_merge = project_after.station_merges.iter().any(|m|
-        m.station_a == StationRef::new(sec_b, 0) || m.station_b == StationRef::new(sec_b, 0)
+        project_after.key_is_ref(&m.station_a, StationRef::new(sec_b, 0)) || project_after.key_is_ref(&m.station_b, StationRef::new(sec_b, 0))
     );
     assert!(b_in_merge, "B:0 merge should survive the split (rewired to fragment)");
 }
@@ -10933,7 +12431,10 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
 
     // Merge should now reference the shifted station
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_a, 1)),
         "A:0 should have shifted to A:1 in merge");
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)),
@@ -11016,8 +12517,7 @@ fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
 
     let project_after = state.get_project_state().unwrap();
     assert_eq!(project_after.zero_datums.len(), 1, "datum should still exist");
-    assert_eq!(project_after.zero_datums[0].station_ref, StationRef::new(sec, 2),
-        "datum should have shifted from station 1 to station 2");
+    assert!(project_after.key_is_ref(&project_after.zero_datums[0].station_ref, StationRef::new(sec, 2)), "datum should have shifted from station 1 to station 2");
 }
 
 // ==========================================================================
@@ -11219,7 +12719,10 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
 
     // The remaining merge should be A:1 ↔ B:0
     let m = &project_after.station_merges[0];
-    let merge_refs: HashSet<StationRef> = [m.station_a, m.station_b].into();
+    let merge_refs: HashSet<StationRef> = [&m.station_a, &m.station_b]
+        .into_iter()
+        .filter_map(|k| project_after.resolve_key(k))
+        .collect();
     assert!(merge_refs.contains(&StationRef::new(sec_a, 1)), "A:1 should be in remaining merge");
     assert!(merge_refs.contains(&StationRef::new(sec_b, 0)), "B:0 should be in remaining merge");
 
@@ -11365,28 +12868,14 @@ fn test_triangle_topology_with_loop_closure() {
 
     // All merges reference valid stations
     for merge in &project.station_merges {
-        let valid_a = project.sections.iter().any(|s|
-            s.id == merge.station_a.section_id &&
-            (merge.station_a.station_index as usize) <= s.shots.len()
-        );
-        let valid_b = project.sections.iter().any(|s|
-            s.id == merge.station_b.section_id &&
-            (merge.station_b.station_index as usize) <= s.shots.len()
-        );
-        assert!(valid_a, "merge station_a {:?} should be valid", merge.station_a);
-        assert!(valid_b, "merge station_b {:?} should be valid", merge.station_b);
+        assert!(project.resolve_key(&merge.station_a).is_some(), "merge station_a {:?} should be valid", merge.station_a);
+        assert!(project.resolve_key(&merge.station_b).is_some(), "merge station_b {:?} should be valid", merge.station_b);
     }
 
     // Loop closure references valid stations
     let lc = &project.loop_closures[0];
-    assert!(project.sections.iter().any(|s|
-        s.id == lc.station_a.section_id &&
-        (lc.station_a.station_index as usize) <= s.shots.len()
-    ), "closure station_a should be valid");
-    assert!(project.sections.iter().any(|s|
-        s.id == lc.station_b.section_id &&
-        (lc.station_b.station_index as usize) <= s.shots.len()
-    ), "closure station_b should be valid");
+    assert!(project.resolve_key(&lc.station_a).is_some(), "closure station_a should be valid");
+    assert!(project.resolve_key(&lc.station_b).is_some(), "closure station_b should be valid");
 }
 
 // === Collaboration mode: empty-section name mapping ===
@@ -11729,4 +13218,110 @@ fn profile_stalx_load() {
     eprintln!("│ end-to-end:                     {:>9.2} ms",
         (t8 - t0).as_secs_f64() * 1000.0);
     eprintln!("└───────────────────────────────────────────────────────");
+}
+
+#[test]
+fn redo_create_shot_preserves_uuid_all_insert_modes() {
+    // Redo of CreateShot must restore the shot's ORIGINAL UUID (not mint a fresh
+    // one) on every insert mode — append, insert_after, and prepend — because
+    // cross-references and Ariane matching anchor on it. Each mode hits a
+    // distinct redo branch (append: Shot::with_uuid; after/before: the forced
+    // uuid threaded through insert_shot_*).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let sid = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let uuid_of = |s: &AppState, shot_id: u32| -> Option<String> {
+        s.get_project_state()
+            .unwrap()
+            .get_section(sid)
+            .unwrap()
+            .get_shot(shot_id)
+            .unwrap()
+            .uuid
+            .clone()
+    };
+    let first_id = state.get_project_state().unwrap().get_section(sid).unwrap().shots[0].id;
+    let last_id = {
+        let p = state.get_project_state().unwrap();
+        let shots = &p.get_section(sid).unwrap().shots;
+        shots[shots.len() - 1].id
+    };
+
+    let cases = [
+        // (after_shot_id, before_shot_id) → append / insert_after / prepend
+        Command::CreateShot { section_id: sid, shot: test_shot_data(3.0), after_shot_id: None, before_shot_id: None },
+        Command::CreateShot { section_id: sid, shot: test_shot_data(3.0), after_shot_id: Some(last_id), before_shot_id: None },
+        Command::CreateShot { section_id: sid, shot: test_shot_data(3.0), after_shot_id: None, before_shot_id: Some(first_id) },
+    ];
+    for cmd in cases {
+        let res = state.execute(cmd);
+        assert!(res.success, "create shot succeeds");
+        let new_id = res.shot_id.expect("create shot returns id");
+        let before = uuid_of(&state, new_id);
+        assert!(before.is_some(), "created shot has a uuid");
+
+        assert!(state.undo().success, "undo create shot");
+        assert!(state.redo().success, "redo create shot");
+
+        assert_eq!(uuid_of(&state, new_id), before, "redo must preserve the shot UUID");
+    }
+}
+
+#[test]
+fn repair_open_project_integrity_reports_fixed_and_remaining() {
+    // Repair returns the genuine before→after delta over the FULL violation set,
+    // so a repairable issue counts as `fixed` and a detect-only one (a drifted
+    // aligned loop closure) counts as `remaining`.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "X".to_string(), location: None });
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#111111".to_string(),
+            direction: Some(SurveyDirection::In),
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Inject a dangling merge (repairable: repair drops it).
+    {
+        let mut guard = state.project.lock().unwrap();
+        let project = guard.as_mut().unwrap();
+        let dangling = StationKey::new(a, StationAnchor::AfterShot("ghost".to_string()));
+        project.station_merges.push(StationMerge {
+            station_a: dangling,
+            station_b: StationRef::new(a, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+    }
+
+    let before = state.integrity_violation_messages().len();
+    assert!(before >= 1, "seeded at least one violation");
+
+    let result = state.repair_open_project_integrity();
+    assert_eq!(
+        (result.fixed + result.remaining) as usize,
+        before,
+        "fixed + remaining accounts for every issue the banner showed"
+    );
+    assert!(result.fixed >= 1, "the dangling merge was repaired");
+    assert_eq!(
+        result.remaining as usize,
+        state.integrity_violation_messages().len(),
+        "remaining matches the true post-repair count"
+    );
 }

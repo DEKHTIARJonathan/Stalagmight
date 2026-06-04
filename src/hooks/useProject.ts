@@ -5,7 +5,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { getErrorMessage } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
-import { isPermissionError } from '../utils/saveErrors';
+import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -79,10 +79,11 @@ export function useProject() {
       }
 
       const result = await store.saveProject(finalPath);
-      // saveProject already opens the folder-access guidance dialog on a
-      // permission denial; don't replace it with the generic error dialog.
-      if (result && !result.success && result.error && !isPermissionError(result.error)) {
-        openDialog('error', { message: result.error, title: 'Save Failed' });
+      // surfaceSaveFailure routes integrity blocks to Review & Repair and skips
+      // the generic error window for permission denials (saveProject already
+      // opened the folder-access guidance dialog for those).
+      if (result && !result.success && result.error) {
+        surfaceSaveFailure(result.error, openDialog);
       }
       return result;
     }
@@ -94,8 +95,8 @@ export function useProject() {
       ? await store.saveProject()
       : await handleSaveProjectAs();
 
-    if (result && !result.success && result.error && !isPermissionError(result.error)) {
-      openDialog('error', { message: result.error, title: 'Save Failed' });
+    if (result && !result.success) {
+      surfaceSaveFailure(result.error, openDialog);
     }
     return result;
   }, [store, handleSaveProjectAs, openDialog]);

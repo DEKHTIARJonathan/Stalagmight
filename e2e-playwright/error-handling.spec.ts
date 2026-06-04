@@ -665,81 +665,35 @@ test.describe('Error Handling', () => {
     test('should display error on file open failure', async ({ page }) => {
       await setupMockedPage(page);
 
-      await setIpcOverrides(page, {
-        load_project_full: { __throw: 'File corrupted: invalid project format' },
-        load_project: { __throw: 'File corrupted: invalid project format' },
-      });
-
-      // Try to open a file via Open button
       const openBtn = page.locator('[data-testid="global-open-project-button"], button:has-text("Open"), h3:has-text("Open")').first();
-      await openBtn.click();
-
-      // Wait for error processing or dialog appearance
-      const anyDialog = page.locator('[data-testid="error-dialog"]');
       const loadingError = page.getByTestId('loading-progress');
-      await Promise.race([
-        anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
-        loadingError.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
-      ]);
-
-      // Close loading error overlay if present (blocks UI)
-      if (await loadingError.isVisible().catch(() => false)) {
-        const dismissButton = loadingError.locator('button:has-text("Dismiss")').first();
-        if (await dismissButton.isVisible().catch(() => false)) {
-          await dismissButton.click();
-        }
-        await loadingError.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
-      }
-
-      // Check if any modal/dialog appeared and close it if visible
-      if (await anyDialog.isVisible().catch(() => false)) {
-        // Try to close any error dialog or overlay
-        const closeButton = anyDialog.locator('button:has-text("OK"), button:has-text("Close"), button:has-text("Cancel")').first();
-        if (await closeButton.isVisible().catch(() => false)) {
-          await closeButton.click();
-          await anyDialog.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
-        }
-      }
-
-      // After error, should stay on start page
       const title = page.locator('h1:has-text("Stalagmight")');
-      await expect(title).toBeVisible({ timeout: 5000 });
 
-      // Swap to "file not found" and retry.
-      await setIpcOverrides(page, {
-        load_project_full: { __throw: 'File not found: the specified file does not exist' },
-        load_project: { __throw: 'File not found: the specified file does not exist' },
-      });
+      // Opening a file whose load fails must surface the loading-error overlay
+      // with the message, keep the app on the start page, and be dismissable.
+      // Asserted deterministically (wait for the actual states, no racing
+      // best-effort timeouts) so it can't flake under parallel load — and it now
+      // verifies the error message is shown, which the previous version never did.
+      const expectOpenErrorSurfaced = async (message: string) => {
+        await setIpcOverrides(page, {
+          load_project_full: { __throw: message },
+          load_project: { __throw: message },
+        });
 
-      // Try open again
-      await openBtn.click();
+        await openBtn.click();
 
-      // Wait for error processing or dialog appearance
-      await Promise.race([
-        anyDialog.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
-        loadingError.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {}),
-      ]);
+        await expect(loadingError).toBeVisible({ timeout: 10000 });
+        await expect(loadingError).toContainText(message);
 
-      // Close loading error overlay if present
-      if (await loadingError.isVisible().catch(() => false)) {
-        const dismissButton = loadingError.locator('button:has-text("Dismiss")').first();
-        if (await dismissButton.isVisible().catch(() => false)) {
-          await dismissButton.click();
-        }
-        await loadingError.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
-      }
+        await loadingError.getByRole('button', { name: 'Dismiss' }).click();
+        await expect(loadingError).toBeHidden({ timeout: 10000 });
 
-      // Close any dialog that appeared
-      if (await anyDialog.isVisible().catch(() => false)) {
-        const closeButton = anyDialog.locator('button:has-text("OK"), button:has-text("Close"), button:has-text("Cancel")').first();
-        if (await closeButton.isVisible().catch(() => false)) {
-          await closeButton.click();
-          await anyDialog.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
-        }
-      }
+        // App stays functional on the start page.
+        await expect(title).toBeVisible();
+      };
 
-      // App should remain on start page after error
-      await expect(title).toBeVisible({ timeout: 5000 });
+      await expectOpenErrorSurfaced('File corrupted: invalid project format');
+      await expectOpenErrorSurfaced('File not found: the specified file does not exist');
     });
   });
 

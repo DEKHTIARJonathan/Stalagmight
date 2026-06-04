@@ -11,18 +11,19 @@ use crate::config::ClosureAdjustmentConfig;
 use super::{
     gps_to_local, ClosurePreview, ClosureRef, ClosureStrategy, CollabState, Coordinates,
     FrozenShotRef, GpsBounds, GpsCoordinates, LoopClosure, Section, SectionData, SectionId,
-    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationMerge, StationRef,
-    ZeroDatum, FEATURE_ID_STRIDE,
+    SectionUpdates, Shot, ShotData, ShotId, ShotUpdates, Station, StationAnchor, StationKey,
+    StationMerge, StationMergeWire, StationRef, ZeroDatum, FEATURE_ID_STRIDE,
 };
+use super::{LoopClosureWire, ZeroDatumWire};
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
 /// Used by the frontend to show affected relationships before section deletion.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionRelationships {
-    /// Station merges referencing the section
-    pub merges: Vec<StationMerge>,
-    /// Loop closures referencing the section
-    pub closures: Vec<LoopClosure>,
+    /// Station merges referencing the section (positional wire form)
+    pub merges: Vec<StationMergeWire>,
+    /// Loop closures referencing the section (positional wire form)
+    pub closures: Vec<LoopClosureWire>,
     /// Whether the section has a section offset
     pub has_section_offset: bool,
     /// Number of station offsets referencing the section
@@ -120,6 +121,11 @@ pub struct DeleteShotImpact {
     pub removed_closures: Vec<ClosurePair>,
     pub replacement_merges: Vec<StationPair>,
     pub replacement_closure_updates: Vec<ClosureUpdate>,
+    /// Closures broken by the deletion: the surviving endpoints are no longer
+    /// connected through the survey, so the closure is replaced by a plain
+    /// station merge instead of being kept as a (false) loop. See issue #8.
+    #[serde(default)]
+    pub closure_to_merge: Vec<StationPair>,
     pub merge_rewire_skipped: bool,
     pub closure_rewire_skipped: bool,
     #[serde(default)]
@@ -143,12 +149,16 @@ pub struct Project {
     pub modified_at: DateTime<Utc>,
     /// All sections in this project
     pub sections: Vec<Section>,
-    /// Station merges
+    /// Station merges. Stored with position-independent [`StationKey`] endpoints;
+    /// the TS/frontend shape is the positional wire form (resolved at IPC encode).
+    #[ts(type = "Array<StationMerge>")]
     pub station_merges: Vec<StationMerge>,
     /// Zero datums
+    #[ts(type = "Array<ZeroDatum>")]
     pub zero_datums: Vec<ZeroDatum>,
     /// Detected loop closures
     #[serde(default)]
+    #[ts(type = "Array<LoopClosure>")]
     pub loop_closures: Vec<LoopClosure>,
     /// File path if saved (None for new unsaved projects)
     #[ts(type = "string | null")]
@@ -161,13 +171,11 @@ pub struct Project {
     /// Station offsets (x, y, z) applied when individual stations are moved
     #[serde(default, serialize_with = "serialize_station_offsets", deserialize_with = "deserialize_station_offsets")]
     #[ts(skip)]
-    #[ts(type = "Array<[StationRef, [number, number, number]]>")]
-    pub station_offsets: HashMap<StationRef, (f64, f64, f64)>,
+    pub station_offsets: HashMap<StationKey, (f64, f64, f64)>,
     /// Station comments keyed by StationRef
     #[serde(default, serialize_with = "serialize_station_comments", deserialize_with = "deserialize_station_comments")]
     #[ts(skip)]
-    #[ts(type = "Array<[StationRef, string]>")]
-    pub station_comments: HashMap<StationRef, String>,
+    pub station_comments: HashMap<StationKey, String>,
     /// SHA256 hashes of imported DMP files (for duplicate detection)
     #[serde(default)]
     pub imported_file_hashes: Vec<String>,
@@ -257,36 +265,88 @@ pub struct ProjectStats {
 /// Serialize station_offsets as a Vec of (StationRef, (f64, f64, f64)) tuples
 /// to avoid serde_json's requirement that map keys be strings.
 fn serialize_station_offsets<S: serde::Serializer>(
-    map: &HashMap<StationRef, (f64, f64, f64)>,
+    map: &HashMap<StationKey, (f64, f64, f64)>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let entries: Vec<(&StationRef, &(f64, f64, f64))> = map.iter().collect();
+    let entries: Vec<(&StationKey, &(f64, f64, f64))> = map.iter().collect();
     entries.serialize(serializer)
 }
 
 /// Deserialize station_offsets from a Vec of (StationRef, (f64, f64, f64)) tuples.
 fn deserialize_station_offsets<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<HashMap<StationRef, (f64, f64, f64)>, D::Error> {
-    let entries: Vec<(StationRef, (f64, f64, f64))> = Vec::deserialize(deserializer)?;
+) -> Result<HashMap<StationKey, (f64, f64, f64)>, D::Error> {
+    let entries: Vec<(StationKey, (f64, f64, f64))> = Vec::deserialize(deserializer)?;
     Ok(entries.into_iter().collect())
 }
 
 /// Serialize station_comments as a Vec of (StationRef, String) tuples.
 fn serialize_station_comments<S: serde::Serializer>(
-    map: &HashMap<StationRef, String>,
+    map: &HashMap<StationKey, String>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let entries: Vec<(&StationRef, &String)> = map.iter().collect();
+    let entries: Vec<(&StationKey, &String)> = map.iter().collect();
     entries.serialize(serializer)
 }
 
 /// Deserialize station_comments from a Vec of (StationRef, String) tuples.
 fn deserialize_station_comments<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<HashMap<StationRef, String>, D::Error> {
-    let entries: Vec<(StationRef, String)> = Vec::deserialize(deserializer)?;
+) -> Result<HashMap<StationKey, String>, D::Error> {
+    let entries: Vec<(StationKey, String)> = Vec::deserialize(deserializer)?;
     Ok(entries.into_iter().collect())
+}
+
+/// IPC serialization view of [`Project`]. The stored `Project` keeps its
+/// `StationKey`-based serde (lossless, required by the undo snapshot path), but
+/// the frontend and the ts-rs `Project` type expect the three cross-reference
+/// collections in positional wire form (`StationRef { section_id, station_index }`).
+/// This wrapper forwards every ts-exported field and re-encodes those three to
+/// wire, dropping dangling refs (the same resolution the binary load path's
+/// `ProjectHeaderBinary` does). `#[ts(skip)]` fields on `Project` — the
+/// `StationKey`-keyed `station_offsets`/`station_comments` and the transient
+/// caches — are intentionally omitted to match the generated `Project` TS type.
+struct ProjectIpc<'a>(&'a Project);
+
+impl Serialize for ProjectIpc<'_> {
+    fn serialize<S: serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let p = self.0;
+        let station_merges: Vec<_> = p.station_merges.iter().filter_map(|m| p.merge_to_wire(m)).collect();
+        let zero_datums: Vec<_> = p.zero_datums.iter().filter_map(|z| p.datum_to_wire(z)).collect();
+        let loop_closures: Vec<_> = p.loop_closures.iter().filter_map(|c| p.closure_to_wire(c)).collect();
+        // Field set + order MUST stay in lockstep with the generated Project.ts
+        // (15 ts-exported fields). Adding a ts-exported field to `Project`
+        // requires adding it here too, or it silently drops off the IPC payload.
+        let mut st = serializer.serialize_struct("Project", 15)?;
+        st.serialize_field("name", &p.name)?;
+        st.serialize_field("location", &p.location)?;
+        st.serialize_field("created_at", &p.created_at)?;
+        st.serialize_field("modified_at", &p.modified_at)?;
+        st.serialize_field("sections", &p.sections)?;
+        st.serialize_field("station_merges", &station_merges)?;
+        st.serialize_field("zero_datums", &zero_datums)?;
+        st.serialize_field("loop_closures", &loop_closures)?;
+        st.serialize_field("file_path", &p.file_path)?;
+        st.serialize_field("next_section_id", &p.next_section_id)?;
+        st.serialize_field("section_offsets", &p.section_offsets)?;
+        st.serialize_field("imported_file_hashes", &p.imported_file_hashes)?;
+        st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
+        st.serialize_field("next_closure_id", &p.next_closure_id)?;
+        st.serialize_field("collab", &p.collab)?;
+        st.end()
+    }
+}
+
+/// `#[serde(serialize_with = "...")]` target for every IPC struct that carries a
+/// `Project` to the frontend (`ProjectState`, `LoadProjectFullResult`,
+/// `CreateProjectFullResult`), so they all emit the positional wire shape the
+/// frontend reads rather than the internal `StationKey` shape derived serde emits.
+pub(crate) fn serialize_project_ipc<S: serde::ser::Serializer>(
+    p: &Project,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    Serialize::serialize(&ProjectIpc(p), s)
 }
 
 impl Project {
@@ -432,6 +492,36 @@ impl Project {
         }
     }
 
+    /// Re-mint the UUID of any shot that shares a UUID with an earlier shot in
+    /// the SAME section, keeping the first occurrence (AfterShot anchors resolve
+    /// to the first match via `position()`, so they stay valid). Returns the
+    /// number re-minted. Restores the per-section uniqueness `resolve_key` relies
+    /// on; the companion detection lives in [`check_structural_integrity`].
+    /// Empty UUIDs are left for [`ensure_shot_uuids`].
+    pub fn ensure_unique_shot_uuids(&mut self) -> usize {
+        let mut reminted = 0;
+        for section in &mut self.sections {
+            let mut seen: HashSet<String> = HashSet::new();
+            for shot in &mut section.shots {
+                let Some(u) = shot.uuid.clone() else { continue };
+                if u.is_empty() {
+                    continue;
+                }
+                // insert() == false means this UUID already appeared in-section.
+                if !seen.insert(u) {
+                    let fresh = uuid::Uuid::new_v4().to_string();
+                    seen.insert(fresh.clone());
+                    shot.uuid = Some(fresh);
+                    reminted += 1;
+                }
+            }
+        }
+        if reminted > 0 {
+            self.touch();
+        }
+        reminted
+    }
+
     /// Rebuild the section-id → index cache from the current `sections`
     /// vector. Cheap (O(N)) and safe to call any time; call this after a
     /// bulk mutation (e.g. snapshot rollback) or before a hot lookup loop
@@ -498,18 +588,18 @@ impl Project {
     /// Query relationships that reference the given section.
     /// Returns merges, closures, offset info, and zero datum count.
     pub fn get_section_relationships(&self, section_id: SectionId) -> SectionRelationships {
-        let merges: Vec<StationMerge> = self
+        let merges: Vec<StationMergeWire> = self
             .station_merges
             .iter()
             .filter(|m| m.station_a.section_id == section_id || m.station_b.section_id == section_id)
-            .cloned()
+            .filter_map(|m| self.merge_to_wire(m))
             .collect();
 
-        let closures: Vec<LoopClosure> = self
+        let closures: Vec<LoopClosureWire> = self
             .loop_closures
             .iter()
             .filter(|lc| lc.station_a.section_id == section_id || lc.station_b.section_id == section_id)
-            .cloned()
+            .filter_map(|lc| self.closure_to_wire(lc))
             .collect();
 
         let has_section_offset = self.section_offsets.contains_key(&section_id);
@@ -628,9 +718,12 @@ impl Project {
         // Add replacement merges (via the helper so the adjacency cache
         // stays consistent for subsequent BFS calls in this transaction).
         for (a, b) in &replacement_merges {
+            let (Some(ka), Some(kb)) = (self.key_for_ref(*a), self.key_for_ref(*b)) else {
+                continue;
+            };
             self.record_station_merge(StationMerge {
-                station_a: *a,
-                station_b: *b,
+                station_a: ka,
+                station_b: kb,
                 merged_at: Utc::now(),
             });
             debug!(
@@ -649,7 +742,7 @@ impl Project {
             .filter(|lc| {
                 lc.station_a.section_id == section_id || lc.station_b.section_id == section_id
             })
-            .map(|lc| (lc.id, lc.station_a, lc.station_b))
+            .map(|lc| (lc.id, lc.station_a.clone(), lc.station_b.clone()))
             .collect();
 
         for (closure_id, station_a, station_b) in closures_to_rewire {
@@ -663,9 +756,15 @@ impl Project {
             if other_station.section_id == section_id {
                 continue;
             }
+            // Resolve the keys to positional refs for the merge-group walk / checks.
+            let (Some(removed_ref), Some(other_ref)) =
+                (self.resolve_key(&removed_station), self.resolve_key(&other_station))
+            else {
+                continue;
+            };
 
             // Find a merge-group partner on another section to rewire to
-            let group = self.get_merge_group(removed_station);
+            let group = self.get_merge_group(removed_ref);
             let mut candidates: Vec<StationRef> = group
                 .into_iter()
                 .filter(|s| s.section_id != section_id)
@@ -674,19 +773,22 @@ impl Project {
 
             if let Some(replacement) = candidates.first().copied() {
                 // Don't rewire if it would create a self-referencing or duplicate closure
-                if replacement == other_station
-                    || self.are_stations_merged(replacement, other_station)
-                    || self.are_stations_in_closure(replacement, other_station)
+                if replacement == other_ref
+                    || self.are_stations_merged(replacement, other_ref)
+                    || self.are_stations_in_closure(replacement, other_ref)
                 {
                     continue;
                 }
+                let Some(replacement_key) = self.key_for_ref(replacement) else {
+                    continue;
+                };
 
                 // Rewire the closure in place
                 if let Some(lc) = self.loop_closures.iter_mut().find(|lc| lc.id == closure_id) {
                     if lc.station_a.section_id == section_id {
-                        lc.station_a = replacement;
+                        lc.station_a = replacement_key;
                     } else {
-                        lc.station_b = replacement;
+                        lc.station_b = replacement_key;
                     }
                     debug!(
                         closure_id,
@@ -717,15 +819,14 @@ impl Project {
             {
                 continue;
             }
-            if stations.contains(&merge.station_a) && stations.contains(&merge.station_b) {
-                adjacency
-                    .entry(merge.station_a)
-                    .or_default()
-                    .push(merge.station_b);
-                adjacency
-                    .entry(merge.station_b)
-                    .or_default()
-                    .push(merge.station_a);
+            let (Some(a), Some(b)) =
+                (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
+            else {
+                continue;
+            };
+            if stations.contains(&a) && stations.contains(&b) {
+                adjacency.entry(a).or_default().push(b);
+                adjacency.entry(b).or_default().push(a);
             }
         }
 
@@ -842,12 +943,6 @@ impl Project {
             .any(|sid| self.zero_datums.iter().any(|zd| zd.station_ref.section_id == *sid))
     }
 
-    /// Does this specific section directly hold a zero datum?
-    pub(crate) fn section_has_direct_datum(&self, id: SectionId) -> bool {
-        self.zero_datums
-            .iter()
-            .any(|zd| zd.station_ref.section_id == id)
-    }
 
     /// Assert that all merge points are colocated (within 1cm tolerance).
     /// Only active in debug builds — no-op in release.
@@ -873,8 +968,8 @@ impl Project {
                 if merge.station_a.section_id == merge.station_b.section_id {
                     continue;
                 }
-                let a = self.compute_station_raw_coords(merge.station_a);
-                let b = self.compute_station_raw_coords(merge.station_b);
+                let a = self.resolve_key(&merge.station_a).and_then(|s| self.compute_station_raw_coords(s));
+                let b = self.resolve_key(&merge.station_b).and_then(|s| self.compute_station_raw_coords(s));
                 if let (Some(a_pos), Some(b_pos)) = (a, b) {
                     let dist = ((a_pos.x - b_pos.x).powi(2) + (a_pos.y - b_pos.y).powi(2)).sqrt();
                     if dist >= 0.05 {
@@ -917,64 +1012,53 @@ impl Project {
     /// have their `station_index` shifted by `delta`. This is needed when inserting or
     /// removing shots, which changes station indices for all subsequent stations.
     ///
-    /// Affects: station_merges, loop_closures, zero_datums, station_offsets.
-    pub(crate) fn shift_station_refs(&mut self, section_id: SectionId, from_index: u32, delta: i32) {
-        let shift = |sr: &mut StationRef| {
-            if sr.section_id == section_id && sr.station_index >= from_index {
-                sr.station_index = (sr.station_index as i32 + delta) as u32;
-            }
-        };
-
-        // Shift station_merges
-        for merge in &mut self.station_merges {
-            shift(&mut merge.station_a);
-            shift(&mut merge.station_b);
+    /// Affects: station_merges, loop_closures, zero_datums, station_offsets,
+    /// station_comments — all routed through [`Self::map_station_refs`].
+    /// THE single enumeration of every [`StationKey`]-bearing collection on the
+    /// project, for READ access. `check_structural_integrity` and
+    /// `reanchor_station_refs` consume this so a newly-added ref-bearing collection
+    /// can't be silently missed; the `label` distinguishes categories.
+    pub(crate) fn for_each_station_ref(&self, mut f: impl FnMut(&str, StationKey)) {
+        for m in &self.station_merges {
+            f("merge", m.station_a.clone());
+            f("merge", m.station_b.clone());
         }
-
-        // Shift loop_closures
-        for closure in &mut self.loop_closures {
-            shift(&mut closure.station_a);
-            shift(&mut closure.station_b);
+        for c in &self.loop_closures {
+            f("loop closure", c.station_a.clone());
+            f("loop closure", c.station_b.clone());
         }
+        for zd in &self.zero_datums {
+            f("zero datum", zd.station_ref.clone());
+        }
+        for k in self.station_offsets.keys() {
+            f("station offset", k.clone());
+        }
+        for k in self.station_comments.keys() {
+            f("station comment", k.clone());
+        }
+    }
 
-        // Shift zero_datums
+    /// THE single enumeration for REWRITING every [`StationKey`]-bearing collection
+    /// (rewrite twin of [`Self::for_each_station_ref`]). Vec fields mapped in place;
+    /// the offset/comment HashMaps rebuilt with transformed keys. Used by
+    /// [`Self::reanchor_station_refs`]. (Keys are position-independent, so
+    /// insert/delete no longer rewrite them — `shift_station_refs` is gone.)
+    pub(crate) fn map_station_refs(&mut self, mut f: impl FnMut(StationKey) -> StationKey) {
+        for m in &mut self.station_merges {
+            m.station_a = f(m.station_a.clone());
+            m.station_b = f(m.station_b.clone());
+        }
+        for c in &mut self.loop_closures {
+            c.station_a = f(c.station_a.clone());
+            c.station_b = f(c.station_b.clone());
+        }
         for zd in &mut self.zero_datums {
-            shift(&mut zd.station_ref);
+            zd.station_ref = f(zd.station_ref.clone());
         }
-
-        // Shift station_offsets (HashMap keys — collect, remove, re-insert)
-        let keys_to_shift: Vec<(StationRef, (f64, f64, f64))> = self
-            .station_offsets
-            .iter()
-            .filter(|(sr, _)| sr.section_id == section_id && sr.station_index >= from_index)
-            .map(|(sr, v)| (*sr, *v))
-            .collect();
-
-        for (old_key, value) in keys_to_shift {
-            self.station_offsets.remove(&old_key);
-            let new_key = StationRef::new(
-                old_key.section_id,
-                (old_key.station_index as i32 + delta) as u32,
-            );
-            self.station_offsets.insert(new_key, value);
-        }
-
-        // Shift station_comments (HashMap keys — collect, remove, re-insert)
-        let comments_to_shift: Vec<(StationRef, String)> = self
-            .station_comments
-            .iter()
-            .filter(|(sr, _)| sr.section_id == section_id && sr.station_index >= from_index)
-            .map(|(sr, v)| (*sr, v.clone()))
-            .collect();
-
-        for (old_key, value) in comments_to_shift {
-            self.station_comments.remove(&old_key);
-            let new_key = StationRef::new(
-                old_key.section_id,
-                (old_key.station_index as i32 + delta) as u32,
-            );
-            self.station_comments.insert(new_key, value);
-        }
+        let offsets = std::mem::take(&mut self.station_offsets);
+        self.station_offsets = offsets.into_iter().map(|(k, v)| (f(k), v)).collect();
+        let comments = std::mem::take(&mut self.station_comments);
+        self.station_comments = comments.into_iter().map(|(k, v)| (f(k), v)).collect();
     }
 
     fn station_ref_key(station_ref: &StationRef) -> (SectionId, u32) {
@@ -983,7 +1067,8 @@ impl Project {
 
     fn has_direct_merge(&self, a: StationRef, b: StationRef) -> bool {
         self.station_merges.iter().any(|m| {
-            (m.station_a == a && m.station_b == b) || (m.station_a == b && m.station_b == a)
+            (self.key_is_ref(&m.station_a, a) && self.key_is_ref(&m.station_b, b))
+                || (self.key_is_ref(&m.station_a, b) && self.key_is_ref(&m.station_b, a))
         })
     }
 
@@ -995,10 +1080,11 @@ impl Project {
 
         while let Some(current) = queue.pop_front() {
             for merge in &self.station_merges {
-                let neighbor = if merge.station_a == current {
-                    Some(merge.station_b)
-                } else if merge.station_b == current {
-                    Some(merge.station_a)
+                // Compare/resolve through the stored keys (never positional ==).
+                let neighbor = if self.key_is_ref(&merge.station_a, current) {
+                    self.resolve_key(&merge.station_b)
+                } else if self.key_is_ref(&merge.station_b, current) {
+                    self.resolve_key(&merge.station_a)
                 } else {
                     None
                 };
@@ -1024,12 +1110,17 @@ impl Project {
         }
 
         for merge in &self.station_merges {
-            if merge.station_a == removed_station || merge.station_b == removed_station {
+            let (Some(a), Some(b)) =
+                (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
+            else {
+                continue;
+            };
+            if a == removed_station || b == removed_station {
                 continue;
             }
-            if stations.contains(&merge.station_a) && stations.contains(&merge.station_b) {
-                adjacency.entry(merge.station_a).or_default().push(merge.station_b);
-                adjacency.entry(merge.station_b).or_default().push(merge.station_a);
+            if stations.contains(&a) && stations.contains(&b) {
+                adjacency.entry(a).or_default().push(b);
+                adjacency.entry(b).or_default().push(a);
             }
         }
 
@@ -1066,10 +1157,15 @@ impl Project {
         components
     }
 
+    /// Stations adjacent to `station_ref` through shots (skipping `excluded_shot`)
+    /// and merges, plus loop closures when `include_closures` is true. Pass
+    /// `false` to ask "are these connected by the *survey itself*" — used to tell
+    /// a true loop from a detached pair when deciding closure-vs-merge.
     fn station_neighbors_excluding_shot(
         &self,
         station_ref: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
+        include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
         let Some(section) = self.get_section(station_ref.section_id) else {
@@ -1094,21 +1190,23 @@ impl Project {
             }
         }
 
-        // Merges
+        // Merges (resolve stored keys to positional refs)
         for merge in &self.station_merges {
-            if merge.station_a == station_ref {
-                neighbors.push(merge.station_b);
-            } else if merge.station_b == station_ref {
-                neighbors.push(merge.station_a);
+            if self.key_is_ref(&merge.station_a, station_ref) {
+                neighbors.extend(self.resolve_key(&merge.station_b));
+            } else if self.key_is_ref(&merge.station_b, station_ref) {
+                neighbors.extend(self.resolve_key(&merge.station_a));
             }
         }
 
         // Closures (all strategies)
-        for closure in &self.loop_closures {
-            if closure.station_a == station_ref {
-                neighbors.push(closure.station_b);
-            } else if closure.station_b == station_ref {
-                neighbors.push(closure.station_a);
+        if include_closures {
+            for closure in &self.loop_closures {
+                if self.key_is_ref(&closure.station_a, station_ref) {
+                    neighbors.extend(self.resolve_key(&closure.station_b));
+                } else if self.key_is_ref(&closure.station_b, station_ref) {
+                    neighbors.extend(self.resolve_key(&closure.station_a));
+                }
             }
         }
 
@@ -1120,6 +1218,7 @@ impl Project {
         station_a: StationRef,
         station_b: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
+        include_closures: bool,
     ) -> bool {
         if station_a == station_b {
             return true;
@@ -1130,7 +1229,7 @@ impl Project {
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot) {
+            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, include_closures) {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
@@ -1147,8 +1246,11 @@ impl Project {
         station_ref: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
     ) -> bool {
-        let zero_datum_set: HashSet<StationRef> =
-            self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+        let zero_datum_set: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .collect();
         if zero_datum_set.contains(&station_ref) {
             return true;
         }
@@ -1158,7 +1260,7 @@ impl Project {
         queue.push_back(station_ref);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot) {
+            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, true) {
                 if visited.insert(neighbor) {
                     if zero_datum_set.contains(&neighbor) {
                         return true;
@@ -1188,12 +1290,17 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
-    /// Insert a shot after a specific shot in a section
+    /// Insert a shot after a specific shot in a section. `forced_id` preserves
+    /// the original id and `forced_uuid` the original collaboration UUID when
+    /// redo re-runs this exact path (see [`AppState::redo`]); pass `None`/`None`
+    /// for normal inserts (a fresh UUID is minted).
     pub fn insert_shot_after(
         &mut self,
         section_id: SectionId,
         after_shot_id: ShotId,
         data: ShotData,
+        forced_id: Option<ShotId>,
+        forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
@@ -1205,42 +1312,45 @@ impl Project {
         // all stations after the insertion point.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_after(after_shot_id, data)?;
+        let shot = section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
-        // insert_after at pos: new shot at pos+1, old stations >= pos+2 shift up
-        self.shift_station_refs(section_id, (pos + 2) as u32, 1);
-        // The new shot's displacement shifts all stations > pos+1.
-        // Check if the tail side is datum-anchored; if so, adjust offset to
-        // keep the tail in place (head shifts).
+        // Station keys are position-independent: no ref-shifting on insert (the
+        // junction the new shot extends from keeps its anchor; shots beyond keep
+        // theirs). The new shot's displacement still shifts stations > pos+1 in
+        // space — if the tail side is datum-anchored, back-shift the offset so the
+        // tail stays put. Positions are resolved from the stored keys.
         if dx != 0.0 || dy != 0.0 {
             let boundary = (pos + 1) as u32;
-            let tail_anchored = self.zero_datums.iter().any(|zd| {
-                zd.station_ref.section_id == section_id
-                    && zd.station_ref.station_index > boundary
-            }) || self.station_merges.iter().any(|m| {
-                let (our, their) = if m.station_a.section_id == section_id {
-                    (m.station_a, m.station_b)
-                } else if m.station_b.section_id == section_id {
-                    (m.station_b, m.station_a)
-                } else {
-                    return false;
-                };
-                our.station_index > boundary
-                    && their.section_id != section_id
-                    && self.has_datum_path_excluding(their.section_id, section_id)
-            }) || self.loop_closures.iter().any(|c| {
-                if !c.is_aligned { return false; }
-                let (our, their) = if c.station_a.section_id == section_id {
-                    (c.station_a, c.station_b)
-                } else if c.station_b.section_id == section_id {
-                    (c.station_b, c.station_a)
-                } else {
-                    return false;
-                };
-                our.station_index > boundary
-                    && their.section_id != section_id
-                    && self.has_datum_path_excluding(their.section_id, section_id)
-            });
+            let on_tail = |key: &StationKey| -> bool {
+                key.section_id == section_id
+                    && self.resolve_key(key).is_some_and(|sr| sr.station_index > boundary)
+            };
+            let tail_anchored = self.zero_datums.iter().any(|zd| on_tail(&zd.station_ref))
+                || self.station_merges.iter().any(|m| {
+                    let (our, their) = if m.station_a.section_id == section_id {
+                        (&m.station_a, &m.station_b)
+                    } else if m.station_b.section_id == section_id {
+                        (&m.station_b, &m.station_a)
+                    } else {
+                        return false;
+                    };
+                    on_tail(our)
+                        && their.section_id != section_id
+                        && self.has_datum_path_excluding(their.section_id, section_id)
+                })
+                || self.loop_closures.iter().any(|c| {
+                    if !c.is_aligned { return false; }
+                    let (our, their) = if c.station_a.section_id == section_id {
+                        (&c.station_a, &c.station_b)
+                    } else if c.station_b.section_id == section_id {
+                        (&c.station_b, &c.station_a)
+                    } else {
+                        return false;
+                    };
+                    on_tail(our)
+                        && their.section_id != section_id
+                        && self.has_datum_path_excluding(their.section_id, section_id)
+                });
 
             if tail_anchored {
                 self.adjust_section_offset(section_id, -dx, -dy);
@@ -1252,12 +1362,16 @@ impl Project {
         self.get_section(section_id)?.get_shot(shot_id)
     }
 
-    /// Insert a shot before a specific shot in a section
+    /// Insert a shot before a specific shot in a section. `forced_id` preserves
+    /// the original id and `forced_uuid` the original collaboration UUID when
+    /// redo re-runs this exact path; pass `None`/`None` for normal inserts.
     pub fn insert_shot_before(
         &mut self,
         section_id: SectionId,
         before_shot_id: ShotId,
         data: ShotData,
+        forced_id: Option<ShotId>,
+        forced_uuid: Option<String>,
     ) -> Option<&Shot> {
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
@@ -1265,62 +1379,42 @@ impl Project {
         if section.shots.len() >= Self::max_shots_per_section() {
             return None;
         }
-        // Compute displacement before data is consumed — the new shot shifts
-        // all stations after the insertion point by this displacement.
+
+        // Inserting before shot[pos] (pos > 0) is the SAME physical insertion as
+        // inserting after shot[pos-1]: same array slot, same station split. Route
+        // it through the one code path so the ref-shift / offset / cascade can't
+        // diverge between the two entry points (the off-by-one that re-pointed a
+        // boundary merge onto the new station and silently displaced its
+        // partner). Only the prepend case (pos == 0, no preceding shot) is
+        // genuinely distinct and handled below.
+        if pos > 0 {
+            let prev_id = section.shots[pos - 1].id;
+            return self.insert_shot_after(section_id, prev_id, data, forced_id, forced_uuid);
+        }
+
+        // Prepend (pos == 0): the new shot becomes the section's first shot and
+        // every existing station shifts up by one; keep them in place by
+        // back-shifting the offset.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
-        let shot = section.insert_shot_before(before_shot_id, data)?;
+        let shot = section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
-        // insert_before at pos: new shot at pos, old station at pos becomes pos+1
-        self.shift_station_refs(section_id, pos as u32, 1);
-        // The new shot's displacement shifts all stations > pos in section-local
-        // coordinates.  We must decide which side to keep at its original
-        // absolute position (mirroring remove_shot_with_rewire):
-        //
-        //   pos == 0: all existing stations are tail → always adjust offset
-        //   pos > 0:  if tail is datum-anchored → adjust offset (tail stays,
-        //             head shifts); otherwise head stays, tail shifts.
-        //
-        // After adjustment, cascade to propagate alignment to merged partners.
-        if dx != 0.0 || dy != 0.0 {
-            if pos == 0 {
-                // Prepend: keep all existing stations in place.
-                self.adjust_section_offset(section_id, -dx, -dy);
-            } else {
-                // Mid-insert: check if the tail side is datum-anchored.
-                // After shift_station_refs, tail stations have index > pos.
-                let tail_anchored = self.zero_datums.iter().any(|zd| {
-                    zd.station_ref.section_id == section_id
-                        && zd.station_ref.station_index > pos as u32
-                }) || self.station_merges.iter().any(|m| {
-                    let (our, their) = if m.station_a.section_id == section_id {
-                        (m.station_a, m.station_b)
-                    } else if m.station_b.section_id == section_id {
-                        (m.station_b, m.station_a)
-                    } else {
-                        return false;
-                    };
-                    our.station_index > pos as u32
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                }) || self.loop_closures.iter().any(|c| {
-                    if !c.is_aligned { return false; }
-                    let (our, their) = if c.station_a.section_id == section_id {
-                        (c.station_a, c.station_b)
-                    } else if c.station_b.section_id == section_id {
-                        (c.station_b, c.station_a)
-                    } else {
-                        return false;
-                    };
-                    our.station_index > pos as u32
-                        && their.section_id != section_id
-                        && self.has_datum_path_excluding(their.section_id, section_id)
-                });
-
-                if tail_anchored {
-                    self.adjust_section_offset(section_id, -dx, -dy);
+        // Prepend is the one insert that shifts identity: the old section-start
+        // station is now *after* the new first shot, so re-anchor any ref on this
+        // section that was `SectionStart` to `AfterShot(new_shot)`. Every other
+        // anchor is position-independent and needs no change.
+        let new_uuid = self.get_section(section_id).and_then(|s| s.shots.first()?.uuid.clone());
+        if let Some(new_uuid) = new_uuid {
+            self.map_station_refs(|key| {
+                if key.section_id == section_id && key.anchor == StationAnchor::SectionStart {
+                    StationKey::new(section_id, StationAnchor::AfterShot(new_uuid.clone()))
+                } else {
+                    key
                 }
-            }
+            });
+        }
+        if dx != 0.0 || dy != 0.0 {
+            self.adjust_section_offset(section_id, -dx, -dy);
         }
         self.cascade_connection_offsets(&[section_id]);
         self.debug_assert_merge_alignment("insert_shot_before");
@@ -1368,6 +1462,7 @@ impl Project {
             removed_closures: Vec::new(),
             replacement_merges: Vec::new(),
             replacement_closure_updates: Vec::new(),
+            closure_to_merge: Vec::new(),
             merge_rewire_skipped: false,
             closure_rewire_skipped: false,
             shift_blocked: false,
@@ -1375,20 +1470,24 @@ impl Project {
         };
 
         for merge in &self.station_merges {
-            if merge.station_a == removed_station || merge.station_b == removed_station {
+            if self.key_is_ref(&merge.station_a, removed_station)
+                || self.key_is_ref(&merge.station_b, removed_station)
+            {
                 impact.removed_merges.push(StationPair {
-                    station_a: merge.station_a,
-                    station_b: merge.station_b,
+                    station_a: self.key_to_ref_lossy(&merge.station_a),
+                    station_b: self.key_to_ref_lossy(&merge.station_b),
                 });
             }
         }
 
         for closure in &self.loop_closures {
-            if closure.station_a == removed_station || closure.station_b == removed_station {
+            if self.key_is_ref(&closure.station_a, removed_station)
+                || self.key_is_ref(&closure.station_b, removed_station)
+            {
                 impact.removed_closures.push(ClosurePair {
                     closure_id: closure.id,
-                    station_a: closure.station_a,
-                    station_b: closure.station_b,
+                    station_a: self.key_to_ref_lossy(&closure.station_a),
+                    station_b: self.key_to_ref_lossy(&closure.station_b),
                 });
             }
         }
@@ -1457,11 +1556,26 @@ impl Project {
                         || self.are_stations_in_closure(replacement_station, other)
                     {
                         impact.closure_rewire_skipped = true;
-                    } else {
+                    } else if self.are_stations_connected_excluding_shot(
+                        replacement_station,
+                        other,
+                        Some((section_id, pos)),
+                        false,
+                    ) {
+                        // The two ends still reach each other through the survey
+                        // (shots + merges), so it remains a genuine loop — just
+                        // move the closure off the deleted station.
                         impact.replacement_closure_updates.push(ClosureUpdate {
                             closure_id: closure.closure_id,
                             old_station: removed_station,
                             new_station: replacement_station,
+                        });
+                    } else {
+                        // The loop is broken: the surviving segment is detached,
+                        // so the closure becomes a plain merge (issue #8).
+                        impact.closure_to_merge.push(StationPair {
+                            station_a: replacement_station,
+                            station_b: other,
                         });
                     }
                 } else {
@@ -1476,7 +1590,7 @@ impl Project {
             let station_after = StationRef::new(section_id, (pos + 1) as u32);
             let excluded = Some((section_id, pos));
 
-            if self.are_stations_connected_excluding_shot(station_before, station_after, excluded) {
+            if self.are_stations_connected_excluding_shot(station_before, station_after, excluded, true) {
                 impact.shift_blocked_reasons.push(
                     "This shot is part of a loop (the two sides are already connected).".to_string(),
                 );
@@ -1512,32 +1626,40 @@ impl Project {
 
         let impact = self.preview_delete_shot(section_id, shot_id)?;
         let removed_station = impact.removed_station;
+        // The deleted station's canonical key (still resolvable — the shot is
+        // removed below). Stored refs are canonical, so key equality is sound.
+        let removed_key = self.key_for_ref(removed_station);
 
-        self.station_offsets.remove(&removed_station);
-        self.station_comments.remove(&removed_station);
-        self.zero_datums.retain(|zd| zd.station_ref != removed_station);
-
-        self.station_merges.retain(|m| {
-            m.station_a != removed_station && m.station_b != removed_station
-        });
+        if let Some(rk) = removed_key.clone() {
+            self.station_offsets.remove(&rk);
+            self.station_comments.remove(&rk);
+            self.zero_datums.retain(|zd| zd.station_ref != rk);
+            self.station_merges.retain(|m| m.station_a != rk && m.station_b != rk);
+        }
         self.merge_adjacency_cache.clear();
 
-        let mut closure_updates: HashMap<u64, StationRef> = HashMap::new();
-        for update in &impact.replacement_closure_updates {
-            closure_updates.insert(update.closure_id, update.new_station);
-        }
+        // Pre-resolve replacement closure targets to keys (the drain below can't
+        // borrow `self`).
+        let closure_updates: HashMap<u64, StationKey> = impact
+            .replacement_closure_updates
+            .iter()
+            .filter_map(|u| self.key_for_ref(u.new_station).map(|k| (u.closure_id, k)))
+            .collect();
 
         let mut updated_closures = Vec::with_capacity(self.loop_closures.len());
         for mut closure in self.loop_closures.drain(..) {
-            if closure.station_a == removed_station || closure.station_b == removed_station {
-                if let Some(new_station) = closure_updates.get(&closure.id).copied() {
-                    if closure.station_a == removed_station {
-                        closure.station_a = new_station;
+            let touches_a = removed_key.as_ref() == Some(&closure.station_a);
+            let touches_b = removed_key.as_ref() == Some(&closure.station_b);
+            if touches_a || touches_b {
+                if let Some(new_key) = closure_updates.get(&closure.id).cloned() {
+                    if touches_a {
+                        closure.station_a = new_key;
                     } else {
-                        closure.station_b = new_station;
+                        closure.station_b = new_key;
                     }
                     updated_closures.push(closure);
                 }
+                // else: closure dropped (its anchoring station is gone)
             } else {
                 updated_closures.push(closure);
             }
@@ -1546,11 +1668,31 @@ impl Project {
 
         for pair in &impact.replacement_merges {
             if !self.has_direct_merge(pair.station_a, pair.station_b) {
-                self.record_station_merge(StationMerge {
-                    station_a: pair.station_a,
-                    station_b: pair.station_b,
-                    merged_at: Utc::now(),
-                });
+                if let (Some(ka), Some(kb)) =
+                    (self.key_for_ref(pair.station_a), self.key_for_ref(pair.station_b))
+                {
+                    self.record_station_merge(StationMerge {
+                        station_a: ka,
+                        station_b: kb,
+                        merged_at: Utc::now(),
+                    });
+                }
+            }
+        }
+
+        // Closures whose loop the deletion broke become plain merges: the
+        // endpoints stay declared-coincident but are no longer a true loop (#8).
+        for pair in &impact.closure_to_merge {
+            if !self.has_direct_merge(pair.station_a, pair.station_b) {
+                if let (Some(ka), Some(kb)) =
+                    (self.key_for_ref(pair.station_a), self.key_for_ref(pair.station_b))
+                {
+                    self.record_station_merge(StationMerge {
+                        station_a: ka,
+                        station_b: kb,
+                        merged_at: Utc::now(),
+                    });
+                }
             }
         }
 
@@ -1563,7 +1705,43 @@ impl Project {
                 .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?
         };
 
-        self.shift_station_refs(section_id, (pos + 1) as u32, -1);
+        // Station keys are position-independent — no ref-shifting on delete. The
+        // deleted station's own refs were rewired above; every surviving ref keeps
+        // its anchor (its resolved index just moves down).
+        //
+        // One case the `removed_station` rewire above can't catch: a ref anchored
+        // directly on the DELETED shot's boundary, `AfterShot(deleted_uuid)`, that
+        // is NOT the `removed_station` (this happens at `pos == 0`, where
+        // `removed_station` is `SectionStart` but a prepend had re-anchored a
+        // boundary ref to `AfterShot(first_shot)`). Its anchoring shot is now gone,
+        // so re-anchor it to the station that absorbs the deleted boundary —
+        // `SectionStart` when the first shot was removed, else `AfterShot(prev)`.
+        if let Some(deleted_uuid) = deleted_shot.uuid.clone() {
+            let survivor = if pos == 0 {
+                Some(StationAnchor::SectionStart)
+            } else {
+                self.get_section(section_id)
+                    .and_then(|s| s.shots.get(pos - 1))
+                    .and_then(|s| s.uuid.clone())
+                    .map(StationAnchor::AfterShot)
+            };
+            if let Some(survivor) = survivor {
+                let stale = StationAnchor::AfterShot(deleted_uuid);
+                self.map_station_refs(|key| {
+                    if key.section_id == section_id && key.anchor == stale {
+                        StationKey::new(section_id, survivor.clone())
+                    } else {
+                        key
+                    }
+                });
+            }
+        }
+
+        // The deletion may have removed the OTHER path of a loop, leaving a
+        // closure as the sole bridge to a section — that is no longer a loop, so
+        // turn any such closure into a merge before the offsets are recomputed
+        // (issue #8, beyond the closure-touched-the-deleted-station case above).
+        self.convert_orphan_closures_to_merges();
 
         // After removing a shot, stations after the deletion point (index > pos)
         // shift by -displacement in section-local coordinates.  We must decide
@@ -1585,35 +1763,38 @@ impl Project {
                 self.adjust_section_offset(section_id, dx, dy);
             }
         } else if dx != 0.0 || dy != 0.0 {
-            // Mid-section: check if the tail side is datum-anchored.
-            // Tail stations have index > pos (after renumbering).
-            let tail_anchored = self.zero_datums.iter().any(|zd| {
-                zd.station_ref.section_id == section_id
-                    && zd.station_ref.station_index > pos as u32
-            }) || self.station_merges.iter().any(|m| {
-                let (our, their) = if m.station_a.section_id == section_id {
-                    (m.station_a, m.station_b)
-                } else if m.station_b.section_id == section_id {
-                    (m.station_b, m.station_a)
-                } else {
-                    return false;
-                };
-                our.station_index > pos as u32
-                    && their.section_id != section_id
-                    && self.has_datum_path_excluding(their.section_id, section_id)
-            }) || self.loop_closures.iter().any(|c| {
-                if !c.is_aligned { return false; }
-                let (our, their) = if c.station_a.section_id == section_id {
-                    (c.station_a, c.station_b)
-                } else if c.station_b.section_id == section_id {
-                    (c.station_b, c.station_a)
-                } else {
-                    return false;
-                };
-                our.station_index > pos as u32
-                    && their.section_id != section_id
-                    && self.has_datum_path_excluding(their.section_id, section_id)
-            });
+            // Mid-section: check if the tail side is datum-anchored. Tail stations
+            // resolve to index > pos (after the deletion renumbered them).
+            let on_tail = |key: &StationKey| -> bool {
+                key.section_id == section_id
+                    && self.resolve_key(key).is_some_and(|sr| sr.station_index > pos as u32)
+            };
+            let tail_anchored = self.zero_datums.iter().any(|zd| on_tail(&zd.station_ref))
+                || self.station_merges.iter().any(|m| {
+                    let (our, their) = if m.station_a.section_id == section_id {
+                        (&m.station_a, &m.station_b)
+                    } else if m.station_b.section_id == section_id {
+                        (&m.station_b, &m.station_a)
+                    } else {
+                        return false;
+                    };
+                    on_tail(our)
+                        && their.section_id != section_id
+                        && self.has_datum_path_excluding(their.section_id, section_id)
+                })
+                || self.loop_closures.iter().any(|c| {
+                    if !c.is_aligned { return false; }
+                    let (our, their) = if c.station_a.section_id == section_id {
+                        (&c.station_a, &c.station_b)
+                    } else if c.station_b.section_id == section_id {
+                        (&c.station_b, &c.station_a)
+                    } else {
+                        return false;
+                    };
+                    on_tail(our)
+                        && their.section_id != section_id
+                        && self.has_datum_path_excluding(their.section_id, section_id)
+                });
 
             if tail_anchored {
                 self.adjust_section_offset(section_id, dx, dy);
@@ -1746,6 +1927,48 @@ impl Project {
             return;
         }
 
+        // Coincidence edges, kept in TWO graphs: merges (the rigid, acyclic
+        // forest — loop-forming merges are rejected in merge_stations) and
+        // ALIGNED loop closures (the redundant, cycle-closing edges; unaligned
+        // closures are inert). Solving merges to full reach FIRST, then closures,
+        // keeps a hard merge constraint winning over a stale aligned closure on
+        // any section the merges can reach.
+        let push_edge = |adj: &mut HashMap<SectionId, Vec<(StationRef, StationRef)>>,
+                         a: StationRef,
+                         b: StationRef| {
+            adj.entry(a.section_id).or_default().push((a, b));
+            adj.entry(b.section_id).or_default().push((b, a));
+        };
+        let mut merge_adj: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
+        for m in &self.station_merges {
+            if let (Some(a), Some(b)) =
+                (self.resolve_key(&m.station_a), self.resolve_key(&m.station_b))
+            {
+                push_edge(&mut merge_adj, a, b);
+            }
+        }
+        let mut closure_adj: HashMap<SectionId, Vec<(StationRef, StationRef)>> = HashMap::new();
+        for c in &self.loop_closures {
+            if c.is_aligned {
+                if let (Some(a), Some(b)) =
+                    (self.resolve_key(&c.station_a), self.resolve_key(&c.station_b))
+                {
+                    push_edge(&mut closure_adj, a, b);
+                }
+            }
+        }
+        if merge_adj.is_empty() && closure_adj.is_empty() {
+            return;
+        }
+
+        // O(1) station coordinates via the per-section local-coord precompute,
+        // so each visit is constant work instead of re-walking the section's
+        // shots. Local coords are offset-independent, so this stays valid as
+        // offsets are mutated.
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+
+        // Authoritative anchors: the seeds + every datum-bearing section.
         let mut authoritative: HashSet<SectionId> = HashSet::new();
         for &sid in seeds {
             authoritative.insert(sid);
@@ -1754,73 +1977,76 @@ impl Project {
             authoritative.insert(zd.station_ref.section_id);
         }
 
-        let merges: Vec<_> = self.station_merges.clone();
-        let closures: Vec<_> = self.loop_closures.clone();
+        let sorted = |auth: &HashSet<SectionId>| {
+            let mut v: Vec<SectionId> = auth.iter().copied().collect();
+            v.sort_unstable();
+            v
+        };
 
-        for _iteration in 0..20 {
-            let mut any_adjustment = false;
+        // Phase 1: BFS over merges only, to full reachability.
+        let seed1 = sorted(&authoritative);
+        self.cascade_bfs(&merge_adj, &local, &station_offsets, &mut authoritative, &seed1);
 
-            for m in &merges {
-                let (fixed_ref, free_ref) =
-                    if authoritative.contains(&m.station_a.section_id)
-                        && !authoritative.contains(&m.station_b.section_id)
-                    {
-                        (m.station_a, m.station_b)
-                    } else if authoritative.contains(&m.station_b.section_id)
-                        && !authoritative.contains(&m.station_a.section_id)
-                    {
-                        (m.station_b, m.station_a)
-                    } else {
-                        continue;
-                    };
-
-                if let (Some(fixed_pos), Some(free_pos)) = (
-                    self.compute_station_raw_coords(fixed_ref),
-                    self.compute_station_raw_coords(free_ref),
-                ) {
-                    let dx = fixed_pos.x - free_pos.x;
-                    let dy = fixed_pos.y - free_pos.y;
-                    if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                        self.adjust_section_offset(free_ref.section_id, dx, dy);
-                        authoritative.insert(free_ref.section_id);
-                        any_adjustment = true;
-                    }
-                }
+        // Phase 2: aligned closures bridge to any component merges couldn't
+        // reach; merges within that component then continue. A redundant closure
+        // (both ends already authoritative) is skipped, leaving its residual —
+        // the loop misclosure — intact.
+        if !closure_adj.is_empty() {
+            let mut combined = merge_adj;
+            for (section, edges) in closure_adj {
+                combined.entry(section).or_default().extend(edges);
             }
+            let seed2 = sorted(&authoritative);
+            self.cascade_bfs(&combined, &local, &station_offsets, &mut authoritative, &seed2);
+        }
+    }
 
-            for c in &closures {
-                if !c.is_aligned {
+    /// One BFS pass of the offset solver over a coincidence-edge `adjacency`,
+    /// starting from the already-`authoritative` sections in `seeds` order. Each
+    /// non-authoritative neighbour reached through a computable edge has its
+    /// section offset set so its station coincides with the anchored side, then
+    /// is itself marked authoritative and enqueued. A neighbour reached only
+    /// through a dangling/out-of-range edge (coords return `None`) is left alone
+    /// — it is not anchored or propagated, so it can't mis-position a chain
+    /// behind a broken reference.
+    fn cascade_bfs(
+        &mut self,
+        adjacency: &HashMap<SectionId, Vec<(StationRef, StationRef)>>,
+        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
+        authoritative: &mut HashSet<SectionId>,
+        seeds: &[SectionId],
+    ) {
+        let mut queue: VecDeque<SectionId> = seeds.iter().copied().collect();
+        while let Some(section) = queue.pop_front() {
+            let Some(neighbors) = adjacency.get(&section).cloned() else {
+                continue;
+            };
+            for (mine, theirs) in neighbors {
+                if authoritative.contains(&theirs.section_id) {
                     continue;
                 }
-                let (fixed_ref, free_ref) =
-                    if authoritative.contains(&c.station_a.section_id)
-                        && !authoritative.contains(&c.station_b.section_id)
-                    {
-                        (c.station_a, c.station_b)
-                    } else if authoritative.contains(&c.station_b.section_id)
-                        && !authoritative.contains(&c.station_a.section_id)
-                    {
-                        (c.station_b, c.station_a)
-                    } else {
-                        continue;
-                    };
-
-                if let (Some(fixed_pos), Some(free_pos)) = (
-                    self.compute_station_raw_coords(fixed_ref),
-                    self.compute_station_raw_coords(free_ref),
+                if let (Some((mx, my)), Some((tx, ty))) = (
+                    self.station_world_xy(mine, local, station_offsets),
+                    self.station_world_xy(theirs, local, station_offsets),
                 ) {
-                    let dx = fixed_pos.x - free_pos.x;
-                    let dy = fixed_pos.y - free_pos.y;
-                    if dx.abs() > 1e-12 || dy.abs() > 1e-12 {
-                        self.adjust_section_offset(free_ref.section_id, dx, dy);
-                        authoritative.insert(free_ref.section_id);
-                        any_adjustment = true;
+                    let dx = mx - tx;
+                    let dy = my - ty;
+                    // A non-finite delta means the coincidence isn't computable (a
+                    // NaN/inf-poisoned section). Don't adjust, anchor, OR propagate
+                    // through it: marking the unpositioned neighbour authoritative
+                    // would drag ITS other partners to a bogus location, and the
+                    // alignment check can't see a NaN distance to catch it later.
+                    // Treat it like a dangling edge — leave the neighbour alone.
+                    if dx.is_finite() && dy.is_finite() {
+                        if dx != 0.0 || dy != 0.0 {
+                            self.adjust_section_offset(theirs.section_id, dx, dy);
+                        }
+                        // Anchor + propagate ONLY when the coincidence was computable.
+                        authoritative.insert(theirs.section_id);
+                        queue.push_back(theirs.section_id);
                     }
                 }
-            }
-
-            if !any_adjustment {
-                break;
             }
         }
     }
@@ -1967,10 +2193,20 @@ impl Project {
         }
     }
 
-    /// Check if a section is connected to a zero datum (directly or through merges only)
+    /// Check if a section is connected to a zero datum (directly or through merges only).
+    ///
+    /// Counts only datums that still RESOLVE: a corrupt project can be opened with a
+    /// dangling zero datum (anchor shot deleted) so the user can repair it, and a
+    /// dangling datum is not a real anchor. Counting it would let a merge pick the
+    /// phantom-anchored section as the fixed group and shift the world coordinate
+    /// system around a station that doesn't exist. (Mirrors find_connected_zero_datum
+    /// and the other zero-datum sites, which all filter via resolve_key.)
     fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
         let merged = self.get_merged_section_ids(section_id);
-        self.zero_datums.iter().any(|zd| merged.contains(&zd.station_ref.section_id))
+        self.zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .any(|sr| merged.contains(&sr.section_id))
     }
 
     /// Get all stations colocated with the given station (via merges and aligned closures).
@@ -1987,10 +2223,10 @@ impl Project {
         while let Some(current) = queue.pop_front() {
             // Check merges
             for merge in &self.station_merges {
-                let partner = if merge.station_a == current {
-                    Some(merge.station_b)
-                } else if merge.station_b == current {
-                    Some(merge.station_a)
+                let partner = if self.key_is_ref(&merge.station_a, current) {
+                    self.resolve_key(&merge.station_b)
+                } else if self.key_is_ref(&merge.station_b, current) {
+                    self.resolve_key(&merge.station_a)
                 } else {
                     None
                 };
@@ -2006,10 +2242,10 @@ impl Project {
                 if !closure.is_aligned {
                     continue;
                 }
-                let partner = if closure.station_a == current {
-                    Some(closure.station_b)
-                } else if closure.station_b == current {
-                    Some(closure.station_a)
+                let partner = if self.key_is_ref(&closure.station_a, current) {
+                    self.resolve_key(&closure.station_b)
+                } else if self.key_is_ref(&closure.station_b, current) {
+                    self.resolve_key(&closure.station_a)
                 } else {
                     None
                 };
@@ -2089,7 +2325,7 @@ impl Project {
         coords.z = self.compute_station_depth(&colocated);
 
         // Apply station offset if exists (individual station move)
-        if let Some(&(ox, oy, oz)) = self.station_offsets.get(&station_ref) {
+        if let Some((ox, oy, oz)) = self.station_offset_for_ref(station_ref) {
             coords.x += ox;
             coords.y += oy;
             coords.z += oz;
@@ -2124,11 +2360,14 @@ impl Project {
         let mut closure_adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
         if include_closures {
             for closure in &self.loop_closures {
-                if !self.station_exists(closure.station_a) || !self.station_exists(closure.station_b) {
+                let (Some(a), Some(b)) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                ) else {
                     continue;
-                }
-                closure_adj.entry(closure.station_a).or_default().push(closure.station_b);
-                closure_adj.entry(closure.station_b).or_default().push(closure.station_a);
+                };
+                closure_adj.entry(a).or_default().push(b);
+                closure_adj.entry(b).or_default().push(a);
             }
         }
 
@@ -2412,7 +2651,7 @@ impl Project {
             .zero_datums
             .iter()
             .filter(|zd| component.contains(&zd.station_ref.section_id))
-            .map(|zd| zd.station_ref)
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
             .collect();
 
         debug!(
@@ -2569,9 +2808,11 @@ impl Project {
             }
             if delta.z.abs() > 1e-9 {
                 if let Some(shot_count) = section_station_counts.get(section_id).copied() {
-                    for idx in 0..=shot_count {
-                        let station = StationRef::new(*section_id, idx as u32);
-                        let entry = self.station_offsets.entry(station).or_insert((0.0, 0.0, 0.0));
+                    let keys: Vec<StationKey> = (0..=shot_count)
+                        .filter_map(|idx| self.key_for_ref(StationRef::new(*section_id, idx as u32)))
+                        .collect();
+                    for key in keys {
+                        let entry = self.station_offsets.entry(key).or_insert((0.0, 0.0, 0.0));
                         entry.2 += delta.z;
                     }
                 }
@@ -2616,9 +2857,11 @@ impl Project {
                     }
                     if ref_delta.z.abs() > 1e-9 {
                         if let Some(shot_count) = section_station_counts.get(&section_id).copied() {
-                            for idx in 0..=shot_count {
-                                let station = StationRef::new(section_id, idx as u32);
-                                let entry = self.station_offsets.entry(station).or_insert((0.0, 0.0, 0.0));
+                            let keys: Vec<StationKey> = (0..=shot_count)
+                                .filter_map(|idx| self.key_for_ref(StationRef::new(section_id, idx as u32)))
+                                .collect();
+                            for key in keys {
+                                let entry = self.station_offsets.entry(key).or_insert((0.0, 0.0, 0.0));
                                 entry.2 += ref_delta.z;
                             }
                         }
@@ -2749,7 +2992,12 @@ impl Project {
             if component.contains(&merge.station_a.section_id)
                 && component.contains(&merge.station_b.section_id)
             {
-                union(merge.station_a, merge.station_b, &mut parent);
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&merge.station_a),
+                    self.resolve_key(&merge.station_b),
+                ) {
+                    union(a, b, &mut parent);
+                }
             }
         }
 
@@ -2757,7 +3005,12 @@ impl Project {
             if component.contains(&closure.station_a.section_id)
                 && component.contains(&closure.station_b.section_id)
             {
-                union(closure.station_a, closure.station_b, &mut parent);
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                ) {
+                    union(a, b, &mut parent);
+                }
             }
         }
 
@@ -2773,7 +3026,7 @@ impl Project {
             .zero_datums
             .iter()
             .filter(|zd| component.contains(&zd.station_ref.section_id))
-            .map(|zd| zd.station_ref)
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
             .collect();
 
         let mut fixed_groups: HashSet<StationRef> = HashSet::new();
@@ -3071,7 +3324,7 @@ impl Project {
             }
         }
 
-        let station_offsets = self.station_offsets.clone();
+        let station_offsets = self.resolved_station_offsets();
 
         // Identify spur stations (not on any cycle) by iterative leaf pruning.
         // Spur shots have no redundancy — there's nothing to adjust them against —
@@ -3090,13 +3343,23 @@ impl Project {
                 if component.contains(&merge.station_a.section_id)
                     && component.contains(&merge.station_b.section_id)
                 {
-                    adj_deg.entry(merge.station_a).or_default().push(merge.station_b);
-                    adj_deg.entry(merge.station_b).or_default().push(merge.station_a);
+                    if let (Some(a), Some(b)) = (
+                        self.resolve_key(&merge.station_a),
+                        self.resolve_key(&merge.station_b),
+                    ) {
+                        adj_deg.entry(a).or_default().push(b);
+                        adj_deg.entry(b).or_default().push(a);
+                    }
                 }
             }
             for closure in closures {
-                adj_deg.entry(closure.station_a).or_default().push(closure.station_b);
-                adj_deg.entry(closure.station_b).or_default().push(closure.station_a);
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                ) {
+                    adj_deg.entry(a).or_default().push(b);
+                    adj_deg.entry(b).or_default().push(a);
+                }
             }
 
             // Fixed stations must not be pruned — they anchor the network
@@ -3221,15 +3484,18 @@ impl Project {
             // is shared with a loop station, so its solved position is exact.
             if delta_xy.is_none() {
                 for merge in &self.station_merges {
-                    let local = if merge.station_a.section_id == section.id
+                    let local_key = if merge.station_a.section_id == section.id
                         && component.contains(&merge.station_b.section_id)
                     {
-                        merge.station_a
+                        &merge.station_a
                     } else if merge.station_b.section_id == section.id
                         && component.contains(&merge.station_a.section_id)
                     {
-                        merge.station_b
+                        &merge.station_b
                     } else {
+                        continue;
+                    };
+                    let Some(local) = self.resolve_key(local_key) else {
                         continue;
                     };
                     let root = *station_root.get(&local).unwrap_or(&local);
@@ -3263,10 +3529,13 @@ impl Project {
             if component.contains(&closure.station_a.section_id)
                 && component.contains(&closure.station_b.section_id)
             {
-                if let Ok(metrics) =
-                    self.compute_closure_metrics(closure.station_a, closure.station_b)
-                {
-                    updates.push((idx, metrics));
+                if let (Some(a), Some(b)) = (
+                    self.resolve_key(&closure.station_a),
+                    self.resolve_key(&closure.station_b),
+                ) {
+                    if let Ok(metrics) = self.compute_closure_metrics(a, b) {
+                        updates.push((idx, metrics));
+                    }
                 }
             }
         }
@@ -3297,8 +3566,13 @@ impl Project {
             {
                 continue;
             }
-            adjacency.entry(merge.station_a).or_default().push(merge.station_b);
-            adjacency.entry(merge.station_b).or_default().push(merge.station_a);
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                adjacency.entry(a).or_default().push(b);
+                adjacency.entry(b).or_default().push(a);
+            }
         }
         adjacency
     }
@@ -3431,7 +3705,8 @@ impl Project {
         if self.zero_datums.is_empty() {
             return None;
         }
-        let zero_set: HashSet<StationRef> = self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+        let zero_set: HashSet<StationRef> =
+            self.zero_datums.iter().filter_map(|zd| self.resolve_key(&zd.station_ref)).collect();
         let (found, prev) = self.shortest_path_with_target(start, |node| zero_set.contains(&node))?;
         let path = Self::reconstruct_path(start, found, &prev)?;
         Some((found, path))
@@ -3495,14 +3770,24 @@ impl Project {
         }
 
         for merge in &self.station_merges {
-            union(&mut parent, &mut rank, merge.station_a, merge.station_b);
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                union(&mut parent, &mut rank, a, b);
+            }
         }
 
         for closure in &self.loop_closures {
             if !closure.is_aligned {
                 continue;
             }
-            union(&mut parent, &mut rank, closure.station_a, closure.station_b);
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                union(&mut parent, &mut rank, a, b);
+            }
         }
 
         let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
@@ -3575,7 +3860,12 @@ impl Project {
         }
 
         for merge in &self.station_merges {
-            union(&mut parent, &mut rank, merge.station_a, merge.station_b);
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) {
+                union(&mut parent, &mut rank, a, b);
+            }
         }
 
         let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
@@ -3595,7 +3885,7 @@ impl Project {
         station_ref: StationRef,
         delta: Coordinates,
     ) -> Result<(), String> {
-        if self.zero_datums.iter().any(|zd| zd.station_ref == station_ref)
+        if self.zero_datums.iter().any(|zd| self.key_is_ref(&zd.station_ref, station_ref))
             && Self::coords_norm(delta) > 1e-9
         {
             error!(
@@ -3606,7 +3896,7 @@ impl Project {
             );
         }
 
-        let existing = self.station_offsets.get(&station_ref).copied().unwrap_or((0.0, 0.0, 0.0));
+        let existing = self.station_offset_for_ref(station_ref).unwrap_or((0.0, 0.0, 0.0));
         let total_dx = existing.0 + delta.x;
         let total_dy = existing.1 + delta.y;
         let total_dz = existing.2 + delta.z;
@@ -3682,7 +3972,9 @@ impl Project {
             shot.pitch_out = Some(pitch);
         }
 
-        self.station_offsets.remove(&station_ref);
+        if let Some(key) = self.key_for_ref(station_ref) {
+            self.station_offsets.remove(&key);
+        }
         Ok(())
     }
 
@@ -3707,7 +3999,8 @@ impl Project {
             }
         }
         let root_for = |station: StationRef| station_to_group.get(&station).copied().unwrap_or(station);
-        let mut zero_datum_set: HashSet<StationRef> = self.zero_datums.iter().map(|zd| zd.station_ref).collect();
+        let mut zero_datum_set: HashSet<StationRef> =
+            self.zero_datums.iter().filter_map(|zd| self.resolve_key(&zd.station_ref)).collect();
         if let Some(extra) = extra_fixed {
             zero_datum_set.extend(extra.iter().copied());
         }
@@ -4180,8 +4473,15 @@ impl Project {
             return Err("These stations are already merged".to_string());
         }
 
-        // Check if already connected (via merges or closures) - reject, use CreateLoopClosure instead
-        let connected_a = self.get_connected_section_ids(station_a.section_id);
+        // Reject only if the two sections are already RIGIDLY connected (via merges
+        // or *aligned* closures) — adding a merge there would create a redundant
+        // rigid cycle, which is what a loop closure is for. An INERT (unaligned)
+        // closure does not constrain the two stations yet, so a merge across one is
+        // the first real connection and must be allowed; rejecting it (the old
+        // get_connected_section_ids walk, which followed inert closures too) forced
+        // users into the sole-bridge-closure-that-should-be-a-merge bug. This asserts
+        // the same graph the cascade actually solves (catalog #8 / #integrity Root 3).
+        let connected_a = self.get_rigid_connected_section_ids(station_a.section_id);
         if connected_a.contains(&station_b.section_id) {
             return Err("Stations are already connected. Use Create Loop Closure instead.".to_string());
         }
@@ -4235,9 +4535,14 @@ impl Project {
         // Apply offset to all sections in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
         let moving_sections = self.get_merged_section_ids(moving_section_id);
-        let moving_has_zero_datum = moving_sections
+        // Resolve-aware (a dangling datum is not a real anchor — matching
+        // section_has_zero_datum), so a deleted-anchor datum can't trigger a
+        // spurious "merge would move a zero datum" alarm.
+        let moving_has_zero_datum = self
+            .zero_datums
             .iter()
-            .any(|sid| self.zero_datums.iter().any(|zd| zd.station_ref.section_id == *sid));
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .any(|sr| moving_sections.contains(&sr.section_id));
         if moving_has_zero_datum && (offset_x.abs() > 1e-9 || offset_y.abs() > 1e-9) {
             error!(
                 moving_section_id,
@@ -4262,9 +4567,14 @@ impl Project {
         // Record the merge via the helper so the merge-adjacency cache
         // stays in sync. (Direct push would silently skip the cache,
         // forcing the next BFS into the O(N) fallback path.)
+        let (Some(key_a), Some(key_b)) =
+            (self.key_for_ref(station_a), self.key_for_ref(station_b))
+        else {
+            return Err("Cannot merge: station has no stable anchor".to_string());
+        };
         self.record_station_merge(StationMerge {
-            station_a,
-            station_b,
+            station_a: key_a,
+            station_b: key_b,
             merged_at: Utc::now(),
         });
 
@@ -4387,10 +4697,15 @@ impl Project {
         let next_id = self.next_closure_id;
         self.next_closure_id += 1;
 
+        let (Some(key_a), Some(key_b)) =
+            (self.key_for_ref(station_a), self.key_for_ref(station_b))
+        else {
+            return Err("Cannot create loop closure: station has no stable anchor".to_string());
+        };
         let closure = LoopClosure {
             id: next_id,
-            station_a,
-            station_b,
+            station_a: key_a,
+            station_b: key_b,
             path_length: metrics.path_length,
             misclosure_distance: metrics.misclosure_distance,
             error_percentage: metrics.error_percentage,
@@ -4442,8 +4757,9 @@ impl Project {
         station_b: StationRef,
     ) -> (bool, Vec<LoopClosure>) {
         let pos = self.station_merges.iter().position(|m| {
-            (m.station_a == station_a && m.station_b == station_b)
-                || (m.station_a == station_b && m.station_b == station_a)
+            (self.key_is_ref(&m.station_a, station_a) && self.key_is_ref(&m.station_b, station_b))
+                || (self.key_is_ref(&m.station_a, station_b)
+                    && self.key_is_ref(&m.station_b, station_a))
         });
 
         if let Some(pos) = pos {
@@ -4452,12 +4768,25 @@ impl Project {
             // deletion would duplicate the work `retain` already did.
             self.merge_adjacency_cache.clear();
 
+            // Decide which closures match the unmerged pair before the retain —
+            // `resolve_key` needs `&self`, but `retain` borrows `loop_closures`
+            // mutably, so the resolution can't happen inside the closure.
+            let remove_flags: Vec<bool> = self
+                .loop_closures
+                .iter()
+                .map(|lc| {
+                    (self.key_is_ref(&lc.station_a, station_a)
+                        && self.key_is_ref(&lc.station_b, station_b))
+                        || (self.key_is_ref(&lc.station_a, station_b)
+                            && self.key_is_ref(&lc.station_b, station_a))
+                })
+                .collect();
+
             // Remove closures for the specific unmerged pair only
             let mut removed_closures = Vec::new();
+            let mut flag_iter = remove_flags.into_iter();
             self.loop_closures.retain(|lc| {
-                let matches = (lc.station_a == station_a && lc.station_b == station_b)
-                    || (lc.station_a == station_b && lc.station_b == station_a);
-                if matches {
+                if flag_iter.next() == Some(true) {
                     removed_closures.push(lc.clone());
                     false
                 } else {
@@ -4487,10 +4816,10 @@ impl Project {
 
         while let Some(current) = queue.pop_front() {
             for merge in &self.station_merges {
-                let neighbor = if merge.station_a == current {
-                    Some(merge.station_b)
-                } else if merge.station_b == current {
-                    Some(merge.station_a)
+                let neighbor = if self.key_is_ref(&merge.station_a, current) {
+                    self.resolve_key(&merge.station_b)
+                } else if self.key_is_ref(&merge.station_b, current) {
+                    self.resolve_key(&merge.station_a)
                 } else {
                     None
                 };
@@ -4510,7 +4839,8 @@ impl Project {
     /// Check if two stations are in a loop closure
     pub fn are_stations_in_closure(&self, a: StationRef, b: StationRef) -> bool {
         self.loop_closures.iter().any(|lc| {
-            (lc.station_a == a && lc.station_b == b) || (lc.station_a == b && lc.station_b == a)
+            (self.key_is_ref(&lc.station_a, a) && self.key_is_ref(&lc.station_b, b))
+                || (self.key_is_ref(&lc.station_a, b) && self.key_is_ref(&lc.station_b, a))
         })
     }
 
@@ -4552,8 +4882,10 @@ impl Project {
     fn find_connected_zero_datum(&self, station_ref: StationRef) -> Option<StationRef> {
         let connected = self.get_connected_stations(station_ref);
         for zd in &self.zero_datums {
-            if connected.contains(&zd.station_ref) && zd.station_ref != station_ref {
-                return Some(zd.station_ref);
+            if let Some(sr) = self.resolve_key(&zd.station_ref) {
+                if connected.contains(&sr) && sr != station_ref {
+                    return Some(sr);
+                }
             }
         }
         None
@@ -4595,6 +4927,11 @@ impl Project {
 
         // Validate GPS coordinates to prevent serialization issues
         GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
+
+        // Stable stored identity for this datum's station.
+        let datum_key = self
+            .key_for_ref(station_ref)
+            .ok_or_else(|| "Cannot set zero datum: station has no stable anchor".to_string())?;
 
         // Check for connected zero datum
         if let Some(existing) = self.find_connected_zero_datum(station_ref) {
@@ -4642,7 +4979,7 @@ impl Project {
         let is_first_datum_station = self
             .zero_datums
             .first()
-            .is_some_and(|d| d.station_ref == station_ref);
+            .is_some_and(|d| d.station_ref == datum_key);
 
         if is_first_datum_station {
             // Updating the first datum: keep at origin (0, 0)
@@ -4700,12 +5037,12 @@ impl Project {
         if let Some(existing) = self
             .zero_datums
             .iter_mut()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| zd.station_ref == datum_key)
         {
             existing.gps = gps;
             updated_existing = true;
         } else {
-            self.zero_datums.push(ZeroDatum { station_ref, gps });
+            self.zero_datums.push(ZeroDatum { station_ref: datum_key, gps });
         }
 
         self.touch();
@@ -4739,6 +5076,11 @@ impl Project {
         // Validate GPS coordinates
         GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
 
+        // Stable stored identity for this datum's station.
+        let datum_key = self
+            .key_for_ref(station_ref)
+            .ok_or_else(|| "Cannot store zero datum: station has no stable anchor".to_string())?;
+
         // Check for connected zero datum (same validation as set_zero_datum)
         if let Some(existing) = self.find_connected_zero_datum(station_ref) {
             let new_station = self.format_station_ref_for_display(station_ref);
@@ -4761,12 +5103,12 @@ impl Project {
         if let Some(existing) = self
             .zero_datums
             .iter_mut()
-            .find(|zd| zd.station_ref == station_ref)
+            .find(|zd| zd.station_ref == datum_key)
         {
             existing.gps = gps;
             updated_existing = true;
         } else {
-            self.zero_datums.push(ZeroDatum { station_ref, gps });
+            self.zero_datums.push(ZeroDatum { station_ref: datum_key, gps });
         }
 
         self.touch();
@@ -4783,8 +5125,9 @@ impl Project {
     /// Remove zero datum from a station
     pub fn remove_zero_datum(&mut self, station_ref: StationRef) -> bool {
         let len_before = self.zero_datums.len();
+        let target_key = self.key_for_ref(station_ref);
         self.zero_datums
-            .retain(|zd| zd.station_ref != station_ref);
+            .retain(|zd| Some(&zd.station_ref) != target_key.as_ref());
         if self.zero_datums.len() == len_before {
             debug!(
                 station_ref = ?station_ref,
@@ -4856,7 +5199,10 @@ impl Project {
 
         // Step 1: Reanchor the datum section's offset to keep datum at target
         let datum_section_id = datum.station_ref.section_id;
-        if let Some(current) = self.compute_station_raw_coords(datum.station_ref) {
+        if let Some(current) = self
+            .resolve_key(&datum.station_ref)
+            .and_then(|sr| self.compute_station_raw_coords(sr))
+        {
             let delta_x = target_x - current.x;
             let delta_y = target_y - current.y;
             if delta_x.abs() > 1e-12 || delta_y.abs() > 1e-12 {
@@ -4879,11 +5225,11 @@ impl Project {
                     if merge.station_a.section_id == current_section
                         && !visited.contains(&merge.station_b.section_id)
                     {
-                        (merge.station_a, merge.station_b)
+                        (&merge.station_a, &merge.station_b)
                     } else if merge.station_b.section_id == current_section
                         && !visited.contains(&merge.station_a.section_id)
                     {
-                        (merge.station_b, merge.station_a)
+                        (&merge.station_b, &merge.station_a)
                     } else {
                         continue;
                     };
@@ -4893,8 +5239,8 @@ impl Project {
 
                 // this_station's section is already aligned; partner needs adjustment
                 if let (Some(this_pos), Some(partner_pos)) = (
-                    self.compute_station_raw_coords(this_station),
-                    self.compute_station_raw_coords(partner_station),
+                    self.resolve_key(this_station).and_then(|sr| self.compute_station_raw_coords(sr)),
+                    self.resolve_key(partner_station).and_then(|sr| self.compute_station_raw_coords(sr)),
                 ) {
                     let delta_x = this_pos.x - partner_pos.x;
                     let delta_y = this_pos.y - partner_pos.y;
@@ -4967,7 +5313,7 @@ impl Project {
             let z = station_depths.get(&first_station_ref).copied().unwrap_or(0.0);
             let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
             // Apply station offset if exists
-            if let Some(&(ox, oy, oz)) = self.station_offsets.get(&first_station_ref) {
+            if let Some((ox, oy, oz)) = self.station_offset_for_ref(first_station_ref) {
                 station_coords = Coordinates::new(
                     station_coords.x + ox,
                     station_coords.y + oy,
@@ -4997,7 +5343,7 @@ impl Project {
                 let z = station_depths.get(&station_ref).copied().unwrap_or(0.0);
                 let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
                 // Apply station offset if exists
-                if let Some(&(ox, oy, oz)) = self.station_offsets.get(&station_ref) {
+                if let Some((ox, oy, oz)) = self.station_offset_for_ref(station_ref) {
                     station_coords = Coordinates::new(
                         station_coords.x + ox,
                         station_coords.y + oy,
@@ -5029,26 +5375,32 @@ impl Project {
         let mut groups: Vec<Vec<StationRef>> = Vec::new();
 
         for merge in &self.station_merges {
-            let group_a = station_to_group.get(&merge.station_a).copied();
-            let group_b = station_to_group.get(&merge.station_b).copied();
+            let (Some(sa), Some(sb)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) else {
+                continue;
+            };
+            let group_a = station_to_group.get(&sa).copied();
+            let group_b = station_to_group.get(&sb).copied();
 
             match (group_a, group_b) {
                 (None, None) => {
                     // Neither station is in a group, create a new group
                     let group_id = groups.len();
-                    groups.push(vec![merge.station_a, merge.station_b]);
-                    station_to_group.insert(merge.station_a, group_id);
-                    station_to_group.insert(merge.station_b, group_id);
+                    groups.push(vec![sa, sb]);
+                    station_to_group.insert(sa, group_id);
+                    station_to_group.insert(sb, group_id);
                 }
                 (Some(gid), None) => {
                     // station_a is in a group, add station_b to it
-                    groups[gid].push(merge.station_b);
-                    station_to_group.insert(merge.station_b, gid);
+                    groups[gid].push(sb);
+                    station_to_group.insert(sb, gid);
                 }
                 (None, Some(gid)) => {
                     // station_b is in a group, add station_a to it
-                    groups[gid].push(merge.station_a);
-                    station_to_group.insert(merge.station_a, gid);
+                    groups[gid].push(sa);
+                    station_to_group.insert(sa, gid);
                 }
                 (Some(gid_a), Some(gid_b)) => {
                     if gid_a != gid_b {
@@ -5092,8 +5444,12 @@ impl Project {
         // For each closure, both endpoint stations (and their merged equivalents)
         // get a ClosureRef entry. Transitive closures go through merged stations.
         for closure in &self.loop_closures {
-            let a_ref = closure.station_a;
-            let b_ref = closure.station_b;
+            let (Some(a_ref), Some(b_ref)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) else {
+                continue;
+            };
 
             // Collect merged equivalents for each endpoint
             let a_group: Vec<StationRef> = station_to_group
@@ -5252,8 +5608,11 @@ impl Project {
 
         // Mark zero datums
         for zd in &self.zero_datums {
+            let Some(sr) = self.resolve_key(&zd.station_ref) else {
+                continue;
+            };
             for station in &mut stations {
-                if station.station_ref == zd.station_ref {
+                if station.station_ref == sr {
                     station.is_zero_datum = true;
                     station.gps_coordinates = Some(zd.gps);
                 }
@@ -5267,9 +5626,12 @@ impl Project {
         let t_phase = std::time::Instant::now();
 
         // Assign station comments
-        for (station_ref, comment) in &self.station_comments {
+        for (key, comment) in &self.station_comments {
+            let Some(sr) = self.resolve_key(key) else {
+                continue;
+            };
             for station in &mut stations {
-                if station.station_ref == *station_ref {
+                if station.station_ref == sr {
                     station.comment = Some(comment.clone());
                 }
             }
@@ -5357,24 +5719,32 @@ impl Project {
             }
         }
         for merge in &self.station_merges {
-            if let (Some(&a), Some(&b)) = (
-                station_index.get(&merge.station_a),
-                station_index.get(&merge.station_b),
+            if let (Some(a_sr), Some(b_sr)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
             ) {
-                adj[a].push((b, 0.0));
-                adj[b].push((a, 0.0));
+                if let (Some(&a), Some(&b)) =
+                    (station_index.get(&a_sr), station_index.get(&b_sr))
+                {
+                    adj[a].push((b, 0.0));
+                    adj[b].push((a, 0.0));
+                }
             }
         }
         for closure in &self.loop_closures {
             if !closure.is_aligned {
                 continue;
             }
-            if let (Some(&a), Some(&b)) = (
-                station_index.get(&closure.station_a),
-                station_index.get(&closure.station_b),
+            if let (Some(a_sr), Some(b_sr)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
             ) {
-                adj[a].push((b, 0.0));
-                adj[b].push((a, 0.0));
+                if let (Some(&a), Some(&b)) =
+                    (station_index.get(&a_sr), station_index.get(&b_sr))
+                {
+                    adj[a].push((b, 0.0));
+                    adj[b].push((a, 0.0));
+                }
             }
         }
 
@@ -5397,7 +5767,10 @@ impl Project {
         }
         let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
         for zd in &self.zero_datums {
-            if let Some(&i) = station_index.get(&zd.station_ref) {
+            if let Some(&i) = self
+                .resolve_key(&zd.station_ref)
+                .and_then(|sr| station_index.get(&sr))
+            {
                 dist[i] = 0.0;
                 heap.push(std::cmp::Reverse(Node(0.0, i)));
             }
@@ -5555,14 +5928,13 @@ impl Project {
             {
                 continue;
             }
-            adjacency
-                .entry(closure.station_a)
-                .or_default()
-                .push(closure.station_b);
-            adjacency
-                .entry(closure.station_b)
-                .or_default()
-                .push(closure.station_a);
+            if let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                adjacency.entry(a).or_default().push(b);
+                adjacency.entry(b).or_default().push(a);
+            }
         }
         adjacency
     }
@@ -5707,7 +6079,7 @@ impl Project {
         let merge_adj = self.build_merge_adjacency(&section_lookup);
         let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
         let datum_stations: HashSet<StationRef> =
-            self.zero_datums.iter().map(|d| d.station_ref).collect();
+            self.zero_datums.iter().filter_map(|d| self.resolve_key(&d.station_ref)).collect();
 
         // Assign each station a compact integer index
         let mut station_to_idx: HashMap<StationRef, usize> = HashMap::new();
@@ -5965,13 +6337,16 @@ impl Project {
 
         // Helper: check if a station has any merge
         let station_has_merge = |sr: StationRef| -> bool {
-            self.station_merges.iter().any(|m| m.station_a == sr || m.station_b == sr)
+            self.station_merges
+                .iter()
+                .any(|m| self.key_is_ref(&m.station_a, sr) || self.key_is_ref(&m.station_b, sr))
         };
 
         // Helper: check if a station has any aligned closure
         let station_has_aligned_closure = |sr: StationRef| -> bool {
             self.loop_closures.iter().any(|c| {
-                c.is_aligned && (c.station_a == sr || c.station_b == sr)
+                c.is_aligned
+                    && (self.key_is_ref(&c.station_a, sr) || self.key_is_ref(&c.station_b, sr))
             })
         };
 
@@ -6105,6 +6480,728 @@ impl Project {
             .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
 
         suggestions
+    }
+}
+
+/// Severity of a structural-integrity violation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViolationSeverity {
+    /// A dangling reference that will cause runtime panics or geometry
+    /// corruption if used (e.g. a merge pointing at a deleted station).
+    Critical,
+    /// A stale/orphaned entry that is ignored by lookups but signals an
+    /// inconsistent project (e.g. an offset keyed by a deleted section).
+    Warning,
+}
+
+/// A single structural-integrity violation found by
+/// [`Project::check_structural_integrity`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegrityViolation {
+    pub severity: ViolationSeverity,
+    /// Stable machine-readable category (e.g. `"dangling_merge_ref"`).
+    pub category: String,
+    /// Human-readable description.
+    pub message: String,
+}
+
+impl Project {
+    /// Reason a stored [`StationKey`] is invalid — it names a section that no
+    /// longer exists, or its anchor no longer resolves to a real station (its
+    /// anchoring shot was deleted) — or `None` if it points at a real station.
+    /// With stable identity this catches a *dangling* anchor (the integrity win
+    /// over positional refs, which could only ever be out-of-range, never
+    /// silently mispointed at the wrong in-range station).
+    fn station_ref_violation(&self, key: &StationKey) -> Option<String> {
+        match self.get_section(key.section_id) {
+            None => Some(format!("references missing section {}", key.section_id)),
+            Some(_) => {
+                if self.resolve_key(key).is_some() {
+                    None
+                } else {
+                    Some(format!(
+                        "anchor no longer resolves in section {} (its anchoring shot was deleted)",
+                        key.section_id
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Audit every cross-reference in the project and return all structural
+    /// violations (an empty vec means the project is structurally sound). This
+    /// does not mutate the project and does not look at shot geometry — it only
+    /// checks that merges, loop closures, zero datums, and the offset/comment
+    /// maps point at stations and sections that actually exist.
+    ///
+    /// Used to (a) block commands that would introduce corruption and (b) warn
+    /// about — and repair — corruption already present in a loaded project.
+    pub fn check_structural_integrity(&self) -> Vec<IntegrityViolation> {
+        let mut violations = Vec::new();
+
+        // Non-finite (NaN/inf) shot geometry — loaded from an older/corrupt file
+        // or an unguarded import. It silently poisons coordinates (NaN passes the
+        // tolerance comparisons in the alignment checks), so surface it.
+        for section in &self.sections {
+            if let Some(pos) = section.shots.iter().position(|s| !s.all_finite()) {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Critical,
+                    category: "non_finite_geometry".to_string(),
+                    message: format!(
+                        "Section {} has a shot with a non-finite (NaN/inf) value (at index {pos})",
+                        section.id
+                    ),
+                });
+            }
+        }
+
+        // Two shots in one section sharing a UUID make AfterShot anchors
+        // mis-resolve: resolve_key takes the FIRST match via position(), so a
+        // merge/closure/datum pointing at the second station silently snaps to
+        // the first — geometrically wrong with no other signal. Critical, and
+        // section-scoped because resolve_key is section-local. Empty UUIDs are
+        // "no identity yet" (ensure_shot_uuids fills them) so they don't count.
+        for section in &self.sections {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for shot in &section.shots {
+                if let Some(u) = shot.uuid.as_deref() {
+                    if !u.is_empty() && !seen.insert(u) {
+                        violations.push(IntegrityViolation {
+                            severity: ViolationSeverity::Critical,
+                            category: "duplicate_shot_uuid".to_string(),
+                            message: format!(
+                                "Section {} has two shots sharing UUID {u}",
+                                section.id
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Validate every StationRef-bearing collection through the single
+        // traversal, so a newly-added ref-bearing collection is checked by
+        // construction. Dangling merge/closure/datum refs are Critical (they
+        // corrupt connectivity); orphaned offset/comment keys are Warning (they
+        // are inert until their station is recreated).
+        self.for_each_station_ref(|label, key| {
+            let Some(reason) = self.station_ref_violation(&key) else {
+                return;
+            };
+            let (severity, category) = match label {
+                "merge" => (ViolationSeverity::Critical, "dangling_merge_ref"),
+                "loop closure" => (ViolationSeverity::Critical, "dangling_closure_ref"),
+                "zero datum" => (ViolationSeverity::Critical, "dangling_zero_datum_ref"),
+                "station offset" => (ViolationSeverity::Warning, "orphan_station_offset"),
+                _ => (ViolationSeverity::Warning, "orphan_station_comment"),
+            };
+            let mut subject = label.to_string();
+            if let Some(first) = subject.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            violations.push(IntegrityViolation {
+                severity,
+                category: category.to_string(),
+                message: format!("{subject} {reason}"),
+            });
+        });
+
+        // section_offsets is keyed by SectionId (not a StationRef), so it isn't
+        // covered by for_each_station_ref — check it for a missing section here.
+        for section_id in self.section_offsets.keys() {
+            if self.get_section(*section_id).is_none() {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Warning,
+                    category: "orphan_section_offset".to_string(),
+                    message: format!("Section offset for missing section {section_id}"),
+                });
+            }
+        }
+
+        violations
+    }
+
+    /// True if the project has any [`ViolationSeverity::Critical`] violation —
+    /// the cheap gate used to block corrupting commands.
+    pub fn has_critical_integrity_violations(&self) -> bool {
+        self.check_structural_integrity()
+            .iter()
+            .any(|v| v.severity == ViolationSeverity::Critical)
+    }
+
+    /// True if ANY persisted cross-reference (a merge/closure/datum endpoint, or
+    /// an offset/comment key) no longer resolves — its anchoring shot was deleted
+    /// or its section is gone. These are precisely the keys that would otherwise
+    /// be collapsed to a phantom `(section, 0)` ref on save and can collide on the
+    /// `(section_id, station_index)` PRIMARY KEY. The save path blocks on this so
+    /// corruption is never persisted; `repair_structural_integrity` drops exactly
+    /// these keys, so repair unblocks the save. Includes Warning-severity orphan
+    /// offsets/comments (they cause the same PK collision), so this is broader
+    /// than [`has_critical_integrity_violations`].
+    pub fn has_unresolvable_cross_references(&self) -> bool {
+        let mut dangling = false;
+        self.for_each_station_ref(|_label, key| {
+            if self.station_ref_violation(&key).is_some() {
+                dangling = true;
+            }
+        });
+        dangling
+    }
+
+    /// Drop every structurally-invalid cross-reference (dangling merges, loop
+    /// closures, zero datums) and orphaned offset/comment entries, returning the
+    /// violations that were repaired (empty = nothing to do). Valid data is left
+    /// untouched. Used by the load-time "warn and offer repair" path.
+    pub fn repair_structural_integrity(&mut self) -> Vec<IntegrityViolation> {
+        let violations = self.check_structural_integrity();
+        if violations.is_empty() {
+            return violations;
+        }
+
+        // Re-mint duplicate shot UUIDs first (keeping the first occurrence), so
+        // the per-section UUID snapshot below reflects the de-duplicated set and
+        // AfterShot anchors that pointed at the kept shot stay valid.
+        self.ensure_unique_shot_uuids();
+
+        // Snapshot, per section, the station count and the set of shot UUIDs, so
+        // the retain closures can validate a stored `StationKey` without
+        // borrowing `self` while mutating its fields. Owns the UUID strings so no
+        // borrow of `self.sections` outlives into the mutating retains.
+        let sect_info: HashMap<SectionId, (u32, HashSet<String>)> = self
+            .sections
+            .iter()
+            .map(|s| {
+                let uuids = s.shots.iter().filter_map(|sh| sh.uuid.clone()).collect();
+                (s.id, (s.shots.len() as u32, uuids))
+            })
+            .collect();
+        let key_valid = |key: &StationKey| -> bool {
+            match sect_info.get(&key.section_id) {
+                None => false,
+                Some((count, uuids)) => match &key.anchor {
+                    StationAnchor::SectionStart => true,
+                    StationAnchor::AfterShot(u) => uuids.contains(u),
+                    StationAnchor::Index(i) => *i <= *count,
+                },
+            }
+        };
+
+        self.station_merges
+            .retain(|m| key_valid(&m.station_a) && key_valid(&m.station_b));
+        self.loop_closures
+            .retain(|c| key_valid(&c.station_a) && key_valid(&c.station_b));
+        self.zero_datums.retain(|z| key_valid(&z.station_ref));
+        self.section_offsets
+            .retain(|section_id, _| sect_info.contains_key(section_id));
+        self.station_offsets.retain(|key, _| key_valid(key));
+        self.station_comments.retain(|key, _| key_valid(key));
+
+        // Merges may have been dropped; the adjacency cache is now stale.
+        self.merge_adjacency_cache.clear();
+        self.touch();
+
+        violations
+    }
+
+    /// Tolerance (metres) within which two merged stations are considered the
+    /// same physical point. The old release-mode alignment check used 5cm.
+    pub const MERGE_ALIGNMENT_TOLERANCE_M: f64 = 0.05;
+
+    /// Per-section cumulative LOCAL `(x, y)` for every station index
+    /// (`0..=shots.len()`), before section/station offsets are applied. Built
+    /// once so callers that look up many stations — the alignment check and the
+    /// offset solver — avoid re-walking a section's shots on every lookup. This
+    /// is what keeps those operations `O(shots + merges)` instead of the
+    /// `O(merges × depth)` that made the per-mutation alignment check too costly.
+    /// Resolve a stored, position-independent [`StationKey`] to a transient
+    /// positional [`StationRef`] against the CURRENT section structure.
+    /// `None` if the section is gone or the anchoring shot was deleted (which is
+    /// exactly the "dangling reference" an integrity check should surface).
+    ///
+    /// This is the read side of the stable-identity boundary: cross-references are
+    /// stored as `StationKey`, and the solver/IPC resolve them to a positional
+    /// `StationRef` here. `O(shots)` per call — callers that resolve many keys for
+    /// the same section should hoist the lookup.
+    pub fn resolve_key(&self, key: &StationKey) -> Option<StationRef> {
+        let section = self.get_section(key.section_id)?;
+        let index = match &key.anchor {
+            StationAnchor::SectionStart => 0,
+            StationAnchor::AfterShot(uuid) => {
+                let pos = section
+                    .shots
+                    .iter()
+                    .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
+                (pos + 1) as u32
+            }
+            StationAnchor::Index(i) => {
+                if *i as usize > section.shots.len() {
+                    return None;
+                }
+                *i
+            }
+        };
+        Some(StationRef::new(key.section_id, index))
+    }
+
+    /// True if the stored key resolves to exactly `sr` (the sound way to ask "is
+    /// this stored ref the same physical station as this positional ref" — never
+    /// compare a positional `Index` key to a stored `AfterShot` key directly).
+    pub fn key_is_ref(&self, key: &StationKey, sr: StationRef) -> bool {
+        self.resolve_key(key) == Some(sr)
+    }
+
+    /// Build the stored [`StationKey`] for a transient positional [`StationRef`].
+    /// `None` if the section is gone, the index is out of range, or the anchoring
+    /// shot has no UUID (shouldn't happen after the load-time mint). Station 0
+    /// anchors to `SectionStart`; station `i` to `AfterShot(uuid of shot i-1)`.
+    pub fn key_for_ref(&self, sr: StationRef) -> Option<StationKey> {
+        let section = self.get_section(sr.section_id)?;
+        let anchor = if sr.station_index == 0 {
+            StationAnchor::SectionStart
+        } else {
+            let shot = section.shots.get((sr.station_index - 1) as usize)?;
+            StationAnchor::AfterShot(shot.uuid.clone()?)
+        };
+        Some(StationKey::new(sr.section_id, anchor))
+    }
+
+    /// Resolve a stored key to a positional ref for a **non-persistence display
+    /// payload only**, falling back to station 0 if the anchor no longer resolves
+    /// (a dangling ref). NEVER use this on a save/wire path: collapsing a dangling
+    /// key to `(section, 0)` writes a phantom station-0 relationship and can
+    /// collide on the `(section_id, station_index)` PRIMARY KEY. Persistence and
+    /// wire encoders use [`resolve_key`] and skip what doesn't resolve. The one
+    /// legitimate caller is the delete-shot impact preview, where an endpoint may
+    /// intentionally be the station being removed.
+    pub(crate) fn key_to_ref_lossy(&self, key: &StationKey) -> StationRef {
+        self.resolve_key(key).unwrap_or_else(|| StationRef::new(key.section_id, 0))
+    }
+
+    /// Positional wire form of a stored merge, or `None` if either endpoint
+    /// dangles (its anchoring shot was deleted) — a dangling merge is invalid and
+    /// must be omitted rather than shown at a phantom station.
+    pub(crate) fn merge_to_wire(&self, m: &StationMerge) -> Option<StationMergeWire> {
+        Some(StationMergeWire {
+            station_a: self.resolve_key(&m.station_a)?,
+            station_b: self.resolve_key(&m.station_b)?,
+            merged_at: m.merged_at,
+        })
+    }
+
+    /// Positional wire form of a stored zero datum, or `None` if its ref dangles.
+    pub(crate) fn datum_to_wire(&self, zd: &ZeroDatum) -> Option<ZeroDatumWire> {
+        Some(ZeroDatumWire {
+            station_ref: self.resolve_key(&zd.station_ref)?,
+            gps: zd.gps,
+        })
+    }
+
+    /// Positional wire form of a stored loop closure, or `None` if either
+    /// endpoint dangles.
+    pub(crate) fn closure_to_wire(&self, c: &LoopClosure) -> Option<LoopClosureWire> {
+        Some(LoopClosureWire {
+            id: c.id,
+            station_a: self.resolve_key(&c.station_a)?,
+            station_b: self.resolve_key(&c.station_b)?,
+            path_length: c.path_length,
+            misclosure_distance: c.misclosure_distance,
+            error_percentage: c.error_percentage,
+            horizontal_misclosure: c.horizontal_misclosure,
+            vertical_misclosure: c.vertical_misclosure,
+            strategy: c.strategy,
+            is_aligned: c.is_aligned,
+        })
+    }
+
+    /// Re-anchor every stored cross-reference from a transitional positional form
+    /// (`Index`) to the stable `AfterShot(uuid)` / `SectionStart` form, now that
+    /// shots (with UUIDs) are present. Run on load so a v6 file's positional refs
+    /// open with stable identity and no `Index` anchor survives into the live model.
+    pub fn reanchor_station_refs(&mut self) {
+        let canon: Vec<Option<StationKey>> = {
+            let mut out = Vec::new();
+            self.for_each_station_ref(|_label, key| {
+                out.push(self.resolve_key(&key).and_then(|sr| self.key_for_ref(sr)));
+            });
+            out
+        };
+        let mut i = 0;
+        self.map_station_refs(|key| {
+            let next = canon.get(i).cloned().flatten();
+            i += 1;
+            next.unwrap_or(key)
+        });
+        // The two passes (for_each_station_ref above, map_station_refs here) must
+        // visit the ref-bearing collections in identical order for the positional
+        // `canon` alignment to be correct. That holds only because the two HashMaps
+        // (station_offsets/comments) are not mutated between the passes. Assert it
+        // so a future change that breaks the order coupling fails loudly in debug
+        // instead of silently re-anchoring an offset onto the wrong station.
+        debug_assert_eq!(
+            i,
+            canon.len(),
+            "reanchor_station_refs: map_station_refs visited a different number of \
+             refs than for_each_station_ref produced — station-ref traversal order \
+             diverged between the read and write passes"
+        );
+    }
+
+    fn section_local_coords(&self) -> HashMap<SectionId, Vec<(f64, f64)>> {
+        let mut map = HashMap::with_capacity(self.sections.len());
+        for section in &self.sections {
+            let mut coords = Vec::with_capacity(section.shots.len() + 1);
+            let (mut x, mut y) = (0.0_f64, 0.0_f64);
+            coords.push((x, y));
+            for shot in &section.shots {
+                let azimuth_rad = shot.average_azimuth().to_radians();
+                let horizontal = shot.horizontal_length();
+                x += horizontal * azimuth_rad.sin();
+                y += horizontal * azimuth_rad.cos();
+                coords.push((x, y));
+            }
+            map.insert(section.id, coords);
+        }
+        map
+    }
+
+    /// World `(x, y)` of a station using a [`Self::section_local_coords`] map:
+    /// section offset + cumulative local position + optional station offset.
+    /// Matches the `x`/`y` of [`Self::compute_station_raw_coords`] in `O(1)`.
+    fn station_world_xy(
+        &self,
+        sr: StationRef,
+        local: &HashMap<SectionId, Vec<(f64, f64)>>,
+        station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
+    ) -> Option<(f64, f64)> {
+        let &(lx, ly) = local.get(&sr.section_id)?.get(sr.station_index as usize)?;
+        let (ox, oy) = self.section_offsets.get(&sr.section_id).copied().unwrap_or((0.0, 0.0));
+        let (mut x, mut y) = (lx + ox, ly + oy);
+        if let Some(&(sx, sy, _)) = station_offsets.get(&sr) {
+            x += sx;
+            y += sy;
+        }
+        Some((x, y))
+    }
+
+    /// The `station_offsets` map (per-station manual nudges) resolved to
+    /// transient positional [`StationRef`] keys against the CURRENT structure —
+    /// the sound positional view for hot solver paths. Usually empty; entries
+    /// whose anchor no longer resolves are dropped (surfaced by integrity).
+    fn resolved_station_offsets(&self) -> HashMap<StationRef, (f64, f64, f64)> {
+        let mut out = HashMap::with_capacity(self.station_offsets.len());
+        for (key, &v) in &self.station_offsets {
+            if let Some(sr) = self.resolve_key(key) {
+                out.insert(sr, v);
+            }
+        }
+        out
+    }
+
+    /// Per-station manual offset for a single positional ref. Found by resolving
+    /// each stored key to its positional ref — sound for ANY anchor kind
+    /// (canonical `AfterShot`/`SectionStart` after reanchor, or transitional
+    /// `Index` straight off a raw load), unlike building a canonical key (which
+    /// would never match an `Index` entry). `None` when there is no nudge (the
+    /// common case — short-circuits before touching the map).
+    pub(crate) fn station_offset_for_ref(&self, sr: StationRef) -> Option<(f64, f64, f64)> {
+        if self.station_offsets.is_empty() {
+            return None;
+        }
+        self.station_offsets
+            .iter()
+            .find(|(k, _)| self.resolve_key(k) == Some(sr))
+            .map(|(_, v)| *v)
+    }
+
+    /// Station comment for a positional ref, found by resolving each stored key
+    /// (sound for any anchor kind). For callers/tests that hold a positional ref
+    /// rather than a stored key.
+    pub(crate) fn station_comment_for_ref(&self, sr: StationRef) -> Option<&String> {
+        self.station_comments
+            .iter()
+            .find(|(k, _)| self.resolve_key(k) == Some(sr))
+            .map(|(_, v)| v)
+    }
+
+    /// Cross-section merges whose two stations have drifted apart — the
+    /// references are valid but the geometry is wrong (a stale section offset
+    /// from a missed cascade). Distinct from [`Self::check_structural_integrity`];
+    /// repaired by re-cascading offsets via [`Self::realign_merges`] rather than
+    /// by dropping data.
+    pub fn check_merge_alignment(&self) -> Vec<IntegrityViolation> {
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+        let mut violations = Vec::new();
+        for merge in &self.station_merges {
+            // Same-section merges are physically meaningless (test-only).
+            if merge.station_a.section_id == merge.station_b.section_id {
+                continue;
+            }
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&merge.station_a),
+                self.resolve_key(&merge.station_b),
+            ) else {
+                continue;
+            };
+            if let (Some((ax, ay)), Some((bx, by))) = (
+                self.station_world_xy(a, &local, &station_offsets),
+                self.station_world_xy(b, &local, &station_offsets),
+            ) {
+                let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "merge_misaligned".to_string(),
+                        message: format!(
+                            "Merged stations {}:{} and {}:{} are {:.2} m apart but should be the same point",
+                            a.section_id,
+                            a.station_index,
+                            b.section_id,
+                            b.station_index,
+                            dist
+                        ),
+                    });
+                }
+            }
+        }
+        violations
+    }
+
+    /// Cross-section *aligned* loop closures whose two stations have drifted
+    /// apart. An aligned closure (`is_aligned == true`) asserts its loop is
+    /// closed — its endpoints coincide — and the offset solver enforces it as a
+    /// rigid edge. But `is_aligned` is never set back to false, so a later shot
+    /// edit can leave the closure stale while still marked aligned. The
+    /// merge-only [`Self::check_merge_alignment`] cannot see this; surface it so
+    /// the user can recompute or remove the loop closure (forcing a loop
+    /// misclosure to zero is over-constrained, so this is detect-and-report, not
+    /// auto-heal).
+    pub fn check_closure_alignment(&self) -> Vec<IntegrityViolation> {
+        let local = self.section_local_coords();
+        let station_offsets = self.resolved_station_offsets();
+        let mut violations = Vec::new();
+        for closure in &self.loop_closures {
+            if !closure.is_aligned || closure.station_a.section_id == closure.station_b.section_id {
+                continue;
+            }
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) else {
+                continue;
+            };
+            if let (Some((ax, ay)), Some((bx, by))) = (
+                self.station_world_xy(a, &local, &station_offsets),
+                self.station_world_xy(b, &local, &station_offsets),
+            ) {
+                let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                if dist >= Self::MERGE_ALIGNMENT_TOLERANCE_M {
+                    violations.push(IntegrityViolation {
+                        severity: ViolationSeverity::Critical,
+                        category: "closure_misaligned".to_string(),
+                        message: format!(
+                            "Loop closure {} ({}:{} ↔ {}:{}) is marked closed but its ends are {:.2} m apart — recompute or remove it",
+                            closure.id,
+                            a.section_id,
+                            a.station_index,
+                            b.section_id,
+                            b.station_index,
+                            dist
+                        ),
+                    });
+                }
+            }
+        }
+        violations
+    }
+
+    /// Closures that are not true loops: their two endpoints are connected ONLY
+    /// through the closure itself (a sole bridge), which is a merge, not a loop.
+    /// [`Self::convert_orphan_closures_to_merges`] normally fixes these the
+    /// moment they appear (on delete/split and on load), so this is a safety-net
+    /// detector for any path that bypassed that (e.g. a collaborator's reconciled
+    /// edit) — it lets the integrity banner surface the condition.
+    pub fn check_orphan_closures(&self) -> Vec<IntegrityViolation> {
+        let mut violations = Vec::new();
+        for closure in &self.loop_closures {
+            if closure.station_a.section_id == closure.station_b.section_id {
+                continue;
+            }
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) else {
+                continue;
+            };
+            if !self.are_stations_connected_excluding_shot(a, b, None, false) {
+                violations.push(IntegrityViolation {
+                    severity: ViolationSeverity::Warning,
+                    category: "orphan_closure".to_string(),
+                    message: format!(
+                        "Loop closure {} ({}:{} ↔ {}:{}) is the only connection between its sections — it should be a merge, not a loop",
+                        closure.id,
+                        a.section_id,
+                        a.station_index,
+                        b.section_id,
+                        b.station_index
+                    ),
+                });
+            }
+        }
+        violations
+    }
+
+    /// One authoritative anchor section per connected merge group, preferring a
+    /// zero-datum section so the realign keeps the group pinned to GPS.
+    fn realign_seeds(&self) -> Vec<SectionId> {
+        let datum_sections: HashSet<SectionId> =
+            self.zero_datums.iter().map(|z| z.station_ref.section_id).collect();
+        let mut seeds = Vec::new();
+        let mut visited: HashSet<SectionId> = HashSet::new();
+        for section in &self.sections {
+            if visited.contains(&section.id) {
+                continue;
+            }
+            let component = self.get_connected_section_ids(section.id);
+            let anchor = component
+                .iter()
+                .copied()
+                .filter(|s| datum_sections.contains(s))
+                .min()
+                .or_else(|| component.iter().copied().min());
+            if let Some(a) = anchor {
+                seeds.push(a);
+            }
+            visited.extend(component);
+        }
+        seeds
+    }
+
+    /// Re-derive section offsets from the merge/datum constraints right after
+    /// loading from disk. Section offsets are **derived** state that the file
+    /// merely caches; re-solving them on load heals any drift a previous session
+    /// persisted (e.g. an older redo bug) so the project always opens
+    /// geometrically correct, without the user having to repair anything. The
+    /// transient caches are rebuilt first so the solve walks the merge graph
+    /// correctly. Returns the number of merges that had drifted (0 = file was
+    /// already consistent, the common case).
+    pub fn redrive_offsets_after_load(&mut self) -> usize {
+        self.rebuild_section_index();
+        self.rebuild_merge_adjacency();
+        // Normalize any closure that is really a sole-bridge attachment into a
+        // merge before solving, so a file persisted in that state (e.g. a section
+        // stranded by an older delete) opens correctly.
+        // De-duplicate shot UUIDs BEFORE re-anchoring: if a section persisted two
+        // shots sharing a UUID, canonicalizing a positional Index(i) ref to
+        // AfterShot(uuid) would later resolve to the FIRST match, silently moving
+        // a ref off the duplicate it was meant to target (and Repair couldn't
+        // recover the intended endpoint). Re-minting the duplicate first gives the
+        // second station its own UUID so the re-anchor stays faithful.
+        self.ensure_unique_shot_uuids();
+        // Upgrade any positional (Index) ref from an older file to the stable
+        // shot-UUID anchor now that shots (with UUIDs) are loaded.
+        self.reanchor_station_refs();
+        self.convert_orphan_closures_to_merges();
+        // Zero-trust: never honor a persisted derivable offset — re-solve
+        // unconditionally so a sub-tolerance stale offset can't survive the load.
+        self.resolve_offsets()
+    }
+
+    /// Enforce the invariant that a loop closure exists only for a TRUE loop. If
+    /// a closure's two endpoints are no longer connected through the survey
+    /// (shots + merges) independently of the closure, the closure is the *sole*
+    /// connection between them — that is a merge, not a loop — so convert it.
+    ///
+    /// Iterative: when two closures bridge the same pair, the first becomes the
+    /// merge and the second is then a genuine (redundant) loop and is kept.
+    /// Returns the number converted. (Issue #8 — a shot deletion can strand a
+    /// section so its only attachment is a closure.)
+    pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
+        let mut converted = 0;
+        loop {
+            let orphan = self.loop_closures.iter().position(|c| {
+                if c.station_a.section_id == c.station_b.section_id {
+                    return false;
+                }
+                let (Some(a), Some(b)) =
+                    (self.resolve_key(&c.station_a), self.resolve_key(&c.station_b))
+                else {
+                    return false;
+                };
+                !self.are_stations_connected_excluding_shot(a, b, None, false)
+            });
+            let Some(idx) = orphan else { break };
+            let closure = self.loop_closures.remove(idx);
+            let already = match (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) {
+                (Some(a), Some(b)) => self.has_direct_merge(a, b),
+                _ => false,
+            };
+            if !already {
+                self.record_station_merge(StationMerge {
+                    station_a: closure.station_a,
+                    station_b: closure.station_b,
+                    merged_at: Utc::now(),
+                });
+            }
+            converted += 1;
+        }
+        converted
+    }
+
+    /// Recompute section offsets so every merge's endpoints coincide again,
+    /// anchoring each connected group at its zero datum (or, failing that, an
+    /// arbitrary section). Returns the number of merges that were misaligned
+    /// before the realign. A no-op when everything is already aligned (within the
+    /// 5 cm reporting tolerance).
+    ///
+    /// This is the per-command self-heal (via `reconcile_geometry`): it keeps the
+    /// fast no-drift early-return because the in-memory offsets it sees were just
+    /// computed by the command/cascade, not read from an untrusted source, and an
+    /// unconditional re-solve after every command would override the exact state
+    /// an undo/redo snapshot just restored. The *load*/repair paths use
+    /// [`Self::resolve_offsets`] instead, which never trusts a persisted value.
+    pub fn realign_merges(&mut self) -> usize {
+        let before = self.check_merge_alignment().len();
+        if before == 0 {
+            return 0;
+        }
+        self.resolve_offsets()
+    }
+
+    /// Zero-trust re-solve of section offsets, used on LOAD and explicit REPAIR.
+    /// Unlike [`Self::realign_merges`] it ALWAYS re-runs the cascade, even when no
+    /// merge is drifted past the 5 cm reporting tolerance: section offsets are
+    /// derived state, so a *sub-tolerance* stale/wrong cached offset (which
+    /// `check_merge_alignment` can't see) must never be trusted across a reload.
+    /// The cascade re-derives every offset reachable from an anchor; only the
+    /// genuinely non-derivable anchors (datum sections and free-placed floating
+    /// components) keep their stored offset, because the cascade never
+    /// seed-adjusts them. Returns the number of merges that were misaligned beyond
+    /// the reporting tolerance before the re-solve.
+    pub fn resolve_offsets(&mut self) -> usize {
+        let before = self.check_merge_alignment().len();
+        // Snapshot the derived offsets so we can tell whether the re-solve actually
+        // moved anything — including SUB-tolerance changes the `before`/`after`
+        // misalignment count can't see (that is the whole reason this re-cascades
+        // unconditionally). Comparing the count alone would miss them.
+        let offsets_before = self.section_offsets.clone();
+        let seeds = self.realign_seeds();
+        let was_deferred = self.cascade_deferred;
+        self.cascade_deferred = false;
+        self.cascade_connection_offsets(&seeds);
+        self.cascade_deferred = was_deferred;
+        // Only stamp a modification when the re-solve genuinely changed an offset.
+        // Opening a byte-clean project re-solves to the identical offsets, and
+        // touch()ing there would bump `modified_at` for a project the user never
+        // edited — a later no-edit save would then persist a bogus timestamp, and
+        // it would make a no-op integrity Repair look like a real change.
+        if self.section_offsets != offsets_before {
+            self.touch();
+        }
+        before.saturating_sub(self.check_merge_alignment().len())
     }
 }
 

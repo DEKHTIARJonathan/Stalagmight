@@ -285,6 +285,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
 
+      // Structural-integrity issues returned by check_project_integrity. Tests
+      // seed these via __MOCK_SET_INTEGRITY_ISSUES__; repair fixes all but the
+      // trailing `mockIntegrityRemaining` detect-only issues.
+      let mockIntegrityIssues: string[] = [];
+      let mockIntegrityRemaining = 0;
+      // Whether the seeded issues block saving (unresolvable cross-references).
+      // Default false so the banner stays dismissable in existing tests.
+      let mockIntegritySaveBlocked = false;
+      (window as unknown as Record<string, unknown>).__MOCK_SET_INTEGRITY_ISSUES__ = (
+        issues: string[]
+      ) => {
+        mockIntegrityIssues = Array.isArray(issues) ? issues : [];
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_SET_INTEGRITY_SAVE_BLOCKED__ = (
+        blocked: boolean
+      ) => {
+        mockIntegritySaveBlocked = !!blocked;
+      };
+      // Seed how many of the issues are detect-only (survive repair), so tests
+      // can exercise the "N need manual attention" path.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_INTEGRITY_REMAINING__ = (
+        n: number
+      ) => {
+        mockIntegrityRemaining = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+      };
+
       // Expose currentProject setter for E2E tests (allows injecting test fixtures)
       (window as unknown as Record<string, unknown>).__E2E_MOCKS__ = {
         setCurrentProject: (project: typeof currentProject) => {
@@ -2563,6 +2589,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'get_project_warnings':
             return [];
 
+          case 'check_project_integrity':
+            return { messages: mockIntegrityIssues, save_blocked: mockIntegritySaveBlocked };
+
+          case 'repair_project_integrity': {
+            const total = mockIntegrityIssues.length;
+            const remaining = Math.min(mockIntegrityRemaining, total);
+            const fixed = total - remaining;
+            // Keep the trailing `remaining` issues as detect-only residue.
+            mockIntegrityIssues = mockIntegrityIssues.slice(total - remaining);
+            return { fixed, remaining };
+          }
+
           case 'remove_from_recent_projects':
             // Mock remove from recent - just return success
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
@@ -2798,6 +2836,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ],
               replacement_merges: [],
               replacement_closure_updates: [],
+              closure_to_merge: [],
               merge_rewire_skipped: false,
               closure_rewire_skipped: true,
               shift_blocked: false,

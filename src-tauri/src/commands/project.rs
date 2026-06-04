@@ -157,6 +157,12 @@ pub(crate) fn merge_projects_impl(
 /// Combined project state for frontend
 #[derive(serde::Serialize, TS)]
 pub struct ProjectState {
+    /// Serialized through [`ProjectIpc`] so cross-references reach the frontend
+    /// in positional wire form (the ts-rs `Project` shape), not the internal
+    /// `StationKey` shape that derived serde would emit. ts-rs still reads the
+    /// field type (`Project`) for the generated binding, so the TS contract is
+    /// unchanged; only the runtime serde payload is corrected.
+    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
     pub project: Project,
     pub stations: Vec<Station>,
     pub stats: ProjectStats,

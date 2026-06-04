@@ -7,7 +7,7 @@ import { isNonInteractiveTool } from '../utils/toolUtils';
 import { normalizeShortcut, parseKeyEvent } from '../utils/shortcuts';
 import { getErrorMessage } from '../utils/ipc';
 import { extractFilename } from '../utils/path';
-import { isPermissionError } from '../utils/saveErrors';
+import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
   ensureExtension,
   projectOpenFilters,
@@ -656,7 +656,13 @@ export function useKeyboardShortcuts() {
         case 'save':
           event.preventDefault();
           if (project) {
-            saveProject();
+            void saveProject().then((result) => {
+              if (result && !result.success) {
+                // A save blocked by integrity issues is not a "real" error —
+                // route to Review & Repair instead of an error window.
+                surfaceSaveFailure(result.error, openDialog);
+              }
+            });
             maybeShowToast(action);
           }
           break;
@@ -689,10 +695,11 @@ export function useKeyboardShortcuts() {
 
                   const store = useProjectStore.getState();
                   const result = await store.saveProject(finalPath);
-                  // saveProject already opens the folder-access guidance dialog
-                  // on a permission denial; don't replace it with the generic one.
-                  if (result && !result.success && result.error && !isPermissionError(result.error)) {
-                    openDialog('error', { message: result.error, title: 'Save Failed' });
+                  // surfaceSaveFailure routes integrity blocks to Review & Repair
+                  // and skips the generic error window for permission denials
+                  // (saveProject already opened the folder-access guidance dialog).
+                  if (result && !result.success) {
+                    surfaceSaveFailure(result.error, openDialog);
                   }
                 }
               } catch (e) {

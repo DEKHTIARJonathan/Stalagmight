@@ -478,9 +478,13 @@ fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
 }
 
 fn parse_f64(fields: &HashMap<&str, String>, key: &str) -> f64 {
+    // Rust's f64 parser accepts "NaN"/"inf"/"-inf"; treat any non-finite value as
+    // missing so a corrupt/hostile .tml can't seed non-finite geometry that would
+    // silently poison every downstream coordinate/alignment computation.
     fields
         .get(key)
         .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
         .unwrap_or(0.0)
 }
 
@@ -488,6 +492,7 @@ fn parse_f64_default(fields: &HashMap<&str, String>, key: &str, default: f64) ->
     fields
         .get(key)
         .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
         .unwrap_or(default)
 }
 
@@ -1725,6 +1730,45 @@ mod tests {
     fn test_color_conversion_standard() {
         assert_eq!(convert_ariane_color(Some("0x8f6112ff")), "#8f6112");
         assert_eq!(convert_ariane_color(Some("0xFF0000FF")), "#FF0000");
+    }
+
+    #[test]
+    fn parse_rejects_non_finite_numeric_fields() {
+        // Rust's f64 parser accepts "NaN"/"Infinity"; a corrupt/hostile .tml must
+        // not seed non-finite geometry. parse_f64 coerces them to the field default
+        // (0.0) so nothing non-finite reaches a RawShot.
+        let xml = wrap_xml(
+            r#"<SurveyData>
+    <ID>1</ID>
+    <FromID>0</FromID>
+    <ClosureToID>-1</ClosureToID>
+    <Type>REAL</Type>
+    <Section>S</Section>
+    <Azimut>NaN</Azimut>
+    <Length>Infinity</Length>
+    <Depth>-Infinity</Depth>
+    <DepthIn>-1.0</DepthIn>
+    <Inclination>NaN</Inclination>
+    <Left>1.0</Left>
+    <Right>2.0</Right>
+    <Up>3.0</Up>
+    <Down>4.0</Down>
+    <Comment></Comment>
+    <Explorer>Tester</Explorer>
+    <Date>2024-06-15</Date>
+    <Color>0x8f6112ff</Color>
+    <Excluded>false</Excluded>
+    <Latitude>0.0</Latitude>
+    <Longitude>0.0</Longitude>
+</SurveyData>"#,
+        );
+        let (shots, _meta) = parse_raw_shots(&xml).unwrap();
+        let s = shots.iter().find(|s| s.id == 1).expect("shot 1 parsed");
+        assert!(s.azimuth.is_finite(), "azimuth NaN must be coerced");
+        assert!(s.length.is_finite(), "length inf must be coerced");
+        assert!(s.depth.is_finite(), "depth -inf must be coerced");
+        assert!(s.inclination.is_finite(), "inclination NaN must be coerced");
+        assert_eq!(s.length, 0.0);
     }
 
     #[test]
@@ -3271,9 +3315,13 @@ mod tests {
         //    This validates the full import + merge + offset pipeline.
         let merge_tolerance = 1e-6;
         for merge in &project.station_merges {
-            let ca = project.compute_station_raw_coords(merge.station_a)
+            let sa = project.resolve_key(&merge.station_a)
+                .unwrap_or_else(|| panic!("Resolve merge station_a {:?}", merge.station_a));
+            let sb = project.resolve_key(&merge.station_b)
+                .unwrap_or_else(|| panic!("Resolve merge station_b {:?}", merge.station_b));
+            let ca = project.compute_station_raw_coords(sa)
                 .unwrap_or_else(|| panic!("Coords for merge station_a {:?}", merge.station_a));
-            let cb = project.compute_station_raw_coords(merge.station_b)
+            let cb = project.compute_station_raw_coords(sb)
                 .unwrap_or_else(|| panic!("Coords for merge station_b {:?}", merge.station_b));
             assert!(
                 (ca.x - cb.x).abs() < merge_tolerance && (ca.y - cb.y).abs() < merge_tolerance,
