@@ -519,17 +519,23 @@ export const useUIStore = create<UIStore>((set) => ({
   toggleSectionsPanel: () => {
     const opening = !useUIStore.getState().sectionsPanelOpen;
     trackPanelToggle('sections', opening);
-    set({ sectionsPanelOpen: opening });
+    // Manually changing the layout drops section-focus mode (#50) so the toolbar
+    // can't keep showing a focused-section name with the panels reopened. Keep
+    // the user's new layout (no snapshot restore); discard the snapshot.
+    focusLayoutSnapshot = null;
+    set({ sectionsPanelOpen: opening, focusedSectionId: null });
   },
   toggleDetailPanel: () => {
     const opening = !useUIStore.getState().detailPanelOpen;
     trackPanelToggle('detail', opening);
-    set({ detailPanelOpen: opening });
+    focusLayoutSnapshot = null;
+    set({ detailPanelOpen: opening, focusedSectionId: null });
   },
   toggleDataTable: () => {
     const opening = !useUIStore.getState().dataTableOpen;
     trackPanelToggle('data-table', opening);
-    set({ dataTableOpen: opening });
+    focusLayoutSnapshot = null;
+    set({ dataTableOpen: opening, focusedSectionId: null });
   },
   setDetailPanelTab: (detailPanelTab) => set({ detailPanelTab }),
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),

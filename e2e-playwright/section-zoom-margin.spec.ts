@@ -406,11 +406,14 @@ test.describe('Section zoom margin', () => {
   test('re-fitting an already-framed section keeps it in viewport with margin', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
 
-    // First, zoom to the section to get it visible and properly positioned.
-    // (#50: double-click also enters section-focus mode and collapses the panel.)
+    // Frame the section with a single click: one fit, no layout change. (We
+    // deliberately avoid double-click here — #50 makes it enter focus mode and
+    // re-fit on the enlarged map, which would mean two fits at two container
+    // sizes and a racy zoom baseline. Single-click keeps the container stable so
+    // this isolates fitToSection's re-fit idempotence.)
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
-    await sectionRow.dblclick();
+    await sectionRow.click();
 
     // Wait for initial zoom to settle with margins
     await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
@@ -423,10 +426,8 @@ test.describe('Section zoom margin', () => {
       return map?.getZoom() ?? 0;
     });
 
-    // Re-fire the same zoom request via the store. We can't double-click the row
-    // again because focus mode has collapsed the panel — but this exercises the
-    // same fitToSection path and verifies re-fitting an already-framed section
-    // (now in the focus-mode viewport) doesn't jump the zoom.
+    // Re-fire the same zoom request via the store: re-fitting an already-framed
+    // section (same container) must not jump the zoom.
     await page.evaluate((secId) => {
       const ui = (window as unknown as {
         __E2E_TEST__?: { uiStore?: { getState: () => { triggerZoomToSection: (id: number) => void } } };

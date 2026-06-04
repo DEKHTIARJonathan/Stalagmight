@@ -212,11 +212,18 @@ export default function Toolbar({
       </div>
 
       {/* Center - project name, or focused section name (#50). In focus mode the
-          map icon hints that double-clicking the name returns to the full map. */}
+          map icon hints that double-clicking the name returns to the full map.
+          Keyboard users exit with Enter/Space (double-click isn't keyboard-fired). */}
       {focusedSectionName !== null ? (
         <button
           type="button"
           onDoubleClick={onExitFocus}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onExitFocus();
+            }
+          }}
           title={t('sections.focus.exitHint')}
           aria-label={t('sections.focus.ariaLabel', { name: focusedSectionName })}
           className="flex items-center gap-1.5 font-medium text-accent hover:text-accent/80 transition-colors"

@@ -13,6 +13,7 @@ import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
+import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { withTrackingSuppressed } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
@@ -271,8 +272,8 @@ export default function SingleSystemView() {
               key={focusedSectionId !== null ? 'data-table-focus' : 'data-table'}
               direction="vertical"
               defaultSize={dataTableHeight}
-              minSize={100}
-              maxSize={500}
+              minSize={DATA_TABLE_MIN_HEIGHT}
+              maxSize={DATA_TABLE_MAX_HEIGHT}
               onResize={setDataTableHeight}
               onResizeEnd={(size) => savePanelSizes(undefined, undefined, size)}
               className="border-t border-border"
