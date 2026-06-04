@@ -8,12 +8,16 @@ Update this file every time a new version is tagged.
 ## [Unreleased]
 
 ### Added
+- **Toggle between measured and closure-adjusted geometry** — the **Display** menu now has a *Geometry* switch with **Measured** (raw survey) and **Closure-adjusted** (loop-closure-corrected) views. Applying loop closures no longer rewrites your measured data: the corrected geometry is computed on top of the measured survey and shown only while the toggle is on, so your raw shots are always intact and adding more closures re-solves cleanly instead of compounding error. The chosen view is remembered across sessions, and the closure-adjusted view is read-only (switch to Measured to edit).
 - **Recent projects show path and last-edited time** — each project in the global recent-projects list now shows its file path (elided to fit, full path on hover) and a relative "last edited" time such as "2 hours ago" (exact, locale-aware date and time on hover) ([#46](https://github.com/Stalagmight/Stalagmight/issues/46), [#48](https://github.com/Stalagmight/Stalagmight/issues/48))
 - **Sort and search the recent-projects list** — a persisted **Sort by** control (last opened, last edited, name, section count, or total length, in either direction) and a **search box** that filters by name, location, or path, with a "showing X of Y" count and a no-results state ([#47](https://github.com/Stalagmight/Stalagmight/issues/47))
 - **Compact table view for recent projects** — toggle between the card view and a dense table whose column headers click to sort
 - **Missing recent files are surfaced, not hidden** — projects whose file was moved, deleted, or is unreadable now appear as "File not found" rows with one-click removal, instead of silently disappearing
 - **Rename a project from the details panel** — inline-edit a recent project's name without opening it; any already-open copy stays in sync
 - **Structural-integrity safety net for survey data** ([#17](https://github.com/Stalagmight/Stalagmight/issues/17)) — Stalagmight now protects the relationships in a survey (station merges, loop closures, zero datums, and comments). Edits that would corrupt them are refused before they take effect, and opening a project re-checks it — when something is wrong, a banner offers a one-click **Repair** that drops the invalid data while leaving everything valid untouched. Cross-references are now tied to each shot's stable identity, so inserting or deleting shots can no longer silently re-point a merge, closure, datum, or comment onto the wrong station.
+
+### Changed
+- **Loop-closure adjustment is now non-destructive** — the old "Adjust Closures" action that permanently baked the correction into your shots has been replaced by the measured/closure-adjusted display toggle described above. Existing projects open unchanged; geometry that a previous build already baked cannot be un-baked, but it is never rewritten again.
 
 ### Fixed
 - **Merged sections move as a rigid group** — "Adjust Position" on a section that is merged (or joined by an aligned loop closure) now moves the whole connected group together, so the merge stays aligned and the move sticks, instead of snapping back or dragging its partner unpredictably

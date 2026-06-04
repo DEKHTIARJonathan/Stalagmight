@@ -26,6 +26,10 @@ export const SOURCE_NAMES: readonly string[] = [
 /** Event base names indexed by event_id (u16). */
 export const EVENT_NAMES: readonly string[] = [
   // ── Commands (0-92) ──
+  // `adjust_loop_closures` was removed when closure adjustment became a
+  // non-destructive display mode, but event-ID 0 is frozen into payloads from
+  // older clients, so its original name is kept verbatim (append-only registry;
+  // frozen entries are never relabeled). Keep in sync with registry.rs.
   'command.adjust_loop_closures',
   'command.attempt_repair',
   'command.calculate_file_hash',
@@ -361,4 +365,12 @@ export const EVENT_NAMES: readonly string[] = [
   // Structural-integrity IPC commands (check + repair).
   'command.check_project_integrity',
   'command.repair_project_integrity',
+  // Closure-adjusted display mode (measured to closure-adjusted) toggle + state.
+  // Only the non-default closureAdjusted state is emitted. (Avoid quoting the
+  // value here: the rust_ts_registry_in_sync parser treats any single-quoted
+  // token on these lines as an array element.)
+  'action.toggle.geometryMode',
+  'display-state.geometryMode:closureAdjusted',
+  // Lazy IPC query that returns the closure-adjusted station coordinates.
+  'command.get_adjusted_stations',
 ];

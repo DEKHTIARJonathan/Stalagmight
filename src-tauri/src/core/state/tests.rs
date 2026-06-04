@@ -1324,6 +1324,95 @@ fn test_create_section() {
 }
 
 #[test]
+fn get_adjusted_stations_none_without_project() {
+    let state = AppState::new().unwrap();
+    assert!(state.get_adjusted_stations().is_none());
+}
+
+#[test]
+fn get_adjusted_stations_caches_and_invalidates() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Adj".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#111111".to_string(),
+        direction: Some(SurveyDirection::In),
+        shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+    });
+
+    // Two consecutive calls return the same result (second served from cache).
+    let adj1 = state.get_adjusted_stations().expect("adjusted stations");
+    let adj1_again = state
+        .get_adjusted_stations()
+        .expect("adjusted stations (cached)");
+    assert_eq!(adj1.len(), adj1_again.len());
+    assert_eq!(adj1.len(), 3, "two shots → three stations");
+
+    // A mutating command must invalidate the cache: the adjusted view reflects
+    // the newly added section.
+    state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#222222".to_string(),
+        direction: Some(SurveyDirection::In),
+        shots: vec![test_shot_data(5.0)],
+    });
+    let adj2 = state
+        .get_adjusted_stations()
+        .expect("adjusted stations after edit");
+    assert_eq!(
+        adj2.len(),
+        5,
+        "adjusted view must reflect the added section after cache invalidation"
+    );
+}
+
+#[test]
+fn repair_invalidates_adjusted_cache() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Repair".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#111111".to_string(),
+        direction: Some(SurveyDirection::In),
+        shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+    });
+
+    // Populate the adjusted cache.
+    let _ = state.get_adjusted_stations().expect("adjusted stations");
+    assert!(
+        state.adjusted_cache.lock().unwrap().is_some(),
+        "cache should be populated after a solve"
+    );
+    let gen_before = state.adjusted_cache_generation.load(SeqCst);
+
+    // Repair mutates measured geometry without necessarily bumping modified_at, so
+    // it must drop the cached adjusted solve (otherwise a later read serves stale
+    // geometry keyed on an unchanged version).
+    let _ = state.repair_open_project_integrity();
+    assert!(
+        state.adjusted_cache.lock().unwrap().is_none(),
+        "repair must invalidate the adjusted cache"
+    );
+    assert!(
+        state.adjusted_cache_generation.load(SeqCst) > gen_before,
+        "repair must bump the invalidation generation"
+    );
+}
+
+#[test]
 fn unmerge_converts_orphaned_bridge_closure() {
     // Deleting the merge that was a loop's other path strands the section onto
     // the closure — which must then become a merge (same #8 principle as delete).
@@ -10576,18 +10665,6 @@ fn test_execute_import_sections_manual_snap_placement() {
     assert!(result.success, "import with ManualSnap failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.station_merges.len(), 1);
-}
-
-// ============================================================================
-// Coverage gap tests: commands.rs — adjust_loop_closures
-// ============================================================================
-
-#[test]
-fn test_adjust_loop_closures_no_project() {
-    let state = AppState::new().unwrap();
-    let result = state.adjust_loop_closures(StationRef::new(1, 0), ClosureStrategy::Batch);
-    assert!(!result.success);
-    assert!(result.error.unwrap_or_default().contains("No project"));
 }
 
 // ============================================================================

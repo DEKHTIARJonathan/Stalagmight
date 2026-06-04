@@ -1123,6 +1123,7 @@ pub fn run() {
             commands::project::save_project,
             commands::project::close_project,
             commands::project::get_project_state,
+            commands::project::get_adjusted_stations,
             commands::project::list_recent_projects,
             commands::project::remove_from_recent_projects,
             commands::project::set_project_name_for_path,
@@ -1165,7 +1166,6 @@ pub fn run() {
             commands::station::check_merge_connectivity,
             commands::station::create_loop_closure,
             commands::station::remove_loop_closure,
-            commands::station::adjust_loop_closures,
             // Undo/Redo
             commands::history::undo,
             commands::history::redo,

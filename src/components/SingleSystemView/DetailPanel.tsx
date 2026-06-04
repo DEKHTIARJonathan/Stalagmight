@@ -14,6 +14,7 @@ import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 
 export default function DetailPanel() {
@@ -315,6 +316,17 @@ function StationDetail({ station }: { station: Station }) {
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
   );
   const precision = useDecimalPrecision();
+  // Closure-adjusted view is read-only: disable mutation controls (edits happen in measured view).
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // Show the active geometry's coordinates so inspection matches the map; falls
+  // back to the passed (measured) station before the adjusted set is fetched.
+  const activeStations = useActiveStations();
+  const displayStation =
+    activeStations.find(
+      (s) =>
+        s.station_ref.section_id === station.station_ref.section_id &&
+        s.station_ref.station_index === station.station_ref.station_index
+    ) ?? station;
   const [unmergeTargetKey, setUnmergeTargetKey] = useState<string | null>(null);
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
@@ -456,9 +468,9 @@ function StationDetail({ station }: { station: Station }) {
             value={formatStationId(sectionId, stationPosition)}
           />
           <DetailRow label={t('detailPanel.labels.section')} value={section?.name ?? t('sections.defaultName', { id: sectionId })} />
-          <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(station.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(station.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(station.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(displayStation.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
 
           {station.comment && (
             <div className="pt-2 border-t border-border">
@@ -512,7 +524,7 @@ function StationDetail({ station }: { station: Station }) {
                       title="Unmerge Stations"
                       aria-label={`Unmerge station ${formatStationId(ref.section_id, ref.station_index)}`}
                       data-testid={`detail-unmerge-${ref.section_id}-${ref.station_index}`}
-                      disabled={unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
+                      disabled={geometryReadOnly || unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
                     >
                       <LinkOffIcon size={14} />
                     </button>
@@ -527,7 +539,6 @@ function StationDetail({ station }: { station: Station }) {
               closures={station.closures_with}
               loopClosures={project?.loop_closures ?? []}
               stations={stations}
-              anchorStation={station.station_ref}
               onSelectStation={handleSelectMergedStation}
               onAnnounce={announceSelection}
               onHoverStart={(ref) => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
@@ -593,7 +604,7 @@ function StationDetail({ station }: { station: Station }) {
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEdit}>
+        <Button size="sm" className="w-full" onClick={handleEdit} disabled={geometryReadOnly}>
           {t('common.actions.edit')}
         </Button>
       </div>
@@ -616,6 +627,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotReference } = useProjectStore();
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
   );
@@ -820,10 +832,10 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       </Panel>
 
       <div className="p-3 border-t border-border space-y-2">
-        <Button size="sm" className="w-full" onClick={handleToggleReference}>
+        <Button size="sm" className="w-full" onClick={handleToggleReference} disabled={geometryReadOnly}>
           {shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
         </Button>
-        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete}>
+        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={geometryReadOnly}>
           {t('common.actions.delete')}
         </Button>
       </div>
@@ -839,6 +851,7 @@ interface SectionDetailProps {
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { t } = useTranslation();
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
@@ -1054,7 +1067,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEditSection}>
+        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={geometryReadOnly}>
           {t('detailPanel.section.edit')}
         </Button>
       </div>
@@ -1250,7 +1263,6 @@ interface ClosuresSectionProps {
   closures: ClosureRef[];
   loopClosures: LoopClosure[];
   stations: Station[];
-  anchorStation: { section_id: number; station_index: number };
   onSelectStation: (ref: { section_id: number; station_index: number }) => void;
   onAnnounce: (message: string) => void;
   onHoverStart: (ref: { section_id: number; station_index: number }) => void;
@@ -1261,15 +1273,14 @@ function ClosuresSection({
   closures,
   loopClosures,
   stations,
-  anchorStation,
   onSelectStation,
   onAnnounce,
   onHoverStart,
   onHoverEnd,
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
-  const openDialog = useUIStore((s) => s.openDialog);
   const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
@@ -1348,16 +1359,6 @@ function ClosuresSection({
       </button>
       {expanded && (
         <div className="mt-1 space-y-2" id={contentId} data-testid="closures-section-content">
-          <div>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => { setSource('detail-panel'); openDialog('adjust-closures', { anchorStation }); }}
-              data-testid="adjust-closures-button"
-            >
-              Adjust Closures
-            </Button>
-          </div>
           {sortedGroups.map(([closureId, refs]) => {
             const closureIdLabel = closureId.toString();
             const closure = closureMap.get(closureId);
@@ -1436,7 +1437,7 @@ function ClosuresSection({
                     title="Remove Closure"
                     aria-label={`Remove closure ${closureIdLabel}`}
                     data-testid={`detail-remove-closure-${closureIdLabel}`}
-                    disabled={!closure || removingClosureId === closureId}
+                    disabled={geometryReadOnly || !closure || removingClosureId === closureId}
                   >
                     <LinkOffIcon size={14} />
                   </button>

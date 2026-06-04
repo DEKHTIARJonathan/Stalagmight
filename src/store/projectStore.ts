@@ -4,6 +4,7 @@ import { invokeIpc } from '../utils/ipc';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
+import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
 import { useGlobalViewStore } from './globalViewStore';
 import type {
@@ -155,6 +156,16 @@ interface ProjectStore {
    * + `stations` go away. See docs/plans/memory-soa-and-mvt.md.
    */
   surveyData: SurveyData | null;
+  /**
+   * Closure-adjusted geometry for the read-only adjusted display mode, derived
+   * non-destructively on the backend and fetched lazily. `null` until fetched
+   * and after any edit (which invalidates it); rendering falls back to the
+   * measured `stations`/`surveyData` while null. See geometrySelectors.ts.
+   */
+  stationsAdjusted: Station[] | null;
+  surveyDataAdjusted: SurveyData | null;
+  /** True while the closure-adjusted geometry is being solved/fetched. */
+  adjustedLoading: boolean;
   stats: ProjectStats | null;
   frozenShots: FrozenShotRef[];
   warnings: ProjectWarning[];
@@ -206,6 +217,12 @@ interface ProjectStore {
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
+  /**
+   * Fetch closure-adjusted geometry for the adjusted display mode (lazy, cached).
+   * Resolves true on success / no-op, false only on a genuine fetch failure (so
+   * the caller can fall back to the measured view rather than getting stuck).
+   */
+  loadAdjustedGeometry: () => Promise<boolean>;
   /** Check if a shot (by section_id + shot index) is frozen */
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   /** Structural-integrity issues found in the open project (empty = sound). */
@@ -268,10 +285,6 @@ interface ProjectStore {
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
-  adjustLoopClosures: (
-    anchorStation: StationRef,
-    method: ClosureStrategy
-  ) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
@@ -400,6 +413,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   project: null,
   stations: [],
   surveyData: null,
+  stationsAdjusted: null,
+  surveyDataAdjusted: null,
+  adjustedLoading: false,
   stats: null,
   frozenShots: [],
   warnings: [],
@@ -434,6 +450,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       await invokeIpc('update_config', { config }, { purpose: 'persist user settings' });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
+      // The closure-adjustment sigmas feed the adjusted solve, so a settings change
+      // can change the adjusted geometry. Drop the cached set; the map re-fetches
+      // lazily (the backend memo is keyed on the config, so a stale config would
+      // otherwise keep rendering the old weighted solve until an unrelated edit).
+      set({ stationsAdjusted: null, surveyDataAdjusted: null });
       return emptyCommandResult(true, null);
     } catch (e) {
       return emptyCommandResult(false, String(e));
@@ -441,7 +462,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   setConfig: (config: Config) => {
-    set({ config });
+    // Replacing the config (e.g. Settings ▸ Advanced "Reload from disk") can change
+    // the closure-adjustment sigmas, so drop the cached adjusted geometry here too —
+    // this is the shared config-replacement path that `updateConfig` doesn't use.
+    set({ config, stationsAdjusted: null, surveyDataAdjusted: null });
   },
 
   // Loading state actions
@@ -577,6 +601,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           project: result.project,
           stations: result.stations,
           surveyData: result.surveyData,
+          // Adjusted geometry is lazily (re)fetched by the map when the adjusted
+          // mode is active; invalidate any stale set from the previous project.
+          stationsAdjusted: null,
+          surveyDataAdjusted: null,
           stats: result.stats,
           warnings: result.warnings,
           isDirty: false,
@@ -746,6 +774,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       set({
         project: result.project,
         stations: [],
+        stationsAdjusted: null,
+        surveyDataAdjusted: null,
         surveyData: emptySurveyData(),
         stats: null,
         frozenShots: [],
@@ -935,7 +965,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
+        set({ project: null, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
       }
       return result;
     } finally {
@@ -965,6 +995,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           project: state.project,
           stations: state.stations,
           surveyData,
+          // Any edit changes measured geometry → the cached adjusted view is stale.
+          // Drop it; the map re-fetches lazily if the adjusted mode is active.
+          stationsAdjusted: null,
+          surveyDataAdjusted: null,
           stats: state.stats,
           frozenShots: state.frozen_shots,
         });
@@ -1357,15 +1391,40 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  adjustLoopClosures: async (anchorStation: StationRef, method: ClosureStrategy) => {
-    return executeCommand(
-      'adjust_loop_closures',
-      {
-        anchorStation,
-        method,
-      },
-      { purpose: 'reduce misclosure error', fields: { anchorStation, method } }
-    );
+  loadAdjustedGeometry: async (): Promise<boolean> => {
+    const { project, surveyData, stations, adjustedLoading, config } = get();
+    // No-op (no project, or a fetch already in flight): not a failure.
+    if (!project || adjustedLoading) return true;
+
+    // No eligible closures → the adjusted view is identical to measured; reuse
+    // the measured set directly and skip the backend round-trip.
+    if (!hasEligibleClosures(project.loop_closures)) {
+      set({ stationsAdjusted: stations, surveyDataAdjusted: surveyData });
+      return true;
+    }
+
+    set({ adjustedLoading: true });
+    try {
+      const adjusted = await invokeIpc<Station[]>('get_adjusted_stations', undefined, {
+        purpose: 'closure-adjusted geometry view',
+      });
+      // Discard if the project OR the closure-adjustment config changed while the
+      // solve was in flight (a refreshProjectState / updateConfig nulled the cache
+      // but the project ref is unchanged on a config-only change), otherwise we'd
+      // cache geometry solved against stale sigmas. The map effect re-fetches once
+      // `adjustedLoading` clears.
+      if (get().project !== project || get().config !== config) {
+        set({ adjustedLoading: false });
+        return true;
+      }
+      const surveyDataAdjusted = surveyDataFromLegacy(project.sections, adjusted);
+      set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
+      return true;
+    } catch (e) {
+      console.warn('Failed to load adjusted geometry:', e);
+      set({ adjustedLoading: false });
+      return false;
+    }
   },
 
   updateStationComment: async (stationRef: StationRef, comment: string | null) => {

@@ -13,3 +13,16 @@ export const NON_INTERACTIVE_TOOLS: ToolType[] = ['pan', 'zoom'];
 export function isNonInteractiveTool(tool: ToolType): boolean {
   return NON_INTERACTIVE_TOOLS.includes(tool);
 }
+
+/**
+ * Tools that never mutate survey geometry (safe in the read-only
+ * closure-adjusted view). Everything else (draw, delete, merge, move_*,
+ * comment, move_comment) edits the underlying measured data and is disabled
+ * while the closure-adjusted view is active.
+ */
+export const READ_ONLY_TOOLS: ToolType[] = ['select', 'pan', 'zoom', 'measure'];
+
+/** Whether a tool mutates geometry and must be disabled in the adjusted view. */
+export function isMutatingTool(tool: ToolType): boolean {
+  return !READ_ONLY_TOOLS.includes(tool);
+}

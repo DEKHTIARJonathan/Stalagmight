@@ -27,6 +27,11 @@ pub(super) const SOURCE_NAMES: &[&str] = &[
 /// Keep in sync with `telemetry-worker/src/registry.ts`.
 pub(super) const EVENT_NAMES: &[&str] = &[
     // ── Commands (0-92) ──
+    // The `adjust_loop_closures` command was removed when closure adjustment
+    // became a non-destructive display mode, but event-ID 0 is frozen into packed
+    // payloads from older clients, so its original name is kept verbatim here — the
+    // registry is append-only and frozen entries are never relabeled. It has no
+    // live handler; the command/undo coverage tests skip it via REMOVED_COMMANDS.
     "command.adjust_loop_closures",
     "command.attempt_repair",
     "command.calculate_file_hash",
@@ -364,6 +369,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // Structural-integrity IPC commands (check + repair).
     "command.check_project_integrity",
     "command.repair_project_integrity",
+    // Closure-adjusted display mode (measured ↔ closure-adjusted) toggle + state.
+    // Only the non-default state ("closureAdjusted") is emitted.
+    "action.toggle.geometryMode",
+    "display-state.geometryMode:closureAdjusted",
+    // Lazy IPC query that returns the closure-adjusted station coordinates.
+    "command.get_adjusted_stations",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -411,6 +422,22 @@ pub(super) fn split_event_key(key: &str) -> (&str, u8) {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// Bare names of commands removed from the app whose registry event-ID slots
+    /// are retained (append-only registry; frozen IDs are never relabeled or
+    /// reused). They intentionally have no live handler and no frontend tracking,
+    /// so the `command.*` and `undo-after.*` coverage checks skip them.
+    const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures"];
+
+    /// Dialog keys removed from `App.tsx` whose registry slots are likewise
+    /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`
+    /// coverage check skips them.
+    const REMOVED_DIALOGS: &[&str] = &["adjust-closures"];
+
+    /// `action.toggle.*` events that are intentionally NOT derived from
+    /// `DISPLAY_DEFAULTS`. `geometryMode` is an enum display mode tracked via an
+    /// explicit `trackAction('toggle.geometryMode')`, not a boolean default.
+    const EXTRA_TOGGLES: &[&str] = &["action.toggle.geometryMode"];
 
     #[test]
     fn no_duplicate_event_names() {
@@ -486,7 +513,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 314);
+        assert_eq!(EVENT_NAMES.len(), 317);
     }
 
     #[test]
@@ -593,11 +620,17 @@ mod tests {
             }
         }
 
-        // Build set of command.* entries from EVENT_NAMES
+        // Build set of command.* entries from EVENT_NAMES, excluding the retained
+        // slots of removed commands (which have no live handler by design).
+        let removed: HashSet<String> = REMOVED_COMMANDS
+            .iter()
+            .map(|c| format!("command.{c}"))
+            .collect();
         let registry_commands: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("command."))
             .map(|n| n.to_string())
+            .filter(|n| !removed.contains(n))
             .collect();
 
         let missing: Vec<_> = handler_commands.difference(&registry_commands).collect();
@@ -787,10 +820,16 @@ mod tests {
             .map(|c| format!("undo-after.{c}"))
             .collect();
 
+        // Exclude the retained undo-after slots of removed commands.
+        let removed: HashSet<String> = REMOVED_COMMANDS
+            .iter()
+            .map(|c| format!("undo-after.{c}"))
+            .collect();
         let reg_undo: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("undo-after."))
             .map(|n| n.to_string())
+            .filter(|n| !removed.contains(n))
             .collect();
 
         let missing: Vec<_> = code_undo.difference(&reg_undo).collect();
@@ -835,10 +874,13 @@ mod tests {
             .map(|k| format!("action.toggle.{k}"))
             .collect();
 
+        // Exclude toggles that are intentionally not DISPLAY_DEFAULTS booleans.
+        let extra: HashSet<String> = EXTRA_TOGGLES.iter().map(|s| s.to_string()).collect();
         let reg_toggles: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.toggle."))
             .map(|n| n.to_string())
+            .filter(|n| !extra.contains(n))
             .collect();
 
         let missing: Vec<_> = code_toggles.difference(&reg_toggles).collect();
@@ -885,20 +927,36 @@ mod tests {
             .map(|d| format!("dwell.dialog.{d}"))
             .collect();
 
+        // Retained slots of removed dialogs are excluded from the stale checks.
+        let removed_action: HashSet<String> = REMOVED_DIALOGS
+            .iter()
+            .map(|d| format!("action.dialog.{d}"))
+            .collect();
+        let removed_cancel: HashSet<String> = REMOVED_DIALOGS
+            .iter()
+            .map(|d| format!("dialog-cancel.{d}"))
+            .collect();
+        let removed_dwell: HashSet<String> = REMOVED_DIALOGS
+            .iter()
+            .map(|d| format!("dwell.dialog.{d}"))
+            .collect();
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.dialog."))
             .map(|n| n.to_string())
+            .filter(|n| !removed_action.contains(n))
             .collect();
         let reg_cancel: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dialog-cancel."))
             .map(|n| n.to_string())
+            .filter(|n| !removed_cancel.contains(n))
             .collect();
         let reg_dwell: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dwell.dialog."))
             .map(|n| n.to_string())
+            .filter(|n| !removed_dwell.contains(n))
             .collect();
 
         let missing_action: Vec<_> = code_action.difference(&reg_action).collect();

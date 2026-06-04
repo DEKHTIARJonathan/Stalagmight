@@ -1156,6 +1156,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
+          case 'get_adjusted_stations': {
+            // Closure-adjusted geometry view. The mock has no real least-squares
+            // solver, so the adjusted geometry is identical to measured: reuse the
+            // station array get_project_state builds.
+            const state = mockHandler('get_project_state', args) as
+              | { stations?: unknown[] }
+              | null;
+            return state?.stations ?? [];
+          }
+
           case 'create_section': {
             sectionCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
@@ -1889,7 +1899,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 error_percentage: 0,
                 horizontal_misclosure: 0,
                 vertical_misclosure: 0,
-                strategy: closureStrategy ?? 'batch',
+                strategy: closureStrategy ?? 'Batch',
                 is_aligned: false,
               });
             }
@@ -1928,11 +1938,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             loopClosures.splice(closureIndex, 1);
             return { success: true };
           }
-
-          case 'adjust_loop_closures':
-            // Mock adjust loop closures - return success
-            console.log('[Mock IPC] adjust_loop_closures called with:', args);
-            return { success: true };
 
           case 'unmerge_stations':
             // Mock unmerge stations - return success

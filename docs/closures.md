@@ -2,14 +2,47 @@
 
 This document summarizes how loop closures work in the current codebase (post-removal of Sequential/KeepRaw/Manual strategies).
 
+## Measured vs Closure-Adjusted (non-destructive display mode)
+
+Closure adjustment is a **non-destructive, toggleable display mode**, not a destructive
+command. The measured survey geometry (raw shots) is always the source of truth and is
+**never rewritten** by adjustment.
+
+- The **Display** dropdown has a *Geometry* control with two modes: **Measured** (raw) and
+  **Closure-adjusted** (loop-closure-corrected). The mode is persisted per the display
+  settings ("remember last used"); default is Measured. The adjusted option is disabled when
+  the project has no closures eligible for the solve (`Batch` / `LeastSquaresWeighted`); `Move`
+  closures are already coincident, so a project with only those shows the option disabled.
+- Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
+  **throwaway clone** of the project (`Project::compute_adjusted_station_coordinates`) and
+  returning only the resulting coordinates — the live project's shots/offsets are untouched.
+  Because the solve always starts from intact measured data, adding/removing closures
+  re-solves accurately instead of compounding on already-adjusted geometry.
+- The adjusted view is **read-only**: geometry-mutating tools are disabled there (edits are
+  made in the Measured view). Selection, inspection, and measuring remain available.
+- The adjusted set is fetched lazily via the `get_adjusted_stations` IPC command, memoized in
+  a transient `AppState` cache keyed on `(modified_at, closure-config hash)` and cleared on
+  every command/undo/redo. The solve runs on a blocking thread; the map shows a
+  "computing closure…" indicator on the first switch for large surveys.
+- Headline stats (penetration distance, length, depth) are always computed from **measured**
+  geometry.
+
+There is **no** longer an "Adjust Closures" dialog or an `adjust_loop_closures` command — the
+old destructive apply path was removed.
+
+> Migration: a project whose shots were already baked by a *previous* destructive adjustment
+> cannot recover its original measurements (they were overwritten and never stored). Such a
+> project opens looking identical (legacy closures keep `is_aligned = true`) and is never
+> rewritten again.
+
 ## Strategy Summary
 
 | Strategy | When used | What it does |
 |----------|-----------|--------------|
 | `ProportionalByLength` | Deferred | Legacy strategy; create-time distribution is disabled and not exposed in the UI (only revisited if users request it). |
 | `EqualDistribution` | Deferred | Legacy strategy; create-time distribution is disabled and not exposed in the UI (only revisited if users request it). |
-| `Batch` | Create loop closure | Records the closure only; no immediate geometry adjustment. |
-| `LeastSquaresWeighted` | Adjust loop closures (batch) | Weighted least-squares adjustment over the connected component. |
+| `Batch` | Create loop closure | Records the closure only; participates in the closure-adjusted display solve. |
+| `LeastSquaresWeighted` | Closure-adjusted view | Weighted least-squares solve over the connected component (derived, non-destructive). |
 | `Move` | Snap-to-merge workflow | Closure created during a move; no extra distribution at create time. |
 
 Removed strategies:
@@ -67,26 +100,29 @@ Common error conditions:
 - `Closure distribution would move a zero datum station` if a computed delta touches a datum station.
 - `Closure distribution failed to align endpoints` if residual misclosure remains and both sides are anchored.
 
-## Batch Adjustment (LeastSquaresWeighted)
+## Closure-Adjusted Solve (LeastSquaresWeighted)
 
-`Adjust Loop Closures` currently supports **only** `LeastSquaresWeighted`.
+The closure-adjusted view solves with **only** `LeastSquaresWeighted`. It runs
+non-destructively on a throwaway clone (`Project::compute_adjusted_station_coordinates`),
+once per connected component that has eligible closures, anchored on a zero datum when present
+and otherwise on a deterministic default anchor (the lexicographically smallest
+`(section_id, station_index)` station in the component, via `default_anchor_for_component`).
+Eligible closures are `Batch` + `LeastSquaresWeighted` (`Move` closures are already coincident).
 
-Inputs:
-- `anchor_station` (used only if the component has no zero datum).
-Adjustment currently uses **batch closures only** (plus the selected method).
-
-Algorithm overview:
+Algorithm overview (unchanged math; the only change is *where* it writes — a clone, not the
+live project):
 - Build constraint groups where stations connected via merges **or closures** are in the same group.
 - If a group contains a zero datum, it is fixed; multiple zero datums in a single group is an error.
 - If no zero datum exists in the component, the anchor station's group is fixed.
-- For each shot, build weighted constraints in X/Y/Z using section quality and base sigmas from config:
+- For each shot, build weighted constraints in X/Y using section quality and base sigmas from config:
   - `base_sigma_length_m`
   - `base_sigma_azimuth_deg`
-  - `base_sigma_depth_m`
-- Solve independent least-squares systems for X/Y/Z using a sparse Jacobi-preconditioned
+  - `base_sigma_depth_m` (depth is not adjusted — the solve is horizontal-only)
+- Solve independent least-squares systems for X/Y using a sparse Jacobi-preconditioned
   Conjugate Gradient solver (see [performance.md](performance.md) for algorithm details).
-- Update shot vectors from solved group coordinates and apply section-level translations to keep merged stations aligned.
-- After adjustment, zero datum positions are verified to remain fixed; any movement is an error.
+- Update the clone's shot vectors from solved group coordinates and apply section-level
+  translations to keep merged stations aligned, then compute coordinates from the clone.
+- Zero datum positions are verified to remain fixed; any movement is an error.
 
 ## Co-location and Move Tools
 
@@ -108,7 +144,11 @@ These mappings are handled in `ClosureStrategy::from_str_lossy` and via serde al
 ## Files of Interest
 
 - `src-tauri/src/models/station.rs` (ClosureStrategy enum + legacy mapping)
-- `src-tauri/src/models/project.rs` (create/distribute/adjust logic)
+- `src-tauri/src/models/project.rs` (create logic; `adjust_loop_closures` solver kept as the
+  internal derivation helper; `compute_adjusted_station_coordinates`; `default_anchor_for_component`)
+- `src-tauri/src/commands/project.rs` (`get_adjusted_stations` IPC command)
+- `src-tauri/src/core/state/app_state.rs` (transient closure-adjusted cache)
 - `src/components/Dialogs/ClosureDialog.tsx` (create closure UI)
-- `src/components/Dialogs/AdjustClosuresDialog.tsx` (batch adjustment UI)
+- `src/components/SingleSystemView/DisplayMenu.tsx` (Geometry mode toggle)
+- `src/store/geometrySelectors.ts` (active-geometry selectors)
 - `docs/move-tools.md` (move tool behavior + co-location rules)

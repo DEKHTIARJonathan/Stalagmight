@@ -12,6 +12,8 @@ import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import { isNonInteractiveTool } from '../../utils/toolUtils';
 import type { ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
+import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { surveyDataFromLegacy } from '../../types/survey-data';
 import { hasLiveStyle } from './mapUtils';
 import {
@@ -3470,8 +3472,10 @@ export default class SurveyLayer {
     // ~10 ms on a single tight loop and the result is a typed-array
     // bundle that structured-clones to the worker far cheaper than
     // 75k+89k JS objects ever would.
-    const surveyData = useProjectStore.getState().surveyData
-      ?? surveyDataFromLegacy(sections, stations);
+    const surveyData = selectActiveSurveyData(
+      useProjectStore.getState(),
+      useUIStore.getState().geometryMode
+    ) ?? surveyDataFromLegacy(sections, stations);
 
     const tBuildStart = performance.now();
     let features: ReturnType<typeof buildSurveyFeatures>;
@@ -3576,8 +3580,10 @@ export default class SurveyLayer {
 
     // Synchronous (drag-commit) path: convert to SurveyData inline
     // before building. See the async counterpart for the rationale.
-    const surveyData = useProjectStore.getState().surveyData
-      ?? surveyDataFromLegacy(sections, stations);
+    const surveyData = selectActiveSurveyData(
+      useProjectStore.getState(),
+      useUIStore.getState().geometryMode
+    ) ?? surveyDataFromLegacy(sections, stations);
 
     const features = buildSurveyFeatures(
       surveyData,

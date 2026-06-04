@@ -117,10 +117,6 @@ pub enum Command {
     RemoveLoopClosure {
         closure_id: u64,
     },
-    AdjustLoopClosures {
-        anchor_station: StationRef,
-        method: ClosureStrategy,
-    },
     SetZeroDatum {
         station_ref: StationRef,
         coordinates: GpsCoordinates,
@@ -386,9 +382,6 @@ impl Command {
             } => format!("Create loop closure between {station_a} and {station_b}"),
             Command::RemoveLoopClosure { closure_id } => {
                 format!("Remove loop closure #{closure_id}")
-            }
-            Command::AdjustLoopClosures { method, .. } => {
-                format!("Adjust loop closures ({})", method.as_str())
             }
             Command::SetZeroDatum { station_ref, .. } => {
                 format!("Set zero datum at {station_ref}")

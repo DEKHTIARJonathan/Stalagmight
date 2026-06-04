@@ -64,15 +64,6 @@ impl AppState {
                 }
             }
 
-            // AdjustLoopClosures: capture full project snapshot (before/after pair)
-            Command::AdjustLoopClosures { .. } => match serde_json::to_string(project) {
-                Ok(before) => UndoData::ProjectSnapshotPair {
-                    before,
-                    after: String::new(),
-                },
-                Err(_) => UndoData::None,
-            },
-
             // For update commands, capture previous values
             Command::UpdateShot {
                 section_id,
@@ -497,7 +488,7 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/Merge/Unmerge/MoveStation/AdjustLoopClosures:
+            // DeleteSection/DeleteShot/Merge/Unmerge/MoveStation:
             // fill in the "after" snapshot now that the mutation (and any cascade
             // re-anchoring, orphan-closure conversion, and offset reconcile triggered
             // in execute()) is done.
@@ -506,8 +497,7 @@ impl AppState {
             | Command::MergeStations { .. }
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }
-            | Command::MoveStation { .. }
-            | Command::AdjustLoopClosures { .. } => {
+            | Command::MoveStation { .. } => {
                 if let UndoData::ProjectSnapshotPair { before, .. } = undo_data {
                     match serde_json::to_string(project) {
                         Ok(after) => UndoData::ProjectSnapshotPair { before, after },
@@ -555,6 +545,7 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        self.invalidate_adjusted_cache();
         let result = self.undo_inner();
         if result.success {
             // Reconcile derived offsets after the restore. For snapshot-restore
@@ -1005,6 +996,7 @@ impl AppState {
         let Ok(_cmd_guard) = self.command_lock.lock() else {
             return CommandResult::failure("Failed to acquire command lock".to_string());
         };
+        self.invalidate_adjusted_cache();
         let result = self.redo_inner();
         if result.success {
             self.reconcile_geometry();

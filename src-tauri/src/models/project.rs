@@ -5262,6 +5262,150 @@ impl Project {
         self.compute_station_coordinates_with_progress(None)
     }
 
+    /// Pick a deterministic anchor station for a component that has no zero datum.
+    ///
+    /// Returns the lexicographically smallest `(section_id, station_index)` station
+    /// in the component. The anchor only fixes the otherwise-free absolute translation
+    /// (gauge) of a datum-less component — the *shape* of the adjusted geometry is
+    /// independent of this choice. Picking the lex-min keeps it stable and reproducible
+    /// across reloads so the adjusted view doesn't jump between refreshes.
+    fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
+        self.sections
+            .iter()
+            .filter(|s| component.contains(&s.id))
+            .flat_map(|s| (0..=s.shots.len()).map(move |idx| StationRef::new(s.id, idx as u32)))
+            .min_by(|a, b| {
+                a.section_id
+                    .cmp(&b.section_id)
+                    .then(a.station_index.cmp(&b.station_index))
+            })
+    }
+
+    /// Whether a loop closure participates in the least-squares adjustment.
+    /// Mirrors the strategy filter inside [`Self::adjust_loop_closures`]: `Move`
+    /// closures are already coincident (snap-to-merge) and the deferred
+    /// proportional/equal strategies are not solved.
+    fn closure_is_eligible(strategy: ClosureStrategy) -> bool {
+        matches!(
+            strategy,
+            ClosureStrategy::Batch | ClosureStrategy::LeastSquaresWeighted
+        )
+    }
+
+    /// Plan which component anchors to feed the closure-adjustment solve.
+    ///
+    /// Returns one anchor per connected component that contains an eligible
+    /// closure: a zero datum in the component when present, otherwise a
+    /// deterministic default anchor (see [`Self::default_anchor_for_component`]).
+    /// Computed from the *measured* topology so it can run once up front, before
+    /// any adjustment mutates the working copy.
+    fn plan_adjustment_anchors(&self) -> Vec<StationRef> {
+        let mut anchors = Vec::new();
+        let mut visited: HashSet<SectionId> = HashSet::new();
+        for section in &self.sections {
+            if visited.contains(&section.id) {
+                continue;
+            }
+            let component = self.get_connected_section_ids(section.id);
+            for sid in &component {
+                visited.insert(*sid);
+            }
+
+            let has_eligible = self.loop_closures.iter().any(|lc| {
+                Self::closure_is_eligible(lc.strategy)
+                    && component.contains(&lc.station_a.section_id)
+                    && component.contains(&lc.station_b.section_id)
+            });
+            if !has_eligible {
+                continue;
+            }
+
+            // Anchor on a zero datum in the component when present, otherwise a
+            // deterministic default so the gauge is reproducible across reloads.
+            let anchor = self
+                .zero_datums
+                .iter()
+                .find(|zd| component.contains(&zd.station_ref.section_id))
+                .and_then(|zd| self.resolve_key(&zd.station_ref))
+                .or_else(|| self.default_anchor_for_component(&component));
+
+            if let Some(anchor) = anchor {
+                anchors.push(anchor);
+            }
+        }
+        anchors
+    }
+
+    /// Compute station coordinates with loop-closure adjustment applied as a
+    /// **non-destructive derived view**.
+    ///
+    /// The measured project is never mutated: the proven adjustment runs on a
+    /// throwaway clone and only the resulting coordinates are returned. The output
+    /// is identical to the geometry users saw after the old "Run Adjustment" action,
+    /// but it is recomputed live from intact measured data — so adding/removing
+    /// closures always re-solves accurately instead of compounding on already-adjusted
+    /// geometry. Each disconnected component is solved independently, anchored on a
+    /// zero datum when present and otherwise on a deterministic default anchor.
+    pub fn compute_adjusted_station_coordinates(
+        &self,
+        config: &ClosureAdjustmentConfig,
+    ) -> Vec<Station> {
+        // Fast path: nothing to adjust → adjusted == measured (skip the clone).
+        if !self
+            .loop_closures
+            .iter()
+            .any(|lc| Self::closure_is_eligible(lc.strategy))
+        {
+            return self.compute_station_coordinates();
+        }
+
+        self.clone().into_adjusted_station_coordinates(config)
+    }
+
+    /// By-value counterpart of [`Self::compute_adjusted_station_coordinates`] that
+    /// consumes `self` as the working copy, so a caller already holding an owned
+    /// clone (the IPC path in `AppState::get_adjusted_stations`) avoids a second
+    /// full-project clone.
+    ///
+    /// The adjustment plan (which component anchors on what) is derived up front
+    /// from the pristine measured topology, before any mutation. Each component is
+    /// then solved on the working copy and **rolled back to measured on failure**:
+    /// `adjust_loop_closures` mutates in place and can return `Err` *after* the
+    /// solve has already moved stations (e.g. the post-solve zero-datum-fixed
+    /// check), so without the rollback a failed component would render
+    /// partially-adjusted geometry instead of the measured fallback the warning
+    /// promises.
+    ///
+    /// Cost: the rollback snapshots the working copy once per eligible component,
+    /// so a cache-miss solve clones the project `O(eligible components)` times.
+    /// In practice that is one or two clones (most surveys are a single connected
+    /// component), it only happens on a cache miss, and `adjust_least_squares`
+    /// rewrites `section.shots` in place — so a cheaper offsets-only snapshot would
+    /// be unsound. Revisit with a scoped {sections, offsets, closures} snapshot
+    /// only if profiling large surveys shows the clones matter.
+    pub fn into_adjusted_station_coordinates(
+        self,
+        config: &ClosureAdjustmentConfig,
+    ) -> Vec<Station> {
+        let anchors = self.plan_adjustment_anchors();
+        let mut working = self;
+        for anchor in anchors {
+            let snapshot = working.clone();
+            if let Err(e) =
+                working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, config)
+            {
+                working = snapshot;
+                warn!(
+                    error = %e,
+                    anchor = ?anchor,
+                    purpose = "derive closure-adjusted view",
+                    "Skipping closure adjustment for component; showing measured geometry"
+                );
+            }
+        }
+        working.compute_station_coordinates()
+    }
+
     /// Compute all station coordinates from shots with optional progress callback.
     ///
     /// The callback receives (current, total) station counts for progress reporting.

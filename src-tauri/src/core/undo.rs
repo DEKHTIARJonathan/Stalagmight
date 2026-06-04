@@ -371,7 +371,21 @@ impl UndoStack {
 
     /// Deserialize an entry from JSON
     pub fn deserialize_entry(command_json: &str, undo_data_json: &str) -> Option<UndoEntry> {
-        let command: Command = serde_json::from_str(command_json).ok()?;
+        let command: Command = match serde_json::from_str(command_json) {
+            Ok(command) => command,
+            Err(e) => {
+                // A command that no longer exists in this build (e.g. a variant
+                // removed in a newer version) can't be deserialized. Skip the
+                // entry rather than aborting the whole load, but log it so the
+                // truncation of undo history is not silent.
+                tracing::warn!(
+                    error = %e,
+                    purpose = "load persisted undo history",
+                    "Skipping an undo entry whose command could not be deserialized; its undo step is dropped"
+                );
+                return None;
+            }
+        };
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
         Some(UndoEntry {
             command,
@@ -386,7 +400,21 @@ impl UndoStack {
         undo_data_json: &str,
         timestamp_str: Option<&str>,
     ) -> Option<UndoEntry> {
-        let command: Command = serde_json::from_str(command_json).ok()?;
+        let command: Command = match serde_json::from_str(command_json) {
+            Ok(command) => command,
+            Err(e) => {
+                // A command that no longer exists in this build (e.g. a variant
+                // removed in a newer version) can't be deserialized. Skip the
+                // entry rather than aborting the whole load, but log it so the
+                // truncation of undo history is not silent.
+                tracing::warn!(
+                    error = %e,
+                    purpose = "load persisted undo history",
+                    "Skipping an undo entry whose command could not be deserialized; its undo step is dropped"
+                );
+                return None;
+            }
+        };
         let undo_data: UndoData = serde_json::from_str(undo_data_json).ok()?;
         let timestamp = timestamp_str.and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));

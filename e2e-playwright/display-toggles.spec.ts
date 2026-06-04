@@ -141,6 +141,20 @@ test.describe('Display Toggle Visibility', () => {
     await expect.poll(async () => (await getStationScreenPositions(page)).length, { timeout: 10000 }).toBeGreaterThan(0);
   });
 
+  test('geometry mode control renders; closure-adjusted disabled without closures', async ({ page }) => {
+    await openDisplayMenu(page);
+
+    // Both segmented-control buttons render.
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toBeVisible();
+    const adjusted = page.locator('[data-testid="geometry-mode-closureAdjusted"]');
+    await expect(adjusted).toBeVisible();
+
+    // Measured is the default selected mode...
+    await expect(page.locator('[data-testid="geometry-mode-measured"]')).toHaveAttribute('aria-pressed', 'true');
+    // ...and the adjusted option is disabled while the project has no loop closures.
+    await expect(adjusted).toBeDisabled();
+  });
+
   test('toggle stations hides and shows station markers on canvas @smoke', async ({ page }) => {
     // Wait for station layer to be visible before testing
     await waitForLayerVisible(page, 'survey-stations');

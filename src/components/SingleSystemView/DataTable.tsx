@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotUpdates, type Station } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
+import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
@@ -34,6 +35,11 @@ export default function DataTable({ sections }: DataTableProps) {
   const internalSelectionRef = useRef(false);
 
   const { updateShot, warnings, isShotFrozen, stations, updateStationComment } = useProjectStore();
+  // Coordinate columns follow the active geometry (adjusted in the read-only
+  // closure-adjusted view); `stations` stays measured for counts/editing.
+  const activeStations = useActiveStations();
+  // Closure-adjusted view is read-only: cell editing and the reference toggle are disabled.
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const {
     selection,
     setSelection,
@@ -258,7 +264,7 @@ export default function DataTable({ sections }: DataTableProps) {
     value: unknown,
     index: number
   ) => {
-    if (!selectedSection) return;
+    if (!selectedSection || geometryReadOnly) return;
 
     // When entering cell edit mode, set selection to this shot
     internalSelectionRef.current = true;
@@ -445,10 +451,12 @@ export default function DataTable({ sections }: DataTableProps) {
 
   const sectionStations = useMemo((): StationRow[] => {
     if (tableView !== 'stations' || selectedSectionId === null) return [];
-    return stations
+    // X/Y/Z columns follow the active geometry so they match the map; the row
+    // refs/comments are unchanged, so comment editing still targets measured data.
+    return activeStations
       .filter((s) => s.station_ref.section_id === selectedSectionId)
       .map((s) => ({ ...s, id: s.station_ref.station_index }));
-  }, [stations, selectedSectionId, tableView]);
+  }, [activeStations, selectedSectionId, tableView]);
 
   const highlightedStationIndex = useMemo((): number | null => {
     if (tableView !== 'stations') return null;
@@ -561,11 +569,11 @@ export default function DataTable({ sections }: DataTableProps) {
 
   const handleStationCellEdit = useCallback(
     async (row: StationRow, key: string, value: unknown) => {
-      if (key !== 'comment') return;
+      if (geometryReadOnly || key !== 'comment') return;
       const comment = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
       await updateStationComment(row.station_ref, comment);
     },
-    [updateStationComment]
+    [updateStationComment, geometryReadOnly]
   );
 
   // View toggle options
@@ -719,9 +727,10 @@ export default function DataTable({ sections }: DataTableProps) {
       align: 'center' as const,
       render: (shot: Shot) => (
         <span
-          className="px-2 py-1 flex items-center justify-center cursor-pointer"
+          className={`px-2 py-1 flex items-center justify-center ${geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
           onClick={(e) => {
             e.stopPropagation();
+            if (geometryReadOnly) return;
             if (selectedSectionId !== null) {
               updateShot(selectedSectionId, shot.id, { is_reference: !shot.is_reference });
             }
@@ -828,7 +837,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 data={selectedSection.shots}
                 keyField="id"
                 onCellEdit={handleCellEdit}
-                editableColumns={editableColumns}
+                editableColumns={geometryReadOnly ? [] : editableColumns}
                 isRowEditable={isRowEditable}
                 selectedKey={highlightedShotId}
                 hoveredKey={
@@ -863,7 +872,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 data={sectionStations}
                 keyField="id"
                 onCellEdit={handleStationCellEdit}
-                editableColumns={['comment']}
+                editableColumns={geometryReadOnly ? [] : ['comment']}
                 selectedKey={highlightedStationIndex}
                 hoveredKey={
                   hoveredStation?.section_id === selectedSectionId

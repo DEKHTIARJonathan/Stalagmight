@@ -23,6 +23,18 @@ export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 export type ResolvedTheme = 'dark' | 'light' | 'cave' | 'dracula' | 'one_dark' | 'solarized_light' | 'catppuccin_latte' | 'nord' | 'catppuccin_mocha';
 
 export type ViewType = 'global' | 'single';
+
+/**
+ * Cave geometry display mode.
+ * - `measured`: raw survey geometry (the source of truth).
+ * - `closureAdjusted`: loop-closure-corrected geometry, derived non-destructively
+ *   on the backend. This view is read-only — edits are made in `measured`.
+ */
+export type GeometryMode = 'measured' | 'closureAdjusted';
+
+/** Geometry mode used before any saved preference exists (first run). */
+export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
+
 export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done';
 
 export type DetailPanelTab = 'details' | 'warnings';
@@ -210,6 +222,11 @@ interface UIStore {
   resetDisplaySettings: () => void;
   /** Apply display settings from backend (merges with existing state using ??) */
   applyDisplaySettings: (settings: DisplaySettings) => void;
+
+  // Geometry display mode (measured vs non-destructive closure-adjusted)
+  geometryMode: GeometryMode;
+  /** Switch the geometry display mode; persists across sessions (remember last used). */
+  setGeometryMode: (mode: GeometryMode, source?: string) => void;
 
   // Hover state
   hoveredStation: StationRef | null;
@@ -592,6 +609,7 @@ export const useUIStore = create<UIStore>((set) => ({
       });
       const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
       let gridSpacing: number | undefined;
+      let geometryMode: GeometryMode | undefined;
       for (const [key, value] of Object.entries(settings)) {
         if (key.startsWith('show')) {
           displayState[key as DisplayToggleKey] = value === 'true';
@@ -600,16 +618,31 @@ export const useUIStore = create<UIStore>((set) => ({
           if (!isNaN(parsed) && parsed > 0) {
             gridSpacing = parsed;
           }
+        } else if (key === 'geometryMode') {
+          // "Remember last used": restore the persisted geometry mode, ignoring
+          // any unrecognized value.
+          if (value === 'measured' || value === 'closureAdjusted') {
+            geometryMode = value;
+          }
         }
       }
       // Migration fallback: if we loaded some settings but showShots wasn't among them,
       // default it to true (older saved settings won't have this newer key)
-      const hasLoadedSettings = Object.keys(displayState).length > 0 || gridSpacing !== undefined;
+      const hasLoadedSettings =
+        Object.keys(displayState).length > 0 || gridSpacing !== undefined || geometryMode !== undefined;
       if (hasLoadedSettings && displayState.showShots === undefined) {
         displayState.showShots = true;
       }
+      // geometryMode is per-project ("remember last used"): restore the saved value
+      // or reset to the measured default. Applied unconditionally so a project with
+      // no saved preference (or no display settings at all) doesn't inherit the
+      // previous project's mode.
+      set({ geometryMode: geometryMode ?? GEOMETRY_MODE_DEFAULT });
       if (hasLoadedSettings) {
-        set({ ...displayState, ...(gridSpacing !== undefined ? { gridSpacing } : {}) });
+        set({
+          ...displayState,
+          ...(gridSpacing !== undefined ? { gridSpacing } : {}),
+        });
         trackDisplayState(useUIStore.getState());
       }
     } catch (e) {
@@ -645,6 +678,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showShotComments: DISPLAY_DEFAULTS.showShotComments,
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
       gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
+      geometryMode: GEOMETRY_MODE_DEFAULT,
     });
   },
 
@@ -665,8 +699,29 @@ export const useUIStore = create<UIStore>((set) => ({
       showDepthGradient: settings.showDepthGradient ?? state.showDepthGradient,
       showStationComments: settings.showStationComments ?? state.showStationComments,
       gridSpacing: settings.gridSpacing ?? state.gridSpacing,
+      // Restore the saved geometry mode ("remember last used"). The backend
+      // defaults geometryMode to "measured" for projects with no saved
+      // preference, so a load is authoritative and never inherits the previous
+      // project's mode.
+      geometryMode: settings.geometryMode === 'closureAdjusted' ? 'closureAdjusted' : GEOMETRY_MODE_DEFAULT,
     }));
     trackDisplayState(useUIStore.getState());
+  },
+
+  // Geometry display mode (measured vs non-destructive closure-adjusted)
+  geometryMode: GEOMETRY_MODE_DEFAULT,
+  setGeometryMode: (mode, source) => {
+    if (useUIStore.getState().geometryMode === mode) return;
+    trackAction('toggle.geometryMode', source);
+    set({ geometryMode: mode });
+    // Persist for "remember last used" across sessions (string value, like gridSpacing).
+    invokeIpc(
+      'save_display_setting',
+      { key: 'geometryMode', value: mode },
+      { purpose: 'persist display setting', fields: { key: 'geometryMode' } }
+    ).catch((e) => {
+      console.warn('Failed to save geometry mode:', e);
+    });
   },
 
   // Hover state

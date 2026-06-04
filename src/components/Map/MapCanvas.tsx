@@ -5,6 +5,9 @@ import type { SectionId, ShotId, StationRef } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
+import { isMutatingTool } from '../../utils/toolUtils';
+import { hasEligibleClosures } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
   getEffectiveShowReferenceShots,
@@ -236,8 +239,27 @@ export default function MapCanvas() {
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
+
+  // Geometry display mode (measured vs read-only closure-adjusted).
+  const geometryMode = useUIStore((s) => s.geometryMode);
+  const setGeometryMode = useUIStore((s) => s.setGeometryMode);
+  const setActiveTool = useUIStore((s) => s.setActiveTool);
+
+  // Station coordinates for the active display mode. The map renders the active
+  // geometry; coordinate-derived editing tools are disabled in the adjusted
+  // (read-only) view, so other consumers continue to use measured `stations`.
+  const activeStations = useMemo(
+    () => selectActiveStations({ stations, surveyData, stationsAdjusted, surveyDataAdjusted }, geometryMode),
+    [stations, surveyData, stationsAdjusted, surveyDataAdjusted, geometryMode]
+  );
+  // Active struct-of-arrays survey data, for derived values (e.g. depth range)
+  // that must scale to the geometry actually drawn.
+  const activeSurveyData = useMemo(
+    () => selectActiveSurveyData({ stations, surveyData, stationsAdjusted, surveyDataAdjusted }, geometryMode),
+    [stations, surveyData, stationsAdjusted, surveyDataAdjusted, geometryMode]
+  );
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
   // Priority: project's zero-datum GPS > config's satellite_gps_origin
@@ -261,18 +283,18 @@ export default function MapCanvas() {
     // shape — accepted regression cost in that corner case.
     let min = Infinity;
     let max = -Infinity;
-    if (surveyData) {
+    if (activeSurveyData) {
       // Station z coordinates live at stride 3 in stationCoords:
       // [x0,y0,z0, x1,y1,z1, …]. Read directly from the typed array.
-      const coords = surveyData.stationCoords;
+      const coords = activeSurveyData.stationCoords;
       for (let i = 2; i < coords.length; i += 3) {
         const z = coords[i]!;
         if (z < min) min = z;
         if (z > max) max = z;
       }
-      const depthIn = surveyData.shotDepthIn;
-      const depthOut = surveyData.shotDepthOut;
-      for (let i = 0; i < surveyData.shotCount; i++) {
+      const depthIn = activeSurveyData.shotDepthIn;
+      const depthOut = activeSurveyData.shotDepthOut;
+      for (let i = 0; i < activeSurveyData.shotCount; i++) {
         const di = depthIn[i]!;
         const dout = depthOut[i]!;
         if (di < min) min = di;
@@ -281,8 +303,8 @@ export default function MapCanvas() {
         if (dout > max) max = dout;
       }
     } else {
-      if (stations && stations.length > 0) {
-        for (const station of stations) {
+      if (activeStations && activeStations.length > 0) {
+        for (const station of activeStations) {
           const z = station.coordinates.z;
           if (z < min) min = z;
           if (z > max) max = z;
@@ -300,7 +322,7 @@ export default function MapCanvas() {
     }
     if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 50 };
     return { min, max };
-  }, [surveyData, stations, project?.sections]);
+  }, [activeSurveyData, activeStations, project?.sections]);
 
   // Extract zoom config values for stable dependencies (used by zoom handlers and effects)
   const zoomStep = config?.map.zoom_step ?? 1.0;
@@ -1492,7 +1514,13 @@ export default function MapCanvas() {
     if (surveyLayerRef.current && project) {
       surveyLayerRef.current.update(
         project.sections,
-        stations,
+        activeStations,
+        // Closure overlays are drawn from the active coordinates, so an adjusted
+        // (closed) loop collapses to a zero-length, invisible line, while a loop
+        // that wasn't closed — an ineligible/deferred closure, or a component whose
+        // solve fell back to measured — stays visible. Pass closures in both modes
+        // rather than hiding them wholesale, so the adjusted view doesn't look
+        // resolved when some loops are still open.
         project.loop_closures,
         gpsOrigin,
         showDepthGradient,
@@ -1500,7 +1528,42 @@ export default function MapCanvas() {
         precision
       );
     }
-  }, [project, stations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
+
+  // Lazily fetch closure-adjusted geometry when the adjusted view is active and
+  // we don't have it yet (first switch, or after an edit invalidated it). The
+  // store action guards against concurrent/duplicate fetches. `adjustedLoading`
+  // is a dependency so that when an in-flight solve is discarded because the
+  // project changed (it clears the flag without storing data), this effect
+  // re-runs and fetches the new project's geometry instead of staying on the
+  // measured fallback.
+  useEffect(() => {
+    if (geometryMode === 'closureAdjusted' && project && !surveyDataAdjusted && !adjustedLoading) {
+      void loadAdjustedGeometry().then((ok) => {
+        // On a genuine fetch failure, fall back to the measured view rather than
+        // leaving the user stuck in a read-only view showing measured geometry.
+        if (!ok) {
+          setGeometryMode('measured');
+          showToast(t('map.geometry.computeFailed'), 'geometry-compute-failed');
+        }
+      });
+    }
+  }, [geometryMode, project, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, setGeometryMode, showToast, t]);
+
+  // The adjusted view is meaningless without an eligible closure: revert to
+  // measured if the last adjustable closure is removed while it is active.
+  useEffect(() => {
+    if (geometryMode === 'closureAdjusted' && project && !hasEligibleClosures(project.loop_closures)) {
+      setGeometryMode('measured');
+    }
+  }, [geometryMode, project, setGeometryMode]);
+
+  // The adjusted view is read-only: drop any geometry-mutating tool back to select.
+  useEffect(() => {
+    if (geometryMode === 'closureAdjusted' && isMutatingTool(activeTool)) {
+      setActiveTool('select');
+    }
+  }, [geometryMode, activeTool, setActiveTool]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -2251,9 +2314,10 @@ export default function MapCanvas() {
 
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback((options?: { snap?: boolean }) => {
-    if (!map.current || stations.length === 0) return;
+    // Frame the *active* (drawn) geometry — adjusted in the closure-adjusted view.
+    if (!map.current || activeStations.length === 0) return;
 
-    const coords = stations.map((s) => s.coordinates);
+    const coords = activeStations.map((s) => s.coordinates);
     const bounds = getBounds(coords);
 
     // Transform bounds to map coordinates
@@ -2273,7 +2337,7 @@ export default function MapCanvas() {
       maxZoom: 20,
       ...(options?.snap ? { animate: false } : {}),
     });
-  }, [stations, gpsOrigin, calcPadding]);
+  }, [activeStations, gpsOrigin, calcPadding]);
 
   // Fit to a specific section's bounds
   const fitToSection = useCallback(
@@ -2281,7 +2345,7 @@ export default function MapCanvas() {
       if (!map.current || !config) return;
 
       // Filter stations belonging to this section
-      const sectionStations = stations.filter((s) => s.station_ref.section_id === sectionId);
+      const sectionStations = activeStations.filter((s) => s.station_ref.section_id === sectionId);
 
       // Empty section: nothing to zoom to
       if (sectionStations.length === 0) {
@@ -2384,7 +2448,7 @@ export default function MapCanvas() {
         maxZoom: config.map.zoom_max ?? 22,
       });
     },
-    [stations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
+    [activeStations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
@@ -2405,10 +2469,10 @@ export default function MapCanvas() {
       const toStationIndex = shotIndex + 1;
 
       // Find the two stations
-      const fromStation = stations.find(
+      const fromStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
       );
-      const toStation = stations.find(
+      const toStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
       );
 
@@ -2431,7 +2495,7 @@ export default function MapCanvas() {
         duration: animationDuration,
       });
     },
-    [project, stations, config, gpsOrigin]
+    [project, activeStations, config, gpsOrigin]
   );
 
   // Center on a station (used by DetailLink)
@@ -2441,7 +2505,7 @@ export default function MapCanvas() {
       if (!map.current || !config) return false;
 
       // Find the station
-      const station = stations.find(
+      const station = activeStations.find(
         (s) =>
           s.station_ref.section_id === stationRef.section_id &&
           s.station_ref.station_index === stationRef.station_index
@@ -2470,7 +2534,7 @@ export default function MapCanvas() {
 
       return true;
     },
-    [stations, config, gpsOrigin]
+    [activeStations, config, gpsOrigin]
   );
 
   // Center on a shot's midpoint (used by DetailLink)
@@ -2492,10 +2556,10 @@ export default function MapCanvas() {
       const toStationIndex = shotIndex + 1;
 
       // Find the two stations
-      const fromStation = stations.find(
+      const fromStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
       );
-      const toStation = stations.find(
+      const toStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
       );
 
@@ -2527,7 +2591,7 @@ export default function MapCanvas() {
 
       return true;
     },
-    [project, stations, config, gpsOrigin]
+    [project, activeStations, config, gpsOrigin]
   );
 
   // Fit to bounds when requested (e.g., after import)
@@ -2985,6 +3049,21 @@ export default function MapCanvas() {
             :
           </span>{' '}
           {t('map.move.instructions')}
+        </div>
+      )}
+
+      {/* Closure-adjusted read-only banner (+ "computing" while solving) */}
+      {geometryMode === 'closureAdjusted' && !placementMode && (
+        <div
+          className="absolute top-2 left-2 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
+          data-testid="geometry-readonly-banner"
+        >
+          <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
+          {adjustedLoading && (
+            <span className="text-text-secondary" data-testid="geometry-computing">
+              {t('map.geometry.computing')}
+            </span>
+          )}
         </div>
       )}
 
