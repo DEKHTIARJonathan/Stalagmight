@@ -226,6 +226,24 @@ impl AppState {
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
 
+        // Canonicalize the same way the production load path (do_load_project_full)
+        // does: a pre-v6 file installed here otherwise keeps positional Index cross-
+        // reference anchors live, and since inserts/deletes no longer shift positional
+        // refs, a later edit would silently move a merge/datum/comment to the wrong
+        // station — and the integrity check can't see an in-range Index ref. Mint
+        // UUIDs, then re-anchor (Index→AfterShot) and re-solve offsets, so the two
+        // load entry points can't diverge. (This legacy IPC has no production caller
+        // today, but it stays registered and invokable, so harden it.)
+        project.ensure_shot_uuids();
+        let healed_offsets = project.redrive_offsets_after_load();
+        if healed_offsets > 0 {
+            tracing::warn!(
+                healed_offsets,
+                purpose = "self-heal on open",
+                "open_project: corrected drifted section offsets on load"
+            );
+        }
+
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
         }
@@ -317,6 +335,51 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        // Refuse to persist a project with unresolvable cross-references (a station an
+        // endpoint anchors on was deleted) BEFORE the heals below mutate the live
+        // project. The heals (UUID mint/dedup, orphan-offset drop, and the DESTRUCTIVE
+        // non-finite sanitize) do NOT affect this predicate — it depends only on
+        // section existence and anchor resolution — so checking first is equivalent
+        // for the block decision but guarantees a REFUSED save leaves the open project
+        // byte-for-byte unchanged (the non-finite sanitize rewrites shot values to
+        // finite defaults with no undo entry, so mutating on a refused save would
+        // silently lose the user's data).
+        //
+        // This applies to AUTO-SAVE as well as manual saves: AUTO-SAVE MUST NEVER
+        // PERSIST A BROKEN PROJECT. When the project is broken the save is refused (no
+        // file written) and the caller surfaces that auto-save did not run (the
+        // auto-save indicator + the integrity banner); the user restores integrity via
+        // Repair, after which saves resume. This is the single chokepoint that
+        // guarantees only sound projects reach disk.
+        if project.has_unresolvable_cross_references() {
+            let count = project
+                .check_structural_integrity()
+                .iter()
+                .filter(|v| {
+                    matches!(
+                        v.category.as_str(),
+                        "dangling_merge_ref"
+                            | "dangling_closure_ref"
+                            | "dangling_zero_datum_ref"
+                            | "orphan_station_offset"
+                            | "orphan_station_comment"
+                    )
+                })
+                .count();
+            tracing::error!(
+                count,
+                is_autosave,
+                purpose = "block persisting unresolvable cross-references",
+                "Refused to save project with dangling cross-references"
+            );
+            return CommandResult::failure(format!(
+                "Can't save: the project has {count} unresolved cross-reference{} \
+                 (a station they point to was deleted). Use \"Repair\" in the \
+                 integrity banner, then save.",
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+
         // Mint UUIDs for any shot still missing one (pre-v6 .stalx
         // files loaded today come back with NULL uuid columns).
         // Doing this BEFORE the SQLite write and BEFORE the sibling
@@ -380,48 +443,6 @@ impl AppState {
             }
         }
 
-        // Refuse to persist a project with unresolvable cross-references (a
-        // station an endpoint anchors on was deleted). Writing them would collapse
-        // the ref to a phantom (section, 0) and can collide on the
-        // station_offsets/station_comments PRIMARY KEY, aborting the whole save.
-        //
-        // This block applies to AUTO-SAVE as well as manual saves: AUTO-SAVE MUST
-        // NEVER PERSIST A BROKEN PROJECT. We would rather skip the save than
-        // silently write a structurally-corrupt project to disk — so when the
-        // project is broken the save is refused (no file is written), and the
-        // caller surfaces to the user that auto-save did not run (the auto-save
-        // indicator + the integrity banner). The user restores integrity via
-        // Repair, after which saves resume. Blocking here, for both manual and
-        // auto-save, is the single chokepoint that guarantees only sound projects
-        // reach disk.
-        if project.has_unresolvable_cross_references() {
-            let count = project
-                .check_structural_integrity()
-                .iter()
-                .filter(|v| {
-                    matches!(
-                        v.category.as_str(),
-                        "dangling_merge_ref"
-                            | "dangling_closure_ref"
-                            | "dangling_zero_datum_ref"
-                            | "orphan_station_offset"
-                            | "orphan_station_comment"
-                    )
-                })
-                .count();
-            tracing::error!(
-                count,
-                is_autosave,
-                purpose = "block persisting unresolvable cross-references",
-                "Refused to save project with dangling cross-references"
-            );
-            return CommandResult::failure(format!(
-                "Can't save: the project has {count} unresolved cross-reference{} \
-                 (a station they point to was deleted). Use \"Repair\" in the \
-                 integrity banner, then save.",
-                if count == 1 { "" } else { "s" }
-            ));
-        }
 
         // Don't let geometric corruption persist silently: a release-mode warning
         // when drifted merges are about to be written. (The frontend re-checks

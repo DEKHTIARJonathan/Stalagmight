@@ -911,6 +911,82 @@ fn save_sanitizes_non_finite_section_offset() {
 }
 
 #[test]
+fn blocked_save_does_not_mutate_non_finite_geometry() {
+    // A save refused for a dangling cross-reference must NOT first run the
+    // destructive non-finite sanitize on the live project — that mutation has no
+    // undo entry, so a refused save would silently lose the user's shot values.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("BlockedNoMutate".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() })
+        .id;
+    project.ensure_shot_uuids();
+    // A dangling station offset → unresolvable cross-reference (save-blocking).
+    project
+        .station_offsets
+        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost".to_string())), (1.0, 2.0, 3.0));
+    // ...and a non-finite shot the (now later) sanitize would otherwise destroy.
+    project.sections[0].shots[0].length = f64::NAN;
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("blocked")), false);
+    assert!(!result.success, "save must be blocked by the dangling cross-reference");
+    // The gate runs BEFORE the destructive sanitize, so the live shot is untouched.
+    let unsaved = state.get_project_state().unwrap();
+    assert!(
+        !unsaved.sections[0].shots[0].all_finite(),
+        "a refused save must not destructively sanitize the live project"
+    );
+}
+
+#[test]
+fn undo_of_duplicate_uuid_repair_restores_the_duplicates() {
+    // The pre-repair state of a duplicate_shot_uuid repair is a CURRENT snapshot
+    // that intentionally holds duplicate UUIDs. Undo must restore it EXACTLY —
+    // restore_snapshot_into must not re-dedup a non-legacy (no Index anchor)
+    // snapshot, or the repair can't be reverted.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("DupRepairUndo".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // A within-section duplicate UUID: a current corrupt state (AfterShot anchors).
+    let dup = project.get_section(a).unwrap().shots[0].uuid.clone().unwrap();
+    project.get_section_mut(a).unwrap().shots[1].uuid = Some(dup.clone());
+    assert!(project.has_critical_integrity_violations());
+    state.set_project_for_tests(project);
+
+    // Repair re-mints the duplicate (now unique) and records the dup state as undo `before`.
+    let r = state.repair_open_project_integrity();
+    assert!(r.changed, "repair changed the project");
+    assert!(
+        !state.get_project_state().unwrap().has_critical_integrity_violations(),
+        "repair deduped the UUIDs"
+    );
+
+    // Undo must restore the duplicate-UUID state EXACTLY (and its warning).
+    assert!(state.undo().success);
+    let after_undo = state.get_project_state().unwrap();
+    let uuids: Vec<_> = after_undo
+        .get_section(a)
+        .unwrap()
+        .shots
+        .iter()
+        .filter_map(|s| s.uuid.clone())
+        .collect();
+    assert_eq!(uuids[0], uuids[1], "undo restored the duplicate UUID exactly");
+    assert!(
+        after_undo.has_critical_integrity_violations(),
+        "the duplicate_shot_uuid warning is back after undo"
+    );
+}
+
+#[test]
 fn restore_snapshot_mints_null_uuids_before_reanchor() {
     // A legacy (pre-v6) snapshot can carry shots with uuid:null AND positional Index
     // anchors. restore must MINT the missing UUIDs before re-anchoring —

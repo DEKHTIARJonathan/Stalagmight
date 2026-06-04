@@ -7,7 +7,7 @@ use tauri::AppHandle;
 
 use crate::cache::TileCache;
 use crate::config::Config;
-use crate::models::Project;
+use crate::models::{Project, StationAnchor};
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
 use crate::TileFetchStats;
@@ -264,21 +264,34 @@ impl AppState {
                 // `{section_id, station_index}` shape). The live-model invariant is
                 // "no Index anchors": a later shot insert/delete only shifts
                 // AfterShot/SectionStart refs, so a live Index ref would silently start
-                // resolving to the wrong station. Canonicalize here — the same step
-                // the load path runs (`redrive_offsets_after_load`) — so every restore
-                // is safe regardless of snapshot provenance. Anchors only (NOT a
-                // re-solve), so the restored geometry is preserved exactly; both calls
-                // are idempotent on already-canonical same-session snapshots. Runs
-                // after the cache rebuilds because `reanchor_station_refs` resolves
-                // refs through the section index. ensure_shot_uuids() MUST run first:
-                // a legacy (pre-v6) snapshot can carry shots with uuid:null, and
-                // ensure_unique only re-mints DUPLICATES — it leaves nulls null. Without
-                // minting them, key_for_ref returns None for the AfterShot of a
-                // null-uuid shot, so reanchor can't canonicalize that station's Index
-                // anchor and it stays live (the exact bug this canonicalization prevents).
-                restored.ensure_shot_uuids();
-                restored.ensure_unique_shot_uuids();
-                restored.reanchor_station_refs();
+                // resolving to the wrong station. Canonicalize such a snapshot — the
+                // same step the load path runs — to AfterShot/SectionStart.
+                //
+                // CRITICALLY, gate this on the snapshot actually being LEGACY (an Index
+                // anchor is present). A CURRENT same-session snapshot is already
+                // canonical, so mint/reanchor would be no-ops — but ensure_unique would
+                // RE-MINT intentional duplicate UUIDs, e.g. the pre-repair state that an
+                // undo of a duplicate_shot_uuid Repair must restore EXACTLY. Skipping
+                // the block when there is no Index anchor keeps current snapshots
+                // byte-for-byte (so undo/redo is a true before/after pair) while legacy
+                // snapshots are still fully canonicalized. (For a legacy snapshot,
+                // ensure_shot_uuids runs FIRST: a pre-v6 blob can have uuid:null shots,
+                // and ensure_unique only dedups existing UUIDs — without minting nulls,
+                // reanchor can't canonicalize the Index anchor of a null-uuid station.)
+                let has_legacy_index = {
+                    let mut found = false;
+                    restored.for_each_station_ref(|_, key| {
+                        if matches!(key.anchor, StationAnchor::Index(_)) {
+                            found = true;
+                        }
+                    });
+                    found
+                };
+                if has_legacy_index {
+                    restored.ensure_shot_uuids();
+                    restored.ensure_unique_shot_uuids();
+                    restored.reanchor_station_refs();
+                }
                 *slot = Some(restored);
                 true
             }

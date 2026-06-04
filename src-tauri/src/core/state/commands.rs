@@ -141,6 +141,14 @@ impl AppState {
             | CloseProject
             | UpdateSectionMetadata { .. }
             | SetShotReference { .. }
+            // Station comments are metadata keyed by station identity; they are
+            // never geometry-derived and can never introduce merge drift, so they
+            // must NOT run the reconcile epilogue. Classifying them GEOMETRY_ONLY
+            // would heal an already-drifted project as a side effect of a comment
+            // edit, while their undo (restore the previous comment) does not invert
+            // that geometry change — an asymmetric undo.
+            | SetStationComment { .. }
+            | MoveComment { .. }
             | RepairIntegrity => INERT,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
@@ -169,11 +177,9 @@ impl AppState {
             | AdjustLoopClosures { .. }
             | SetZeroDatum { .. }
             | RemoveZeroDatum { .. }
-            | SetStationComment { .. }
             | MoveSection { .. }
             | MoveSegment { .. }
             | MoveStation { .. }
-            | MoveComment { .. }
             | ApplyCollabChanges => GEOMETRY_ONLY,
         }
     }
@@ -3091,6 +3097,20 @@ mod integrity_capability_tests {
         );
         // RepairIntegrity never runs through execute(); it is classified INERT.
         assert_eq!(caps(&Command::RepairIntegrity), (false, false, false));
+        // Comment edits are metadata-only — INERT, so a comment edit can't run the
+        // reconcile epilogue (which would heal a drifted project with no undo).
+        assert_eq!(
+            caps(&Command::SetStationComment { station_ref: StationRef::new(1, 0), comment: None }),
+            (false, false, false)
+        );
+        assert_eq!(
+            caps(&Command::MoveComment {
+                source: CommentHolder::Station { station_ref: StationRef::new(1, 0) },
+                target: CommentHolder::Station { station_ref: StationRef::new(1, 1) },
+                swap: false,
+            }),
+            (false, false, false)
+        );
 
         // REMOVES (can dangle refs AND orphan a closure → needs rollback snapshot
         // + reconcile + orphan-closure conversion).
