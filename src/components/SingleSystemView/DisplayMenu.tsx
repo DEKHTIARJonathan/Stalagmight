@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
@@ -69,8 +70,10 @@ export default function DisplayMenu() {
     showShotComments,
     showDevStats,
     gridSpacing,
+    geometryMode,
     toggleDisplay,
     setGridSpacing,
+    setGeometryMode,
   } = useUIStore(useShallow((s) => ({
     showStations: s.showStations,
     showShots: s.showShots,
@@ -87,9 +90,15 @@ export default function DisplayMenu() {
     showShotComments: s.showShotComments,
     showDevStats: s.showDevStats,
     gridSpacing: s.gridSpacing,
+    geometryMode: s.geometryMode,
     toggleDisplay: s.toggleDisplay,
     setGridSpacing: s.setGridSpacing,
+    setGeometryMode: s.setGeometryMode,
   })));
+
+  // The closure-adjusted view only differs from measured when the project has
+  // loop closures; otherwise the option is disabled (it would be identical).
+  const hasClosures = useProjectStore((s) => (s.project?.loop_closures.length ?? 0) > 0);
 
   const toggleValues: Record<DisplayToggleKey, boolean> = {
     showStations,
@@ -234,9 +243,60 @@ export default function DisplayMenu() {
           style={{ maxHeight: 'calc(100vh - 6rem)' }}
           data-testid="display-menu"
         >
-          {displayOptions.map((group, groupIndex) => (
+          {/* Geometry mode: raw measured vs non-destructive closure-adjusted */}
+          <div>
+            <div className="px-3 py-2 text-xs font-medium text-text-secondary uppercase tracking-wide">
+              {t('displayMenu.geometry.groupLabel')}
+            </div>
+            <div className="px-3 pb-2">
+              <div
+                className="flex rounded border border-border overflow-hidden"
+                role="group"
+                aria-label={t('displayMenu.geometry.groupLabel')}
+              >
+                <button
+                  onClick={() => setGeometryMode('measured', 'display-menu')}
+                  className={`flex-1 px-2 py-1.5 text-xs transition-colors ${
+                    geometryMode === 'measured'
+                      ? 'bg-accent text-accent-on'
+                      : 'bg-background hover:bg-background-50 text-text-primary'
+                  }`}
+                  data-testid="geometry-mode-measured"
+                  aria-pressed={geometryMode === 'measured'}
+                >
+                  {t('displayMenu.geometry.measured')}
+                </button>
+                <button
+                  onClick={() => {
+                    if (!hasClosures) return;
+                    setGeometryMode('closureAdjusted', 'display-menu');
+                  }}
+                  disabled={!hasClosures}
+                  aria-disabled={!hasClosures || undefined}
+                  title={!hasClosures ? t('displayMenu.geometry.noClosures') : undefined}
+                  className={`flex-1 px-2 py-1.5 text-xs border-l border-border transition-colors ${
+                    geometryMode === 'closureAdjusted'
+                      ? 'bg-accent text-accent-on'
+                      : !hasClosures
+                        ? 'bg-background opacity-50 cursor-not-allowed text-text-primary'
+                        : 'bg-background hover:bg-background-50 text-text-primary'
+                  }`}
+                  data-testid="geometry-mode-closureAdjusted"
+                  aria-pressed={geometryMode === 'closureAdjusted'}
+                >
+                  {t('displayMenu.geometry.closureAdjusted')}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-text-secondary">
+                {geometryMode === 'closureAdjusted'
+                  ? t('displayMenu.geometry.closureAdjustedDescription')
+                  : t('displayMenu.geometry.measuredDescription')}
+              </p>
+            </div>
+          </div>
+          {displayOptions.map((group) => (
             <div key={group.groupKey}>
-              {groupIndex > 0 && <div className="border-t border-border" />}
+              <div className="border-t border-border" />
               <div className="px-3 py-2 text-xs font-medium text-text-secondary uppercase tracking-wide">
                 {t(group.groupKey)}
               </div>

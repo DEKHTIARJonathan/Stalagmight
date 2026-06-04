@@ -5,6 +5,8 @@ import type { SectionId, ShotId, StationRef } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
+import { selectActiveStations } from '../../store/geometrySelectors';
+import { isMutatingTool } from '../../utils/toolUtils';
 import { useShallow } from 'zustand/react/shallow';
 import {
   getEffectiveShowReferenceShots,
@@ -236,8 +238,21 @@ export default function MapCanvas() {
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
+
+  // Geometry display mode (measured vs read-only closure-adjusted).
+  const geometryMode = useUIStore((s) => s.geometryMode);
+  const setGeometryMode = useUIStore((s) => s.setGeometryMode);
+  const setActiveTool = useUIStore((s) => s.setActiveTool);
+
+  // Station coordinates for the active display mode. The map renders the active
+  // geometry; coordinate-derived editing tools are disabled in the adjusted
+  // (read-only) view, so other consumers continue to use measured `stations`.
+  const activeStations = useMemo(
+    () => selectActiveStations({ stations, surveyData, stationsAdjusted, surveyDataAdjusted }, geometryMode),
+    [stations, surveyData, stationsAdjusted, surveyDataAdjusted, geometryMode]
+  );
 
   // Get GPS origin for coordinate transforms (enables satellite tile alignment)
   // Priority: project's zero-datum GPS > config's satellite_gps_origin
@@ -1492,15 +1507,41 @@ export default function MapCanvas() {
     if (surveyLayerRef.current && project) {
       surveyLayerRef.current.update(
         project.sections,
-        stations,
-        project.loop_closures,
+        activeStations,
+        // In the adjusted view loops are closed, so the misclosure overlay is
+        // meaningless — hide it by passing no closures.
+        geometryMode === 'closureAdjusted' ? undefined : project.loop_closures,
         gpsOrigin,
         showDepthGradient,
         depthRange,
         precision
       );
     }
-  }, [project, stations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
+
+  // Lazily fetch closure-adjusted geometry when the adjusted view is active and
+  // we don't have it yet (first switch, or after an edit invalidated it). The
+  // store action guards against concurrent/duplicate fetches.
+  useEffect(() => {
+    if (geometryMode === 'closureAdjusted' && project && !surveyDataAdjusted) {
+      void loadAdjustedGeometry();
+    }
+  }, [geometryMode, project, surveyDataAdjusted, loadAdjustedGeometry]);
+
+  // The adjusted view is meaningless without closures: revert to measured if the
+  // last closure is removed while it is active.
+  useEffect(() => {
+    if (geometryMode === 'closureAdjusted' && project && project.loop_closures.length === 0) {
+      setGeometryMode('measured');
+    }
+  }, [geometryMode, project, setGeometryMode]);
+
+  // The adjusted view is read-only: drop any geometry-mutating tool back to select.
+  useEffect(() => {
+    if (geometryMode === 'closureAdjusted' && isMutatingTool(activeTool)) {
+      setActiveTool('select');
+    }
+  }, [geometryMode, activeTool, setActiveTool]);
 
   // Update callbacks when they change
   useEffect(() => {
@@ -2985,6 +3026,21 @@ export default function MapCanvas() {
             :
           </span>{' '}
           {t('map.move.instructions')}
+        </div>
+      )}
+
+      {/* Closure-adjusted read-only banner (+ "computing" while solving) */}
+      {geometryMode === 'closureAdjusted' && !placementMode && (
+        <div
+          className="absolute top-2 left-2 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
+          data-testid="geometry-readonly-banner"
+        >
+          <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
+          {adjustedLoading && (
+            <span className="text-text-secondary" data-testid="geometry-computing">
+              {t('map.geometry.computing')}
+            </span>
+          )}
         </div>
       )}
 

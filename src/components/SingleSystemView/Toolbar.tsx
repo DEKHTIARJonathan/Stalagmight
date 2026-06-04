@@ -23,6 +23,7 @@ import {
 import DisplayMenu from './DisplayMenu';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
+import { isMutatingTool } from '../../utils/toolUtils';
 import { setSource } from '../../utils/telemetry';
 import { defaultConfig } from '../../types/config';
 
@@ -141,6 +142,9 @@ export default function Toolbar({
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const openDialog = useUIStore((s) => s.openDialog);
+  // The closure-adjusted view is read-only: geometry-mutating tools are disabled
+  // there (edits are made in the measured view).
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
 
   return (
     <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
@@ -220,7 +224,7 @@ export default function Toolbar({
                   tool={item.id}
                   active={activeTool === item.id}
                   onClick={() => setActiveTool(item.id)}
-                  disabled={placementModeActive}
+                  disabled={placementModeActive || (geometryReadOnly && isMutatingTool(item.id))}
                 />
               );
             }
@@ -233,7 +237,7 @@ export default function Toolbar({
                 group={group}
                 activeTool={activeTool}
                 onActivateTool={setActiveTool}
-                disabled={placementModeActive}
+                disabled={placementModeActive || (geometryReadOnly && group.tools.every(isMutatingTool))}
               />
             );
           })}
