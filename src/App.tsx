@@ -430,6 +430,12 @@ function App() {
       if (useProjectStore.getState().integrityIssues.length === 0) {
         closeIntegrityDialog();
       }
+    } catch {
+      // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
+      // during teardown) rather than reporting a fake no-op success. Surface it and
+      // keep the dialog open — integrityIssues is untouched, so the banner/save-block
+      // stay correct and the user can retry.
+      useUIStore.getState().showToast('Repair failed — nothing was changed. Please try again.', 'integrity-repair');
     } finally {
       setRepairingIntegrity(false);
     }

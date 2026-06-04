@@ -816,6 +816,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   saveProject: async (path?: string, isAutosave?: boolean) => {
+    // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
+    // non-finite geometry in memory before persisting, which mutates the backend
+    // project — so afterward the frontend's mirror can be stale. Those heals only
+    // ever fire on a project the integrity check already flags, so capture that here
+    // as a cheap signal to refresh below, avoiding a get_project_state on every
+    // clean save / autosave.
+    const hadIntegrityIssues = get().integrityIssues.length > 0;
     const result = await invokeIpc<CommandResult>(
       'save_project',
       { path, isAutosave: isAutosave ?? false },
@@ -850,6 +857,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Lightweight: just refresh undo/redo availability
       await get().refreshUndoState();
       set({ isDirty: false });
+      // If the save healed the project in memory (re-minted duplicate UUIDs,
+      // dropped orphan section offsets, sanitized non-finite geometry), the
+      // frontend's shots/stations are now stale vs the saved file — refresh so the
+      // rendered state matches. Gated on hadIntegrityIssues so a clean save/autosave
+      // skips the extra get_project_state fetch and re-render.
+      if (hadIntegrityIssues) {
+        await get().refreshProjectState();
+      }
       // Don't let geometric corruption persist silently: re-check after save so
       // drifted merges surface in the integrity banner this session, not only on
       // the next load. (Skip on autosave to avoid churn.)
@@ -1124,8 +1139,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       return result;
     } catch (e) {
+      // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
+      // repair (an IPC rejection during window/app teardown, a serialization
+      // failure, or a backend panic — note the command itself is infallible, so a
+      // normal backend Err is not a trigger) must be distinguishable from a genuine
+      // clean repair. Otherwise the caller shows a fake "Repaired 0 issues" success
+      // toast and swallows the error. Re-throw so the caller surfaces the failure
+      // and keeps the Repair entry point open. (integrityIssues / integritySaveBlocked
+      // are untouched here, so the banner and save-block stay correct.)
       console.error('Failed to repair project integrity:', e);
-      return { fixed: 0, remaining: 0, changed: false };
+      throw e;
     }
   },
 

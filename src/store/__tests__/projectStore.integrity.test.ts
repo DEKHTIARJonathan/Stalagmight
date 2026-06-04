@@ -343,4 +343,63 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     expect(useProjectStore.getState().integrityIssues).toEqual([]);
     expect(useProjectStore.getState().integrityDialogOpen).toBe(false);
   });
+
+  it('surfaces a thrown repair instead of faking a no-op success', async () => {
+    // A repair IPC rejection (window/app teardown, panic) must REJECT — not return
+    // a fake { fixed:0, remaining:0 } that the caller reads as a successful repair
+    // (fake toast + lost entry point). The banner/save-block must stay intact.
+    useProjectStore.setState({
+      project: { file_path: '/p.stalx' } as never,
+      integrityIssues: ['dangling merge'],
+      integritySaveBlocked: true,
+    });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'repair_project_integrity') throw new Error('ipc down');
+      return undefined;
+    });
+
+    await expect(useProjectStore.getState().repairProjectIntegrity()).rejects.toThrow('ipc down');
+    expect(useProjectStore.getState().integrityIssues).toEqual(['dangling merge']);
+    expect(useProjectStore.getState().integritySaveBlocked).toBe(true);
+  });
+
+  it('refreshes project state after a save that healed a corrupt project', async () => {
+    // The Rust save heals dup UUIDs / non-finite / orphan offsets in memory, so the
+    // frontend must refresh (get_project_state) to match the saved file.
+    useProjectStore.setState({
+      project: { file_path: '/p.stalx' } as never,
+      integrityIssues: ['non-finite shot geometry'],
+      integritySaveBlocked: false,
+    });
+    let getProjectStateCalled = false;
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'save_project') return { success: true };
+      if (command === 'get_project_state') { getProjectStateCalled = true; return null; }
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      return undefined;
+    });
+
+    await useProjectStore.getState().saveProject('/p.stalx', false);
+    expect(getProjectStateCalled).toBe(true);
+  });
+
+  it('does not refresh project state after a clean save', async () => {
+    // No integrity issues → the save can't have healed anything → skip the extra
+    // get_project_state fetch (no churn on the common path).
+    useProjectStore.setState({
+      project: { file_path: '/p.stalx' } as never,
+      integrityIssues: [],
+      integritySaveBlocked: false,
+    });
+    let getProjectStateCalled = false;
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'save_project') return { success: true };
+      if (command === 'get_project_state') { getProjectStateCalled = true; return null; }
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      return undefined;
+    });
+
+    await useProjectStore.getState().saveProject('/p.stalx', false);
+    expect(getProjectStateCalled).toBe(false);
+  });
 });
