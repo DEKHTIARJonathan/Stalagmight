@@ -578,13 +578,17 @@ export const useUIStore = create<UIStore>((set) => ({
       };
     }
     // Set the focus height directly (not via savePanelSizes) so the temporary
-    // focus layout is never persisted to the user's panel config.
+    // focus layout is never persisted to the user's panel config. Only apply it
+    // when the table opens from closed: a fresh ResizablePanel mount seeds its
+    // (uncontrolled) size from this height. If the table is already open we leave
+    // its height alone rather than force a remount that would reset DataTable
+    // state (selection, scroll).
     set({
       focusedSectionId,
       sectionsPanelOpen: false,
       detailPanelOpen: false,
       dataTableOpen: true,
-      dataTableHeight,
+      ...(s.dataTableOpen ? {} : { dataTableHeight }),
     });
   },
   exitSectionFocus: () => {

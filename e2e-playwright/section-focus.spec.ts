@@ -97,4 +97,28 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
   });
+
+  test('deleting the focused section exits focus mode', async ({ page }) => {
+    const sectionId = await getSectionIdByName(page, SECTION_NAME);
+
+    // Enter focus mode.
+    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
+    await expect(sectionRow).toBeVisible();
+    await sectionRow.dblclick();
+    await expect(page.getByTestId('toolbar-section-focus-name')).toBeVisible();
+
+    // Delete the focused section out from under focus mode (e.g. via undo, collab
+    // sync, or a delete action). Focus must not linger on a section that's gone.
+    await page.evaluate((secId) => {
+      const store = (window as unknown as {
+        __E2E_TEST__?: { projectStore?: { getState: () => { deleteSection: (id: number) => Promise<unknown> } } };
+      }).__E2E_TEST__?.projectStore;
+      return store?.getState().deleteSection(secId);
+    }, sectionId);
+
+    // Focus mode exits: project name returns, side panels restored.
+    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
+    await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
+    await expect(page.getByTestId('sections-panel')).toBeVisible();
+  });
 });

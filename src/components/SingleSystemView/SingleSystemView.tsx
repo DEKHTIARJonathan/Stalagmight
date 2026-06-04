@@ -15,10 +15,16 @@ import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
-import { withTrackingSuppressed } from '../../utils/telemetry';
+import { setSource, withTrackingSuppressed } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+
+// #50: after double-click collapses the side panels, the map grows. fitToSection
+// reads the container size at call time, so re-fit once the layout has reflowed
+// and MapLibre's ResizeObserver has resized the map (a couple of frames). This
+// lives here rather than in SectionsPanel, which unmounts when it collapses.
+const SECTION_FOCUS_REFIT_DELAY_MS = 180;
 
 export default function SingleSystemView() {
   const { t } = useTranslation();
@@ -55,6 +61,7 @@ export default function SingleSystemView() {
     dataTableHeight,
     focusedSectionId,
     exitSectionFocus,
+    triggerZoomToSection,
     toggleSectionsPanel,
     toggleDetailPanel,
     toggleDataTable,
@@ -71,6 +78,7 @@ export default function SingleSystemView() {
     dataTableHeight: s.dataTableHeight,
     focusedSectionId: s.focusedSectionId,
     exitSectionFocus: s.exitSectionFocus,
+    triggerZoomToSection: s.triggerZoomToSection,
     toggleSectionsPanel: s.toggleSectionsPanel,
     toggleDetailPanel: s.toggleDetailPanel,
     toggleDataTable: s.toggleDataTable,
@@ -81,11 +89,34 @@ export default function SingleSystemView() {
   })));
 
   // #50: name shown in place of the project name while focused on one section.
+  const focusedSectionExists =
+    focusedSectionId !== null && (project?.sections.some((s) => s.id === focusedSectionId) ?? false);
   const focusedSectionName =
     focusedSectionId !== null
       ? project?.sections.find((s) => s.id === focusedSectionId)?.name
           ?? t('sections.defaultName', { id: focusedSectionId })
       : null;
+
+  // #50: re-fit the map to the focused section once the collapsed layout has
+  // settled. Lives here (not in SectionsPanel, which unmounts on collapse) so the
+  // timer survives; cleanup cancels it if focus is left/changed within the delay.
+  useEffect(() => {
+    if (focusedSectionId === null) return;
+    const id = focusedSectionId;
+    const timer = window.setTimeout(() => {
+      setSource('sections-panel');
+      triggerZoomToSection(id);
+    }, SECTION_FOCUS_REFIT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [focusedSectionId, triggerZoomToSection]);
+
+  // #50: if the focused section disappears (e.g. deleted while focused), exit
+  // focus mode rather than stay in the collapsed layout showing a stale name.
+  useEffect(() => {
+    if (focusedSectionId !== null && project && !focusedSectionExists) {
+      exitSectionFocus();
+    }
+  }, [focusedSectionId, focusedSectionExists, project, exitSectionFocus]);
 
   const sectionsPanelOpenedByOnboardingRef = useRef(false);
   const detailPanelOpenedByOnboardingRef = useRef(false);
@@ -266,16 +297,18 @@ export default function SingleSystemView() {
           {/* Data table */}
           {dataTableOpen ? (
             <ResizablePanel
-              // Re-seed the panel's uncontrolled size when entering/leaving
-              // section-focus mode (#50) so the ~30% focus height applies even
-              // if the table was already open.
-              key={focusedSectionId !== null ? 'data-table-focus' : 'data-table'}
               direction="vertical"
               defaultSize={dataTableHeight}
               minSize={DATA_TABLE_MIN_HEIGHT}
               maxSize={DATA_TABLE_MAX_HEIGHT}
               onResize={setDataTableHeight}
-              onResizeEnd={(size) => savePanelSizes(undefined, undefined, size)}
+              // Don't persist the temporary focus-mode height (#50): in focus
+              // mode the data table opens at ~30% and exit restores the prior
+              // height only in memory, so persisting a focus-time drag would
+              // leak that size into the next session.
+              onResizeEnd={(size) => {
+                if (focusedSectionId === null) savePanelSizes(undefined, undefined, size);
+              }}
               className="border-t border-border"
             >
               <div className="relative h-full">

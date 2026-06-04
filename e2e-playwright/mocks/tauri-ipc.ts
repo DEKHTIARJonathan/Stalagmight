@@ -2886,9 +2886,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           }
 
-          case 'delete_section':
+          case 'delete_section': {
             console.log('[Mock IPC] delete_section called with:', args);
+            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            if (currentProject && sectionId !== undefined) {
+              currentProject.sections = currentProject.sections.filter(
+                (s: { id: number }) => s.id !== sectionId,
+              );
+            }
             return { success: true };
+          }
 
           case 'create_shot':
             console.log('[Mock IPC] create_shot called with:', args);
