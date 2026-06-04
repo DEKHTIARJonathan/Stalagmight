@@ -1374,6 +1374,45 @@ fn get_adjusted_stations_caches_and_invalidates() {
 }
 
 #[test]
+fn repair_invalidates_adjusted_cache() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Repair".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#111111".to_string(),
+        direction: Some(SurveyDirection::In),
+        shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+    });
+
+    // Populate the adjusted cache.
+    let _ = state.get_adjusted_stations().expect("adjusted stations");
+    assert!(
+        state.adjusted_cache.lock().unwrap().is_some(),
+        "cache should be populated after a solve"
+    );
+    let gen_before = state.adjusted_cache_generation.load(SeqCst);
+
+    // Repair mutates measured geometry without necessarily bumping modified_at, so
+    // it must drop the cached adjusted solve (otherwise a later read serves stale
+    // geometry keyed on an unchanged version).
+    let _ = state.repair_open_project_integrity();
+    assert!(
+        state.adjusted_cache.lock().unwrap().is_none(),
+        "repair must invalidate the adjusted cache"
+    );
+    assert!(
+        state.adjusted_cache_generation.load(SeqCst) > gen_before,
+        "repair must bump the invalidation generation"
+    );
+}
+
+#[test]
 fn unmerge_converts_orphaned_bridge_closure() {
     // Deleting the merge that was a loop's other path strands the section onto
     // the closure — which must then become a merge (same #8 principle as delete).

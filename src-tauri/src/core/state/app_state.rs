@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 
@@ -91,6 +91,10 @@ pub struct AppState {
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
+    /// Bumped on every adjusted-cache invalidation. Captured before the lock-free
+    /// solve so a result computed against a since-invalidated project is not
+    /// written back (covers mutations that don't bump `modified_at`, e.g. repair).
+    pub(super) adjusted_cache_generation: AtomicU64,
 }
 
 impl AppState {
@@ -136,6 +140,7 @@ impl AppState {
             app_handle: Mutex::new(None),
             active_loading: Mutex::new(None),
             adjusted_cache: Mutex::new(None),
+            adjusted_cache_generation: AtomicU64::new(0),
         })
     }
 
@@ -297,19 +302,34 @@ impl AppState {
         // reconciled solve under the final version. Re-read the version from the
         // clone so the cache key matches exactly the data solved, and hand the
         // clone to the by-value solver so it isn't cloned a second time.
-        let project = {
+        let (project, generation) = {
             let _cmd_guard = self.command_lock.lock().ok()?;
-            self.get_project_state()?
+            // Capture the invalidation generation alongside the (reconciled) clone,
+            // under command_lock, so it reflects exactly the data being solved.
+            let generation = self
+                .adjusted_cache_generation
+                .load(std::sync::atomic::Ordering::SeqCst);
+            (self.get_project_state()?, generation)
         };
         let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
         let stations = project.into_adjusted_station_coordinates(&config.closure_adjustment);
 
         if let Ok(mut cache) = self.adjusted_cache.lock() {
-            *cache = Some(AdjustedStationsCache {
-                version: solved_version,
-                config_hash,
-                stations: stations.clone(),
-            });
+            // Only store if nothing invalidated the cache while command_lock was
+            // released for the heavy, lock-free solve. Otherwise an edit/open/repair
+            // that ran during the solve — including a repair that doesn't bump
+            // modified_at — could be clobbered by this now-stale result.
+            if self
+                .adjusted_cache_generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == generation
+            {
+                *cache = Some(AdjustedStationsCache {
+                    version: solved_version,
+                    config_hash,
+                    stations: stations.clone(),
+                });
+            }
         }
         Some(stations)
     }
@@ -318,6 +338,10 @@ impl AppState {
     /// command/undo/redo path so the adjusted view never serves stale geometry.
     pub(super) fn invalidate_adjusted_cache(&self) {
         if let Ok(mut cache) = self.adjusted_cache.lock() {
+            // Bump the generation under the cache lock so an in-flight solve's
+            // generation check (also under this lock) reliably observes it.
+            self.adjusted_cache_generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             *cache = None;
         }
     }

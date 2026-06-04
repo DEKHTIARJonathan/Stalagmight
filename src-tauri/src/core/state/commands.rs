@@ -347,6 +347,9 @@ impl AppState {
             project.convert_orphan_closures_to_merges();
             project.resolve_offsets();
         } // release the guard before re-measuring (integrity_violation_messages re-locks)
+        // Repair mutated measured geometry (and convert_orphan_closures_to_merges
+        // doesn't bump modified_at), so drop any cached closure-adjusted solve.
+        self.invalidate_adjusted_cache();
         let after = self.integrity_violation_messages().len();
         // Record an undo entry (before -> after) so the user can revert the repair.
         // Only when it actually changed the project, so a no-op repair doesn't add
