@@ -1389,7 +1389,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   loadAdjustedGeometry: async (): Promise<boolean> => {
-    const { project, surveyData, stations, adjustedLoading } = get();
+    const { project, surveyData, stations, adjustedLoading, config } = get();
     // No-op (no project, or a fetch already in flight): not a failure.
     if (!project || adjustedLoading) return true;
 
@@ -1405,9 +1405,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const adjusted = await invokeIpc<Station[]>('get_adjusted_stations', undefined, {
         purpose: 'closure-adjusted geometry view',
       });
-      // Discard if the project changed while the solve was in flight; a
-      // refreshProjectState will have nulled the cache and re-triggered us.
-      if (get().project !== project) {
+      // Discard if the project OR the closure-adjustment config changed while the
+      // solve was in flight (a refreshProjectState / updateConfig nulled the cache
+      // but the project ref is unchanged on a config-only change), otherwise we'd
+      // cache geometry solved against stale sigmas. The map effect re-fetches once
+      // `adjustedLoading` clears.
+      if (get().project !== project || get().config !== config) {
         set({ adjustedLoading: false });
         return true;
       }

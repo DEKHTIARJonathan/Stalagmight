@@ -165,7 +165,7 @@ export default function Toolbar({
         <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
         </Button>
-        <Button onClick={() => { setSource('toolbar'); onImport(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-import-button">
+        <Button onClick={() => { setSource('toolbar'); onImport(); }} disabled={placementModeActive || geometryReadOnly} size="sm" data-testid="toolbar-import-button">
           {t('common.actions.import')}
         </Button>
         <Button onClick={() => { setSource('toolbar'); openDialog('export'); }} disabled={placementModeActive} size="sm" data-testid="toolbar-export-button">

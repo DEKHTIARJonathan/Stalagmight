@@ -690,6 +690,23 @@ describe('Geometry Mode', () => {
     expect(useUIStore.getState().geometryMode).toBe('measured');
   });
 
+  it('loadDisplaySettings resets geometryMode to measured when no preference is saved (no carry-over)', async () => {
+    // Leaving a prior project in closureAdjusted must not bleed into a project
+    // whose saved settings omit geometryMode (e.g. an older file).
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    vi.mocked(invoke).mockResolvedValueOnce({ showStations: 'true' });
+    await useUIStore.getState().loadDisplaySettings();
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+  });
+
+  it('applyDisplaySettings resets geometryMode to measured (typed struct carries no mode)', () => {
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    // The DisplaySettings struct has no geometryMode field; the load path must not
+    // inherit the previous project's mode.
+    useUIStore.getState().applyDisplaySettings({ showStations: true } as never);
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+  });
+
   it('geometryMode is NOT part of DISPLAY_DEFAULTS (telemetry registry contract)', () => {
     expect('geometryMode' in DISPLAY_DEFAULTS).toBe(false);
   });
