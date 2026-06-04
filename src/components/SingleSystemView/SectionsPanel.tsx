@@ -33,6 +33,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     }))
   );
 
+  // The closure-adjusted view is read-only — section add/delete are disabled there.
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+
   // The row to highlight comes from any of: an explicit section hover (panel row /
   // DetailPanel section link), or — for map hovers — the section that owns the
   // currently hovered shot or station. Deriving in the panel keeps the map-driven
@@ -198,18 +201,20 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   }, [setHoveredSectionId]);
 
   const handleAddSection = () => {
+    if (geometryReadOnly) return;
     setSource('sections-panel');
     openDialog('import');
   };
 
   const handleDeleteSection = useCallback((sectionId: number, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (geometryReadOnly) return;
     setSource('sections-panel');
     openDialog('confirm-delete', {
       type: 'section',
       sectionId,
     });
-  }, [openDialog]);
+  }, [openDialog, geometryReadOnly]);
 
   const openSectionContextMenu = useCallback((sectionId: number, x: number, y: number) => {
     setSource('sections-panel');
@@ -238,6 +243,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
           tooltip={t('sections.actions.add')}
           aria-label={t('sections.actions.add')}
           data-testid="sections-add-button"
+          disabled={geometryReadOnly}
         />
       </div>
 
@@ -249,7 +255,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
             <br />
             <button
               onClick={handleAddSection}
-              className="text-accent hover:underline mt-2 inline-block"
+              disabled={geometryReadOnly}
+              className="text-accent hover:underline mt-2 inline-block disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
               data-testid="sections-empty-add"
             >
               {t('sections.empty.action')}
@@ -284,6 +291,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 onDeleteDoubleClick={handleDeleteDoubleClick}
                 onLongPress={openSectionContextMenu}
                 optionRefs={optionRefs}
+                readOnly={geometryReadOnly}
               />
             ))}
           </ul>
@@ -362,6 +370,8 @@ interface SectionRowProps {
   onDeleteDoubleClick: (e: React.MouseEvent) => void;
   onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
+  /** When true (closure-adjusted view), the per-row delete control is disabled. */
+  readOnly: boolean;
 }
 
 const SectionRow = memo(function SectionRow({
@@ -384,6 +394,7 @@ const SectionRow = memo(function SectionRow({
   onDeleteDoubleClick,
   onLongPress,
   optionRefs,
+  readOnly,
 }: SectionRowProps) {
   const { t } = useTranslation();
   const stats = calculateSectionStats(section);
@@ -446,6 +457,7 @@ const SectionRow = memo(function SectionRow({
           className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-error"
           tabIndex={-1}
           data-testid={`section-delete-${section.id}`}
+          disabled={readOnly}
         />
       </div>
       <div className="text-xs text-text-secondary mt-1 ml-5">
