@@ -352,6 +352,20 @@ impl AppState {
             .section_offsets
             .retain(|sid, _| existing_sections.contains(sid));
 
+        // Sanitize non-finite (NaN/inf) section offsets before persisting, mirroring
+        // the load-boundary guard and the shot sanitize below. section_offsets has no
+        // other finite guard, and a non-finite offset would either be coerced to NULL
+        // by SQLite (a NaN, aborting the save) or persist (an inf) and poison every
+        // world coordinate for that component on the next load.
+        for offset in project.section_offsets.values_mut() {
+            if !offset.0.is_finite() {
+                offset.0 = 0.0;
+            }
+            if !offset.1.is_finite() {
+                offset.1 = 0.0;
+            }
+        }
+
         // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
         // be stored in a `REAL NOT NULL` column (SQLite coerces it to NULL → the
         // INSERT aborts the whole save), and an inf would persist and only be

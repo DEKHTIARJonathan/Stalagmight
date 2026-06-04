@@ -884,6 +884,33 @@ fn save_sanitizes_non_finite_geometry() {
 }
 
 #[test]
+fn save_sanitizes_non_finite_section_offset() {
+    // section_offsets is the one geometry field with no finite guard. A non-finite
+    // offset (corrupt/hand-edited DB, or an inf round-trip) would abort the save
+    // (NaN → NULL) or persist and poison the component's world coords. It must be
+    // sanitized on save, mirroring the shot sanitize and the load-boundary guard.
+    let temp_dir = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("NonFiniteOffset".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() })
+        .id;
+    project.ensure_shot_uuids();
+    project.section_offsets.insert(a, (f64::NAN, f64::INFINITY));
+    state.set_project_for_tests(project);
+
+    let result = state.save_project(Some(temp_dir.path().join("nf_offset")), false);
+    assert!(
+        result.success,
+        "a non-finite section offset must be sanitized, not abort the save: {:?}",
+        result.error
+    );
+    let saved = state.get_project_state().unwrap();
+    let off = saved.section_offsets.get(&a).copied().unwrap_or((0.0, 0.0));
+    assert!(off.0.is_finite() && off.1.is_finite(), "section offset sanitized on save");
+}
+
+#[test]
 fn restore_snapshot_mints_null_uuids_before_reanchor() {
     // A legacy (pre-v6) snapshot can carry shots with uuid:null AND positional Index
     // anchors. restore must MINT the missing UUIDs before re-anchoring —

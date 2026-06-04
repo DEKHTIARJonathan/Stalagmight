@@ -1958,9 +1958,33 @@ impl Database {
                 ))
             })?;
 
+            let mut sanitized_offsets = 0usize;
             for offset_row in offset_rows {
-                let (section_id, offset_x, offset_y) = offset_row?;
+                let (section_id, mut offset_x, mut offset_y) = offset_row?;
+                // Sanitize non-finite (NaN/inf) section offsets at the load boundary,
+                // mirroring the per-shot sanitize above. section_offsets is the one
+                // geometry field with no finite guard, and resolve_offsets never
+                // adjusts a component ANCHOR's own offset, so a non-finite anchor/
+                // floating offset from a corrupt or hand-edited DB would survive the
+                // load and poison every world coordinate for that component. Coerce
+                // to 0.0 so the subsequent re-solve can re-derive a finite position.
+                if !offset_x.is_finite() || !offset_y.is_finite() {
+                    if !offset_x.is_finite() {
+                        offset_x = 0.0;
+                    }
+                    if !offset_y.is_finite() {
+                        offset_y = 0.0;
+                    }
+                    sanitized_offsets += 1;
+                }
                 section_offsets.insert(section_id, (offset_x, offset_y));
+            }
+            if sanitized_offsets > 0 {
+                tracing::warn!(
+                    sanitized_offsets,
+                    purpose = "block corruption at the source",
+                    "Replaced non-finite (NaN/inf) section offset with 0.0 on load"
+                );
             }
         }
 
