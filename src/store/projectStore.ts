@@ -450,6 +450,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       await invokeIpc('update_config', { config }, { purpose: 'persist user settings' });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
+      // The closure-adjustment sigmas feed the adjusted solve, so a settings change
+      // can change the adjusted geometry. Drop the cached set; the map re-fetches
+      // lazily (the backend memo is keyed on the config, so a stale config would
+      // otherwise keep rendering the old weighted solve until an unrelated edit).
+      set({ stationsAdjusted: null, surveyDataAdjusted: null });
       return emptyCommandResult(true, null);
     } catch (e) {
       return emptyCommandResult(false, String(e));

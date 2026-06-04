@@ -1522,9 +1522,13 @@ export default function MapCanvas() {
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
-  // store action guards against concurrent/duplicate fetches.
+  // store action guards against concurrent/duplicate fetches. `adjustedLoading`
+  // is a dependency so that when an in-flight solve is discarded because the
+  // project changed (it clears the flag without storing data), this effect
+  // re-runs and fetches the new project's geometry instead of staying on the
+  // measured fallback.
   useEffect(() => {
-    if (geometryMode === 'closureAdjusted' && project && !surveyDataAdjusted) {
+    if (geometryMode === 'closureAdjusted' && project && !surveyDataAdjusted && !adjustedLoading) {
       void loadAdjustedGeometry().then((ok) => {
         // On a genuine fetch failure, fall back to the measured view rather than
         // leaving the user stuck in a read-only view showing measured geometry.
@@ -1534,7 +1538,7 @@ export default function MapCanvas() {
         }
       });
     }
-  }, [geometryMode, project, surveyDataAdjusted, loadAdjustedGeometry, setGeometryMode, showToast, t]);
+  }, [geometryMode, project, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, setGeometryMode, showToast, t]);
 
   // The adjusted view is meaningless without an eligible closure: revert to
   // measured if the last adjustable closure is removed while it is active.
@@ -2300,9 +2304,10 @@ export default function MapCanvas() {
 
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback((options?: { snap?: boolean }) => {
-    if (!map.current || stations.length === 0) return;
+    // Frame the *active* (drawn) geometry — adjusted in the closure-adjusted view.
+    if (!map.current || activeStations.length === 0) return;
 
-    const coords = stations.map((s) => s.coordinates);
+    const coords = activeStations.map((s) => s.coordinates);
     const bounds = getBounds(coords);
 
     // Transform bounds to map coordinates
@@ -2322,7 +2327,7 @@ export default function MapCanvas() {
       maxZoom: 20,
       ...(options?.snap ? { animate: false } : {}),
     });
-  }, [stations, gpsOrigin, calcPadding]);
+  }, [activeStations, gpsOrigin, calcPadding]);
 
   // Fit to a specific section's bounds
   const fitToSection = useCallback(
@@ -2330,7 +2335,7 @@ export default function MapCanvas() {
       if (!map.current || !config) return;
 
       // Filter stations belonging to this section
-      const sectionStations = stations.filter((s) => s.station_ref.section_id === sectionId);
+      const sectionStations = activeStations.filter((s) => s.station_ref.section_id === sectionId);
 
       // Empty section: nothing to zoom to
       if (sectionStations.length === 0) {
@@ -2433,7 +2438,7 @@ export default function MapCanvas() {
         maxZoom: config.map.zoom_max ?? 22,
       });
     },
-    [stations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
+    [activeStations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)
@@ -2454,10 +2459,10 @@ export default function MapCanvas() {
       const toStationIndex = shotIndex + 1;
 
       // Find the two stations
-      const fromStation = stations.find(
+      const fromStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
       );
-      const toStation = stations.find(
+      const toStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
       );
 
@@ -2480,7 +2485,7 @@ export default function MapCanvas() {
         duration: animationDuration,
       });
     },
-    [project, stations, config, gpsOrigin]
+    [project, activeStations, config, gpsOrigin]
   );
 
   // Center on a station (used by DetailLink)
@@ -2490,7 +2495,7 @@ export default function MapCanvas() {
       if (!map.current || !config) return false;
 
       // Find the station
-      const station = stations.find(
+      const station = activeStations.find(
         (s) =>
           s.station_ref.section_id === stationRef.section_id &&
           s.station_ref.station_index === stationRef.station_index
@@ -2519,7 +2524,7 @@ export default function MapCanvas() {
 
       return true;
     },
-    [stations, config, gpsOrigin]
+    [activeStations, config, gpsOrigin]
   );
 
   // Center on a shot's midpoint (used by DetailLink)
@@ -2541,10 +2546,10 @@ export default function MapCanvas() {
       const toStationIndex = shotIndex + 1;
 
       // Find the two stations
-      const fromStation = stations.find(
+      const fromStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === fromStationIndex
       );
-      const toStation = stations.find(
+      const toStation = activeStations.find(
         (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === toStationIndex
       );
 
@@ -2576,7 +2581,7 @@ export default function MapCanvas() {
 
       return true;
     },
-    [project, stations, config, gpsOrigin]
+    [project, activeStations, config, gpsOrigin]
   );
 
   // Fit to bounds when requested (e.g., after import)
