@@ -642,3 +642,55 @@ describe('Grid Spacing', () => {
     });
   });
 });
+
+describe('Geometry Mode', () => {
+  beforeEach(() => {
+    useUIStore.setState({ geometryMode: 'measured' });
+    vi.clearAllMocks();
+  });
+
+  it('defaults to measured after reset', () => {
+    useUIStore.setState({ geometryMode: 'closureAdjusted' });
+    useUIStore.getState().resetDisplaySettings();
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+  });
+
+  it('setGeometryMode updates state', () => {
+    useUIStore.getState().setGeometryMode('closureAdjusted');
+    expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
+  });
+
+  it('setGeometryMode persists the mode via invoke', async () => {
+    useUIStore.getState().setGeometryMode('closureAdjusted');
+    await vi.waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+        key: 'geometryMode',
+        value: 'closureAdjusted',
+      });
+    });
+  });
+
+  it('setGeometryMode is a no-op when already in that mode', () => {
+    useUIStore.setState({ geometryMode: 'measured' });
+    vi.clearAllMocks();
+    useUIStore.getState().setGeometryMode('measured');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('loadDisplaySettings restores a persisted geometryMode ("remember last used")', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ geometryMode: 'closureAdjusted' });
+    await useUIStore.getState().loadDisplaySettings();
+    expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
+  });
+
+  it('loadDisplaySettings ignores an invalid persisted geometryMode', async () => {
+    useUIStore.setState({ geometryMode: 'measured' });
+    vi.mocked(invoke).mockResolvedValueOnce({ geometryMode: 'not-a-mode' });
+    await useUIStore.getState().loadDisplaySettings();
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+  });
+
+  it('geometryMode is NOT part of DISPLAY_DEFAULTS (telemetry registry contract)', () => {
+    expect('geometryMode' in DISPLAY_DEFAULTS).toBe(false);
+  });
+});
