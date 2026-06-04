@@ -8,6 +8,32 @@ use crate::persistence::Database;
 
 use super::AppState;
 
+/// Build a save-failure `CommandResult`, tagging filesystem permission
+/// denials with `PERMISSION_DENIED_CODE` so the frontend can surface
+/// folder-access guidance instead of a misleading message. macOS drops
+/// previously-granted folder access after OS/app updates, which otherwise
+/// reaches the user as a bogus "corrupted database"/raw-OS error.
+///
+/// `target` is the destination file. We only treat the failure as a
+/// permission problem when its parent directory still exists: a
+/// deleted/renamed save folder yields SQLite's same generic "unable to open
+/// database file", but that's a vanished-location error, not a denial, and
+/// should stay an ordinary failure rather than show Privacy & Security steps.
+fn save_failure(context: &str, target: &std::path::Path, err: &anyhow::Error) -> CommandResult {
+    let detail = format!("{context}: {err}");
+    let dir_present = target
+        .parent()
+        .is_none_or(|p| p.try_exists().unwrap_or(true));
+    if dir_present && crate::core::loading::is_permission_denied(err) {
+        CommandResult::failure(format!(
+            "{}: {detail}",
+            crate::core::loading::PERMISSION_DENIED_CODE
+        ))
+    } else {
+        CommandResult::failure(detail)
+    }
+}
+
 impl AppState {
     /// Resolve the project file path from a name and optional directory.
     /// Sanitizes the name and ensures .stalx extension.
@@ -431,7 +457,7 @@ impl AppState {
             Err(e) => {
                 // Clean up temp file on failure
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create save file: {e}"));
+                return save_failure("Failed to create save file", &save_path, &e);
             }
         };
 
@@ -444,7 +470,7 @@ impl AppState {
                 purpose = "persist edits safely",
                 "Save failed; temp file cleaned up"
             );
-            return CommandResult::failure(format!("Failed to save project: {e}"));
+            return save_failure("Failed to save project", &save_path, &e);
         }
 
         // Copy display settings to the new database
@@ -466,12 +492,13 @@ impl AppState {
         // This is safe: if rename fails, original file is untouched
         if let Err(e) = std::fs::rename(&temp_path, &save_path) {
             let _ = std::fs::remove_file(&temp_path);
+            let e = anyhow::Error::from(e);
             tracing::error!(
                 error = %e,
                 purpose = "persist edits safely",
                 "Failed to rename temp file to final destination"
             );
-            return CommandResult::failure(format!("Failed to finalize save: {e}"));
+            return save_failure("Failed to finalize save", &save_path, &e);
         }
 
         // Reopen the database at the final path
@@ -1006,14 +1033,14 @@ impl AppState {
             Ok(db) => db,
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create output file: {e}"));
+                return save_failure("Failed to create output file", &output_path, &e);
             }
         };
 
         if let Err(e) = db.save_project(&merged_project) {
             drop(db);
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to save merged project: {e}"));
+            return save_failure("Failed to save merged project", &output_path, &e);
         }
 
         // Close database before rename
@@ -1022,7 +1049,8 @@ impl AppState {
         // Atomically rename temp file to final destination
         if let Err(e) = std::fs::rename(&temp_path, &output_path) {
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to finalize save: {e}"));
+            let e = anyhow::Error::from(e);
+            return save_failure("Failed to finalize save", &output_path, &e);
         }
 
         tracing::info!(
@@ -1139,14 +1167,35 @@ impl AppState {
 
         // === PHASE 0: Opening database (5%) ===
         progress.start_phase(LoadingPhase::OpeningDatabase);
-        if !path.exists() {
-            early_return_err!(LoadError::not_found(&path.display().to_string()));
+        // `try_exists()` rather than `exists()`: a metadata-access denial
+        // (macOS folder permission) must surface guidance, not NOT_FOUND —
+        // `exists()` would collapse that error to `false`.
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                early_return_err!(LoadError::not_found(&path.display().to_string()))
+            }
+            Err(e) => {
+                let e = anyhow::Error::from(e);
+                if crate::core::loading::is_permission_denied(&e) {
+                    early_return_err!(LoadError::permission(
+                        e.to_string(),
+                        &path.display().to_string()
+                    ));
+                }
+                early_return_err!(LoadError::not_found(&path.display().to_string()));
+            }
         }
         // Local variable only - NO state mutation until Finalizing
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => {
                 let msg = e.to_string();
+                // A permission denial (e.g. macOS forgot folder access after an
+                // update) otherwise masquerades as corruption — check it first.
+                if crate::core::loading::is_permission_denied(&e) {
+                    early_return_err!(LoadError::permission(msg, &path.display().to_string()));
+                }
                 // Detect corruption-specific errors and return CORRUPT code
                 // so the frontend can offer recovery options
                 if msg.contains("integrity check failed") || msg.contains("corrupted") {

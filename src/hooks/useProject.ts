@@ -79,6 +79,9 @@ export function useProject() {
       }
 
       const result = await store.saveProject(finalPath);
+      // surfaceSaveFailure routes integrity blocks to Review & Repair and skips
+      // the generic error window for permission denials (saveProject already
+      // opened the folder-access guidance dialog for those).
       if (result && !result.success && result.error) {
         surfaceSaveFailure(result.error, openDialog);
       }

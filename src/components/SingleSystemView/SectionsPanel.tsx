@@ -19,17 +19,27 @@ interface SectionsPanelProps {
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, setSelection, clearSelection, hoveredSectionId, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore(
+  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       setSelection: s.setSelection,
       clearSelection: s.clearSelection,
       hoveredSectionId: s.hoveredSectionId,
+      hoveredShot: s.hoveredShot,
+      hoveredStation: s.hoveredStation,
       setHoveredSectionId: s.setHoveredSectionId,
       openDialog: s.openDialog,
       triggerZoomToSection: s.triggerZoomToSection,
     }))
   );
+
+  // The row to highlight comes from any of: an explicit section hover (panel row /
+  // DetailPanel section link), or — for map hovers — the section that owns the
+  // currently hovered shot or station. Deriving in the panel keeps the map-driven
+  // highlight out of `hoveredSectionId`, which is also consumed by the map's
+  // section-wide highlighter.
+  const effectiveHoveredSectionId: SectionId | null =
+    hoveredSectionId ?? hoveredShot?.sectionId ?? hoveredStation?.section_id ?? null;
 
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
@@ -50,6 +60,16 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       }
     };
   }, []);
+
+  // Scroll the hovered section's row into view when it's off-screen.
+  // block: 'nearest' is a no-op when the row is already visible, so this
+  // is silent for panel-internal hovers and only acts on external (map) hovers.
+  useEffect(() => {
+    if (effectiveHoveredSectionId === null) return;
+    const idx = sections.findIndex((s) => s.id === effectiveHoveredSectionId);
+    if (idx < 0) return;
+    optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+  }, [effectiveHoveredSectionId, sections]);
 
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
@@ -241,7 +261,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 section={section}
                 index={index}
                 isSelected={selection?.type === 'section' && selection.sectionId === section.id}
-                isHovered={hoveredSectionId === section.id}
+                isHovered={effectiveHoveredSectionId === section.id}
                 isFocused={focusedIndex === index}
                 isDefaultFocus={focusedIndex === -1 && index === 0}
                 precision={precision.length}
@@ -382,10 +402,10 @@ const SectionRow = memo(function SectionRow({
       tabIndex={isFocused ? 0 : (isDefaultFocus ? 0 : -1)}
       data-testid={`section-row-${section.id}`}
       title={t('sections.actions.zoom')}
-      className={`px-3 py-2 cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
+      className={`px-3 py-2 border-l-2 border-transparent cursor-pointer group transition-colors outline-none focus:ring-2 focus:ring-accent focus:ring-inset ${
         isSelected
           ? 'bg-accent-20 ring-2 ring-accent ring-inset'
-          : (isHovered ? 'bg-accent-10' : 'hover:bg-accent-10')
+          : (isHovered ? 'bg-accent-10 border-accent' : 'hover:bg-accent-10')
       }`}
       onMouseDown={(e) => onMouseDown(section, e)}
       onDoubleClick={(e) => onDoubleClick(section, e)}

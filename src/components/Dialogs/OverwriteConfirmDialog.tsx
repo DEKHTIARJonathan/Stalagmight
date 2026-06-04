@@ -5,6 +5,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
+import { isPermissionError } from '../../utils/saveErrors';
 
 export default function OverwriteConfirmDialog() {
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore();
@@ -25,6 +26,12 @@ export default function OverwriteConfirmDialog() {
     try {
       const result = await saveProject(path);
       if (result && !result.success && result.error) {
+        // On a permission error, saveProject has already opened the folder-access
+        // guidance dialog; don't close it, stack a generic error, or record the
+        // overwrite as completed (it was superseded by the guidance dialog).
+        if (isPermissionError(result.error)) {
+          return;
+        }
         trackDialogComplete('confirm-overwrite');
         closeDialog();
         surfaceSaveFailure(result.error, showDialog);

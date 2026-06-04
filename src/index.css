@@ -939,6 +939,9 @@ html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
+  /* Prevents WKWebView rubber-band window scroll on macOS (#43) */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {

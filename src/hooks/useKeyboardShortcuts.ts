@@ -695,6 +695,9 @@ export function useKeyboardShortcuts() {
 
                   const store = useProjectStore.getState();
                   const result = await store.saveProject(finalPath);
+                  // surfaceSaveFailure routes integrity blocks to Review & Repair
+                  // and skips the generic error window for permission denials
+                  // (saveProject already opened the folder-access guidance dialog).
                   if (result && !result.success) {
                     surfaceSaveFailure(result.error, openDialog);
                   }
