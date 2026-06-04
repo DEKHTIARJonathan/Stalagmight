@@ -3,6 +3,7 @@ import { useUIStore, type Selection } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
+import { useActiveStations } from './useActiveStations';
 import { getErrorMessage } from '../utils/ipc';
 import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
 import { setSource } from '../utils/telemetry';
@@ -55,6 +56,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest));
 
   const { stations, project, checkMergeConnectivity } = useProjectStore();
+  // Coordinate lookups for read-only inspection (the measure tool) follow the
+  // active geometry so distances match what's drawn; editing/comment paths below
+  // keep using the measured `stations`.
+  const activeStations = useActiveStations();
 
   const [isCheckingConnectivity, setIsCheckingConnectivity] = useState(false);
   // Ref-based guard prevents re-entrancy from fast successive clicks
@@ -65,12 +70,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Get station coordinates by ref
   const getStationCoordinates = useCallback(
     (ref: StationRef): Coordinates | null => {
-      const station = stations.find(
+      const station = activeStations.find(
         (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
       );
       return station?.coordinates ?? null;
     },
-    [stations]
+    [activeStations]
   );
 
   // Calculate distance between two points

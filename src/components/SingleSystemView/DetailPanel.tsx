@@ -14,6 +14,7 @@ import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 
 export default function DetailPanel() {
@@ -317,6 +318,15 @@ function StationDetail({ station }: { station: Station }) {
   const precision = useDecimalPrecision();
   // Closure-adjusted view is read-only: disable mutation controls (edits happen in measured view).
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // Show the active geometry's coordinates so inspection matches the map; falls
+  // back to the passed (measured) station before the adjusted set is fetched.
+  const activeStations = useActiveStations();
+  const displayStation =
+    activeStations.find(
+      (s) =>
+        s.station_ref.section_id === station.station_ref.section_id &&
+        s.station_ref.station_index === station.station_ref.station_index
+    ) ?? station;
   const [unmergeTargetKey, setUnmergeTargetKey] = useState<string | null>(null);
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
@@ -458,9 +468,9 @@ function StationDetail({ station }: { station: Station }) {
             value={formatStationId(sectionId, stationPosition)}
           />
           <DetailRow label={t('detailPanel.labels.section')} value={section?.name ?? t('sections.defaultName', { id: sectionId })} />
-          <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(station.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(station.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
-          <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(station.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
+          <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(displayStation.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
 
           {station.comment && (
             <div className="pt-2 border-t border-border">

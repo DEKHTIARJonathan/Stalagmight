@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotUpdates, type Station } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
+import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
@@ -34,6 +35,9 @@ export default function DataTable({ sections }: DataTableProps) {
   const internalSelectionRef = useRef(false);
 
   const { updateShot, warnings, isShotFrozen, stations, updateStationComment } = useProjectStore();
+  // Coordinate columns follow the active geometry (adjusted in the read-only
+  // closure-adjusted view); `stations` stays measured for counts/editing.
+  const activeStations = useActiveStations();
   // Closure-adjusted view is read-only: cell editing and the reference toggle are disabled.
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const {
@@ -447,10 +451,12 @@ export default function DataTable({ sections }: DataTableProps) {
 
   const sectionStations = useMemo((): StationRow[] => {
     if (tableView !== 'stations' || selectedSectionId === null) return [];
-    return stations
+    // X/Y/Z columns follow the active geometry so they match the map; the row
+    // refs/comments are unchanged, so comment editing still targets measured data.
+    return activeStations
       .filter((s) => s.station_ref.section_id === selectedSectionId)
       .map((s) => ({ ...s, id: s.station_ref.station_index }));
-  }, [stations, selectedSectionId, tableView]);
+  }, [activeStations, selectedSectionId, tableView]);
 
   const highlightedStationIndex = useMemo((): number | null => {
     if (tableView !== 'stations') return null;
