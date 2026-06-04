@@ -287,12 +287,20 @@ impl AppState {
             }
         }
 
-        // Miss: clone the project out and solve without holding the project lock
-        // (the solve is CPU-heavy and runs on a blocking thread). Re-read the
-        // version from the clone so the cache key matches exactly the data solved.
-        // The clone is handed to the by-value solver as its working copy so the
-        // solve doesn't clone the whole project a second time.
-        let project = self.get_project_state()?;
+        // Miss: clone the project out, then solve without holding any lock (the
+        // solve is CPU-heavy and runs on a blocking thread). The clone is taken
+        // under `command_lock` so it is serialized with `execute()`/undo/redo:
+        // those hold `command_lock` across both the mutation *and* the
+        // `reconcile_geometry()` epilogue, which repairs derived offsets without
+        // bumping `modified_at`. Cloning outside that lock could capture a project
+        // after the mutation but before reconcile and then cache that partially
+        // reconciled solve under the final version. Re-read the version from the
+        // clone so the cache key matches exactly the data solved, and hand the
+        // clone to the by-value solver so it isn't cloned a second time.
+        let project = {
+            let _cmd_guard = self.command_lock.lock().ok()?;
+            self.get_project_state()?
+        };
         let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
         let stations = project.into_adjusted_station_coordinates(&config.closure_adjustment);
 

@@ -462,7 +462,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   setConfig: (config: Config) => {
-    set({ config });
+    // Replacing the config (e.g. Settings ▸ Advanced "Reload from disk") can change
+    // the closure-adjustment sigmas, so drop the cached adjusted geometry here too —
+    // this is the shared config-replacement path that `updateConfig` doesn't use.
+    set({ config, stationsAdjusted: null, surveyDataAdjusted: null });
   },
 
   // Loading state actions
