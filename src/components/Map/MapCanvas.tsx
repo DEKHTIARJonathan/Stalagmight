@@ -7,6 +7,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { selectActiveStations } from '../../store/geometrySelectors';
 import { isMutatingTool } from '../../utils/toolUtils';
+import { hasEligibleClosures } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
   getEffectiveShowReferenceShots,
@@ -1535,10 +1536,10 @@ export default function MapCanvas() {
     }
   }, [geometryMode, project, surveyDataAdjusted, loadAdjustedGeometry, setGeometryMode, showToast, t]);
 
-  // The adjusted view is meaningless without closures: revert to measured if the
-  // last closure is removed while it is active.
+  // The adjusted view is meaningless without an eligible closure: revert to
+  // measured if the last adjustable closure is removed while it is active.
   useEffect(() => {
-    if (geometryMode === 'closureAdjusted' && project && project.loop_closures.length === 0) {
+    if (geometryMode === 'closureAdjusted' && project && !hasEligibleClosures(project.loop_closures)) {
       setGeometryMode('measured');
     }
   }, [geometryMode, project, setGeometryMode]);

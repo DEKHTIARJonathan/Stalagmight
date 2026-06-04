@@ -4,6 +4,7 @@ import { invokeIpc } from '../utils/ipc';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
+import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
 import { useGlobalViewStore } from './globalViewStore';
 import type {
@@ -1389,7 +1390,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     // No eligible closures → the adjusted view is identical to measured; reuse
     // the measured set directly and skip the backend round-trip.
-    if (project.loop_closures.length === 0) {
+    if (!hasEligibleClosures(project.loop_closures)) {
       set({ stationsAdjusted: stations, surveyDataAdjusted: surveyData });
       return true;
     }

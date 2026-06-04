@@ -11,7 +11,8 @@ command. The measured survey geometry (raw shots) is always the source of truth 
 - The **Display** dropdown has a *Geometry* control with two modes: **Measured** (raw) and
   **Closure-adjusted** (loop-closure-corrected). The mode is persisted per the display
   settings ("remember last used"); default is Measured. The adjusted option is disabled when
-  the project has no loop closures.
+  the project has no closures eligible for the solve (`Batch` / `LeastSquaresWeighted`); `Move`
+  closures are already coincident, so a project with only those shows the option disabled.
 - Closure-adjusted coordinates are derived by running the weighted least-squares solve on a
   **throwaway clone** of the project (`Project::compute_adjusted_station_coordinates`) and
   returning only the resulting coordinates — the live project's shots/offsets are untouched.

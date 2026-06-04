@@ -7,6 +7,7 @@ import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon, EyeIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
+import { hasEligibleClosures } from '../../utils/closures';
 
 interface DisplayOption {
   key: DisplayToggleKey;
@@ -96,9 +97,10 @@ export default function DisplayMenu() {
     setGeometryMode: s.setGeometryMode,
   })));
 
-  // The closure-adjusted view only differs from measured when the project has
-  // loop closures; otherwise the option is disabled (it would be identical).
-  const hasClosures = useProjectStore((s) => (s.project?.loop_closures.length ?? 0) > 0);
+  // The closure-adjusted view only differs from measured when the project has at
+  // least one closure eligible for the solve (Batch / LeastSquaresWeighted);
+  // otherwise the option is disabled (it would render identical geometry).
+  const hasClosures = useProjectStore((s) => hasEligibleClosures(s.project?.loop_closures ?? []));
 
   const toggleValues: Record<DisplayToggleKey, boolean> = {
     showStations,
