@@ -5292,35 +5292,15 @@ impl Project {
         )
     }
 
-    /// Compute station coordinates with loop-closure adjustment applied as a
-    /// **non-destructive derived view**.
+    /// Plan which component anchors to feed the closure-adjustment solve.
     ///
-    /// The measured project is never mutated: the proven adjustment runs on a
-    /// throwaway clone and only the resulting coordinates are returned. The output
-    /// is identical to the geometry users saw after the old "Run Adjustment" action,
-    /// but it is recomputed live from intact measured data — so adding/removing
-    /// closures always re-solves accurately instead of compounding on already-adjusted
-    /// geometry. Each disconnected component is solved independently, anchored on a
-    /// zero datum when present and otherwise on a deterministic default anchor.
-    pub fn compute_adjusted_station_coordinates(
-        &self,
-        config: &ClosureAdjustmentConfig,
-    ) -> Vec<Station> {
-        // Fast path: nothing to adjust → adjusted == measured.
-        if !self
-            .loop_closures
-            .iter()
-            .any(|lc| Self::closure_is_eligible(lc.strategy))
-        {
-            return self.compute_station_coordinates();
-        }
-
-        let mut working = self.clone();
-
-        // Solve each connected component that contains an eligible closure. The
-        // component is derived from the *measured* topology (merges/closures), which
-        // `adjust_loop_closures` does not change, so detecting it on `self` is sound
-        // even as `working` is progressively adjusted.
+    /// Returns one anchor per connected component that contains an eligible
+    /// closure: a zero datum in the component when present, otherwise a
+    /// deterministic default anchor (see [`Self::default_anchor_for_component`]).
+    /// Computed from the *measured* topology so it can run once up front, before
+    /// any adjustment mutates the working copy.
+    fn plan_adjustment_anchors(&self) -> Vec<StationRef> {
+        let mut anchors = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
         for section in &self.sections {
             if visited.contains(&section.id) {
@@ -5349,15 +5329,72 @@ impl Project {
                 .and_then(|zd| self.resolve_key(&zd.station_ref))
                 .or_else(|| self.default_anchor_for_component(&component));
 
-            let Some(anchor) = anchor else {
-                continue;
-            };
+            if let Some(anchor) = anchor {
+                anchors.push(anchor);
+            }
+        }
+        anchors
+    }
 
-            if let Err(e) = working.adjust_loop_closures(
-                anchor,
-                ClosureStrategy::LeastSquaresWeighted,
-                config,
-            ) {
+    /// Compute station coordinates with loop-closure adjustment applied as a
+    /// **non-destructive derived view**.
+    ///
+    /// The measured project is never mutated: the proven adjustment runs on a
+    /// throwaway clone and only the resulting coordinates are returned. The output
+    /// is identical to the geometry users saw after the old "Run Adjustment" action,
+    /// but it is recomputed live from intact measured data — so adding/removing
+    /// closures always re-solves accurately instead of compounding on already-adjusted
+    /// geometry. Each disconnected component is solved independently, anchored on a
+    /// zero datum when present and otherwise on a deterministic default anchor.
+    pub fn compute_adjusted_station_coordinates(
+        &self,
+        config: &ClosureAdjustmentConfig,
+    ) -> Vec<Station> {
+        // Fast path: nothing to adjust → adjusted == measured (skip the clone).
+        if !self
+            .loop_closures
+            .iter()
+            .any(|lc| Self::closure_is_eligible(lc.strategy))
+        {
+            return self.compute_station_coordinates();
+        }
+
+        self.clone().into_adjusted_station_coordinates(config)
+    }
+
+    /// By-value counterpart of [`Self::compute_adjusted_station_coordinates`] that
+    /// consumes `self` as the working copy, so a caller already holding an owned
+    /// clone (the IPC path in `AppState::get_adjusted_stations`) avoids a second
+    /// full-project clone.
+    ///
+    /// The adjustment plan (which component anchors on what) is derived up front
+    /// from the pristine measured topology, before any mutation. Each component is
+    /// then solved on the working copy and **rolled back to measured on failure**:
+    /// `adjust_loop_closures` mutates in place and can return `Err` *after* the
+    /// solve has already moved stations (e.g. the post-solve zero-datum-fixed
+    /// check), so without the rollback a failed component would render
+    /// partially-adjusted geometry instead of the measured fallback the warning
+    /// promises.
+    ///
+    /// Cost: the rollback snapshots the working copy once per eligible component,
+    /// so a cache-miss solve clones the project `O(eligible components)` times.
+    /// In practice that is one or two clones (most surveys are a single connected
+    /// component), it only happens on a cache miss, and `adjust_least_squares`
+    /// rewrites `section.shots` in place — so a cheaper offsets-only snapshot would
+    /// be unsound. Revisit with a scoped {sections, offsets, closures} snapshot
+    /// only if profiling large surveys shows the clones matter.
+    pub fn into_adjusted_station_coordinates(
+        self,
+        config: &ClosureAdjustmentConfig,
+    ) -> Vec<Station> {
+        let anchors = self.plan_adjustment_anchors();
+        let mut working = self;
+        for anchor in anchors {
+            let snapshot = working.clone();
+            if let Err(e) =
+                working.adjust_loop_closures(anchor, ClosureStrategy::LeastSquaresWeighted, config)
+            {
+                working = snapshot;
                 warn!(
                     error = %e,
                     anchor = ?anchor,
@@ -5366,7 +5403,6 @@ impl Project {
                 );
             }
         }
-
         working.compute_station_coordinates()
     }
 

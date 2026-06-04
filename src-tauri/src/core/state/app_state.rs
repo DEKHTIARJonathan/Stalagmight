@@ -248,8 +248,8 @@ impl AppState {
 
     /// Compute (or return cached) closure-adjusted station coordinates for the
     /// current project. Non-destructive: the measured project is never mutated —
-    /// the adjustment runs on a throwaway clone (see
-    /// [`Project::compute_adjusted_station_coordinates`]) and only the resulting
+    /// the adjustment runs on the project clone this method already takes (see
+    /// [`Project::into_adjusted_station_coordinates`]) and only the resulting
     /// coordinates are returned.
     ///
     /// The result is memoized in a transient cache keyed on the project's
@@ -290,9 +290,11 @@ impl AppState {
         // Miss: clone the project out and solve without holding the project lock
         // (the solve is CPU-heavy and runs on a blocking thread). Re-read the
         // version from the clone so the cache key matches exactly the data solved.
+        // The clone is handed to the by-value solver as its working copy so the
+        // solve doesn't clone the whole project a second time.
         let project = self.get_project_state()?;
         let solved_version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-        let stations = project.compute_adjusted_station_coordinates(&config.closure_adjustment);
+        let stations = project.into_adjusted_station_coordinates(&config.closure_adjustment);
 
         if let Ok(mut cache) = self.adjusted_cache.lock() {
             *cache = Some(AdjustedStationsCache {

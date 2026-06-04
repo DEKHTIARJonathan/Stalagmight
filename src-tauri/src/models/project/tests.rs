@@ -3962,6 +3962,172 @@ fn compute_adjusted_equals_measured_without_closures() {
     }
 }
 
+#[test]
+fn compute_adjusted_closes_datumless_loop_deterministically() {
+    // Two paths from a shared (merged) origin to a near-shared endpoint joined by
+    // a closure, but with NO zero datum — so the solve anchors each component on
+    // the deterministic default anchor (`default_anchor_for_component`) instead.
+    let mut project = Project::new("DatumlessLoop".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.2, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(a, 2),
+            StationRef::new(b, 2),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+
+    // Precondition: this exercises the datum-less anchor path.
+    assert!(project.zero_datums.is_empty());
+
+    let config = ClosureAdjustmentConfig::default();
+    let shots_before = shot_geometry(&project);
+    let adjusted1 = project.compute_adjusted_station_coordinates(&config);
+    let adjusted2 = project.compute_adjusted_station_coordinates(&config);
+
+    // Non-destructive: deriving the view doesn't rewrite measured shots.
+    assert_eq!(shots_before, shot_geometry(&project));
+
+    // Deterministic across solves: the lex-min default anchor fixes a stable gauge.
+    assert_eq!(adjusted1.len(), adjusted2.len());
+    for (s1, s2) in adjusted1.iter().zip(adjusted2.iter()) {
+        assert_eq!(s1.station_ref, s2.station_ref);
+        assert!((s1.coordinates.x - s2.coordinates.x).abs() < 1e-9);
+        assert!((s1.coordinates.y - s2.coordinates.y).abs() < 1e-9);
+    }
+
+    // The loop still closes without a datum (only the absolute translation is free).
+    let adj_a2 = station_coords(&adjusted1, StationRef::new(a, 2));
+    let adj_b2 = station_coords(&adjusted1, StationRef::new(b, 2));
+    let misclosure = ((adj_a2.x - adj_b2.x).powi(2) + (adj_a2.y - adj_b2.y).powi(2)).sqrt();
+    assert!(
+        misclosure < 1e-3,
+        "datum-less adjusted loop should close, got {misclosure}"
+    );
+}
+
+/// A component whose adjustment fails must fall back to *measured* geometry while
+/// a sibling component is still adjusted, and the measured project must be left
+/// intact. This guards the per-component error handling in
+/// `into_adjusted_station_coordinates`: warn-and-continue (one component's
+/// failure does not abort the whole solve) plus the snapshot/restore that keeps
+/// a failed component on measured geometry rather than leaking a partial solve.
+///
+/// The failure is forced by injecting a second zero datum into one component's
+/// constraint group (bypassing the single-datum-per-component API guard), which
+/// makes `adjust_loop_closures` return `Err`.
+#[test]
+fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
+    // Helper: a misclosing two-section loop (origin merged, ~0.2 m open at the far end).
+    fn looped(project: &mut Project) -> (SectionId, SectionId) {
+        let x = project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+        let y = project
+            .add_section(SectionData {
+                shots: vec![
+                    shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                    shot(90.0, 90.0, 10.2, 0.0, 0.0),
+                ],
+                ..Default::default()
+            })
+            .id;
+        project
+            .merge_stations(StationRef::new(x, 0), StationRef::new(y, 0))
+            .unwrap();
+        project
+            .create_loop_closure(
+                StationRef::new(x, 2),
+                StationRef::new(y, 2),
+                ClosureStrategy::Batch,
+            )
+            .unwrap();
+        (x, y)
+    }
+
+    let mut project = Project::new("MixedComponents".to_string(), None);
+    // Component 1 — will FAIL (two datums forced into the origin constraint group).
+    let (a, b) = looped(&mut project);
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    let dup_key = project.key_for_ref(StationRef::new(b, 0)).unwrap();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: dup_key,
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+    // Component 2 — disconnected from the first, with a single datum; SUCCEEDS.
+    let (c, d) = looped(&mut project);
+    project
+        .set_zero_datum(StationRef::new(c, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+
+    let config = ClosureAdjustmentConfig::default();
+    let shots_before = shot_geometry(&project);
+    let measured = project.compute_station_coordinates();
+    let adjusted = project.compute_adjusted_station_coordinates(&config);
+
+    // Non-destructive even though one component errored mid-solve.
+    assert_eq!(shots_before, shot_geometry(&project));
+
+    // Failed component (a/b): every station identical to measured (clean fallback,
+    // no partial adjustment leaked).
+    for sr in [
+        StationRef::new(a, 1),
+        StationRef::new(a, 2),
+        StationRef::new(b, 1),
+        StationRef::new(b, 2),
+    ] {
+        let m = station_coords(&measured, sr);
+        let adj = station_coords(&adjusted, sr);
+        assert!(
+            (m.x - adj.x).abs() < 1e-9 && (m.y - adj.y).abs() < 1e-9,
+            "failed component station {sr:?} should stay on measured geometry"
+        );
+    }
+    // The failed component's loop is therefore still open.
+    let m_a2 = station_coords(&adjusted, StationRef::new(a, 2));
+    let m_b2 = station_coords(&adjusted, StationRef::new(b, 2));
+    assert!(
+        ((m_a2.x - m_b2.x).powi(2) + (m_a2.y - m_b2.y).powi(2)).sqrt() > 0.1,
+        "failed component loop should remain open (measured)"
+    );
+
+    // Sibling component (c/d) was still adjusted: its loop closes.
+    let adj_c2 = station_coords(&adjusted, StationRef::new(c, 2));
+    let adj_d2 = station_coords(&adjusted, StationRef::new(d, 2));
+    assert!(
+        ((adj_c2.x - adj_d2.x).powi(2) + (adj_c2.y - adj_d2.y).powi(2)).sqrt() < 1e-3,
+        "sibling component should still be adjusted despite the other's failure"
+    );
+}
+
 // ── Frozen shot tests ─────────────────────────────────────────────
 
 #[test]
