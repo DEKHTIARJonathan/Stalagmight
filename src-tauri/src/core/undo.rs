@@ -71,6 +71,11 @@ pub enum UndoData {
         shot_data: ShotData,
         /// Position in the section's shot list (for re-insertion)
         position: usize,
+        /// The deleted shot's stable collaboration UUID, so undo restores the
+        /// same identity (cross-references and Ariane matching anchor on it)
+        /// rather than minting a fresh one. `None` for legacy persisted entries.
+        #[serde(default)]
+        uuid: Option<String>,
     },
 
     /// Snapshot of a newly created shot (for CreateShot undo/redo ID preservation)
@@ -86,6 +91,21 @@ pub enum UndoData {
         /// Undo of CreateShot (delete) uses the inverse shift automatically via remove_shot.
         #[serde(default)]
         station_shift_from: u32,
+        /// The original command's anchor shot. Redo re-runs the SAME
+        /// `insert_shot_after`/`insert_shot_before` (with `shot_id` forced) so the
+        /// forward and redo paths share one code path and can't drift apart. Both
+        /// `None` means the shot was appended.
+        #[serde(default)]
+        after_shot_id: Option<ShotId>,
+        #[serde(default)]
+        before_shot_id: Option<ShotId>,
+        /// The shot's stable collaboration UUID at creation. Redo restores it via
+        /// `Shot::with_uuid` so the recreated shot keeps the same identity that
+        /// cross-references (`AfterShot(uuid)`) and Ariane matching anchor on.
+        /// `None` for legacy persisted entries written before this field existed
+        /// (redo then mints a fresh UUID, the pre-fix behavior).
+        #[serde(default)]
+        uuid: Option<String>,
     },
 
     /// Merge info for unmerging stations
@@ -866,6 +886,7 @@ mod tests {
                 shot_id: 100,
                 shot_data,
                 position: 2,
+                uuid: None,
             },
         );
 
@@ -875,6 +896,7 @@ mod tests {
             shot_id,
             shot_data: stored_data,
             position,
+            ..
         } = data
         {
             assert_eq!(*section_id, 1);
@@ -1313,6 +1335,7 @@ mod tests {
                         ..Default::default()
                     },
                     position: 0,
+                    uuid: None,
                 },
                 timestamp: None,
             },
@@ -1335,6 +1358,9 @@ mod tests {
                     },
                     position: 0,
                     station_shift_from: 1,
+                    after_shot_id: None,
+                    before_shot_id: None,
+                    uuid: None,
                 },
                 timestamp: None,
             },
@@ -1406,8 +1432,8 @@ mod tests {
     fn test_undo_data_closure_info_serialization() {
         let closure = LoopClosure {
             id: 1,
-            station_a: StationRef::new(1, 0),
-            station_b: StationRef::new(2, 3),
+            station_a: StationRef::new(1, 0).into(),
+            station_b: StationRef::new(2, 3).into(),
             path_length: 45.5,
             misclosure_distance: 1.2,
             error_percentage: 2.6,
@@ -1440,8 +1466,10 @@ mod tests {
         // Verify roundtrip
         match &restored.undo_data {
             UndoData::ClosureInfo { closure: restored_closure } => {
-                assert_eq!(restored_closure.station_a, StationRef::new(1, 0));
-                assert_eq!(restored_closure.station_b, StationRef::new(2, 3));
+                // Pure serialization roundtrip (no project / no reanchor): the
+                // transitional Index anchors survive verbatim, so compare keys directly.
+                assert_eq!(restored_closure.station_a, StationRef::new(1, 0).into());
+                assert_eq!(restored_closure.station_b, StationRef::new(2, 3).into());
                 assert!((restored_closure.path_length - 45.5).abs() < 1e-6);
                 assert!((restored_closure.misclosure_distance - 1.2).abs() < 1e-6);
                 assert!((restored_closure.error_percentage - 2.6).abs() < 1e-6);

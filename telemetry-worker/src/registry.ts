@@ -343,6 +343,7 @@ export const EVENT_NAMES: readonly string[] = [
   // Collaboration-mode IPC commands (Ariane sibling .tml workflow).
   'command.set_collab_enabled',
   'command.set_collab_enabled_for_path',
+  'command.set_project_name_for_path',
   'command.get_collab_state',
   'command.detect_collab_changes',
   'command.apply_collab_changes',
@@ -353,4 +354,11 @@ export const EVENT_NAMES: readonly string[] = [
   'dwell.dialog.collab-review',
   // SVG stick-map export preview command.
   'command.preview_svg_export',
+  // Folder-access permission guidance dialog (action/cancel/dwell trio).
+  'action.dialog.save-permission',
+  'dialog-cancel.save-permission',
+  'dwell.dialog.save-permission',
+  // Structural-integrity IPC commands (check + repair).
+  'command.check_project_integrity',
+  'command.repair_project_integrity',
 ];

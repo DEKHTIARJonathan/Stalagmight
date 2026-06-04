@@ -21,7 +21,7 @@ use stalagmight_lib::config::{
     PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
     StationConfig, ThemeMode, UnitsConfig, ValidationConfig,
 };
-use stalagmight_lib::core::command::{CommandResult, CommentHolder, ValidationWarning, WarningSeverity};
+use stalagmight_lib::core::command::{CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning, WarningSeverity};
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
 };
@@ -31,10 +31,10 @@ use stalagmight_lib::export::{
 use stalagmight_lib::models::{
     ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
     ConnectivityResult, Coordinates, DeleteShotImpact, FrozenShotRef, GpsBounds, GpsCoordinates,
-    ImportPlacement, ExistingShotUpdate, ImportSectionConfig, LoopClosure, Project, ProjectMetadata,
+    ImportPlacement, ExistingShotUpdate, ImportSectionConfig, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, Section, SectionData, SectionRelationships, SectionStats,
-    SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMerge,
-    StationPair, StationRef, SurveyDirection, ZeroDatum,
+    SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire,
+    StationPair, StationRef, SurveyDirection, ZeroDatumWire, LoopClosureWire,
 };
 use stalagmight_lib::core::reconcile::{
     AddedSection, AddedShot, CollabChangeSet, CollabFieldChange, CollabWarning, EditedShot,
@@ -71,6 +71,8 @@ fn main() {
     // Core command/result types
     export::<CommandResult>(&out_dir);
     export::<CommentHolder>(&out_dir);
+    export::<IntegrityRepairResult>(&out_dir);
+    export::<IntegrityCheckResult>(&out_dir);
     export::<ValidationWarning>(&out_dir);
     export::<WarningSeverity>(&out_dir);
 
@@ -110,9 +112,9 @@ fn main() {
     export::<ShotUpdates>(&out_dir);
     export::<Station>(&out_dir);
     export::<StationRef>(&out_dir);
-    export::<StationMerge>(&out_dir);
-    export::<ZeroDatum>(&out_dir);
-    export::<LoopClosure>(&out_dir);
+    export::<StationMergeWire>(&out_dir);
+    export::<ZeroDatumWire>(&out_dir);
+    export::<LoopClosureWire>(&out_dir);
     export::<ClosureRef>(&out_dir);
     export::<ClosureStrategy>(&out_dir);
     export::<Coordinates>(&out_dir);
@@ -243,6 +245,8 @@ fn main() {
     let export_list = [
         "CommandResult",
         "CommentHolder",
+        "IntegrityRepairResult",
+        "IntegrityCheckResult",
         "ValidationWarning",
         "WarningSeverity",
         // Collaboration mode
@@ -394,4 +398,59 @@ fn main() {
         .expect("ipc types directory should have a parent")
         .join("ipc.generated.ts");
     fs::write(generated_path, generated).expect("Failed to write ipc.generated.ts");
+
+    // `Project`'s station_merges/zero_datums/loop_closures fields are declared
+    // with `#[ts(type = "Array<...>")]` so the TS shape stays the positional wire
+    // form while the in-memory fields are StationKey-based. ts-rs 7 treats a
+    // `type` override as an opaque string and emits no import for it, so inject
+    // the imports the interface body references. The wire structs export those
+    // names (via `#[ts(rename = ...)]`) to `bindings/<Name>.ts`, flattened to
+    // `ipc/<Name>.ts` here, so a sibling `./<Name>` import resolves.
+    ensure_imports(
+        &out_dir.join("Project.ts"),
+        &[
+            ("StationMerge", "./StationMerge"),
+            ("ZeroDatum", "./ZeroDatum"),
+            ("LoopClosure", "./LoopClosure"),
+        ],
+    );
+}
+
+/// Ensure each `(name, path)` is imported in `file`. Missing imports are added
+/// and ALL `import type` lines are re-sorted alphabetically to match ts-rs's own
+/// deterministic ordering (so the output is byte-identical regardless of which
+/// imports ts-rs emitted vs. which we injected).
+fn ensure_imports(file: &Path, imports: &[(&str, &str)]) {
+    let content = fs::read_to_string(file).expect("Project.ts should exist after export");
+    let lines: Vec<&str> = content.split('\n').collect();
+
+    let header: Vec<String> = lines
+        .iter()
+        .take_while(|l| l.starts_with("//"))
+        .map(|s| s.to_string())
+        .collect();
+    let mut import_lines: Vec<String> = lines
+        .iter()
+        .filter(|l| l.starts_with("import type "))
+        .map(|s| s.to_string())
+        .collect();
+    let body: Vec<String> = lines
+        .iter()
+        .skip_while(|l| l.starts_with("//"))
+        .filter(|l| !l.starts_with("import type "))
+        .map(|s| s.to_string())
+        .collect();
+
+    for (name, path) in imports {
+        let line = format!("import type {{ {name} }} from \"{path}\";");
+        if !import_lines.iter().any(|l| l.contains(&format!("{{ {name} }}"))) {
+            import_lines.push(line);
+        }
+    }
+    import_lines.sort();
+
+    let mut out = header;
+    out.extend(import_lines);
+    out.extend(body);
+    fs::write(file, out.join("\n")).expect("Failed to rewrite Project.ts imports");
 }

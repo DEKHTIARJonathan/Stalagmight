@@ -803,6 +803,7 @@ fn empty_impact(sid: SectionId, shot_index: u32) -> DeleteShotImpact {
         removed_closures: Vec::new(),
         replacement_merges: Vec::new(),
         replacement_closure_updates: Vec::new(),
+        closure_to_merge: Vec::new(),
         merge_rewire_skipped: false,
         closure_rewire_skipped: false,
         shift_blocked: false,
@@ -1166,7 +1167,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = project_with(three());
         p.zero_datums.push(ZeroDatum {
-            station_ref: StationRef::new(p.sections[0].id, 2),
+            station_ref: StationRef::new(p.sections[0].id, 2).into(),
             gps: GpsCoordinates::new(20.25, -87.5, 12.0).unwrap(),
         });
         let base = baseline_for(p, dir.path());
@@ -1207,8 +1208,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 2),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 2).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1272,8 +1273,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 0),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 0).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1305,8 +1306,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 0),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 0).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1345,8 +1346,8 @@ mod tests {
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
-            station_a: StationRef::new(root_id, 1),
-            station_b: StationRef::new(child_id, 0),
+            station_a: StationRef::new(root_id, 1).into(),
+            station_b: StationRef::new(child_id, 0).into(),
             merged_at: chrono::Utc::now(),
         });
         let base = baseline_for(p, dir.path());
@@ -1407,10 +1408,56 @@ mod tests {
         let mut p = project_with(three());
         p.sections[0].shots[1].comment = Some("broken tape".into());
         p.station_comments
-            .insert(StationRef::new(0, 2), "junction with main".into());
+            .insert(StationRef::new(0, 2).into(), "junction with main".into());
         p.station_comments
-            .insert(StationRef::new(0, 3), "beware silt".into());
+            .insert(StationRef::new(0, 3).into(), "beware silt".into());
         p
+    }
+
+    #[test]
+    fn apply_changeset_skips_non_finite_edit_and_add() {
+        // The collab apply path writes foreign TML geometry straight into shots, so
+        // it must reject non-finite (NaN/inf) values at ingest the same way the
+        // command boundary does — otherwise a corrupt collaborator file poisons
+        // coordinate computation. apply_changeset skips such shots (with a warning)
+        // and leaves the project's existing geometry untouched.
+        let mut p = project_with(three());
+        let sid = p.sections[0].id;
+        let orig_len = p.sections[0].shots[0].length;
+
+        let mut cs = CollabChangeSet::empty();
+        // Edit shot 0 with a NaN length.
+        let mut bad_edit = shot(10.0, 5.0, 0.0, 1.0);
+        bad_edit.length = f64::NAN;
+        cs.shots_edited.push(EditedShot {
+            section_id: sid,
+            shot_index: 0,
+            section_name: "Main".into(),
+            changes: vec![],
+            new_data: bad_edit,
+            new_station_comment: None,
+        });
+        // Add a shot with +inf depth.
+        let mut bad_add = shot(15.0, 4.0, 1.0, 2.0);
+        bad_add.depth_out = f64::INFINITY;
+        cs.shots_added.push(AddedShot {
+            section_id: Some(sid),
+            section_name: "Main".into(),
+            position: 0,
+            after_shot_id: None,
+            uuid: None,
+            data: bad_add,
+            station_comment: None,
+        });
+
+        let shots_before = p.sections[0].shots.len();
+        let skipped = crate::core::apply_changeset(&mut p, &cs);
+
+        assert_eq!(skipped.len(), 2, "both non-finite changes should be skipped: {skipped:?}");
+        // Existing geometry untouched, no NaN/inf shot inserted.
+        assert_eq!(p.sections[0].shots.len(), shots_before, "no non-finite shot added");
+        assert_eq!(p.sections[0].shots[0].length, orig_len, "edit not applied");
+        assert!(p.sections[0].shots.iter().all(|s| s.all_finite()), "no non-finite geometry leaked in");
     }
 
     #[test]
@@ -1473,7 +1520,7 @@ mod tests {
         crate::core::apply_changeset(&mut applied, &cs);
         let s1 = StationRef::new(0, 1);
         assert_eq!(
-            applied.station_comments.get(&s1).map(String::as_str),
+            applied.station_comment_for_ref(s1).map(String::as_str),
             Some("muddy floor"),
         );
     }
@@ -1489,7 +1536,7 @@ mod tests {
         let mut edited = base.clone();
         edited
             .station_comments
-            .insert(StationRef::new(0, 2), "junction widened in 2026".into());
+            .insert(StationRef::new(0, 2).into(), "junction widened in 2026".into());
         let ret = returned(&edited, dir.path());
 
         let cs = diff(&base, &ret);
@@ -1522,7 +1569,7 @@ mod tests {
         let mut p = project_with(three());
         p.sections[0].shots[1].comment = Some("broken tape".into());
         p.station_comments
-            .insert(StationRef::new(0, 2), "junction with main".into());
+            .insert(StationRef::new(0, 2).into(), "junction with main".into());
 
         let path = dir.path().join("import.tmlu");
         export_tml_with_baseline(&p, &path).unwrap();

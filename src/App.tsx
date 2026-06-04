@@ -14,7 +14,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry } from './utils/telemetry';
 import { ContextMenu } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -24,6 +24,16 @@ import type { OrphanPlacementSuggestion } from './types/commands';
 
 function App() {
   const { project, stations, recentProjects, loading, loadConfig, config, isDirty, importDmp, parseTml, parseCompass, parseGpx, setConfig } = useProjectStore();
+  const integrityIssues = useProjectStore((s) => s.integrityIssues);
+  const integrityDismissed = useProjectStore((s) => s.integrityDismissed);
+  const integritySaveBlocked = useProjectStore((s) => s.integritySaveBlocked);
+  const checkProjectIntegrity = useProjectStore((s) => s.checkProjectIntegrity);
+  const repairProjectIntegrity = useProjectStore((s) => s.repairProjectIntegrity);
+  const dismissIntegrityIssues = useProjectStore((s) => s.dismissIntegrityIssues);
+  const integrityDialogOpen = useProjectStore((s) => s.integrityDialogOpen);
+  const openIntegrityDialog = useProjectStore((s) => s.openIntegrityDialog);
+  const closeIntegrityDialog = useProjectStore((s) => s.closeIntegrityDialog);
+  const [repairingIntegrity, setRepairingIntegrity] = useState(false);
   const {
     view,
     setView,
@@ -99,6 +109,14 @@ function App() {
       void initTelemetry(config.general.telemetry_enabled);
     }
   }, [config?.general.telemetry_enabled]);
+
+  // After a project loads, check its structural integrity so corruption already
+  // on disk (older versions / external edits) surfaces a warn + repair banner (#17).
+  useEffect(() => {
+    if (project?.file_path && !loading.isLoading) {
+      void checkProjectIntegrity();
+    }
+  }, [project?.file_path, loading.isLoading, checkProjectIntegrity]);
 
   // Hide splash once config has loaded (or immediately if splash is disabled)
   useEffect(() => {
@@ -394,8 +412,128 @@ function App() {
     void store.updateConfig(nextConfig);
   }, []);
 
+  const handleRepairIntegrity = async () => {
+    setRepairingIntegrity(true);
+    try {
+      const { fixed, remaining } = await repairProjectIntegrity();
+      const message =
+        remaining > 0
+          ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
+          : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
+      useUIStore.getState().showToast(message, 'integrity-repair');
+      // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
+      // (the same integrityIssues the banner and the dialog render-gate use) rather
+      // than the point-in-time `remaining` — a command or undo that interleaved
+      // during the repair's awaits could have changed the real issue set, and
+      // repairProjectIntegrity awaits its post-repair checkProjectIntegrity before
+      // resolving, so integrityIssues is already fresh here.
+      if (useProjectStore.getState().integrityIssues.length === 0) {
+        closeIntegrityDialog();
+      }
+    } catch {
+      // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
+      // during teardown) rather than reporting a fake no-op success. Surface it and
+      // keep the dialog open — integrityIssues is untouched, so the banner/save-block
+      // stay correct and the user can retry.
+      useUIStore.getState().showToast('Repair failed — nothing was changed. Please try again.', 'integrity-repair');
+    } finally {
+      setRepairingIntegrity(false);
+    }
+  };
+
   return (
     <div className="h-full bg-background text-text-primary flex flex-col relative" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      {/* Integrity warning banner (corruption found on load/save) */}
+      {integrityIssues.length > 0 && (integritySaveBlocked || !integrityDismissed) && !loading.isLoading && (
+        <div
+          className="bg-warning-10 border-b border-warning-20 px-4 py-2 flex items-center gap-3 text-sm"
+          role="alert"
+          data-testid="integrity-banner"
+        >
+          <span className="text-warning font-medium flex-1 min-w-0">
+            This project has {integrityIssues.length} integrity{' '}
+            {integrityIssues.length === 1 ? 'issue' : 'issues'} that may affect your survey.
+            {integritySaveBlocked && ' Saving is paused until you repair them.'}
+          </span>
+          <button
+            onClick={() => openIntegrityDialog()}
+            className="px-3 py-1 rounded bg-accent text-white text-xs"
+            data-testid="integrity-review-button"
+          >
+            Review &amp; Repair
+          </button>
+          {/* Dismiss is offered only for non-blocking (detect-only) issues. When
+              saving is blocked, the banner stays so the Repair entry point can't
+              be hidden on a project that can't be saved. */}
+          {!integritySaveBlocked && (
+            <button
+              onClick={dismissIntegrityIssues}
+              className="px-2 py-1 text-text-secondary hover:text-text text-xs"
+              data-testid="integrity-dismiss-button"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Integrity details + repair dialog */}
+      {integrityDialogOpen && integrityIssues.length > 0 && (
+        <div
+          className="fixed inset-0 z-[1000] bg-overlay flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="integrity-dialog-title"
+          data-testid="integrity-dialog"
+          onClick={() => !repairingIntegrity && closeIntegrityDialog()}
+        >
+          <div
+            className="bg-panel border border-border rounded-lg shadow-xl w-full max-w-xl max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-border">
+              <h2 id="integrity-dialog-title" className="font-medium text-text-primary">
+                Project integrity ({integrityIssues.length}{' '}
+                {integrityIssues.length === 1 ? 'issue' : 'issues'})
+              </h2>
+            </div>
+            <div className="px-4 py-3 overflow-auto">
+              <p className="text-sm text-text-secondary mb-3">
+                The following problems were found in this project. Repairing drops invalid
+                references and realigns drifted station merges; valid survey data is kept. Save the
+                project afterwards to make the fix permanent.
+              </p>
+              <ul
+                className="list-disc list-inside space-y-1 text-sm text-text-primary"
+                data-testid="integrity-dialog-list"
+              >
+                {integrityIssues.map((issue, i) => (
+                  <li key={i} className="break-words">{issue}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="px-4 py-3 border-t border-border flex justify-end gap-2">
+              <button
+                onClick={() => closeIntegrityDialog()}
+                disabled={repairingIntegrity}
+                className="px-3 py-1.5 rounded border border-border text-sm hover:bg-background disabled:opacity-50"
+                data-testid="integrity-dialog-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRepairIntegrity}
+                disabled={repairingIntegrity}
+                className="px-3 py-1.5 rounded bg-accent text-white text-sm disabled:opacity-50"
+                data-testid="integrity-dialog-repair"
+              >
+                {repairingIntegrity ? 'Repairing…' : 'Repair'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Splash screen overlay */}
       {splashMounted && (
         <SplashScreen
@@ -590,6 +728,7 @@ function App() {
       {activeDialog === 'remove-closure' && <RemoveClosureDialog />}
       {activeDialog === 'unsaved-changes' && <UnsavedChangesDialog />}
       {activeDialog === 'error' && <ErrorDialog />}
+      {activeDialog === 'save-permission' && <SavePermissionDialog />}
       {activeDialog === 'confirm-overwrite' && <OverwriteConfirmDialog />}
       {activeDialog === 'context-menu' && <ContextMenu />}
       {activeDialog === 'section-adjust' && <SectionAdjustDialog />}

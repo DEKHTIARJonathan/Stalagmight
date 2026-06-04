@@ -162,6 +162,7 @@ fn get_command_type(command: &Command) -> String {
         Command::Batch { .. } => "batch".to_string(),
         Command::MergeProjects { .. } => "merge_projects".to_string(),
         Command::ApplyCollabChanges => "apply_collab_changes".to_string(),
+        Command::RepairIntegrity => "repair_integrity".to_string(),
     }
 }
 
@@ -174,6 +175,20 @@ fn format_station_with_name(
         format!("{station_ref} ({name})")
     } else {
         station_ref.to_string()
+    }
+}
+
+/// Like [`format_station_with_name`] but for a stored [`StationKey`] (e.g. a
+/// captured loop closure in undo data), where no project is in scope to resolve
+/// the anchor to a positional index — the key's own `Display` is used.
+fn format_station_key_with_name(
+    key: &crate::models::StationKey,
+    section_names: &HashMap<SectionId, Option<String>>,
+) -> String {
+    if let Some(Some(name)) = section_names.get(&key.section_id) {
+        format!("{key} ({name})")
+    } else {
+        key.to_string()
     }
 }
 
@@ -696,8 +711,8 @@ fn derive_preview_data(
                         old_value: String::new(),
                         new_value: format!(
                             "{} \u{2194} {}",
-                            format_station_with_name(&closure.station_a, section_names),
-                            format_station_with_name(&closure.station_b, section_names),
+                            format_station_key_with_name(&closure.station_a, section_names),
+                            format_station_key_with_name(&closure.station_b, section_names),
                         ),
                     },
                 ],

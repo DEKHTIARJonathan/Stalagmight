@@ -139,6 +139,27 @@ On a project with ~500 sections, undo operations that previously stalled due to
 `compute_frozen_shots()` dominating CPU no longer show the function in profiling
 hotspots.
 
+## Per-Command Geometry Reconcile
+
+Every command whose `command_integrity` profile sets `affects_geometry` runs a
+`reconcile_geometry()` pass in the `execute()` epilogue (`check_merge_alignment`
++ `realign_merges` + `resolve_offsets`). That pass is O(total shots + total
+merges) and allocates two whole-project maps (`section_local_coords` and the
+resolved station offsets) — it is **not** cached between calls.
+
+`UpdateShot` is in this group (a length/azimuth/depth edit moves stations, and
+the bespoke `realign_after_shot_edit` no-ops on a merge group with no zero
+datum, so without the reconcile a shot edit upstream of a datum-less merge would
+leave the partners drifted). The cost is one O(N) pass **per discrete edit** —
+acceptable because the Edit Shot dialog commits a single `UpdateShot` on save,
+not one per keystroke, and it matches the per-command cost every other geometry
+command (`MergeStations`, `MoveStation`, `SetZeroDatum`, …) already pays.
+
+Watch this if a future bulk/Excel-style data-entry surface (see roadmap #61)
+fires an `UpdateShot` per cell: that would multiply the reconcile by the edit
+count and should batch the edits (the `Batch` command already finalizes once)
+or debounce the reconcile.
+
 ## Profiling Guide
 
 ### Build for profiling

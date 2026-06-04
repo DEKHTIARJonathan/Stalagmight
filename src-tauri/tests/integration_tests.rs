@@ -672,6 +672,7 @@ fn test_comprehensive_undo_types() {
             shot_id: 0,
             shot_data: create_shot_data(0.0, 10.0, 5.0, 5.0),
             position: 0,
+            uuid: None,
         },
         UndoData::MergeInfo {
             station_a: StationRef::new(0, 0),
@@ -1706,8 +1707,8 @@ fn test_save_load_with_station_merges() {
 
     // Add a merge
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(0, 1),
-        station_b: StationRef::new(1, 0),
+        station_a: StationRef::new(0, 1).into(),
+        station_b: StationRef::new(1, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -1716,8 +1717,8 @@ fn test_save_load_with_station_merges() {
     let loaded = db.load_project().unwrap();
 
     assert_eq!(loaded.station_merges.len(), 1);
-    assert_eq!(loaded.station_merges[0].station_a, StationRef::new(0, 1));
-    assert_eq!(loaded.station_merges[0].station_b, StationRef::new(1, 0));
+    assert!(loaded.key_is_ref(&loaded.station_merges[0].station_a, StationRef::new(0, 1)));
+    assert!(loaded.key_is_ref(&loaded.station_merges[0].station_b, StationRef::new(1, 0)));
 }
 
 /// Coverage Test 7: Save/load with zero datums
@@ -1780,8 +1781,8 @@ fn test_save_load_with_loop_closures() {
 
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(0, 0),
-        station_b: StationRef::new(0, 1),
+        station_a: StationRef::new(0, 0).into(),
+        station_b: StationRef::new(0, 1).into(),
         path_length: 100.0,
         misclosure_distance: 2.5,
         error_percentage: 2.5,
@@ -1914,7 +1915,7 @@ fn test_project_insert_shot_after() {
     ));
 
     let first_shot_id = project.sections[0].shots[0].id;
-    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0));
+    let result = project.insert_shot_after(0, first_shot_id, create_shot_data(45.0, 5.0, 5.0, 5.0), None, None);
 
     assert!(result.is_some());
     assert_eq!(project.sections[0].shots.len(), 3);
@@ -2405,10 +2406,8 @@ fn test_merge_projects_preserves_zero_datums() {
         // Remap zero datums
         for zd in &loaded1.zero_datums {
             if zd.station_ref.section_id == old_id {
-                let _ = merged.set_zero_datum(
-                    StationRef::new(new_id, zd.station_ref.station_index),
-                    zd.gps,
-                );
+                let idx = loaded1.resolve_key(&zd.station_ref).unwrap().station_index;
+                let _ = merged.set_zero_datum(StationRef::new(new_id, idx), zd.gps);
             }
         }
     }
@@ -2422,10 +2421,8 @@ fn test_merge_projects_preserves_zero_datums() {
         // Remap zero datums
         for zd in &loaded2.zero_datums {
             if zd.station_ref.section_id == old_id {
-                let _ = merged.set_zero_datum(
-                    StationRef::new(new_id, zd.station_ref.station_index),
-                    zd.gps,
-                );
+                let idx = loaded2.resolve_key(&zd.station_ref).unwrap().station_index;
+                let _ = merged.set_zero_datum(StationRef::new(new_id, idx), zd.gps);
             }
         }
     }
@@ -2434,13 +2431,15 @@ fn test_merge_projects_preserves_zero_datums() {
     assert_eq!(merged.zero_datums.len(), 2);
 
     // First zero datum from project 1 (section 0, station 0)
-    assert_eq!(merged.zero_datums[0].station_ref.section_id, 0);
-    assert_eq!(merged.zero_datums[0].station_ref.station_index, 0);
+    let mzd0 = merged.resolve_key(&merged.zero_datums[0].station_ref).unwrap();
+    assert_eq!(mzd0.section_id, 0);
+    assert_eq!(mzd0.station_index, 0);
     assert!((merged.zero_datums[0].gps.latitude - 45.0).abs() < 0.001);
 
     // Second zero datum from project 2 (section 1, station 1)
-    assert_eq!(merged.zero_datums[1].station_ref.section_id, 1);
-    assert_eq!(merged.zero_datums[1].station_ref.station_index, 1);
+    let mzd1 = merged.resolve_key(&merged.zero_datums[1].station_ref).unwrap();
+    assert_eq!(mzd1.section_id, 1);
+    assert_eq!(mzd1.station_index, 1);
     assert!((merged.zero_datums[1].gps.latitude - 46.0).abs() < 0.001);
 }
 
@@ -2510,9 +2509,11 @@ fn test_merge_projects_preserves_station_merges() {
             section_id_map.get(&sm.station_a.section_id),
             section_id_map.get(&sm.station_b.section_id),
         ) {
+            let a_idx = loaded1.resolve_key(&sm.station_a).unwrap().station_index;
+            let b_idx = loaded1.resolve_key(&sm.station_b).unwrap().station_index;
             merged.station_merges.push(StationMerge {
-                station_a: StationRef::new(new_a, sm.station_a.station_index),
-                station_b: StationRef::new(new_b, sm.station_b.station_index),
+                station_a: StationRef::new(new_a, a_idx).into(),
+                station_b: StationRef::new(new_b, b_idx).into(),
                 merged_at: sm.merged_at,
             });
         }
@@ -2525,10 +2526,12 @@ fn test_merge_projects_preserves_station_merges() {
 
     // Verify station merge was preserved with remapped IDs
     assert_eq!(merged.station_merges.len(), 1);
-    assert_eq!(merged.station_merges[0].station_a.section_id, 0);
-    assert_eq!(merged.station_merges[0].station_a.station_index, 1);
-    assert_eq!(merged.station_merges[0].station_b.section_id, 1);
-    assert_eq!(merged.station_merges[0].station_b.station_index, 0);
+    let msa = merged.resolve_key(&merged.station_merges[0].station_a).unwrap();
+    let msb = merged.resolve_key(&merged.station_merges[0].station_b).unwrap();
+    assert_eq!(msa.section_id, 0);
+    assert_eq!(msa.station_index, 1);
+    assert_eq!(msb.section_id, 1);
+    assert_eq!(msb.station_index, 0);
 
     // Verify 3 sections total
     assert_eq!(merged.sections.len(), 3);

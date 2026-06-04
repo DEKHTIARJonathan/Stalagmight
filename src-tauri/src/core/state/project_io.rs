@@ -3,10 +3,36 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::{CommandResult, UndoStack};
-use crate::models::{Project, SectionId, StationRef};
+use crate::models::{Project, SectionId, StationKey, StationRef};
 use crate::persistence::Database;
 
 use super::AppState;
+
+/// Build a save-failure `CommandResult`, tagging filesystem permission
+/// denials with `PERMISSION_DENIED_CODE` so the frontend can surface
+/// folder-access guidance instead of a misleading message. macOS drops
+/// previously-granted folder access after OS/app updates, which otherwise
+/// reaches the user as a bogus "corrupted database"/raw-OS error.
+///
+/// `target` is the destination file. We only treat the failure as a
+/// permission problem when its parent directory still exists: a
+/// deleted/renamed save folder yields SQLite's same generic "unable to open
+/// database file", but that's a vanished-location error, not a denial, and
+/// should stay an ordinary failure rather than show Privacy & Security steps.
+fn save_failure(context: &str, target: &std::path::Path, err: &anyhow::Error) -> CommandResult {
+    let detail = format!("{context}: {err}");
+    let dir_present = target
+        .parent()
+        .is_none_or(|p| p.try_exists().unwrap_or(true));
+    if dir_present && crate::core::loading::is_permission_denied(err) {
+        CommandResult::failure(format!(
+            "{}: {detail}",
+            crate::core::loading::PERMISSION_DENIED_CODE
+        ))
+    } else {
+        CommandResult::failure(detail)
+    }
+}
 
 impl AppState {
     /// Resolve the project file path from a name and optional directory.
@@ -200,6 +226,24 @@ impl AppState {
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
 
+        // Canonicalize the same way the production load path (do_load_project_full)
+        // does: a pre-v6 file installed here otherwise keeps positional Index cross-
+        // reference anchors live, and since inserts/deletes no longer shift positional
+        // refs, a later edit would silently move a merge/datum/comment to the wrong
+        // station — and the integrity check can't see an in-range Index ref. Mint
+        // UUIDs, then re-anchor (Index→AfterShot) and re-solve offsets, so the two
+        // load entry points can't diverge. (This legacy IPC has no production caller
+        // today, but it stays registered and invokable, so harden it.)
+        project.ensure_shot_uuids();
+        let healed_offsets = project.redrive_offsets_after_load();
+        if healed_offsets > 0 {
+            tracing::warn!(
+                healed_offsets,
+                purpose = "self-heal on open",
+                "open_project: corrected drifted section offsets on load"
+            );
+        }
+
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
         }
@@ -291,6 +335,51 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        // Refuse to persist a project with unresolvable cross-references (a station an
+        // endpoint anchors on was deleted) BEFORE the heals below mutate the live
+        // project. The heals (UUID mint/dedup, orphan-offset drop, and the DESTRUCTIVE
+        // non-finite sanitize) do NOT affect this predicate — it depends only on
+        // section existence and anchor resolution — so checking first is equivalent
+        // for the block decision but guarantees a REFUSED save leaves the open project
+        // byte-for-byte unchanged (the non-finite sanitize rewrites shot values to
+        // finite defaults with no undo entry, so mutating on a refused save would
+        // silently lose the user's data).
+        //
+        // This applies to AUTO-SAVE as well as manual saves: AUTO-SAVE MUST NEVER
+        // PERSIST A BROKEN PROJECT. When the project is broken the save is refused (no
+        // file written) and the caller surfaces that auto-save did not run (the
+        // auto-save indicator + the integrity banner); the user restores integrity via
+        // Repair, after which saves resume. This is the single chokepoint that
+        // guarantees only sound projects reach disk.
+        if project.has_unresolvable_cross_references() {
+            let count = project
+                .check_structural_integrity()
+                .iter()
+                .filter(|v| {
+                    matches!(
+                        v.category.as_str(),
+                        "dangling_merge_ref"
+                            | "dangling_closure_ref"
+                            | "dangling_zero_datum_ref"
+                            | "orphan_station_offset"
+                            | "orphan_station_comment"
+                    )
+                })
+                .count();
+            tracing::error!(
+                count,
+                is_autosave,
+                purpose = "block persisting unresolvable cross-references",
+                "Refused to save project with dangling cross-references"
+            );
+            return CommandResult::failure(format!(
+                "Can't save: the project has {count} unresolved cross-reference{} \
+                 (a station they point to was deleted). Use \"Repair\" in the \
+                 integrity banner, then save.",
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+
         // Mint UUIDs for any shot still missing one (pre-v6 .stalx
         // files loaded today come back with NULL uuid columns).
         // Doing this BEFORE the SQLite write and BEFORE the sibling
@@ -300,6 +389,75 @@ impl AppState {
         // a different set, leaving the .stalx and the .tml disagreeing
         // about every shot's identity until the next reload.
         project.ensure_shot_uuids();
+        // Re-mint any within-section duplicate shot UUID before refs are resolved
+        // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
+        // the FIRST matching shot, so a ref anchored on a later duplicate would be
+        // written to the wrong station — duplicate_shot_uuid is a Critical violation
+        // that the unresolvable-cross-reference save gate below does NOT catch (the
+        // ref still resolves, just to the wrong shot). Re-minting is lossless and
+        // non-destructive: the kept (first) occurrence keeps its UUID so refs
+        // anchored on it stay faithful, and it clears the Critical so the heal isn't
+        // re-detected on the next load. (Mirrors the load-path dedup in
+        // redrive_offsets_after_load; non-destructive, unlike dropping a dangling
+        // ref, so unlike those it is safe to auto-heal on save rather than block.)
+        project.ensure_unique_shot_uuids();
+
+        // Drop section_offsets for sections that no longer exist. An orphan entry
+        // (a section removed via a path that bypassed cleanup) is dead data, and the
+        // SQLite section_offsets row carries a FOREIGN KEY to sections(id) — writing
+        // it aborts the ENTIRE save with a generic FK error rather than routing the
+        // user to Repair. Lossless (matches repair_structural_integrity), so heal on
+        // save. (orphan_section_offset is Critical but the save gate below only sees
+        // station cross-refs, not section_offsets.)
+        let existing_sections: std::collections::HashSet<SectionId> =
+            project.sections.iter().map(|s| s.id).collect();
+        project
+            .section_offsets
+            .retain(|sid, _| existing_sections.contains(sid));
+
+        // Sanitize non-finite (NaN/inf) section offsets before persisting, mirroring
+        // the load-boundary guard and the shot sanitize below. section_offsets has no
+        // other finite guard, and a non-finite offset would either be coerced to NULL
+        // by SQLite (a NaN, aborting the save) or persist (an inf) and poison every
+        // world coordinate for that component on the next load.
+        for offset in project.section_offsets.values_mut() {
+            if !offset.0.is_finite() {
+                offset.0 = 0.0;
+            }
+            if !offset.1.is_finite() {
+                offset.1 = 0.0;
+            }
+        }
+
+        // Sanitize non-finite (NaN/inf) shot geometry before binding. A NaN cannot
+        // be stored in a `REAL NOT NULL` column (SQLite coerces it to NULL → the
+        // INSERT aborts the whole save), and an inf would persist and only be
+        // neutralized on the next load. The load path already sanitizes, so mirror
+        // it here so a save can neither abort nor write unusable geometry.
+        // (non_finite_geometry is a detect-only Critical that Repair can't auto-fix,
+        // so blocking the save would strand the user; neutralizing matches the load
+        // round-trip — the value was already unusable.)
+        for section in &mut project.sections {
+            for shot in &mut section.shots {
+                shot.sanitize_non_finite();
+            }
+        }
+
+
+        // Don't let geometric corruption persist silently: a release-mode warning
+        // when drifted merges are about to be written. (The frontend re-checks
+        // after save and offers a repair via the integrity banner.)
+        let misaligned = project.check_merge_alignment();
+        if !misaligned.is_empty() {
+            tracing::warn!(
+                count = misaligned.len(),
+                purpose = "flag misaligned merges before persisting",
+                "Saving a project with drifted station merges"
+            );
+            for violation in &misaligned {
+                tracing::warn!(category = %violation.category, "{}", violation.message);
+            }
+        }
 
         // Determine save path and ensure .stalx extension
         let is_implicit_save = path.is_none();
@@ -373,7 +531,7 @@ impl AppState {
             Err(e) => {
                 // Clean up temp file on failure
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create save file: {e}"));
+                return save_failure("Failed to create save file", &save_path, &e);
             }
         };
 
@@ -386,7 +544,7 @@ impl AppState {
                 purpose = "persist edits safely",
                 "Save failed; temp file cleaned up"
             );
-            return CommandResult::failure(format!("Failed to save project: {e}"));
+            return save_failure("Failed to save project", &save_path, &e);
         }
 
         // Copy display settings to the new database
@@ -408,12 +566,13 @@ impl AppState {
         // This is safe: if rename fails, original file is untouched
         if let Err(e) = std::fs::rename(&temp_path, &save_path) {
             let _ = std::fs::remove_file(&temp_path);
+            let e = anyhow::Error::from(e);
             tracing::error!(
                 error = %e,
                 purpose = "persist edits safely",
                 "Failed to rename temp file to final destination"
             );
-            return CommandResult::failure(format!("Failed to finalize save: {e}"));
+            return save_failure("Failed to finalize save", &save_path, &e);
         }
 
         // Reopen the database at the final path
@@ -701,15 +860,48 @@ impl AppState {
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
             std::collections::HashMap::new();
 
+        // Shot UUIDs already placed in the merged project. Shots carry a stable
+        // collaboration UUID that cross-references and Ariane matching anchor on;
+        // preserve it across the merge instead of re-minting. Two source files can
+        // legitimately share a UUID (one branched from the other), so dedup
+        // globally — a colliding UUID keeps a fresh mint to stay unique.
+        let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         // Append sections from all projects
         for (proj_idx, source_project) in source_projects.iter().enumerate() {
             for section in &source_project.sections {
                 let old_section_id = section.id;
                 let new_section_id = merged_project.next_section_id;
 
-                // Clone section data and add to merged project
+                // Clone section data and add to merged project. add_section mints
+                // fresh UUIDs for every shot; restore each source shot's UUID (in
+                // order) so identity survives the merge, deduping across all
+                // sources to guarantee uniqueness within the merged project.
                 let section_data = section.to_section_data();
                 merged_project.add_section(section_data);
+                let source_uuids: Vec<Option<String>> =
+                    section.shots.iter().map(|s| s.uuid.clone()).collect();
+                if let Some(new_section) = merged_project.get_section_mut(new_section_id) {
+                    for (new_shot, src_uuid) in new_section.shots.iter_mut().zip(source_uuids) {
+                        let final_uuid = match src_uuid {
+                            Some(u) if !seen_uuids.contains(&u) => Some(u),
+                            Some(dup) => {
+                                tracing::warn!(
+                                    project = %source_project.name,
+                                    uuid = %dup,
+                                    purpose = "merge shot uuid dedup",
+                                    "Duplicate shot UUID across merged projects; re-minting to keep identities unique"
+                                );
+                                new_shot.uuid.clone() // fresh mint from add_section
+                            }
+                            None => new_shot.uuid.clone(), // pre-v6 shot: keep fresh mint
+                        };
+                        if let Some(u) = &final_uuid {
+                            seen_uuids.insert(u.clone());
+                        }
+                        new_shot.uuid = final_uuid;
+                    }
+                }
 
                 // Record the mapping
                 section_id_map.insert((proj_idx, old_section_id), new_section_id);
@@ -729,17 +921,46 @@ impl AppState {
                 }
             }
 
-            // Copy station offsets with remapped section IDs
-            for (old_station_ref, offset) in &source_project.station_offsets {
-                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_station_ref.section_id)) {
-                    let new_station_ref = StationRef::new(new_section_id, old_station_ref.station_index);
-                    merged_project.station_offsets.insert(new_station_ref, *offset);
+            // Copy station offsets with remapped section IDs. Resolve the source
+            // key to a positional index against the source, then store as a
+            // transitional Index anchor under the new section; redrive's
+            // reanchor pass canonicalizes it once merged shots are present.
+            for (old_key, offset) in &source_project.station_offsets {
+                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_key.section_id)) {
+                    if let Some(src_sr) = source_project.resolve_key(old_key) {
+                        let new_key = StationKey::positional(new_section_id, src_sr.station_index);
+                        merged_project.station_offsets.insert(new_key, *offset);
+                    }
                 } else {
                     tracing::warn!(
                         project = %source_project.name,
-                        section_id = old_station_ref.section_id,
+                        section_id = old_key.section_id,
                         purpose = "merge station offsets",
                         "Station offset references unknown section ID; skipping"
+                    );
+                }
+            }
+
+            // Copy station comments with remapped section IDs. Same transitional
+            // Index-anchor approach as station_offsets above: resolve the source
+            // key to a positional index, then store under the new section; the
+            // redrive reanchor pass canonicalizes it once the merged shots exist.
+            // (Without this, every per-station comment was silently dropped on
+            // merge while every sibling collection was copied.)
+            for (old_key, comment) in &source_project.station_comments {
+                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_key.section_id)) {
+                    if let Some(src_sr) = source_project.resolve_key(old_key) {
+                        let new_key = StationKey::positional(new_section_id, src_sr.station_index);
+                        merged_project
+                            .station_comments
+                            .insert(new_key, comment.clone());
+                    }
+                } else {
+                    tracing::warn!(
+                        project = %source_project.name,
+                        section_id = old_key.section_id,
+                        purpose = "merge station comments",
+                        "Station comment references unknown section ID; skipping"
                     );
                 }
             }
@@ -751,7 +972,10 @@ impl AppState {
                 if let Some(&new_section_id) =
                     section_id_map.get(&(proj_idx, zd.station_ref.section_id))
                 {
-                    let new_station_ref = StationRef::new(new_section_id, zd.station_ref.station_index);
+                    let Some(src_sr) = source_project.resolve_key(&zd.station_ref) else {
+                        continue;
+                    };
+                    let new_station_ref = StationRef::new(new_section_id, src_sr.station_index);
                     // Use store-only helper to avoid triggering repositioning during merge
                     if let Err(e) = merged_project.store_zero_datum_without_repositioning(new_station_ref, zd.gps) {
                         return CommandResult::failure(format!(
@@ -775,13 +999,15 @@ impl AppState {
                     section_id_map.get(&(proj_idx, merge.station_a.section_id)),
                     section_id_map.get(&(proj_idx, merge.station_b.section_id)),
                 ) {
-                    let new_station_a =
-                        StationRef::new(new_a_section, merge.station_a.station_index);
-                    let new_station_b =
-                        StationRef::new(new_b_section, merge.station_b.station_index);
+                    let (Some(a_sr), Some(b_sr)) = (
+                        source_project.resolve_key(&merge.station_a),
+                        source_project.resolve_key(&merge.station_b),
+                    ) else {
+                        continue;
+                    };
                     merged_project.station_merges.push(crate::models::StationMerge {
-                        station_a: new_station_a,
-                        station_b: new_station_b,
+                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
+                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
                         merged_at: merge.merged_at,
                     });
                 } else {
@@ -801,14 +1027,16 @@ impl AppState {
                     section_id_map.get(&(proj_idx, closure.station_a.section_id)),
                     section_id_map.get(&(proj_idx, closure.station_b.section_id)),
                 ) {
-                    let new_station_a =
-                        StationRef::new(new_a_section, closure.station_a.station_index);
-                    let new_station_b =
-                        StationRef::new(new_b_section, closure.station_b.station_index);
+                    let (Some(a_sr), Some(b_sr)) = (
+                        source_project.resolve_key(&closure.station_a),
+                        source_project.resolve_key(&closure.station_b),
+                    ) else {
+                        continue;
+                    };
                     merged_project.loop_closures.push(crate::models::LoopClosure {
                         id: 0, // Reset to 0; assign_closure_ids() will reassign unique IDs
-                        station_a: new_station_a,
-                        station_b: new_station_b,
+                        station_a: StationKey::positional(new_a_section, a_sr.station_index),
+                        station_b: StationKey::positional(new_b_section, b_sr.station_index),
                         path_length: closure.path_length,
                         misclosure_distance: closure.misclosure_distance,
                         error_percentage: closure.error_percentage,
@@ -851,6 +1079,11 @@ impl AppState {
         // merged project takes the O(group) fast path.
         merged_project.rebuild_merge_adjacency();
 
+        // Re-derive section offsets from the (now combined) merge/datum
+        // constraints so the merged output is geometrically consistent and any
+        // drift in a source isn't laundered into the new file.
+        merged_project.redrive_offsets_after_load();
+
         // Set the output file path
         merged_project.file_path = Some(output_path.clone());
 
@@ -874,14 +1107,14 @@ impl AppState {
             Ok(db) => db,
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);
-                return CommandResult::failure(format!("Failed to create output file: {e}"));
+                return save_failure("Failed to create output file", &output_path, &e);
             }
         };
 
         if let Err(e) = db.save_project(&merged_project) {
             drop(db);
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to save merged project: {e}"));
+            return save_failure("Failed to save merged project", &output_path, &e);
         }
 
         // Close database before rename
@@ -890,7 +1123,8 @@ impl AppState {
         // Atomically rename temp file to final destination
         if let Err(e) = std::fs::rename(&temp_path, &output_path) {
             let _ = std::fs::remove_file(&temp_path);
-            return CommandResult::failure(format!("Failed to finalize save: {e}"));
+            let e = anyhow::Error::from(e);
+            return save_failure("Failed to finalize save", &output_path, &e);
         }
 
         tracing::info!(
@@ -1007,14 +1241,35 @@ impl AppState {
 
         // === PHASE 0: Opening database (5%) ===
         progress.start_phase(LoadingPhase::OpeningDatabase);
-        if !path.exists() {
-            early_return_err!(LoadError::not_found(&path.display().to_string()));
+        // `try_exists()` rather than `exists()`: a metadata-access denial
+        // (macOS folder permission) must surface guidance, not NOT_FOUND —
+        // `exists()` would collapse that error to `false`.
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                early_return_err!(LoadError::not_found(&path.display().to_string()))
+            }
+            Err(e) => {
+                let e = anyhow::Error::from(e);
+                if crate::core::loading::is_permission_denied(&e) {
+                    early_return_err!(LoadError::permission(
+                        e.to_string(),
+                        &path.display().to_string()
+                    ));
+                }
+                early_return_err!(LoadError::not_found(&path.display().to_string()));
+            }
         }
         // Local variable only - NO state mutation until Finalizing
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
             Err(e) => {
                 let msg = e.to_string();
+                // A permission denial (e.g. macOS forgot folder access after an
+                // update) otherwise masquerades as corruption — check it first.
+                if crate::core::loading::is_permission_denied(&e) {
+                    early_return_err!(LoadError::permission(msg, &path.display().to_string()));
+                }
                 // Detect corruption-specific errors and return CORRUPT code
                 // so the frontend can offer recovery options
                 if msg.contains("integrity check failed") || msg.contains("corrupted") {
@@ -1035,8 +1290,25 @@ impl AppState {
             }
         };
         project.file_path = Some(path.clone());
+        // Guarantee every shot has a stable UUID at runtime, not just after the
+        // next save: pre-v6 files load shots with uuid=None, and station identity
+        // (and the Ariane collaboration round-trip) anchors on the shot UUID. The
+        // minted UUIDs persist on the next save (matching save_project's call).
+        project.ensure_shot_uuids();
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
+        // Section offsets are derived state: re-solve them from the merge/datum
+        // constraints so a file persisted with drifted offsets (e.g. from an
+        // older redo bug) opens geometrically correct, before stations are
+        // computed below. No-op for an already-consistent file.
+        let healed_offsets = project.redrive_offsets_after_load();
+        if healed_offsets > 0 {
+            tracing::warn!(
+                healed = healed_offsets,
+                purpose = "self-heal derived geometry on load",
+                "Re-derived drifted section offsets while opening project"
+            );
+        }
         progress.update_phase(LoadingPhase::LoadingProjectData, 1, 1);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingProjectData);
@@ -1087,6 +1359,24 @@ impl AppState {
         // Compute warnings using the local db reference (before finalization)
         progress.start_phase(LoadingPhase::ValidatingData);
         let warnings = self.compute_project_warnings(&project, Some(&db));
+
+        // Surface corruption present on disk (older versions / external edits /
+        // a missed offset cascade): both dangling references and drifted merges.
+        // The frontend re-checks after load and offers a repair; here we just
+        // record it. (#17, merge-misalignment)
+        let mut integrity = project.check_structural_integrity();
+        integrity.extend(project.check_merge_alignment());
+        if !integrity.is_empty() {
+            tracing::warn!(
+                count = integrity.len(),
+                purpose = "flag corruption on load",
+                "Loaded project has integrity violations"
+            );
+            for violation in &integrity {
+                tracing::warn!(category = %violation.category, "{}", violation.message);
+            }
+        }
+
         progress.heartbeat(LoadingPhase::ValidatingData);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::ValidatingData);

@@ -1,5 +1,7 @@
 use super::*;
 use crate::models::ShotData;
+use crate::models::StationAnchor;
+use crate::models::StationRef;
 use tempfile::TempDir;
 
 #[test]
@@ -292,14 +294,14 @@ fn test_save_load_station_merges() {
 
     // Add station merges manually (bypassing validation for test)
     let merge1 = StationMerge {
-        station_a: StationRef::new(0, 1), // Section 0, Station 1
-        station_b: StationRef::new(1, 0), // Section 1, Station 0
+        station_a: StationRef::new(0, 1).into(), // Section 0, Station 1
+        station_b: StationRef::new(1, 0).into(), // Section 1, Station 0
         merged_at: Utc::now(),
     };
 
     let merge2 = StationMerge {
-        station_a: StationRef::new(0, 2), // Section 0, Station 2
-        station_b: StationRef::new(1, 1), // Section 1, Station 1
+        station_a: StationRef::new(0, 2).into(), // Section 0, Station 2
+        station_b: StationRef::new(1, 1).into(), // Section 1, Station 1
         merged_at: Utc::now(),
     };
 
@@ -318,17 +320,19 @@ fn test_save_load_station_merges() {
 
     assert_eq!(loaded.station_merges.len(), 2);
 
-    let m1 = &loaded.station_merges[0];
-    assert_eq!(m1.station_a.section_id, 0);
-    assert_eq!(m1.station_a.station_index, 1);
-    assert_eq!(m1.station_b.section_id, 1);
-    assert_eq!(m1.station_b.station_index, 0);
+    let m1a = loaded.resolve_key(&loaded.station_merges[0].station_a).unwrap();
+    let m1b = loaded.resolve_key(&loaded.station_merges[0].station_b).unwrap();
+    assert_eq!(m1a.section_id, 0);
+    assert_eq!(m1a.station_index, 1);
+    assert_eq!(m1b.section_id, 1);
+    assert_eq!(m1b.station_index, 0);
 
-    let m2 = &loaded.station_merges[1];
-    assert_eq!(m2.station_a.section_id, 0);
-    assert_eq!(m2.station_a.station_index, 2);
-    assert_eq!(m2.station_b.section_id, 1);
-    assert_eq!(m2.station_b.station_index, 1);
+    let m2a = loaded.resolve_key(&loaded.station_merges[1].station_a).unwrap();
+    let m2b = loaded.resolve_key(&loaded.station_merges[1].station_b).unwrap();
+    assert_eq!(m2a.section_id, 0);
+    assert_eq!(m2a.station_index, 2);
+    assert_eq!(m2b.section_id, 1);
+    assert_eq!(m2b.station_index, 1);
 }
 
 // === Test 3.3: Save/Load Zero Datums with GPS Precision ===
@@ -352,7 +356,7 @@ fn test_save_load_zero_datums() {
 
     // Add zero datums with high-precision GPS coordinates (8+ decimal places)
     let zd1 = ZeroDatum {
-        station_ref: StationRef::new(0, 0),
+        station_ref: StationRef::new(0, 0).into(),
         gps: GpsCoordinates {
             latitude: 45.123_456_789_012_34,   // 14 decimal places
             longitude: -93.987_654_321_098_76, // 14 decimal places
@@ -361,7 +365,7 @@ fn test_save_load_zero_datums() {
     };
 
     let zd2 = ZeroDatum {
-        station_ref: StationRef::new(0, 1),
+        station_ref: StationRef::new(0, 1).into(),
         gps: GpsCoordinates {
             latitude: -33.856_789_012_345_67,
             longitude: 151.209_876_543_210_98,
@@ -386,8 +390,9 @@ fn test_save_load_zero_datums() {
 
     // Verify 8+ decimal places of precision preserved
     let loaded_zd1 = &loaded.zero_datums[0];
-    assert_eq!(loaded_zd1.station_ref.section_id, 0);
-    assert_eq!(loaded_zd1.station_ref.station_index, 0);
+    let loaded_zd1_ref = loaded.resolve_key(&loaded_zd1.station_ref).unwrap();
+    assert_eq!(loaded_zd1_ref.section_id, 0);
+    assert_eq!(loaded_zd1_ref.station_index, 0);
     // Check precision to 8 decimal places
     assert!((loaded_zd1.gps.latitude - 45.123_456_789_012_34).abs() < 1e-8);
     assert!((loaded_zd1.gps.longitude - (-93.987_654_321_098_76)).abs() < 1e-8);
@@ -744,8 +749,8 @@ fn test_save_load_loop_closures() {
     // Add loop closure data
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(0, 0),
-        station_b: StationRef::new(0, 1),
+        station_a: StationRef::new(0, 0).into(),
+        station_b: StationRef::new(0, 1).into(),
         path_length: 50.0,
         misclosure_distance: 0.5,
         error_percentage: 1.0,
@@ -1158,8 +1163,8 @@ fn test_save_load_station_offsets_individual() {
     // Add individual station offsets
     let ref_a = StationRef::new(section_id, 0);
     let ref_b = StationRef::new(section_id, 1);
-    project.station_offsets.insert(ref_a, (1.5, -2.3, 0.1));
-    project.station_offsets.insert(ref_b, (-0.5, 0.8, -0.3));
+    project.station_offsets.insert(ref_a.into(), (1.5, -2.3, 0.1));
+    project.station_offsets.insert(ref_b.into(), (-0.5, 0.8, -0.3));
 
     // Save
     {
@@ -1172,12 +1177,12 @@ fn test_save_load_station_offsets_individual() {
     let loaded = db.load_project().unwrap();
 
     assert_eq!(loaded.station_offsets.len(), 2);
-    let offset_a = loaded.station_offsets.get(&ref_a).unwrap();
+    let offset_a = loaded.station_offset_for_ref(ref_a).unwrap();
     assert!((offset_a.0 - 1.5).abs() < 1e-10);
     assert!((offset_a.1 - (-2.3)).abs() < 1e-10);
     assert!((offset_a.2 - 0.1).abs() < 1e-10);
 
-    let offset_b = loaded.station_offsets.get(&ref_b).unwrap();
+    let offset_b = loaded.station_offset_for_ref(ref_b).unwrap();
     assert!((offset_b.0 - (-0.5)).abs() < 1e-10);
     assert!((offset_b.1 - 0.8).abs() < 1e-10);
     assert!((offset_b.2 - (-0.3)).abs() < 1e-10);
@@ -1412,22 +1417,22 @@ fn test_save_load_complex_project_round_trip() {
 
     // Add station merge
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_a, 2),
-        station_b: StationRef::new(section_b, 0),
+        station_a: StationRef::new(section_a, 2).into(),
+        station_b: StationRef::new(section_b, 0).into(),
         merged_at: Utc::now(),
     });
 
     // Add zero datum
     project.zero_datums.push(ZeroDatum {
-        station_ref: StationRef::new(section_a, 0),
+        station_ref: StationRef::new(section_a, 0).into(),
         gps: GpsCoordinates::new(45.5, -90.3, 0.0).unwrap(),
     });
 
     // Add loop closure
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(section_a, 1),
-        station_b: StationRef::new(section_b, 0),
+        station_a: StationRef::new(section_a, 1).into(),
+        station_b: StationRef::new(section_b, 0).into(),
         strategy: ClosureStrategy::Move,
         is_aligned: false,
         path_length: 15.0,
@@ -1438,7 +1443,7 @@ fn test_save_load_complex_project_round_trip() {
     });
 
     // Add station offset
-    project.station_offsets.insert(StationRef::new(section_a, 1), (0.1, -0.2, 0.05));
+    project.station_offsets.insert(StationRef::new(section_a, 1).into(), (0.1, -0.2, 0.05));
 
     // Save
     {
@@ -1471,7 +1476,7 @@ fn test_save_load_complex_project_round_trip() {
 
     // Verify merges
     assert_eq!(loaded.station_merges.len(), 1);
-    assert_eq!(loaded.station_merges[0].station_a.station_index, 2);
+    assert_eq!(loaded.resolve_key(&loaded.station_merges[0].station_a).unwrap().station_index, 2);
 
     // Verify zero datums
     assert_eq!(loaded.zero_datums.len(), 1);
@@ -1483,7 +1488,7 @@ fn test_save_load_complex_project_round_trip() {
     assert_eq!(loaded.loop_closures[0].strategy, ClosureStrategy::Move);
 
     // Verify station offsets
-    let st_offset = loaded.station_offsets.get(&StationRef::new(s_a_id, 1)).unwrap();
+    let st_offset = loaded.station_offset_for_ref(StationRef::new(s_a_id, 1)).unwrap();
     assert!((st_offset.0 - 0.1).abs() < 1e-10);
     assert!((st_offset.1 - (-0.2)).abs() < 1e-10);
     assert!((st_offset.2 - 0.05).abs() < 1e-10);
@@ -2049,8 +2054,8 @@ fn test_save_load_round_trip_all_metadata() {
     let section_b_id = project.sections[1].id;
 
     project.station_merges.push(StationMerge {
-        station_a: StationRef::new(section_id, 1),
-        station_b: StationRef::new(section_b_id, 0),
+        station_a: StationRef::new(section_id, 1).into(),
+        station_b: StationRef::new(section_b_id, 0).into(),
         merged_at: Utc::now(),
     });
 
@@ -2059,7 +2064,7 @@ fn test_save_load_round_trip_all_metadata() {
 
     // set_zero_datum creates section offsets for all connected sections (A and B are merged),
     // so we don't add a manual section_offset — we just verify the ones set_zero_datum created.
-    project.station_offsets.insert(StationRef::new(section_id, 1), (1.0, 2.0, 3.0));
+    project.station_offsets.insert(StationRef::new(section_id, 1).into(), (1.0, 2.0, 3.0));
     project.imported_file_hashes.push("abc123def456".to_string());
     project.next_closure_id = 42;
 
@@ -2101,8 +2106,8 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
 
     project.loop_closures.push(LoopClosure {
         id: 1,
-        station_a: StationRef::new(sec_id, 0),
-        station_b: StationRef::new(sec_id, 1),
+        station_a: StationRef::new(sec_id, 0).into(),
+        station_b: StationRef::new(sec_id, 1).into(),
         path_length: 50.0,
         misclosure_distance: 0.1,
         error_percentage: 0.2,
@@ -2113,8 +2118,8 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
     });
     project.loop_closures.push(LoopClosure {
         id: 2,
-        station_a: StationRef::new(sec_id, 0),
-        station_b: StationRef::new(sec_id, 1),
+        station_a: StationRef::new(sec_id, 0).into(),
+        station_b: StationRef::new(sec_id, 1).into(),
         path_length: 100.0,
         misclosure_distance: 0.5,
         error_percentage: 0.5,
@@ -2311,4 +2316,38 @@ fn test_save_collab_state_upsert() {
     // Clearing removes the row.
     db.save_collab_state(None).unwrap();
     assert!(db.load_project().unwrap().collab.is_none());
+}
+
+#[test]
+fn two_dangling_station_offsets_in_one_section_save_without_pk_collision() {
+    // Regression for the save crash (review finding #7): two dangling station
+    // offsets in one section both used to resolve to (section, 0) via
+    // key_to_ref_lossy and collide on the (section_id, station_index) PRIMARY
+    // KEY, aborting the entire save. The persistence layer now skips a key that
+    // doesn't resolve, so the save succeeds and the dangling offsets are dropped
+    // (not persisted as phantom station-0 rows).
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Dangling".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![ShotData { length: 5.0, ..Default::default() }],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project
+        .station_offsets
+        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost-1".into())), (1.0, 0.0, 0.0));
+    project
+        .station_offsets
+        .insert(StationKey::new(a, StationAnchor::AfterShot("ghost-2".into())), (2.0, 0.0, 0.0));
+
+    db.save_project(&project)
+        .expect("save must not PK-collide on two dangling offsets");
+
+    let loaded = db.load_project().unwrap();
+    assert!(
+        loaded.station_offsets.is_empty(),
+        "dangling offsets are dropped on save, not written as phantom station-0 rows"
+    );
 }

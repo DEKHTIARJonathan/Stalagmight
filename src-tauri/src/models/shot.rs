@@ -178,6 +178,35 @@ pub struct ShotUpdates {
 }
 
 impl ShotUpdates {
+    /// False if this update would write a non-finite (NaN/±inf) number into any
+    /// numeric field. Used to reject corrupt geometry at the command boundary
+    /// before it poisons coordinate computation.
+    pub fn all_finite(&self) -> bool {
+        let direct = [
+            self.azimuth_in,
+            self.azimuth_out,
+            self.length,
+            self.depth_in,
+            self.depth_out,
+        ];
+        if direct.into_iter().flatten().any(|v| !v.is_finite()) {
+            return false;
+        }
+        // Option<Option<f64>>: outer Some = "set this field", inner Some = value.
+        let nested = [
+            self.pitch_in,
+            self.pitch_out,
+            self.left,
+            self.right,
+            self.up,
+            self.down,
+            self.temperature,
+        ];
+        !nested
+            .into_iter()
+            .any(|o| matches!(o, Some(Some(v)) if !v.is_finite()))
+    }
+
     /// Returns true if this update touches any geometry fields
     /// (azimuth, length, depth, pitch).
     pub fn touches_geometry(&self) -> bool {
@@ -192,6 +221,67 @@ impl ShotUpdates {
 }
 
 impl Shot {
+    /// False if any numeric field is non-finite (NaN/±inf).
+    pub fn all_finite(&self) -> bool {
+        let direct = [
+            self.azimuth_in,
+            self.azimuth_out,
+            self.length,
+            self.depth_in,
+            self.depth_out,
+        ];
+        if direct.iter().any(|v| !v.is_finite()) {
+            return false;
+        }
+        let opts = [
+            self.pitch_in,
+            self.pitch_out,
+            self.left,
+            self.right,
+            self.up,
+            self.down,
+            self.temperature,
+        ];
+        !opts.into_iter().flatten().any(|v| !v.is_finite())
+    }
+
+    /// Replace any non-finite (NaN/±inf) numeric field with a safe finite value:
+    /// the required core fields become `0.0`, optional fields become `None`.
+    /// Returns true if anything was changed. Used at the load boundary to
+    /// neutralize geometry corrupt-on-disk before it can poison coordinate
+    /// computation (a single NaN propagates through the whole cascade); the
+    /// degenerate-but-finite result is localized and visible.
+    pub fn sanitize_non_finite(&mut self) -> bool {
+        if self.all_finite() {
+            return false;
+        }
+        for f in [
+            &mut self.azimuth_in,
+            &mut self.azimuth_out,
+            &mut self.length,
+            &mut self.depth_in,
+            &mut self.depth_out,
+        ] {
+            if !f.is_finite() {
+                *f = 0.0;
+            }
+        }
+        for o in [
+            &mut self.pitch_in,
+            &mut self.pitch_out,
+            &mut self.left,
+            &mut self.right,
+            &mut self.up,
+            &mut self.down,
+            &mut self.temperature,
+        ] {
+            if matches!(o, Some(v) if !v.is_finite()) {
+                *o = None;
+            }
+        }
+        true
+    }
+
     /// Create a new shot from shot data.  A fresh v4 UUID is minted for
     /// collaboration identity (see `Shot::uuid`); call [`Shot::with_uuid`]
     /// instead when restoring a shot from a persisted UUID.
@@ -319,6 +409,32 @@ impl Shot {
 }
 
 impl ShotData {
+    /// False if any numeric field is non-finite (NaN/±inf). Used to reject
+    /// corrupt geometry at ingest before it poisons coordinate computation
+    /// (NaN passes the existing zero/negative-length checks).
+    pub fn all_finite(&self) -> bool {
+        let direct = [
+            self.azimuth_in,
+            self.azimuth_out,
+            self.length,
+            self.depth_in,
+            self.depth_out,
+        ];
+        if direct.iter().any(|v| !v.is_finite()) {
+            return false;
+        }
+        let opts = [
+            self.pitch_in,
+            self.pitch_out,
+            self.left,
+            self.right,
+            self.up,
+            self.down,
+            self.temperature,
+        ];
+        !opts.into_iter().flatten().any(|v| !v.is_finite())
+    }
+
     /// Horizontal projection of the shot length (meters).
     /// ShotData.length is slope distance, so horizontal is derived from depth change.
     pub fn horizontal_length(&self) -> f64 {

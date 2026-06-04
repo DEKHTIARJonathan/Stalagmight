@@ -68,6 +68,56 @@ impl LoadError {
     pub fn corrupt(message: impl Into<String>, path: &str) -> Self {
         Self::with_details("CORRUPT", message, path)
     }
+
+    /// Error when the OS denied filesystem access to the file — e.g. macOS
+    /// forgot a previously-granted folder permission after an OS/app update.
+    /// The `path` rides in `details` so the frontend can name the file.
+    pub fn permission(message: impl Into<String>, path: &str) -> Self {
+        Self::with_details("PERMISSION", message, path)
+    }
+}
+
+/// Prefix stamped onto a save `CommandResult` error when the failure is a
+/// filesystem permission denial, so the frontend can show folder-access
+/// guidance instead of a misleading "corrupted"/raw-OS message.
+pub(crate) const PERMISSION_DENIED_CODE: &str = "FS_PERMISSION_DENIED";
+
+/// True if `err` (or any error in its chain) is a filesystem permission
+/// denial. macOS forgets previously-granted folder access after an OS or
+/// app update, which surfaces as EPERM (os error 1) / EACCES (os error 13),
+/// a `PermissionDenied` io error, or a SQLite "unable to open database file".
+///
+/// Deliberately conservative on the string side: it must NOT classify a
+/// genuine corruption ("integrity check failed") as a permission problem,
+/// since the whole point is to stop showing the wrong remediation.
+pub(crate) fn is_permission_denied(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        // A typed io error decodes the platform errno for us: EACCES/EPERM on
+        // unix and ERROR_ACCESS_DENIED on Windows all map to PermissionDenied,
+        // so we never hardcode platform-specific error numbers.
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::PermissionDenied {
+                return true;
+            }
+        }
+        // String fallback for causes that don't reach us as a typed io error
+        // (e.g. SQLite reporting it cannot open the database file).
+        let msg = cause.to_string().to_ascii_lowercase();
+        if msg.contains("permission denied")
+            || msg.contains("operation not permitted")
+            || msg.contains("unable to open database file")
+        {
+            return true;
+        }
+        // Unix errno text that can show up in a stringified (non-typed) cause.
+        // Gated to unix: "(os error 1)"/"(os error 13)" are EPERM/EACCES there
+        // but unrelated codes on Windows.
+        #[cfg(unix)]
+        if msg.contains("(os error 1)") || msg.contains("(os error 13)") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Escape a string for JSON, handling quotes, backslashes, and control characters.
@@ -589,7 +639,11 @@ impl ProgressEmitter {
 pub struct LoadProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,
-    /// The loaded project
+    /// The loaded project. Serialized in positional wire form (like
+    /// `ProjectState`) so cross-references reach the frontend as
+    /// `StationRef { section_id, station_index }`, not the internal `StationKey`
+    /// shape derived serde would emit.
+    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
     pub project: crate::models::Project,
     /// Computed station coordinates
     pub stations: Vec<crate::models::Station>,
@@ -613,7 +667,10 @@ pub struct LoadProjectFullResult {
 pub struct CreateProjectFullResult {
     /// Unique ID for this load operation (for filtering stale events)
     pub loading_id: u64,
-    /// The created project
+    /// The created project. Serialized in positional wire form (see
+    /// `LoadProjectFullResult`); harmless for a fresh project (no cross-refs yet),
+    /// but keeps every Project-bearing IPC payload consistent.
+    #[serde(serialize_with = "crate::models::project::serialize_project_ipc")]
     pub project: crate::models::Project,
     /// Display settings (defaults for new project)
     pub display_settings: DisplaySettings,
@@ -812,5 +869,82 @@ mod tests {
 
         token1.cancel();
         assert!(token2.is_cancelled(), "Cloned token should see cancellation");
+    }
+
+    #[test]
+    fn load_and_create_results_serialize_project_cross_refs_in_wire_form() {
+        use crate::models::{Project, ProjectStats, SectionData, ShotData, StationKey, StationMerge};
+
+        // A project with one resolvable station merge, stored in the internal
+        // StationKey form.
+        let mut project = Project::new("Wire".to_string(), None);
+        let a = project
+            .add_section(SectionData {
+                shots: vec![ShotData { length: 1.0, ..Default::default() }],
+                ..Default::default()
+            })
+            .id;
+        let b = project
+            .add_section(SectionData {
+                shots: vec![ShotData { length: 1.0, ..Default::default() }],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        project.record_station_merge(StationMerge {
+            station_a: StationKey::positional(a, 0),
+            station_b: StationKey::positional(b, 0),
+            merged_at: chrono::Utc::now(),
+        });
+
+        let stats = ProjectStats {
+            section_count: 2,
+            shot_count: 2,
+            total_length: 2.0,
+            min_depth: 0.0,
+            max_depth: 0.0,
+            station_count: 4,
+            loop_count: 0,
+            penetration_distance: 0.0,
+        };
+
+        // The merge endpoint must serialize as positional wire form
+        // ({section_id, station_index}), NOT the internal StationKey shape
+        // ({section_id, anchor}). This is what makes the JSON load/create routes
+        // match what the frontend reads (and the binary route emits).
+        let assert_wire = |v: &serde_json::Value, label: &str| {
+            let sa = &v["project"]["station_merges"][0]["station_a"];
+            assert!(
+                sa.get("station_index").is_some(),
+                "{label}: cross-ref must be positional wire form, got {sa}"
+            );
+            assert!(
+                sa.get("anchor").is_none(),
+                "{label}: cross-ref must NOT be the internal StationKey shape, got {sa}"
+            );
+        };
+
+        let load = LoadProjectFullResult {
+            loading_id: 1,
+            project: project.clone(),
+            stations: Vec::new(),
+            stats,
+            warnings: Vec::new(),
+            display_settings: DisplaySettings::default(),
+        };
+        assert_wire(
+            &serde_json::to_value(&load).expect("serialize load result"),
+            "LoadProjectFullResult",
+        );
+
+        let create = CreateProjectFullResult {
+            loading_id: 1,
+            project,
+            display_settings: DisplaySettings::default(),
+        };
+        assert_wire(
+            &serde_json::to_value(&create).expect("serialize create result"),
+            "CreateProjectFullResult",
+        );
     }
 }
