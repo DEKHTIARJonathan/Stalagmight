@@ -353,4 +353,7 @@ export const EVENT_NAMES: readonly string[] = [
   'dwell.dialog.collab-review',
   // SVG stick-map export preview command.
   'command.preview_svg_export',
+  // Structural-integrity IPC commands (check + repair).
+  'command.check_project_integrity',
+  'command.repair_project_integrity',
 ];

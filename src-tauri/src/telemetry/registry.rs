@@ -356,6 +356,9 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.collab-review",
     // SVG stick-map export preview command.
     "command.preview_svg_export",
+    // Structural-integrity IPC commands (check + repair).
+    "command.check_project_integrity",
+    "command.repair_project_integrity",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -478,7 +481,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 308);
+        assert_eq!(EVENT_NAMES.len(), 310);
     }
 
     #[test]
