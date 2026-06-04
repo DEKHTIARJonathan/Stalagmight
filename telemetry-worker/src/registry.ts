@@ -364,4 +364,8 @@ export const EVENT_NAMES: readonly string[] = [
   // Structural-integrity IPC commands (check + repair).
   'command.check_project_integrity',
   'command.repair_project_integrity',
+  // Closure-adjusted display mode (measured ↔ closure-adjusted) toggle + state.
+  // Only the non-default state ('closureAdjusted') is emitted.
+  'action.toggle.geometryMode',
+  'display-state.geometryMode:closureAdjusted',
 ];

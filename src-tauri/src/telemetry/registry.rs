@@ -368,6 +368,10 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // Structural-integrity IPC commands (check + repair).
     "command.check_project_integrity",
     "command.repair_project_integrity",
+    // Closure-adjusted display mode (measured ↔ closure-adjusted) toggle + state.
+    // Only the non-default state ("closureAdjusted") is emitted.
+    "action.toggle.geometryMode",
+    "display-state.geometryMode:closureAdjusted",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -490,7 +494,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 314);
+        assert_eq!(EVENT_NAMES.len(), 316);
     }
 
     #[test]

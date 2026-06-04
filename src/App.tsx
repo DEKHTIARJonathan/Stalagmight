@@ -14,7 +14,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, AdjustClosuresDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, SectionAdjustDialog, SettingsDialog, SplitSectionDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry } from './utils/telemetry';
 import { ContextMenu } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -718,7 +718,6 @@ function App() {
       {activeDialog === 'delete-shot-choice' && <DeleteShotChoiceDialog />}
       {activeDialog === 'merge' && <MergeDialog />}
       {activeDialog === 'closure' && <ClosureDialog />}
-      {activeDialog === 'adjust-closures' && <AdjustClosuresDialog />}
       {activeDialog === 'merge-projects' && <MergeProjectsDialog />}
       {activeDialog === 'draw-shot' && <DrawShotDialog />}
       {activeDialog === 'edit-section' && <EditSectionDialog />}

@@ -155,6 +155,16 @@ interface ProjectStore {
    * + `stations` go away. See docs/plans/memory-soa-and-mvt.md.
    */
   surveyData: SurveyData | null;
+  /**
+   * Closure-adjusted geometry for the read-only adjusted display mode, derived
+   * non-destructively on the backend and fetched lazily. `null` until fetched
+   * and after any edit (which invalidates it); rendering falls back to the
+   * measured `stations`/`surveyData` while null. See geometrySelectors.ts.
+   */
+  stationsAdjusted: Station[] | null;
+  surveyDataAdjusted: SurveyData | null;
+  /** True while the closure-adjusted geometry is being solved/fetched. */
+  adjustedLoading: boolean;
   stats: ProjectStats | null;
   frozenShots: FrozenShotRef[];
   warnings: ProjectWarning[];
@@ -206,6 +216,8 @@ interface ProjectStore {
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
+  /** Fetch closure-adjusted geometry for the adjusted display mode (lazy, cached). */
+  loadAdjustedGeometry: () => Promise<void>;
   /** Check if a shot (by section_id + shot index) is frozen */
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   /** Structural-integrity issues found in the open project (empty = sound). */
@@ -268,10 +280,6 @@ interface ProjectStore {
   checkMergeConnectivity: (stationA: StationRef, stationB: StationRef) => Promise<ConnectivityResult>;
   createLoopClosure: (stationA: StationRef, stationB: StationRef, closureStrategy: ClosureStrategy) => Promise<CommandResult>;
   removeLoopClosure: (closureId: bigint) => Promise<CommandResult>;
-  adjustLoopClosures: (
-    anchorStation: StationRef,
-    method: ClosureStrategy
-  ) => Promise<CommandResult>;
   updateStationComment: (stationRef: StationRef, comment: string | null) => Promise<CommandResult>;
   moveComment: (source: CommentHolder, target: CommentHolder, swap: boolean) => Promise<CommandResult>;
   setZeroDatum: (stationRef: StationRef, coordinates: GpsCoordinates, options?: { fitToBounds?: boolean }) => Promise<CommandResult>;
@@ -400,6 +408,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   project: null,
   stations: [],
   surveyData: null,
+  stationsAdjusted: null,
+  surveyDataAdjusted: null,
+  adjustedLoading: false,
   stats: null,
   frozenShots: [],
   warnings: [],
@@ -577,6 +588,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           project: result.project,
           stations: result.stations,
           surveyData: result.surveyData,
+          // Adjusted geometry is lazily (re)fetched by the map when the adjusted
+          // mode is active; invalidate any stale set from the previous project.
+          stationsAdjusted: null,
+          surveyDataAdjusted: null,
           stats: result.stats,
           warnings: result.warnings,
           isDirty: false,
@@ -746,6 +761,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       set({
         project: result.project,
         stations: [],
+        stationsAdjusted: null,
+        surveyDataAdjusted: null,
         surveyData: emptySurveyData(),
         stats: null,
         frozenShots: [],
@@ -935,7 +952,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], surveyData: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
+        set({ project: null, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
       }
       return result;
     } finally {
@@ -965,6 +982,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           project: state.project,
           stations: state.stations,
           surveyData,
+          // Any edit changes measured geometry → the cached adjusted view is stale.
+          // Drop it; the map re-fetches lazily if the adjusted mode is active.
+          stationsAdjusted: null,
+          surveyDataAdjusted: null,
           stats: state.stats,
           frozenShots: state.frozen_shots,
         });
@@ -1357,15 +1378,34 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  adjustLoopClosures: async (anchorStation: StationRef, method: ClosureStrategy) => {
-    return executeCommand(
-      'adjust_loop_closures',
-      {
-        anchorStation,
-        method,
-      },
-      { purpose: 'reduce misclosure error', fields: { anchorStation, method } }
-    );
+  loadAdjustedGeometry: async () => {
+    const { project, surveyData, stations, adjustedLoading } = get();
+    if (!project || adjustedLoading) return;
+
+    // No eligible closures → the adjusted view is identical to measured; reuse
+    // the measured set directly and skip the backend round-trip.
+    if (project.loop_closures.length === 0) {
+      set({ stationsAdjusted: stations, surveyDataAdjusted: surveyData });
+      return;
+    }
+
+    set({ adjustedLoading: true });
+    try {
+      const adjusted = await invokeIpc<Station[]>('get_adjusted_stations', undefined, {
+        purpose: 'closure-adjusted geometry view',
+      });
+      // Discard if the project changed while the solve was in flight; a
+      // refreshProjectState will have nulled the cache and re-triggered us.
+      if (get().project !== project) {
+        set({ adjustedLoading: false });
+        return;
+      }
+      const surveyDataAdjusted = surveyDataFromLegacy(project.sections, adjusted);
+      set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
+    } catch (e) {
+      console.warn('Failed to load adjusted geometry:', e);
+      set({ adjustedLoading: false });
+    }
   },
 
   updateStationComment: async (stationRef: StationRef, comment: string | null) => {

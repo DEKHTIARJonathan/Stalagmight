@@ -527,7 +527,6 @@ function StationDetail({ station }: { station: Station }) {
               closures={station.closures_with}
               loopClosures={project?.loop_closures ?? []}
               stations={stations}
-              anchorStation={station.station_ref}
               onSelectStation={handleSelectMergedStation}
               onAnnounce={announceSelection}
               onHoverStart={(ref) => setHoveredStation({ section_id: ref.section_id, station_index: ref.station_index })}
@@ -1250,7 +1249,6 @@ interface ClosuresSectionProps {
   closures: ClosureRef[];
   loopClosures: LoopClosure[];
   stations: Station[];
-  anchorStation: { section_id: number; station_index: number };
   onSelectStation: (ref: { section_id: number; station_index: number }) => void;
   onAnnounce: (message: string) => void;
   onHoverStart: (ref: { section_id: number; station_index: number }) => void;
@@ -1261,14 +1259,12 @@ function ClosuresSection({
   closures,
   loopClosures,
   stations,
-  anchorStation,
   onSelectStation,
   onAnnounce,
   onHoverStart,
   onHoverEnd,
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
-  const openDialog = useUIStore((s) => s.openDialog);
   const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
@@ -1348,16 +1344,6 @@ function ClosuresSection({
       </button>
       {expanded && (
         <div className="mt-1 space-y-2" id={contentId} data-testid="closures-section-content">
-          <div>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => { setSource('detail-panel'); openDialog('adjust-closures', { anchorStation }); }}
-              data-testid="adjust-closures-button"
-            >
-              Adjust Closures
-            </Button>
-          </div>
           {sortedGroups.map(([closureId, refs]) => {
             const closureIdLabel = closureId.toString();
             const closure = closureMap.get(closureId);

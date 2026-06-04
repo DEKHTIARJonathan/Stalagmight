@@ -277,6 +277,13 @@ export function trackDisplayState(current: object): void {
       counts[eventKey] = (counts[eventKey] || 0) + 1;
     }
   }
+  // geometryMode is an enum, not a boolean toggle in DISPLAY_DEFAULTS. Emit its
+  // non-default state (default is 'measured'); only 'closureAdjusted' is registered.
+  const geometryMode = state['geometryMode'];
+  if (typeof geometryMode === 'string' && geometryMode !== 'measured') {
+    const eventKey = `display-state.geometryMode:${geometryMode}`;
+    counts[eventKey] = (counts[eventKey] || 0) + 1;
+  }
   scheduleFlush();
 }
 
