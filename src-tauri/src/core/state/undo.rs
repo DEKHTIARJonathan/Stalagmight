@@ -1088,18 +1088,52 @@ impl AppState {
                         .insert_shot_after(*section_id, *after_id, shot_data.clone(), Some(*shot_id), uuid.clone())
                         .is_some()
                 } else {
-                    // Append: restore directly at the captured position.
-                    let id = *shot_id;
-                    if let Some(section) = project.get_section_mut(*section_id) {
-                        if id >= section.next_shot_id {
-                            section.next_shot_id = id + 1;
+                    // Both anchors absent. For a CURRENT entry this is an append to an
+                    // empty section (exact via a raw insert). But a LEGACY persisted
+                    // entry (written by a pre-anchor build, reloaded after upgrade) has
+                    // both anchors None even for a prepend / mid-section insert, so route
+                    // through the proper insert helper using the captured position — which
+                    // re-anchors SectionStart on a prepend and cascades offsets on a
+                    // mid-insert — instead of a raw insert that would mis-place anchored
+                    // tails or start-station refs.
+                    let section_len = project.get_section(*section_id).map_or(0, |s| s.shots.len());
+                    let pos = (*position).min(section_len);
+                    if pos == 0 && section_len > 0 {
+                        // Prepend before the current first shot.
+                        let first_id = project
+                            .get_section(*section_id)
+                            .and_then(|s| s.shots.first().map(|sh| sh.id));
+                        match first_id {
+                            Some(fid) => project
+                                .insert_shot_before(*section_id, fid, shot_data.clone(), Some(*shot_id), uuid.clone())
+                                .is_some(),
+                            None => false,
                         }
-                        let pos = (*position).min(section.shots.len());
-                        section.shots.insert(pos, Shot::with_uuid(id, shot_data.clone(), uuid.clone()));
-                        project.touch();
-                        true
+                    } else if pos < section_len {
+                        // Mid-section: insert after the shot currently at pos-1.
+                        let prev_id = project
+                            .get_section(*section_id)
+                            .and_then(|s| s.shots.get(pos - 1).map(|sh| sh.id));
+                        match prev_id {
+                            Some(pid) => project
+                                .insert_shot_after(*section_id, pid, shot_data.clone(), Some(*shot_id), uuid.clone())
+                                .is_some(),
+                            None => false,
+                        }
                     } else {
-                        false
+                        // True append (pos == len) or empty section: a raw insert is
+                        // exact — no station shift or SectionStart re-anchor is needed.
+                        let id = *shot_id;
+                        if let Some(section) = project.get_section_mut(*section_id) {
+                            if id >= section.next_shot_id {
+                                section.next_shot_id = id + 1;
+                            }
+                            section.shots.insert(pos, Shot::with_uuid(id, shot_data.clone(), uuid.clone()));
+                            project.touch();
+                            true
+                        } else {
+                            false
+                        }
                     }
                 };
                 if ok {

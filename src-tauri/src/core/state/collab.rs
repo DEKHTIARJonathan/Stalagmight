@@ -162,6 +162,10 @@ impl AppState {
             Ok(s) => s,
             Err(r) => return r,
         };
+        // Capture critical state BEFORE the apply so the guard below only rejects
+        // corruption this apply INTRODUCED, not pre-existing corruption the project
+        // was already opened with (matching execute()'s guard_introduced_corruption).
+        let pre_had_critical = self.project_has_critical();
 
         let skipped = {
             let mut guard = match self.project.lock() {
@@ -187,7 +191,7 @@ impl AppState {
         // reconcile derived offsets, and reject (roll back) if applying the
         // collaborator's changes introduced critical corruption. apply_changeset
         // writes foreign TML geometry directly, so this is the first gate it sees.
-        if self.finalize_structural_edit() {
+        if self.finalize_structural_edit(pre_had_critical) {
             self.rollback_project(&before);
             tracing::error!(
                 purpose = "block corruption at the source",

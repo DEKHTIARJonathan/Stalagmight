@@ -884,6 +884,132 @@ fn save_sanitizes_non_finite_geometry() {
 }
 
 #[test]
+fn restore_snapshot_mints_null_uuids_before_reanchor() {
+    // A legacy (pre-v6) snapshot can carry shots with uuid:null AND positional Index
+    // anchors. restore must MINT the missing UUIDs before re-anchoring —
+    // ensure_unique only dedups EXISTING UUIDs — or key_for_ref can't canonicalize
+    // the Index anchor and it stays live (the gap S4 closes in the P1 fix).
+    let mut project = Project::new("LegacyNullUuid".to_string(), None);
+    let s = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0), test_shot_data(3.0)],
+            ..Default::default()
+        })
+        .id;
+    // Force legacy null UUIDs (pre-v6 files load with NULL uuid columns).
+    for shot in &mut project.get_section_mut(s).unwrap().shots {
+        shot.uuid = None;
+    }
+    // A station offset stored in the legacy positional (Index) form.
+    project
+        .station_offsets
+        .insert(StationKey::new(s, StationAnchor::Index(2)), (1.0, 2.0, 3.0));
+    let snapshot = serde_json::to_string(&project).unwrap();
+
+    let mut slot: Option<Project> = None;
+    assert!(AppState::restore_snapshot_into(&mut slot, &snapshot));
+    let restored = slot.unwrap();
+
+    // No Index anchor survives: the null UUIDs were minted, so reanchor could
+    // canonicalize Index → AfterShot.
+    let mut saw_index = false;
+    restored.for_each_station_ref(|_label, key| {
+        if matches!(key.anchor, StationAnchor::Index(_)) {
+            saw_index = true;
+        }
+    });
+    assert!(!saw_index, "restore must mint null UUIDs so Index anchors canonicalize");
+}
+
+#[test]
+fn finalize_structural_edit_ignores_pre_existing_critical() {
+    // A project opened ALREADY critical (e.g. a dangling cross-reference) must not
+    // have an otherwise-clean collab apply / import rolled back: finalize signals a
+    // rollback only for NEWLY introduced corruption, matching execute()'s guard.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("AlreadyCritical".to_string(), None);
+    project.add_section(SectionData { shots: vec![test_shot_data(1.0)], ..Default::default() });
+    project.ensure_shot_uuids();
+    // Inject a non-finite shot value → non_finite_geometry (a Critical violation).
+    project.sections[0].shots[0].length = f64::NAN;
+    assert!(project.has_critical_integrity_violations());
+    state.set_project_for_tests(project);
+
+    // pre_had_critical = true: do NOT signal rollback (the corruption pre-existed).
+    assert!(
+        !state.finalize_structural_edit(true),
+        "must not block an otherwise-clean edit on an already-critical project"
+    );
+    // pre_had_critical = false (clean before): DOES signal rollback (corruption present).
+    assert!(
+        state.finalize_structural_edit(false),
+        "must block when this edit introduced the critical violation"
+    );
+}
+
+#[test]
+fn redo_legacy_prepend_createshot_reanchors_section_start() {
+    // A CreateShot undo entry persisted by a PRE-anchor build has after_shot_id /
+    // before_shot_id == None even for a prepend, so redo used to hit a raw insert
+    // that skipped the SectionStart re-anchor — leaving a station-0 datum pointing at
+    // the newly-prepended station instead of the original first station. Redo now
+    // routes a legacy (anchor-less) entry through the insert helper by position.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("LegacyRedo".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    // Zero datum on station 0 → stored as a SectionStart anchor.
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(45.0, -73.0, 100.0).unwrap())
+        .unwrap();
+    state.set_project_for_tests(project);
+
+    // A LEGACY redo entry: prepend (position 0) with NO anchor fields, as a
+    // pre-anchor build would have persisted it.
+    let entry = UndoEntry {
+        command: Command::CreateShot {
+            section_id: a,
+            shot: test_shot_data(5.0),
+            after_shot_id: None,
+            before_shot_id: None,
+        },
+        undo_data: UndoData::CreatedShotSnapshot {
+            section_id: a,
+            shot_id: 999,
+            shot_data: test_shot_data(5.0),
+            position: 0,
+            station_shift_from: 0,
+            after_shot_id: None,
+            before_shot_id: None,
+            uuid: Some("prep-uuid".to_string()),
+        },
+        timestamp: None,
+    };
+    state.undo_stack.lock().unwrap().push_redo(entry);
+    assert!(state.redo().success, "legacy prepend redo");
+
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(restored.get_section(a).unwrap().shots.len(), 3, "prepend re-applied");
+    assert_eq!(
+        restored.get_section(a).unwrap().shots[0].uuid.as_deref(),
+        Some("prep-uuid"),
+    );
+    // The station-0 datum must still resolve to the ORIGINAL first station (now
+    // index 1), not the freshly-prepended station (index 0).
+    let datum_key = restored.zero_datums[0].station_ref.clone();
+    let resolved = restored.resolve_key(&datum_key).expect("datum still resolves");
+    assert_eq!(
+        resolved.station_index, 1,
+        "SectionStart datum re-anchored to the original first station after a legacy prepend redo"
+    );
+}
+
+#[test]
 fn test_open_project_fails_on_invalid_file() {
     let temp_dir = TempDir::new().unwrap();
     let invalid_path = temp_dir.path().join("invalid.stalx");

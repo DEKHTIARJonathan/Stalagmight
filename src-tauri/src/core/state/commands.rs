@@ -198,7 +198,7 @@ impl AppState {
     }
 
     /// True iff the open project currently holds a Critical integrity violation.
-    fn project_has_critical(&self) -> bool {
+    pub(super) fn project_has_critical(&self) -> bool {
         self.project
             .lock()
             .ok()
@@ -237,14 +237,23 @@ impl AppState {
     /// Shared structural-edit epilogue for the custom `execute_*` paths that
     /// bypass [`Self::execute`]'s gated epilogue (collab apply, TML import).
     /// Converts sole-bridge closures to merges and reconciles derived offsets,
-    /// then reports whether the project now holds a CRITICAL integrity violation
+    /// then reports whether this edit INTRODUCED a CRITICAL integrity violation
     /// (dangling ref / out-of-range index / non-finite geometry). A caller that
     /// captured a pre-edit snapshot rolls back to it when this returns `true`,
     /// giving these paths the same "block corruption at the source" guarantee the
     /// standard command path gets (#integrity Root 4).
-    pub(super) fn finalize_structural_edit(&self) -> bool {
+    ///
+    /// `pre_had_critical` is the project's critical state BEFORE the edit. Matching
+    /// `guard_introduced_corruption` / `execute`, an already-critical project (one
+    /// opened with a dangling ref or non-finite shot — permitted; the banner offers
+    /// Repair) does not block an otherwise-clean collab apply / import: only NEWLY
+    /// introduced corruption rolls back.
+    pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
         self.convert_orphan_closures_in_open_project();
         self.reconcile_geometry();
+        if pre_had_critical {
+            return false;
+        }
         self.project
             .lock()
             .ok()
@@ -704,6 +713,7 @@ impl AppState {
         );
 
         // Take a project snapshot BEFORE any modifications
+        let pre_had_critical = self.project_has_critical();
         let before_snapshot = match self.capture_project_snapshot() {
             Ok(s) => s,
             Err(result) => return result,
@@ -1295,7 +1305,7 @@ impl AppState {
         // corruption (dangling refs / non-finite geometry) rather than committing
         // and later persisting it. This custom path bypasses execute()'s guard, so
         // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
-        if self.finalize_structural_edit() {
+        if self.finalize_structural_edit(pre_had_critical) {
             self.rollback_project(&before_snapshot);
             tracing::error!(
                 purpose = "block corruption at the source",

@@ -270,7 +270,13 @@ impl AppState {
                 // re-solve), so the restored geometry is preserved exactly; both calls
                 // are idempotent on already-canonical same-session snapshots. Runs
                 // after the cache rebuilds because `reanchor_station_refs` resolves
-                // refs through the section index.
+                // refs through the section index. ensure_shot_uuids() MUST run first:
+                // a legacy (pre-v6) snapshot can carry shots with uuid:null, and
+                // ensure_unique only re-mints DUPLICATES — it leaves nulls null. Without
+                // minting them, key_for_ref returns None for the AfterShot of a
+                // null-uuid shot, so reanchor can't canonicalize that station's Index
+                // anchor and it stays live (the exact bug this canonicalization prevents).
+                restored.ensure_shot_uuids();
                 restored.ensure_unique_shot_uuids();
                 restored.reanchor_station_refs();
                 *slot = Some(restored);
