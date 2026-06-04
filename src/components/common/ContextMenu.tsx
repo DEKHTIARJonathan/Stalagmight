@@ -15,13 +15,14 @@ interface ContextMenuItem {
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection } = useUIStore(useShallow((s) => ({
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, geometryMode } = useUIStore(useShallow((s) => ({
     closeDialog: s.closeDialog,
     dialogData: s.dialogData,
     openDialog: s.openDialog,
     setActiveTool: s.setActiveTool,
     setMergeStationA: s.setMergeStationA,
     triggerZoomToSection: s.triggerZoomToSection,
+    geometryMode: s.geometryMode,
   })));
   const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
 
@@ -474,7 +475,16 @@ export default function ContextMenu() {
     return [];
   };
 
-  const items = buildMenuItems();
+  // The closure-adjusted view is read-only: disable every mutation item (all of
+  // them except read-only navigation like "Zoom to Section"). Edits are made in
+  // the measured view.
+  const geometryReadOnly = geometryMode === 'closureAdjusted';
+  const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
+  const items = buildMenuItems().map((item) =>
+    geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
+      ? { ...item, disabled: true }
+      : item
+  );
 
   if (!target || !position || items.length === 0) {
     return null;

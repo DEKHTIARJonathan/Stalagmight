@@ -315,6 +315,8 @@ function StationDetail({ station }: { station: Station }) {
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnStation: s.triggerCenterOnStation, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredShot: s.setHoveredShot, setHoveredSectionId: s.setHoveredSectionId }))
   );
   const precision = useDecimalPrecision();
+  // Closure-adjusted view is read-only: disable mutation controls (edits happen in measured view).
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const [unmergeTargetKey, setUnmergeTargetKey] = useState<string | null>(null);
   const section = project?.sections.find(
     (s) => s.id === station.station_ref.section_id
@@ -512,7 +514,7 @@ function StationDetail({ station }: { station: Station }) {
                       title="Unmerge Stations"
                       aria-label={`Unmerge station ${formatStationId(ref.section_id, ref.station_index)}`}
                       data-testid={`detail-unmerge-${ref.section_id}-${ref.station_index}`}
-                      disabled={unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
+                      disabled={geometryReadOnly || unmergeTargetKey === `${ref.section_id}:${ref.station_index}`}
                     >
                       <LinkOffIcon size={14} />
                     </button>
@@ -592,7 +594,7 @@ function StationDetail({ station }: { station: Station }) {
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEdit}>
+        <Button size="sm" className="w-full" onClick={handleEdit} disabled={geometryReadOnly}>
           {t('common.actions.edit')}
         </Button>
       </div>
@@ -615,6 +617,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
   const { setShotReference } = useProjectStore();
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
   );
@@ -819,10 +822,10 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       </Panel>
 
       <div className="p-3 border-t border-border space-y-2">
-        <Button size="sm" className="w-full" onClick={handleToggleReference}>
+        <Button size="sm" className="w-full" onClick={handleToggleReference} disabled={geometryReadOnly}>
           {shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
         </Button>
-        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete}>
+        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={geometryReadOnly}>
           {t('common.actions.delete')}
         </Button>
       </div>
@@ -838,6 +841,7 @@ interface SectionDetailProps {
 
 function SectionDetail({ section, stations, totalProjectLength }: SectionDetailProps) {
   const { t } = useTranslation();
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const { openDialog, setSelection, triggerZoomToSection, announceSelection, setHoveredStation } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
@@ -1053,7 +1057,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEditSection}>
+        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={geometryReadOnly}>
           {t('detailPanel.section.edit')}
         </Button>
       </div>
@@ -1266,6 +1270,7 @@ function ClosuresSection({
 }: ClosuresSectionProps) {
   const { t } = useTranslation();
   const removeLoopClosure = useProjectStore((s) => s.removeLoopClosure);
+  const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   const precision = useDecimalPrecision();
   const [expanded, setExpanded] = useState(true);
   const [removingClosureId, setRemovingClosureId] = useState<bigint | null>(null);
@@ -1422,7 +1427,7 @@ function ClosuresSection({
                     title="Remove Closure"
                     aria-label={`Remove closure ${closureIdLabel}`}
                     data-testid={`detail-remove-closure-${closureIdLabel}`}
-                    disabled={!closure || removingClosureId === closureId}
+                    disabled={geometryReadOnly || !closure || removingClosureId === closureId}
                   >
                     <LinkOffIcon size={14} />
                   </button>

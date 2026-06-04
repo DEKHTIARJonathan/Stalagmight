@@ -173,6 +173,7 @@ impl AppState {
 
         // Clear display settings cache for new project
         self.clear_display_settings_cache();
+        self.invalidate_adjusted_cache();
 
         CommandResult::success()
     }
@@ -284,6 +285,7 @@ impl AppState {
 
         // Clear display settings cache (settings will be loaded from DB by frontend)
         self.clear_display_settings_cache();
+        self.invalidate_adjusted_cache();
 
         // Restore persisted undo/redo stacks
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -662,6 +664,7 @@ impl AppState {
 
         // Clear in-memory cache since settings are now persisted to DB
         self.clear_display_settings_cache();
+        self.invalidate_adjusted_cache();
 
         // Add to recent projects and persist to config
         if let Ok(mut recent) = self.recent_projects.lock() {
@@ -779,6 +782,7 @@ impl AppState {
 
         // Clear display settings cache
         self.clear_display_settings_cache();
+        self.invalidate_adjusted_cache();
 
         tracing::info!(
             purpose = "release project resources",
@@ -1436,6 +1440,7 @@ impl AppState {
 
         // Commit 3: Display settings cache clear
         self.clear_display_settings_cache();
+        self.invalidate_adjusted_cache();
 
         // Commit 4: Undo/redo stack restore
         {
@@ -1678,6 +1683,7 @@ impl AppState {
             }
         } else {
             self.clear_display_settings_cache();
+            self.invalidate_adjusted_cache();
         }
 
         // Commit 5: Add to recent projects only after a real file exists.

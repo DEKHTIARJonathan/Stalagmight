@@ -1567,7 +1567,8 @@
     "fitToViewTitle": "Fit to view",
     "geometry": {
       "adjustedBadge": "Closure-adjusted · read-only",
-      "computing": "Computing closure…"
+      "computing": "Computing closure…",
+      "computeFailed": "Couldn't compute the closure-adjusted view; showing measured geometry."
     },
     "depthLegend": {
       "aria": "Depth scale from {{min}} (shallow) to {{max}} (deep)",

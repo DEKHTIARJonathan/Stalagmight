@@ -1524,9 +1524,16 @@ export default function MapCanvas() {
   // store action guards against concurrent/duplicate fetches.
   useEffect(() => {
     if (geometryMode === 'closureAdjusted' && project && !surveyDataAdjusted) {
-      void loadAdjustedGeometry();
+      void loadAdjustedGeometry().then((ok) => {
+        // On a genuine fetch failure, fall back to the measured view rather than
+        // leaving the user stuck in a read-only view showing measured geometry.
+        if (!ok) {
+          setGeometryMode('measured');
+          showToast(t('map.geometry.computeFailed'), 'geometry-compute-failed');
+        }
+      });
     }
-  }, [geometryMode, project, surveyDataAdjusted, loadAdjustedGeometry]);
+  }, [geometryMode, project, surveyDataAdjusted, loadAdjustedGeometry, setGeometryMode, showToast, t]);
 
   // The adjusted view is meaningless without closures: revert to measured if the
   // last closure is removed while it is active.

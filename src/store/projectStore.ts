@@ -216,8 +216,12 @@ interface ProjectStore {
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
-  /** Fetch closure-adjusted geometry for the adjusted display mode (lazy, cached). */
-  loadAdjustedGeometry: () => Promise<void>;
+  /**
+   * Fetch closure-adjusted geometry for the adjusted display mode (lazy, cached).
+   * Resolves true on success / no-op, false only on a genuine fetch failure (so
+   * the caller can fall back to the measured view rather than getting stuck).
+   */
+  loadAdjustedGeometry: () => Promise<boolean>;
   /** Check if a shot (by section_id + shot index) is frozen */
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   /** Structural-integrity issues found in the open project (empty = sound). */
@@ -1378,15 +1382,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  loadAdjustedGeometry: async () => {
+  loadAdjustedGeometry: async (): Promise<boolean> => {
     const { project, surveyData, stations, adjustedLoading } = get();
-    if (!project || adjustedLoading) return;
+    // No-op (no project, or a fetch already in flight): not a failure.
+    if (!project || adjustedLoading) return true;
 
     // No eligible closures → the adjusted view is identical to measured; reuse
     // the measured set directly and skip the backend round-trip.
     if (project.loop_closures.length === 0) {
       set({ stationsAdjusted: stations, surveyDataAdjusted: surveyData });
-      return;
+      return true;
     }
 
     set({ adjustedLoading: true });
@@ -1398,13 +1403,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // refreshProjectState will have nulled the cache and re-triggered us.
       if (get().project !== project) {
         set({ adjustedLoading: false });
-        return;
+        return true;
       }
       const surveyDataAdjusted = surveyDataFromLegacy(project.sections, adjusted);
       set({ stationsAdjusted: adjusted, surveyDataAdjusted, adjustedLoading: false });
+      return true;
     } catch (e) {
       console.warn('Failed to load adjusted geometry:', e);
       set({ adjustedLoading: false });
+      return false;
     }
   },
 

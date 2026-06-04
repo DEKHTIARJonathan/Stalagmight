@@ -407,6 +407,8 @@ export function useKeyboardShortcuts() {
           event.preventDefault();
           return;
         }
+        // GUARD: the closure-adjusted view is read-only — no deletes.
+        if (useUIStore.getState().geometryMode === 'closureAdjusted') return;
         // GUARD: No delete for pan/zoom tools
         const currentToolDel = useUIStore.getState().activeTool;
         if (isNonInteractiveTool(currentToolDel)) return;
