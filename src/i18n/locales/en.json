@@ -1011,6 +1011,7 @@
       "cancel": "Cancel",
       "apply": "Apply Changes",
       "applying": "Applying...",
+      "readOnlyHint": "Switch to the Measured view to apply — the closure-adjusted view is read-only.",
       "errorTitle": "Reconcile Failed",
       "errorUnknown": "Unknown error while applying changes",
       "errorApply": "Failed to apply collaborator changes",
