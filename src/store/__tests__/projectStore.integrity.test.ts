@@ -201,4 +201,38 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
 
     expect(useProjectStore.getState().isDirty).toBe(false);
   });
+
+  it('drops a stale integrity result when the project switches mid-check', async () => {
+    // A check is in flight for project A when the user opens B. The backend scans
+    // whatever project is currently loaded (no path arg), so the late A result
+    // must NOT overwrite B's freshly-reset banner/save-block state.
+    useProjectStore.setState({
+      project: { file_path: '/A.stalx' } as never,
+      loading: { ...useProjectStore.getState().loading, clientOpId: 1 },
+      integrityIssues: [],
+      integritySaveBlocked: false,
+    });
+
+    let resolveA!: (v: { messages: string[]; save_blocked: boolean }) => void;
+    invokeIpcMock.mockImplementationOnce(
+      () => new Promise((r) => { resolveA = r as typeof resolveA; }),
+    );
+    const checkA = useProjectStore.getState().checkProjectIntegrity();
+
+    // Switch to B: new project, integrity reset, clientOpId bumped (as a load does).
+    useProjectStore.setState({
+      project: { file_path: '/B.stalx' } as never,
+      loading: { ...useProjectStore.getState().loading, clientOpId: 2 },
+      integrityIssues: [],
+      integritySaveBlocked: false,
+    });
+
+    // A's slow check now resolves with A's save-blocking issues.
+    resolveA({ messages: ['A: merge references a deleted station'], save_blocked: true });
+    await checkA;
+
+    // B's state is untouched — the stale A result was dropped.
+    expect(useProjectStore.getState().integrityIssues).toEqual([]);
+    expect(useProjectStore.getState().integritySaveBlocked).toBe(false);
+  });
 });

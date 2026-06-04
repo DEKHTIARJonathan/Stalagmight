@@ -566,8 +566,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           warnings: result.warnings,
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
-          // previous project can never carry over and suppress this one's banner
-          // (the post-load check below repopulates it for the new project).
+          // previous project can never carry over and suppress this one's banner.
+          // The post-load integrity-check effect in App.tsx (keyed on
+          // project.file_path + loading.isLoading) repopulates it for the new
+          // project once this load settles.
           integrityIssues: [],
           integrityDismissed: false,
           integritySaveBlocked: false,
@@ -1014,10 +1016,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   checkProjectIntegrity: async () => {
+    // The check is fire-and-forget (the post-load App effect, the after-every-
+    // command wrapper, a failed save) and the backend scans whatever project is
+    // currently loaded with no path argument. Correlate the result with the
+    // project that was active when it STARTED: if the user switches or closes
+    // projects while the check is in flight, a late-resolving result must not
+    // overwrite the new project's freshly-reset banner/save-block state.
+    // clientOpId bumps on every load (catches a switch); file_path catches a
+    // close (project → null).
+    const pathAtStart = get().project?.file_path ?? null;
+    const opAtStart = get().loading.clientOpId;
     try {
       const result = await invokeIpc<IntegrityCheckResult>('check_project_integrity', undefined, {
         purpose: 'check project structural integrity after load',
       });
+      const cur = get();
+      if ((cur.project?.file_path ?? null) !== pathAtStart || cur.loading.clientOpId !== opAtStart) {
+        // Project switched/closed mid-check — drop this stale result so it can't
+        // clobber the new project's integrity state.
+        return [];
+      }
       const issues = result.messages;
       set((state) => {
         // Keep a dismissal sticky across re-checks (e.g. after every save) as long
