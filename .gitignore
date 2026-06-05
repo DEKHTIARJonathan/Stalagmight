@@ -65,3 +65,7 @@ src-tauri/gen/android/local.properties
 # Cloudflare Worker
 telemetry-worker/wrangler.toml
 telemetry-worker/.wrangler/
+
+# Claude Code local/runtime state (machine-specific; must not be tracked)
+.claude/*.lock
+.claude/settings.local.json
