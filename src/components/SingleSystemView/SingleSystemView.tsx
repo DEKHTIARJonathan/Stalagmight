@@ -65,6 +65,7 @@ export default function SingleSystemView() {
     setFocusedSection,
     selection,
     triggerZoomToSection,
+    triggerFitToBounds,
     toggleSectionsPanel,
     toggleDetailPanel,
     toggleDataTable,
@@ -84,6 +85,7 @@ export default function SingleSystemView() {
     setFocusedSection: s.setFocusedSection,
     selection: s.selection,
     triggerZoomToSection: s.triggerZoomToSection,
+    triggerFitToBounds: s.triggerFitToBounds,
     toggleSectionsPanel: s.toggleSectionsPanel,
     toggleDetailPanel: s.toggleDetailPanel,
     toggleDataTable: s.toggleDataTable,
@@ -111,30 +113,35 @@ export default function SingleSystemView() {
         ? selection.stationRef?.section_id
         : undefined;
 
-  // #50: re-fit the map once the layout settles — on a fresh ENTRY into focus
-  // (null -> id) and on EXIT (id -> null). Entry frames the section in the
-  // enlarged map; exit re-frames it after the side panels return and the map
-  // shrinks, so the section stays centered instead of drifting off. NOT on a
-  // follow (id -> id'), so clicking another section never re-zooms — consistent
-  // with single-click no longer moving the map. Lives here (not in SectionsPanel,
+  // #50: adjust the map once the layout settles, after the side panels collapse
+  // (entry) or return (exit). ENTRY (null -> id) frames the focused section in the
+  // enlarged map; EXIT (id -> null) returns to a neutral whole-map overview
+  // (fit-to-bounds) rather than staying zoomed into the section. NOT on a follow
+  // (id -> id'), so clicking another section never re-zooms — consistent with
+  // single-click no longer moving the map. Lives here (not in SectionsPanel,
   // which unmounts on collapse) so the timer survives the panel mount/unmount.
   const prevFocusedRef = useRef<SectionId | null>(null);
   useEffect(() => {
     const prev = prevFocusedRef.current;
     prevFocusedRef.current = focusedSectionId;
-    const target =
+    const transition =
       prev === null && focusedSectionId !== null
-        ? focusedSectionId // entry
+        ? 'enter'
         : prev !== null && focusedSectionId === null
-          ? prev // exit — re-frame the section just left
+          ? 'exit'
           : null; // follow / no transition
-    if (target === null) return;
+    if (transition === null) return;
+    const enterId = focusedSectionId;
     const timer = window.setTimeout(() => {
       setSource('sections-panel');
-      triggerZoomToSection(target);
+      if (transition === 'enter' && enterId !== null) {
+        triggerZoomToSection(enterId);
+      } else {
+        triggerFitToBounds();
+      }
     }, SECTION_FOCUS_REFIT_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [focusedSectionId, triggerZoomToSection]);
+  }, [focusedSectionId, triggerZoomToSection, triggerFitToBounds]);
 
   // #50: while focused, follow the selected section so the toolbar heading tracks
   // the data table (clicking another section on the map updates both).

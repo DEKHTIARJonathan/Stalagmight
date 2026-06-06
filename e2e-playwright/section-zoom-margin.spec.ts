@@ -489,22 +489,51 @@ test.describe('Section zoom margin', () => {
     assertMargins(finalResult!, MIN_MARGIN_PCT);
   });
 
-  test('exiting focus mode re-centers the section in the restored view', async ({ page }) => {
+  test('exiting focus mode returns to the whole-map (fit-to-bounds) view', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
+    const getView = () =>
+      page.evaluate(() => {
+        const m = (window as unknown as {
+          __stalagmight_map__?: { getZoom: () => number; getCenter: () => { lng: number; lat: number } };
+        }).__stalagmight_map__!;
+        const c = m.getCenter();
+        return { lng: c.lng, lat: c.lat, zoom: m.getZoom() };
+      });
+    const mapIdle = () =>
+      page.evaluate(() => {
+        const m = (window as unknown as { __stalagmight_map__?: { isMoving: () => boolean } }).__stalagmight_map__;
+        return m ? !m.isMoving() : false;
+      });
+    const settle = async () => {
+      // Ride past the post-action re-fit delay (180ms here + 100ms in MapCanvas).
+      await page.waitForTimeout(400);
+      await expect.poll(mapIdle, { timeout: 15000 }).toBe(true);
+    };
 
-    // Enter focus: panels collapse, the section is framed in the enlarged map.
+    // Enter focus, then exit via the toolbar section name.
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.dblclick();
     await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
-
-    // Exit via the toolbar section name. The side panels return and the map
-    // shrinks — the section must be re-framed, not left drifting off-centre with
-    // the wide-view camera (the reported bug).
     await page.getByTestId('toolbar-section-focus-name').dblclick();
     await expect(page.getByTestId('sections-panel')).toBeVisible();
+    await settle();
+    const exitView = await getView();
 
-    const result = await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
-    assertMargins(result, MIN_MARGIN_PCT);
+    // Exit must already be at the whole-map fit-to-bounds view: triggering
+    // fit-to-bounds now must be a no-op (idempotent). If exit had instead stayed
+    // zoomed into the section (the bug), this would move the camera.
+    await page.evaluate(() => {
+      const ui = (window as unknown as {
+        __E2E_TEST__?: { uiStore?: { getState: () => { triggerFitToBounds: () => void } } };
+      }).__E2E_TEST__?.uiStore;
+      ui?.getState().triggerFitToBounds();
+    });
+    await settle();
+    const fitView = await getView();
+
+    expect(Math.abs(exitView.zoom - fitView.zoom)).toBeLessThan(0.25);
+    expect(Math.abs(exitView.lng - fitView.lng)).toBeLessThan(1e-5);
+    expect(Math.abs(exitView.lat - fitView.lat)).toBeLessThan(1e-5);
   });
 });
