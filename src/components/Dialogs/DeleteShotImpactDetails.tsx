@@ -1,12 +1,20 @@
 import type { DeleteShotImpact } from '../../types/commands';
 import type { StationRef } from '../../types/project';
+import { EntityBlob } from '../common/EntityBlob';
 
-function formatStationRef(station: StationRef): string {
-  return `${station.section_id}:${station.station_index}`;
+/** A station reference as the entity pill (Full level) or plain "section:index". */
+function StationRefBlob({ station }: { station: StationRef }) {
+  return (
+    <EntityBlob entity="station">{`${station.section_id}:${station.station_index}`}</EntityBlob>
+  );
 }
 
-function formatPair(a: StationRef, b: StationRef): string {
-  return `${formatStationRef(a)} <-> ${formatStationRef(b)}`;
+function Pair({ a, b }: { a: StationRef; b: StationRef }) {
+  return (
+    <>
+      <StationRefBlob station={a} /> {'<->'} <StationRefBlob station={b} />
+    </>
+  );
 }
 
 export default function DeleteShotImpactDetails({
@@ -38,7 +46,7 @@ export default function DeleteShotImpactDetails({
             <p className="font-medium">Removed merges</p>
             <ul className="list-disc list-inside">
               {impact.removed_merges.map((pair, index) => (
-                <li key={`removed-merge-${index}`}>{formatPair(pair.station_a, pair.station_b)}</li>
+                <li key={`removed-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
               ))}
             </ul>
           </div>
@@ -52,7 +60,7 @@ export default function DeleteShotImpactDetails({
                 const closureId = closure.closure_id.toString();
                 return (
                   <li key={`removed-closure-${closureId}`}>
-                    #{closureId}: {formatPair(closure.station_a, closure.station_b)}
+                    #{closureId}: <Pair a={closure.station_a} b={closure.station_b} />
                   </li>
                 );
               })}
@@ -65,7 +73,7 @@ export default function DeleteShotImpactDetails({
             <p className="font-medium">Replacement merges</p>
             <ul className="list-disc list-inside">
               {impact.replacement_merges.map((pair, index) => (
-                <li key={`replacement-merge-${index}`}>{formatPair(pair.station_a, pair.station_b)}</li>
+                <li key={`replacement-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
               ))}
             </ul>
           </div>
@@ -79,7 +87,7 @@ export default function DeleteShotImpactDetails({
                 const closureId = update.closure_id.toString();
                 return (
                   <li key={`replacement-closure-${closureId}`}>
-                    #{closureId}: {formatStationRef(update.old_station)} {'->'} {formatStationRef(update.new_station)}
+                    #{closureId}: <StationRefBlob station={update.old_station} /> {'->'} <StationRefBlob station={update.new_station} />
                   </li>
                 );
               })}
@@ -92,7 +100,7 @@ export default function DeleteShotImpactDetails({
             <p className="font-medium">Closures becoming merges</p>
             <ul className="list-disc list-inside">
               {impact.closure_to_merge.map((pair, index) => (
-                <li key={`closure-to-merge-${index}`}>{formatPair(pair.station_a, pair.station_b)}</li>
+                <li key={`closure-to-merge-${index}`}><Pair a={pair.station_a} b={pair.station_b} /></li>
               ))}
             </ul>
           </div>

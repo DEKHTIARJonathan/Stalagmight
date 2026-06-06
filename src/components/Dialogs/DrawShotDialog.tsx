@@ -4,6 +4,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
+import { EntityBlob } from '../common/EntityBlob';
+import { formatStationId } from '../../utils/formatters';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData } from '../../types/project';
 
@@ -216,7 +218,7 @@ export default function DrawShotDialog() {
         <div className="p-3 bg-background rounded">
           <span className="text-text-secondary">From:</span>{' '}
           <span className="font-medium">
-            {sectionName} #{fromStation.station_index}
+            <EntityBlob entity="station">{formatStationId(fromStation.section_id, fromStation.station_index)}</EntityBlob> ({sectionName})
           </span>
         </div>
 
