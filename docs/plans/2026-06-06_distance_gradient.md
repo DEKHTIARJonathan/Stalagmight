@@ -17,12 +17,28 @@
   (a jump); drop redundant ones (double-count). Shared graph, so
   penetration/export use the corrected reachability. Temporary → retire under
   **#77**. Tests green (1511+80). (`626b2f95`)
-- [ ] IPC: `get_station_distances_from(Option<StationRef>) -> DistanceField` +
-  ts-rs export + `pnpm gen:ipc-types`.
+- [x] **IPC** — `DistanceField` + `Project::distance_field_from(Option<&StationRef>)`
+  (None = entrance default) + `get_station_distances_from` command + ts-rs +
+  telemetry event (Rust+worker). cargo(+telemetry) & tsc green. (`9c4b7eb6`)
 - [ ] Frontend: uiStore state, Display toggle, click-to-pick, paint expression,
-  legend + origin marker, i18n.
-- [ ] Telemetry events (append-only).
-- [ ] Verification (tsc, test:ui, cargo ±telemetry).
+  legend + origin marker, i18n. **Paused here for review** (visual/UX work +
+  one decision below). Integration points fully mapped: depth-gradient is the
+  template — `uiStore.ts` display toggle plumbing, `displaySelectors.ts`
+  DISPLAY_DEFAULTS, `DisplayMenu.tsx` Overlays group, `surveyLayer/features.ts`
+  + `SurveyLayer.tsx` paint, `DepthLegend.tsx` → new `DistanceLegend.tsx`,
+  `useMapTools.ts` station-click origin pick, `utils/ipc.ts` `invokeIpc`.
+- [x] Telemetry event (append-only) — `command.get_station_distances_from`
+  added (Rust + worker), len 317→318. (`9c4b7eb6`)
+- [ ] Verification (tsc ✅ so far, test:ui, cargo ±telemetry ✅ so far).
+
+### Open decision before frontend (for Nico)
+**Should the distance-gradient toggle persist across sessions?** Depth gradient
+does, but it goes through the typed Rust `DisplaySettings` struct
+(`core/loading.rs:197`; a test asserts the field count). Distance gradient is a
+*transient* analytical overlay that defaults to the entrance each time, so
+persisting it is likely wrong. **Recommendation: runtime-only** (a plain uiStore
+field + a DisplayMenu item that doesn't route through `saveDisplaySetting`), which
+avoids the cross-stack Rust/ts-rs change. Confirm before wiring the toggle.
 
 ## Context
 
