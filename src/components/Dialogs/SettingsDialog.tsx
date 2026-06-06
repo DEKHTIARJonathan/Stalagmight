@@ -21,6 +21,7 @@ import { ShortcutsSettings } from './settings/ShortcutsSettings';
 import { CacheSettings } from './settings/CacheSettings';
 import { AdvancedSettings } from './settings/AdvancedSettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
+import { SyntacticHighlightingSettings } from './settings/SyntacticHighlightingSettings';
 import type { Config } from '../../types/config';
 import {
   defaultConfig,
@@ -105,6 +106,13 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
       return { cache: { ...defaultConfig.cache } };
     case 'appearance':
       return { appearance: { ...defaultConfig.appearance } };
+    case 'syntactic':
+      return {
+        syntactic_highlighting: {
+          ...defaultConfig.syntactic_highlighting,
+          overrides: {},
+        },
+      };
     case 'advanced':
       return {
         debug: { map: { ...defaultConfig.debug.map }, memory_probe: defaultConfig.debug.memory_probe },
@@ -318,6 +326,7 @@ export default function SettingsDialog() {
   const { closeDialog } = useUIStore();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const setThemePreview = useUIStore((s) => s.setThemePreview);
+  const setSyntacticHighlightPreview = useUIStore((s) => s.setSyntacticHighlightPreview);
   const { config, updateConfig } = useProjectStore();
 
   // Panel ID base for ARIA associations
@@ -370,6 +379,19 @@ export default function SettingsDialog() {
     }
     return () => setThemePreview(null);
   }, [localConfig?.appearance.theme, localConfig?.appearance.day_color_theme, localConfig?.appearance.night_color_theme, setThemePreview]);
+
+  // Live-preview syntactic-highlighting changes (level / preset / per-color overrides)
+  useEffect(() => {
+    if (localConfig) {
+      setSyntacticHighlightPreview(localConfig.syntactic_highlighting);
+    }
+    return () => setSyntacticHighlightPreview(null);
+  }, [
+    localConfig?.syntactic_highlighting.level,
+    localConfig?.syntactic_highlighting.preset,
+    localConfig?.syntactic_highlighting.overrides,
+    setSyntacticHighlightPreview,
+  ]);
 
   // Compute changed fields from original config
   const changedFields = useMemo(() => {
@@ -557,6 +579,8 @@ export default function SettingsDialog() {
         return <CacheSettings {...commonProps} />;
       case 'appearance':
         return <AppearanceSettings {...commonProps} />;
+      case 'syntactic':
+        return <SyntacticHighlightingSettings {...commonProps} />;
       case 'advanced':
         return <AdvancedSettings {...commonProps} />;
       default:

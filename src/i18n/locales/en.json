@@ -63,6 +63,7 @@
       "ariaLabel": "Settings categories",
       "general": "General",
       "appearance": "Appearance",
+      "syntactic": "Highlighting",
       "units": "Units",
       "display": "Display",
       "map": "Map",
@@ -242,6 +243,53 @@
             "description": "Follows your operating system appearance preference"
           }
         }
+      }
+    },
+    "syntactic": {
+      "title": "Syntactic Highlighting",
+      "sections": {
+        "level": "Level",
+        "preset": "Preset",
+        "entities": "Entity Colors",
+        "actions": "Action Colors",
+        "tools": "Tool Colors"
+      },
+      "level": {
+        "label": "Highlighting level",
+        "help": "How far color reaches. Off: monochrome toolbar, no entity coloring. Toolbar only: color the toolbar icons. Full: also color id blobs in tables and detail-panel links.",
+        "options": {
+          "off": "Off",
+          "toolbar": "Toolbar only",
+          "full": "Full"
+        }
+      },
+      "preset": {
+        "label": "Color preset",
+        "help": "Default follows the standard palette. The colorblind-safe presets retune the colors for different types of color-vision deficiency.",
+        "options": {
+          "default": "Default",
+          "deuteranopia": "Colorblind — Deuteranopia",
+          "protanopia": "Colorblind — Protanopia",
+          "tritanopia": "Colorblind — Tritanopia"
+        }
+      },
+      "colors": {
+        "aria": "{{role}} color",
+        "resetAll": "Reset all colors to preset defaults"
+      },
+      "roles": {
+        "segment": "Segment",
+        "section": "Section",
+        "shot": "Shot",
+        "station": "Station",
+        "comment": "Comment",
+        "delete": "Delete action",
+        "move": "Move action",
+        "select": "Select tool",
+        "measure": "Measure tool",
+        "merge": "Merge tool",
+        "pan": "Pan tool",
+        "zoom": "Zoom tool"
       }
     },
     "units": {
