@@ -2336,13 +2336,18 @@ export default function MapCanvas() {
     const container = map.current.getContainer();
     const padding = calcPadding(container);
 
+    // Respect the configured animation speed (matches fitToSection / center moves).
+    // `snap` forces an instant jump regardless of the setting.
+    const animationConfig = config?.map.animation;
+    const animationDuration = animationConfig && !animationConfig.enabled ? 0 : (animationConfig?.duration ?? 300);
+
     // Use MapLibre's fitBounds with percentage-based padding
     map.current.fitBounds([sw, ne], {
       padding,
       maxZoom: 20,
-      ...(options?.snap ? { animate: false } : {}),
+      ...(options?.snap ? { animate: false } : { duration: animationDuration }),
     });
-  }, [activeStations, gpsOrigin, calcPadding]);
+  }, [activeStations, gpsOrigin, calcPadding, config]);
 
   // Fit to a specific section's bounds
   const fitToSection = useCallback(
