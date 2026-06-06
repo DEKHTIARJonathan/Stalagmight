@@ -12,7 +12,24 @@
  * `overrides[preset][role] ?? SYNTACTIC_PRESETS[preset][role]`.
  */
 import type { ToolType } from '../store/uiStore';
-import type { SyntacticHighlightPreset } from '../types/config';
+import type { SyntacticHighlightPreset, SyntacticHighlightLevel } from '../types/config';
+
+/** Severity rank of each highlighting level (off < toolbar < icons < full). */
+const LEVEL_RANK: Record<string, number> = {
+  off: 0,
+  toolbar_only: 1,
+  icons: 2,
+  full: 3,
+  unknown: 3, // unknown normalizes to full
+};
+
+/** Whether the active level is at least `target` (e.g. action icons show at icons+full). */
+export function syntacticLevelAtLeast(
+  level: SyntacticHighlightLevel,
+  target: SyntacticHighlightLevel,
+): boolean {
+  return (LEVEL_RANK[level] ?? 3) >= (LEVEL_RANK[target] ?? 3);
+}
 
 /** Editable color roles, grouped for the settings list. */
 export type SyntacticRole =

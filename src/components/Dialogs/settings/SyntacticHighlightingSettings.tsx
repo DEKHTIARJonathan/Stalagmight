@@ -42,6 +42,7 @@ export function SyntacticHighlightingSettings({
     () => [
       { value: 'off', label: t('settings.syntactic.level.options.off') },
       { value: 'toolbar_only', label: t('settings.syntactic.level.options.toolbar') },
+      { value: 'icons', label: t('settings.syntactic.level.options.icons') },
       { value: 'full', label: t('settings.syntactic.level.options.full') },
     ],
     [t],

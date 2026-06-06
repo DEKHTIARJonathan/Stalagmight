@@ -472,6 +472,8 @@ impl AppearanceConfig {
 pub enum SyntacticHighlightLevel {
     Off,
     ToolbarOnly,
+    /// Toolbar coloring plus action icons in menus (e.g. context menus).
+    Icons,
     /// Opt-out default: full highlighting is on for new users.
     #[default]
     Full,

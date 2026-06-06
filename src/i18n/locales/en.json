@@ -255,10 +255,11 @@
       },
       "level": {
         "label": "Highlighting level",
-        "help": "How far color reaches. Off: monochrome toolbar, no entity coloring. Toolbar only: color the toolbar icons. Full: also color id blobs in tables and detail-panel links.",
+        "help": "How far color reaches. Off: monochrome toolbar, no entity coloring. Toolbar only: color the toolbar icons. Icons: also show action icons in menus. Full: also color id blobs in tables and detail-panel links.",
         "options": {
           "off": "Off",
           "toolbar": "Toolbar only",
+          "icons": "Icons",
           "full": "Full"
         }
       },
