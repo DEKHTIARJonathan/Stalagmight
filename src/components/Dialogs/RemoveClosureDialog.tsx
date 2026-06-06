@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { getErrorMessage } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
 import { formatStationId } from '../../utils/formatters';
+import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -65,10 +66,14 @@ export default function RemoveClosureDialog() {
     [closures, selectedClosureId]
   );
 
-  const getStationDisplayLabel = (ref: StationRef): string => {
+  const getStationDisplayLabel = (ref: StationRef): ReactNode => {
     const section = project?.sections.find((item) => item.id === ref.section_id);
     const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
-    return `${formatStationId(ref.section_id, ref.station_index)} (${sectionLabel})`;
+    return (
+      <>
+        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob> ({sectionLabel})
+      </>
+    );
   };
 
   const handleConfirm = async () => {

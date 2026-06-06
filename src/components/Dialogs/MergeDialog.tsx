@@ -4,8 +4,10 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
+import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 import type { StationRef } from '../../types/project';
+import { formatStationId } from '../../utils/formatters';
 import type { BatchCommand } from '../../types/commands';
 
 export default function MergeDialog() {
@@ -83,11 +85,11 @@ export default function MergeDialog() {
         <div className="space-y-2">
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
-            <span>{sectionAName} #{stationA.station_index}</span>
+            <span><EntityBlob entity="station">{formatStationId(stationA.section_id, stationA.station_index)}</EntityBlob> ({sectionAName})</span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
-            <span>{sectionBName} #{stationB.station_index}</span>
+            <span><EntityBlob entity="station">{formatStationId(stationB.section_id, stationB.station_index)}</EntityBlob> ({sectionBName})</span>
           </div>
         </div>
 
