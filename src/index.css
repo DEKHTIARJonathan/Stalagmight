@@ -1438,11 +1438,12 @@ button.sh-tool.sh-tool--active {
    not a full-height border, so it doesn't span the whole line. */
 .sh-pill-id {
   position: relative;
-  margin-left: 1px;
-  /* Equal left/right padding centers the id text in its own cell (the divider
-     sits in the left padding) without moving the symbol or primary label. */
+  margin-left: 0;
+  /* The divider sits at the very left of the id (left: 0 below), so the gap
+     before it is just the flex gap (~4px); padding-left then gives a larger gap
+     after it before the id text. */
   padding-left: 7px;
-  padding-right: 7px;
+  padding-right: 5px;
   text-align: center;
   line-height: 1;
   /* Monospace id, like the example's tier text: semibold (600), sized to the same
@@ -1456,7 +1457,7 @@ button.sh-tool.sh-tool--active {
 .sh-pill-id::before {
   content: "";
   position: absolute;
-  left: 3px;
+  left: 0;
   top: 50%;
   transform: translateY(-50%);
   width: 1px;
