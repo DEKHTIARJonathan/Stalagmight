@@ -167,7 +167,7 @@ export default function Toolbar({
           icon={<ArrowLeftIcon size={14} />}
           data-testid="back-button"
         >
-          {t('common.actions.back')}
+          {t('common.actions.close')}
         </Button>
         <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
