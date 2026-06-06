@@ -4,6 +4,7 @@ import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
 import { ResizablePanel } from '../common/Panel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
@@ -61,6 +62,8 @@ export default function SingleSystemView() {
     dataTableHeight,
     focusedSectionId,
     exitSectionFocus,
+    setFocusedSection,
+    selection,
     triggerZoomToSection,
     toggleSectionsPanel,
     toggleDetailPanel,
@@ -78,6 +81,8 @@ export default function SingleSystemView() {
     dataTableHeight: s.dataTableHeight,
     focusedSectionId: s.focusedSectionId,
     exitSectionFocus: s.exitSectionFocus,
+    setFocusedSection: s.setFocusedSection,
+    selection: s.selection,
     triggerZoomToSection: s.triggerZoomToSection,
     toggleSectionsPanel: s.toggleSectionsPanel,
     toggleDetailPanel: s.toggleDetailPanel,
@@ -97,11 +102,25 @@ export default function SingleSystemView() {
           ?? t('sections.defaultName', { id: focusedSectionId })
       : null;
 
+  // The section that owns the current selection (section / shot / station) — the
+  // same mapping the data table uses to pick its section.
+  const selectedSectionId: SectionId | undefined =
+    selection?.type === 'section' || selection?.type === 'shot'
+      ? selection.sectionId
+      : selection?.type === 'station'
+        ? selection.stationRef?.section_id
+        : undefined;
+
   // #50: re-fit the map to the focused section once the collapsed layout has
   // settled. Lives here (not in SectionsPanel, which unmounts on collapse) so the
-  // timer survives; cleanup cancels it if focus is left/changed within the delay.
+  // timer survives. Only fires on a fresh ENTRY into focus (null -> id), not when
+  // focus follows a selection change (id -> id'), so clicking another section
+  // never re-zooms the map — consistent with single-click no longer moving it.
+  const prevFocusedRef = useRef<SectionId | null>(null);
   useEffect(() => {
-    if (focusedSectionId === null) return;
+    const justEntered = prevFocusedRef.current === null && focusedSectionId !== null;
+    prevFocusedRef.current = focusedSectionId;
+    if (!justEntered || focusedSectionId === null) return;
     const id = focusedSectionId;
     const timer = window.setTimeout(() => {
       setSource('sections-panel');
@@ -109,6 +128,18 @@ export default function SingleSystemView() {
     }, SECTION_FOCUS_REFIT_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [focusedSectionId, triggerZoomToSection]);
+
+  // #50: while focused, follow the selected section so the toolbar heading tracks
+  // the data table (clicking another section on the map updates both).
+  useEffect(() => {
+    if (
+      focusedSectionId !== null &&
+      selectedSectionId !== undefined &&
+      selectedSectionId !== focusedSectionId
+    ) {
+      setFocusedSection(selectedSectionId);
+    }
+  }, [focusedSectionId, selectedSectionId, setFocusedSection]);
 
   // #50: if the focused section disappears (e.g. deleted while focused), exit
   // focus mode rather than stay in the collapsed layout showing a stale name.

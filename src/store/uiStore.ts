@@ -184,6 +184,9 @@ interface UIStore {
   focusedSectionId: SectionId | null;
   enterSectionFocus: (sectionId: SectionId, dataTableHeight: number) => void;
   exitSectionFocus: () => void;
+  /** While focused, follow the selected section so the heading tracks the table
+   *  (does not re-snapshot layout or re-fit the map). */
+  setFocusedSection: (sectionId: SectionId) => void;
 
   // Map state
   mapCenter: [number, number];
@@ -567,6 +570,12 @@ export const useUIStore = create<UIStore>((set) => ({
   focusedSectionId: null,
   enterSectionFocus: (focusedSectionId, dataTableHeight) => {
     const s = useUIStore.getState();
+    // Focus mode is an editable workspace for one section. The closure-adjusted
+    // view (#70) is read-only, so entering focus leaves it and returns to the
+    // measured geometry — guaranteeing the focused data table is editable.
+    if (s.geometryMode !== 'measured') {
+      s.setGeometryMode('measured', 'sections-panel');
+    }
     // Snapshot the layout only on first entry; re-focusing another section
     // while already focused must not overwrite the pre-focus layout.
     if (s.focusedSectionId === null) {
@@ -597,6 +606,7 @@ export const useUIStore = create<UIStore>((set) => ({
     focusLayoutSnapshot = null;
     set({ focusedSectionId: null, ...(snap ?? {}) });
   },
+  setFocusedSection: (focusedSectionId) => set({ focusedSectionId }),
 
   // Map state
   mapCenter: [0, 0],

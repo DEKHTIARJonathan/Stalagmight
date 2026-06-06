@@ -1680,7 +1680,7 @@
     "actions": {
       "add": "Add section",
       "delete": "Delete section",
-      "zoom": "Click to zoom · double-click to focus this section"
+      "zoom": "Click to select · double-click to focus this section"
     },
     "ariaList": "Sections list",
     "confirmDelete": "Delete this section?",

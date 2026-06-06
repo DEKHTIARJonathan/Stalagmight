@@ -26,7 +26,7 @@ const SECTION_FOCUS_TABLE_FRACTION = 0.3;
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, triggerZoomToSection, enterSectionFocus } = useUIStore(
+  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       setSelection: s.setSelection,
@@ -36,7 +36,6 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       hoveredStation: s.hoveredStation,
       setHoveredSectionId: s.setHoveredSectionId,
       openDialog: s.openDialog,
-      triggerZoomToSection: s.triggerZoomToSection,
       enterSectionFocus: s.enterSectionFocus,
     }))
   );
@@ -86,15 +85,26 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     // Only handle left mouse button for mouse events
     if (e && e.button !== 0) return;
     setSource('sections-panel');
+    // Single click only selects — it must NOT move the map (reverts #64's
+    // single-click-centers behaviour). Double-click enters focus mode, which is
+    // what frames the section — see handleSectionDoubleClick.
     setSelection({
       type: 'section',
       sectionId: section.id,
     });
-    // #64: selecting a section focuses the map on it, reusing the existing
-    // zoom-to-section machinery. (Double-click additionally enters section
-    // focus mode — see handleSectionDoubleClick.)
-    triggerZoomToSection(section.id);
-  }, [setSelection, triggerZoomToSection]);
+  }, [setSelection]);
+
+  // Shared focus-entry: select the section and drop into focus mode. Used by
+  // double-click and keyboard Enter so focus is reachable without a mouse.
+  const enterFocusFor = useCallback((section: Section) => {
+    const focusHeight = Math.round(
+      Math.min(
+        Math.max(window.innerHeight * SECTION_FOCUS_TABLE_FRACTION, DATA_TABLE_MIN_HEIGHT),
+        DATA_TABLE_MAX_HEIGHT,
+      ),
+    );
+    enterSectionFocus(section.id, focusHeight);
+  }, [enterSectionFocus]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, currentIndex: number) => {
     // Only handle keyboard events when the list item itself is focused,
@@ -133,13 +143,16 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         optionRefs.current[sections.length - 1]?.focus();
         break;
       case 'Enter':
+        // Enter = activate (the keyboard equivalent of double-click): focus.
         e.preventDefault();
         e.stopPropagation();
         if (sections[currentIndex]) {
           handleSectionClick(sections[currentIndex]);
+          enterFocusFor(sections[currentIndex]);
         }
         break;
       case ' ':
+        // Space = select only (the keyboard equivalent of single-click).
         e.preventDefault();
         e.stopPropagation();
         if (sections[currentIndex]) {
@@ -152,7 +165,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         clearSelection();
         break;
     }
-  }, [sections, handleSectionClick, clearSelection]);
+  }, [sections, handleSectionClick, enterFocusFor, clearSelection]);
 
   const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
     // CRITICAL: Only clear when focus leaves the listbox ENTIRELY
@@ -187,19 +200,12 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (e.button !== 0) return;
     // Don't trigger if double-clicking nested controls (like delete button)
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
-    // Ensure selection happens (in case mouseDown was prevented)
+    // Ensure selection happens (in case mouseDown was prevented), then dedicate
+    // the screen to this section: collapse both side panels and open the data
+    // table to ~30% of the viewport. SingleSystemView re-fits the map on entry.
     handleSectionClick(section, e);
-    // #50: dedicate the screen to this section — collapse both side panels and
-    // open the data table to ~30% of the viewport. SingleSystemView watches
-    // `focusedSectionId` and re-fits the map once the collapsed layout settles.
-    const focusHeight = Math.round(
-      Math.min(
-        Math.max(window.innerHeight * SECTION_FOCUS_TABLE_FRACTION, DATA_TABLE_MIN_HEIGHT),
-        DATA_TABLE_MAX_HEIGHT,
-      ),
-    );
-    enterSectionFocus(section.id, focusHeight);
-  }, [handleSectionClick, enterSectionFocus]);
+    enterFocusFor(section);
+  }, [handleSectionClick, enterFocusFor]);
 
   const handleDeleteDoubleClick = useCallback((e: React.MouseEvent) => {
     // Stop propagation to prevent row zoom
