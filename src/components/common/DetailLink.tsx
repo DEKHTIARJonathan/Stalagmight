@@ -239,10 +239,7 @@ export function DetailLink({
       {showSymbol ? (
         <>
           <EntitySymbol entity={type} size={14} testId={`${computedTestId}-symbol`} />
-          {/* Numeric primaries (shot/station position) are cap-height and sit high
-              like the id, so they get the same nudge; section names (lowercase)
-              don't. */}
-          <span className={hasPosition(target) ? 'sh-pill-nudge' : undefined}>{pillPrimary}</span>
+          <span>{pillPrimary}</span>
           {pillId !== null && (
             <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
               <span className="sh-pill-nudge">{pillId}</span>
