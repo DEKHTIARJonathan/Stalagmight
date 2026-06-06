@@ -183,15 +183,12 @@ const FALLBACK_PRESET = 'default';
 /**
  * Map each tool to the role that drives its icon's object color. The move group
  * tools reuse their entity's color and add the slate `move` modifier in the icon
- * itself. `draw`/`delete` are dormant (removed from the toolbar) but mapped for
- * type completeness.
+ * itself.
  */
 export const TOOL_ROLE_MAP: Record<ToolType, SyntacticRole> = {
   select: 'select',
   pan: 'pan',
   zoom: 'zoom',
-  draw: 'select',
-  delete: 'delete',
   merge: 'merge',
   measure: 'measure',
   move_station: 'station',
