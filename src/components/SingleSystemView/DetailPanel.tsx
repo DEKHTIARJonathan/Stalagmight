@@ -181,6 +181,16 @@ interface WarningsContentProps {
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
   const { resolveWarning, resolveAllWarnings, unresolveWarning } = useProjectStore();
+  const { setSelection, setDetailPanelTab, announceSelection } = useUIStore(
+    useShallow((s) => ({
+      setSelection: s.setSelection,
+      setDetailPanelTab: s.setDetailPanelTab,
+      announceSelection: s.announceSelection,
+    })),
+  );
+  // At the Full level the location subtitle is shown as entity pills (section +
+  // shot), matching the rest of the detail panel; otherwise it stays plain text.
+  const showPills = useUIStore((s) => s.syntacticLevel) === 'full';
   const [showResolved, setShowResolved] = useState(false);
 
   const unresolvedCount = warnings.filter((w) => !w.isResolved).length;
@@ -273,12 +283,14 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                     <div className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
                       {warning.message}
                     </div>
-                    <div className="text-xs text-text-secondary mt-0.5">
-                      {t('detailPanel.warnings.location', {
-                        section: getSectionName(warning.sectionId),
-                        shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
-                      })}
-                    </div>
+                    {!showPills && (
+                      <div className="text-xs text-text-secondary mt-0.5">
+                        {t('detailPanel.warnings.location', {
+                          section: getSectionName(warning.sectionId),
+                          shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </button>
@@ -302,6 +314,28 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 </button>
               )}
             </div>
+            {showPills && (
+              <div className="mt-1 pl-6 flex items-center gap-1.5 flex-wrap">
+                <DetailLink
+                  type="section"
+                  target={{ sectionId: warning.sectionId }}
+                  displayText={getSectionName(warning.sectionId)}
+                  pillLabel={getSectionName(warning.sectionId)}
+                  onSelect={() => {
+                    setSelection({ type: 'section', sectionId: warning.sectionId });
+                    setDetailPanelTab('details');
+                  }}
+                  onAnnounce={announceSelection}
+                />
+                <DetailLink
+                  type="shot"
+                  target={{ sectionId: warning.sectionId, position: warning.shotIndex + 1 }}
+                  displayText={formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                  onSelect={() => onWarningClick(warning)}
+                  onAnnounce={announceSelection}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>
