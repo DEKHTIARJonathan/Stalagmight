@@ -146,20 +146,27 @@ test.describe('Syntactic Highlighting', () => {
   });
 
   test('Full mode shows entity blobs in the data table; Off hides them', async ({ page }) => {
-    // Select the first section and open the data table.
+    // Select the first shot (reading the real ids from the store) so the detail
+    // panel shows its start/end station links, and open the data table.
     await page.evaluate(() => {
       const e2e = (window as unknown as {
-        __E2E_TEST__: { uiStore: { getState: () => { setSelection: (s: unknown) => void } } };
+        __E2E_TEST__: {
+          projectStore: { getState: () => { project: { sections: { id: number; shots: { id: number }[] }[] } } };
+          uiStore: { getState: () => { setSelection: (s: unknown) => void } };
+        };
       }).__E2E_TEST__;
-      e2e.uiStore.getState().setSelection({ type: 'section', sectionId: 0 });
+      const section = e2e.projectStore.getState().project.sections[0];
+      e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId: section.shots[0].id });
     });
     await page.keyboard.press('Control+3');
     await expect(page.getByTestId('data-table')).toBeVisible();
 
-    // Full (default): entity blobs render.
+    // Full (default): entity blobs render in the table, and detail-panel links
+    // render the entity symbol (a duotone svg, not a plain dot).
     await expect(page.locator('[data-entity]').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid$="-link-symbol"]').first()).toBeVisible({ timeout: 5000 });
 
-    // Switch to Off via the store preview: blobs disappear.
+    // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {
       const e2e = (window as unknown as {
         __E2E_TEST__: { uiStore: { getState: () => { setSyntacticHighlightPreview: (c: unknown) => void } } };
@@ -167,5 +174,6 @@ test.describe('Syntactic Highlighting', () => {
       e2e.uiStore.getState().setSyntacticHighlightPreview({ level: 'off', preset: 'default', overrides: {} });
     });
     await expect(page.locator('[data-entity]')).toHaveCount(0);
+    await expect(page.locator('[data-testid$="-link-symbol"]')).toHaveCount(0);
   });
 });

@@ -11,7 +11,7 @@
  */
 import type { CSSProperties, ReactNode } from 'react';
 import type { ToolType } from '../../store/uiStore';
-import { TOOL_ROLE_MAP, syntacticVarName } from '../../theme/syntacticPalette';
+import { TOOL_ROLE_MAP, syntacticVarName, type BlobEntity } from '../../theme/syntacticPalette';
 
 /** Survey station glyph: accent ring + filled centre dot. */
 function Station({ cx, cy, r = 3 }: { cx: number; cy: number; r?: number }) {
@@ -179,6 +179,81 @@ export function ToolGlyph({ tool, size = 20 }: ToolGlyphProps) {
 /** Whether a duotone glyph exists for a tool. */
 export function hasToolGlyph(tool: ToolType): boolean {
   return GLYPHS[tool] !== undefined;
+}
+
+/**
+ * Standalone object glyphs for each geometry entity (no action modifier), used
+ * to mark entity hyperlinks. Same duotone language as the toolbar icons: the
+ * object color (segment > section > shot > station) plus comment.
+ */
+const ENTITY_GLYPHS: Record<BlobEntity, () => ReactNode> = {
+  station: () => <Station cx={12} cy={12} r={5.5} />,
+  shot: () => (
+    <g>
+      <path className="s thick" d="M6.5 17 L17.5 7" />
+      <Station cx={6.5} cy={17} r={2.8} />
+      <Station cx={17.5} cy={7} r={2.8} />
+    </g>
+  ),
+  section: () => (
+    <g>
+      <path className="s" d="M3 17.5 L8.5 8 L13.5 16 L19 8.5" />
+      <circle className="d" cx="3" cy="17.5" r="1.7" />
+      <circle className="d" cx="8.5" cy="8" r="1.7" />
+      <circle className="d" cx="13.5" cy="16" r="1.7" />
+      <circle className="d" cx="19" cy="8.5" r="1.7" />
+    </g>
+  ),
+  segment: () => (
+    <g>
+      <path className="s" d="M3 18 L8 11 L13 15 L18 9" />
+      <path className="s" d="M8 11 L6 5.5" />
+      <circle className="d" cx="3" cy="18" r="1.6" />
+      <circle className="d" cx="8" cy="11" r="1.6" />
+      <circle className="d" cx="13" cy="15" r="1.6" />
+      <circle className="d" cx="18" cy="9" r="1.6" />
+      <circle className="d" cx="6" cy="5.5" r="1.6" />
+    </g>
+  ),
+  comment: () => (
+    <g>
+      <path
+        className="f"
+        d="M5 5 H19 A1 1 0 0 1 20 6 V15 A1 1 0 0 1 19 16 H11 L7 20 V16 H5 A1 1 0 0 1 4 15 V6 A1 1 0 0 1 5 5 Z"
+      />
+      <path
+        className="s"
+        d="M5 5 H19 A1 1 0 0 1 20 6 V15 A1 1 0 0 1 19 16 H11 L7 20 V16 H5 A1 1 0 0 1 4 15 V6 A1 1 0 0 1 5 5 Z"
+      />
+    </g>
+  ),
+};
+
+export interface EntitySymbolProps {
+  entity: BlobEntity;
+  size?: number;
+  className?: string;
+  testId?: string;
+}
+
+/** Render the duotone object symbol for an entity, colored by its --sh-<entity>. */
+export function EntitySymbol({ entity, size = 14, className = '', testId }: EntitySymbolProps) {
+  const render = ENTITY_GLYPHS[entity];
+  const style = { '--o': `var(${syntacticVarName(entity)})` } as CSSProperties;
+  return (
+    <svg
+      className={`duotone ${className}`}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      style={style}
+      aria-hidden="true"
+      focusable="false"
+      data-testid={testId}
+    >
+      {render()}
+    </svg>
+  );
 }
 
 /** CSS `var(--sh-<role>)` reference for a tool's accent color (icon + button tint). */

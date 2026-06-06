@@ -16,7 +16,7 @@
 
 import { useCallback, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
-import { syntacticVarName } from '../../theme/syntacticPalette';
+import { EntitySymbol } from './toolIcons';
 
 export type DetailLinkType = 'station' | 'shot' | 'section';
 
@@ -129,11 +129,11 @@ export function DetailLink({
   const computedTestId = testId ?? generateTestId(type, target);
   const ariaLabel = generateAriaLabel(type, displayText);
 
-  // Full highlighting: a leading entity-colored dot signals what the link points
-  // to (station = green, shot = blue, section = purple). Hidden for missing
-  // targets (the warning glyph already conveys state).
+  // Full highlighting: a leading entity symbol signals what the link points to
+  // (station ring, shot line, section zigzag), colored by entity. Hidden for
+  // missing targets (the warning glyph already conveys state).
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
-  const showBlob = syntacticLevel === 'full' && !isMissing;
+  const showSymbol = syntacticLevel === 'full' && !isMissing;
 
   const handleClick = useCallback(() => {
     if (isMissing) {
@@ -204,12 +204,12 @@ export function DetailLink({
       data-testid={computedTestId}
       title={isMissing ? `${type} not found` : undefined}
     >
-      {showBlob && (
-        <span
-          aria-hidden="true"
-          className="inline-block w-2 h-2 rounded-full mr-1 align-middle"
-          style={{ backgroundColor: `var(${syntacticVarName(type)})` }}
-          data-testid={`${computedTestId}-blob`}
+      {showSymbol && (
+        <EntitySymbol
+          entity={type}
+          size={14}
+          className="mr-1 inline-block align-[-0.2em]"
+          testId={`${computedTestId}-symbol`}
         />
       )}
       {displayText}
