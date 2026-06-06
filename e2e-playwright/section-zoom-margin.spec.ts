@@ -488,4 +488,23 @@ test.describe('Section zoom margin', () => {
     expect(finalResult).not.toBeNull();
     assertMargins(finalResult!, MIN_MARGIN_PCT);
   });
+
+  test('exiting focus mode re-centers the section in the restored view', async ({ page }) => {
+    const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
+
+    // Enter focus: panels collapse, the section is framed in the enlarged map.
+    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
+    await expect(sectionRow).toBeVisible();
+    await sectionRow.dblclick();
+    await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
+
+    // Exit via the toolbar section name. The side panels return and the map
+    // shrinks — the section must be re-framed, not left drifting off-centre with
+    // the wide-view camera (the reported bug).
+    await page.getByTestId('toolbar-section-focus-name').dblclick();
+    await expect(page.getByTestId('sections-panel')).toBeVisible();
+
+    const result = await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
+    assertMargins(result, MIN_MARGIN_PCT);
+  });
 });

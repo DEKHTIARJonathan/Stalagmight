@@ -111,20 +111,27 @@ export default function SingleSystemView() {
         ? selection.stationRef?.section_id
         : undefined;
 
-  // #50: re-fit the map to the focused section once the collapsed layout has
-  // settled. Lives here (not in SectionsPanel, which unmounts on collapse) so the
-  // timer survives. Only fires on a fresh ENTRY into focus (null -> id), not when
-  // focus follows a selection change (id -> id'), so clicking another section
-  // never re-zooms the map — consistent with single-click no longer moving it.
+  // #50: re-fit the map once the layout settles — on a fresh ENTRY into focus
+  // (null -> id) and on EXIT (id -> null). Entry frames the section in the
+  // enlarged map; exit re-frames it after the side panels return and the map
+  // shrinks, so the section stays centered instead of drifting off. NOT on a
+  // follow (id -> id'), so clicking another section never re-zooms — consistent
+  // with single-click no longer moving the map. Lives here (not in SectionsPanel,
+  // which unmounts on collapse) so the timer survives the panel mount/unmount.
   const prevFocusedRef = useRef<SectionId | null>(null);
   useEffect(() => {
-    const justEntered = prevFocusedRef.current === null && focusedSectionId !== null;
+    const prev = prevFocusedRef.current;
     prevFocusedRef.current = focusedSectionId;
-    if (!justEntered || focusedSectionId === null) return;
-    const id = focusedSectionId;
+    const target =
+      prev === null && focusedSectionId !== null
+        ? focusedSectionId // entry
+        : prev !== null && focusedSectionId === null
+          ? prev // exit — re-frame the section just left
+          : null; // follow / no transition
+    if (target === null) return;
     const timer = window.setTimeout(() => {
       setSource('sections-panel');
-      triggerZoomToSection(id);
+      triggerZoomToSection(target);
     }, SECTION_FOCUS_REFIT_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [focusedSectionId, triggerZoomToSection]);
