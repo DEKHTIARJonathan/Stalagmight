@@ -83,9 +83,13 @@ const GLYPHS: Partial<Record<ToolType, () => ReactNode>> = {
     <g>
       <path className="s" d="M6.5 8 L14 12" />
       <path className="s" d="M6.5 16 L14 12" />
-      <Station cx={4} cy={8} r={2.4} />
-      <Station cx={4} cy={16} r={2.4} />
-      <Station cx={19} cy={12} r={2.6} />
+      {/* The merged objects are stations — color their circles with the station
+          color (overriding the tool's --o for this subtree). */}
+      <g className="sh-tone" style={{ '--o': 'var(--sh-station)' } as CSSProperties}>
+        <Station cx={4} cy={8} r={2.4} />
+        <Station cx={4} cy={16} r={2.4} />
+        <Station cx={19} cy={12} r={2.6} />
+      </g>
       <path className="s arrow" d="M12.5 9.8 L15.5 12 L12.5 14.2" />
     </g>
   ),
@@ -260,6 +264,104 @@ export function EntitySymbol({ entity, size = 14, className = '', testId }: Enti
       {render()}
     </svg>
   );
+}
+
+/** A corner-badge glyph (rendered inside the dark disc): the action modifier. */
+type BadgeContent = (cx: number, cy: number, r: number) => ReactNode;
+
+/** Red ✕ (delete). */
+const deleteX: BadgeContent = (cx, cy, r) => {
+  const a = r * 0.62;
+  return (
+    <g>
+      <path className="x" d={`M${cx - a} ${cy - a} L${cx + a} ${cy + a}`} />
+      <path className="x" d={`M${cx + a} ${cy - a} L${cx - a} ${cy + a}`} />
+    </g>
+  );
+};
+
+/** Orange pencil (edit) — a filled pencil, rotated diagonally. */
+const editPencil: BadgeContent = (cx, cy, r) => {
+  const k = r * 0.92;
+  return (
+    <g transform={`translate(${cx} ${cy}) rotate(45) scale(${k})`}>
+      {/* eraser + body + triangular tip */}
+      <path className="edit-pencil" d="M-0.34 -1 H0.34 V0.55 L0 1 L-0.34 0.55 Z" />
+    </g>
+  );
+};
+
+/** 5-point star path centered at (cx,cy). */
+function starD(cx: number, cy: number, outer: number, inner: number): string {
+  const pts: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const rr = i % 2 === 0 ? outer : inner;
+    const ang = -Math.PI / 2 + (i * Math.PI) / 5;
+    pts.push(`${(cx + rr * Math.cos(ang)).toFixed(2)} ${(cy + rr * Math.sin(ang)).toFixed(2)}`);
+  }
+  return `M${pts.join(' L')}Z`;
+}
+
+/** Golden star (zero datum). */
+const datumStar: BadgeContent = (cx, cy, r) => (
+  <path className="datum-star" d={starD(cx, cy, r * 1.02, r * 0.42)} />
+);
+
+/** Bottom-right action-badge placement (cx/cy/r) per entity. The entity itself is
+ * the centered object glyph; the badge sits in the bottom-right corner (overlap
+ * with the object is expected). */
+const BADGE_POS: Record<BlobEntity, { bx: number; by: number; br: number }> = {
+  station: { bx: 17.4, by: 17.4, br: 6.2 },
+  shot: { bx: 17.6, by: 17.6, br: 5.9 },
+  segment: { bx: 17.6, by: 17.6, br: 5.7 },
+  section: { bx: 17.6, by: 17.6, br: 5.7 },
+  comment: { bx: 17.6, by: 17.6, br: 5.7 },
+};
+
+/** Entity glyph + a corner action badge (object color via --o; the badge modifier
+ * color comes from its own class — red ✕ / orange pencil / gold star). */
+function EntityBadgedSymbol({
+  entity,
+  content,
+  size = 16,
+  className = '',
+  testId,
+}: EntitySymbolProps & { content: BadgeContent }) {
+  const g = BADGE_POS[entity];
+  const style = {
+    '--o': `var(${syntacticVarName(entity)})`,
+    display: 'inline-block',
+    verticalAlign: '-0.2em',
+  } as CSSProperties;
+  return (
+    <svg
+      className={`duotone ${className}`}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      style={style}
+      aria-hidden="true"
+      focusable="false"
+      data-testid={testId}
+    >
+      {ENTITY_GLYPHS[entity]()}
+      <circle className="badge-bg" cx={g.bx} cy={g.by} r={g.br} />
+      {content(g.bx, g.by, g.br)}
+    </svg>
+  );
+}
+
+/** Duotone "delete <entity>" (entity color + red ✕ badge). */
+export function EntityDeleteSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={deleteX} />;
+}
+/** Duotone "edit <entity>" (entity color + orange pencil badge). */
+export function EntityEditSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={editPencil} />;
+}
+/** Duotone "zero datum on <entity>" (entity color + golden star badge). */
+export function EntityDatumSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={datumStar} />;
 }
 
 /** CSS `var(--sh-<role>)` reference for a tool's accent color (icon + button tint). */

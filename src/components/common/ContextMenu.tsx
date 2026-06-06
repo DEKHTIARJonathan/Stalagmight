@@ -1,21 +1,26 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import { PlusIcon, LinkOffIcon, ArrowUpRightIcon } from './icons';
+import { EntityDeleteSymbol, EntityEditSymbol, EntityDatumSymbol, ToolGlyph } from './toolIcons';
 
 interface ContextMenuItem {
   label: string;
   action: () => void;
+  /** Leading action icon, shown at the Icons+ highlighting level. */
+  icon?: ReactNode;
   disabled?: boolean;
   danger?: boolean;
   separator?: boolean;
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, geometryMode } = useUIStore(useShallow((s) => ({
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, geometryMode, syntacticLevel } = useUIStore(useShallow((s) => ({
     closeDialog: s.closeDialog,
     dialogData: s.dialogData,
     openDialog: s.openDialog,
@@ -23,6 +28,7 @@ export default function ContextMenu() {
     setMergeStationA: s.setMergeStationA,
     triggerZoomToSection: s.triggerZoomToSection,
     geometryMode: s.geometryMode,
+    syntacticLevel: s.syntacticLevel,
   })));
   const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
 
@@ -475,16 +481,53 @@ export default function ContextMenu() {
     return [];
   };
 
+  // Leading action icon per menu item (shown at the Icons+ highlighting level).
+  const showIcons = syntacticLevelAtLeast(syntacticLevel, 'icons');
+  const iconForLabel = (label: string): ReactNode => {
+    switch (label) {
+      case 'Edit Station':
+        return <EntityEditSymbol entity="station" size={18} />;
+      case 'Edit Shot':
+        return <EntityEditSymbol entity="shot" size={18} />;
+      case 'Edit Section':
+        return <EntityEditSymbol entity="section" size={18} />;
+      case 'Merge With...':
+        return <ToolGlyph tool="merge" size={16} />;
+      case 'Unmerge Stations':
+      case 'Remove Closure':
+        return <LinkOffIcon size={16} />;
+      case 'Add Shot Before':
+      case 'Add Shot After':
+        return <PlusIcon size={16} />;
+      case 'Set Zero Datum':
+        return <EntityDatumSymbol entity="station" size={18} />;
+      case 'Delete Section':
+        return <EntityDeleteSymbol entity="section" size={18} />;
+      case 'Delete Station':
+        return <EntityDeleteSymbol entity="station" size={18} />;
+      case 'Delete Shot':
+        return <EntityDeleteSymbol entity="shot" size={18} />;
+      case 'Adjust Position...':
+        return <ToolGlyph tool="move_segment" size={18} />;
+      case 'Zoom to Section':
+        return <ToolGlyph tool="zoom" size={16} />;
+      default:
+        // "Mark as Jump/Reference" / "Mark as Permanent"
+        return <ArrowUpRightIcon size={16} />;
+    }
+  };
+
   // The closure-adjusted view is read-only: disable every mutation item (all of
   // them except read-only navigation like "Zoom to Section"). Edits are made in
   // the measured view.
   const geometryReadOnly = geometryMode === 'closureAdjusted';
   const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);
-  const items = buildMenuItems().map((item) =>
-    geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
-      ? { ...item, disabled: true }
-      : item
-  );
+  const items = buildMenuItems().map((item) => {
+    const withIcon = item.separator ? item : { ...item, icon: iconForLabel(item.label) };
+    return geometryReadOnly && !item.separator && !READ_ONLY_SAFE_LABELS.has(item.label)
+      ? { ...withIcon, disabled: true }
+      : withIcon;
+  });
 
   if (!target || !position || items.length === 0) {
     return null;
@@ -515,12 +558,17 @@ export default function ContextMenu() {
               onClick={() => { setSource('context-menu'); item.action(); }}
               disabled={item.disabled}
               className={`
-                w-full px-3 py-2 text-left text-sm
+                w-full px-3 py-2 text-left text-sm flex items-center gap-2
                 ${item.disabled ? 'text-text-secondary cursor-not-allowed' : 'hover:bg-accent-10'}
                 ${item.danger && !item.disabled ? 'text-error hover:bg-error-10' : ''}
               `}
             >
-              {item.label}
+              {showIcons && (
+                <span className="w-[18px] h-[18px] flex-shrink-0 inline-flex items-center justify-center" aria-hidden="true">
+                  {item.icon}
+                </span>
+              )}
+              <span className="flex-1 truncate">{item.label}</span>
             </button>
           );
         })}

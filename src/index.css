@@ -1336,6 +1336,12 @@ tr[data-selected="true"]:hover {
   --glyph: color-mix(in oklab, var(--o) 90%, var(--cc-text-primary));
   display: block;
 }
+/* Re-derive --glyph from a locally-overridden --o, so a subtree of a duotone
+   icon can use a different object color (e.g. the station circles inside the
+   merge icon, which set --o to var(--sh-station)). */
+.duotone .sh-tone {
+  --glyph: color-mix(in oklab, var(--o) 90%, var(--cc-text-primary));
+}
 .duotone .s {
   fill: none;
   stroke: var(--glyph);
@@ -1380,6 +1386,16 @@ tr[data-selected="true"]:hover {
   stroke: var(--sh-delete);
   stroke-width: 2;
   stroke-linecap: round;
+}
+/* edit badge: orange pencil */
+.duotone .edit-pencil {
+  fill: #ff8c1a;
+  stroke: none;
+}
+/* zero-datum badge: golden star */
+.duotone .datum-star {
+  fill: var(--cc-zero-datum, #ffd23f);
+  stroke: none;
 }
 /* move compass */
 .duotone .mvf {

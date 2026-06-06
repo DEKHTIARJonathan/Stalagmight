@@ -50,8 +50,20 @@ async function openSyntacticSettings(page: Page): Promise<void> {
 }
 
 async function pickOption(page: Page, selectTestId: string, optionName: string): Promise<void> {
-  await page.getByTestId(selectTestId).click();
-  await page.getByRole('option', { name: optionName }).click();
+  const trigger = page.getByTestId(selectTestId);
+  const option = page.getByRole('option', { name: optionName });
+  // The Select opens in two phases (renders visibility:hidden, then a layout
+  // effect repositions it), and a settings re-render can close the dropdown
+  // between locating and clicking the option. Retry the open+click as a unit,
+  // only (re)opening when it's actually closed so we never toggle it shut.
+  // Selecting the same option twice is idempotent, so converging is safe.
+  await expect(async () => {
+    if ((await trigger.getAttribute('data-dropdown-open')) === null) {
+      await trigger.click();
+    }
+    await expect(option).toBeVisible({ timeout: 1500 });
+    await option.click({ timeout: 1500 });
+  }).toPass({ timeout: 12000 });
 }
 
 test.describe('Syntactic Highlighting', () => {
