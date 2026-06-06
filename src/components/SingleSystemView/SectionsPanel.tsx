@@ -8,18 +8,25 @@ import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
-import { CloseIcon, PlusIcon } from '../common/icons';
+import { ExternalLinkIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
 import { useLongPress } from '../../hooks';
+import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 
 interface SectionsPanelProps {
   sections: Section[];
 }
 
+// Focus-mode data-table height as a fraction of the viewport, clamped to the
+// data-table panel's shared [min, max] bounds. The post-collapse map re-fit
+// lives in SingleSystemView (which stays mounted across focus toggles, unlike
+// this panel which collapses away in focus mode).
+const SECTION_FOCUS_TABLE_FRACTION = 0.3;
+
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, triggerZoomToSection } = useUIStore(
+  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       setSelection: s.setSelection,
@@ -29,6 +36,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       hoveredStation: s.hoveredStation,
       setHoveredSectionId: s.setHoveredSectionId,
       openDialog: s.openDialog,
+      enterSectionFocus: s.enterSectionFocus,
       triggerZoomToSection: s.triggerZoomToSection,
     }))
   );
@@ -44,8 +52,28 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const effectiveHoveredSectionId: SectionId | null =
     hoveredSectionId ?? hoveredShot?.sectionId ?? hoveredStation?.section_id ?? null;
 
+  // The section that owns the current selection — a directly selected section, or
+  // the section of a selected shot/station (selected from the map, data table, or
+  // details panel). The matching row is highlighted and scrolled into view so the
+  // Sections panel always reflects what's selected elsewhere. Same mapping used by
+  // SingleSystemView / the data table.
+  const selectedSectionId: SectionId | null =
+    selection?.type === 'section' || selection?.type === 'shot'
+      ? selection.sectionId ?? null
+      : selection?.type === 'station'
+        ? selection.stationRef?.section_id ?? null
+        : null;
+
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
+
+  // Scroll container for the section list, plus the scroll position captured
+  // before an *external* hover (map / data table / details panel) auto-scrolled
+  // the hovered row into view. Restored once nothing is hovered again so the
+  // panel doesn't drift while the user skims other surfaces. `null` means there
+  // is no external-hover scroll to undo.
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const preHoverScrollTopRef = useRef<number | null>(null);
 
   // Keyboard accessibility: track focused index and refs for roving tabindex
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
@@ -67,26 +95,77 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // Scroll the hovered section's row into view when it's off-screen.
   // block: 'nearest' is a no-op when the row is already visible, so this
   // is silent for panel-internal hovers and only acts on external (map) hovers.
+  //
+  // For external hovers (map / data table / details panel — the panel itself did
+  // not set the hover, so `lastHoveredIdRef` is null) we remember the scroll
+  // position before the first auto-scroll and restore it once nothing is hovered
+  // anywhere, so skimming other surfaces doesn't permanently move the list.
   useEffect(() => {
-    if (effectiveHoveredSectionId === null) return;
+    const container = listContainerRef.current;
+    if (effectiveHoveredSectionId === null) {
+      // Nothing hovered anywhere — undo any external-hover auto-scroll.
+      if (preHoverScrollTopRef.current !== null && container) {
+        container.scrollTop = preHoverScrollTopRef.current;
+      }
+      preHoverScrollTopRef.current = null;
+      return;
+    }
     const idx = sections.findIndex((s) => s.id === effectiveHoveredSectionId);
     if (idx < 0) return;
+    // Panel-internal row hovers (lastHoveredIdRef set) are the user already
+    // interacting with the list — don't capture/restore for those.
+    const isExternalHover = lastHoveredIdRef.current === null;
+    if (isExternalHover && preHoverScrollTopRef.current === null && container) {
+      preHoverScrollTopRef.current = container.scrollTop;
+    }
     optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
   }, [effectiveHoveredSectionId, sections]);
+
+  // Scroll the selected section's row into view when the selection changes (a
+  // shot/station/section selected from the map, data table, or details panel).
+  // Unlike the hover scroll, this is a persistent reveal — there's nothing to
+  // restore — so it's kept separate from the hover save/restore bookkeeping.
+  const prevSelectedSectionIdRef = useRef<SectionId | null>(null);
+  useEffect(() => {
+    const selectionChanged = prevSelectedSectionIdRef.current !== selectedSectionId;
+    prevSelectedSectionIdRef.current = selectedSectionId;
+    if (selectedSectionId === null) return;
+    const idx = sections.findIndex((s) => s.id === selectedSectionId);
+    if (idx < 0) return;
+    optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+    // A *new* selection becomes the panel's anchor. If it was made during an
+    // active external hover (e.g. hover a shot on the map, then click to select
+    // it), drop the pre-hover restore so un-hovering lands on the selection
+    // rather than snapping back to where the list was before the hover.
+    if (selectionChanged) {
+      preHoverScrollTopRef.current = null;
+    }
+  }, [selectedSectionId, sections]);
 
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
     if (e && e.button !== 0) return;
     setSource('sections-panel');
+    // Single click only selects — it must NOT move the map (reverts #64's
+    // single-click-centers behaviour). Double-click enters focus mode, which is
+    // what frames the section — see handleSectionDoubleClick.
     setSelection({
       type: 'section',
       sectionId: section.id,
     });
-    // #64: selecting a section focuses the map on it (reuses the existing
-    // zoom-to-section machinery; double-click stays as a redundant trigger
-    // until #50 reassigns it to panel-expand).
-    triggerZoomToSection(section.id);
-  }, [setSelection, triggerZoomToSection]);
+  }, [setSelection]);
+
+  // Shared focus-entry: select the section and drop into focus mode. Used by
+  // double-click and keyboard Enter so focus is reachable without a mouse.
+  const enterFocusFor = useCallback((section: Section) => {
+    const focusHeight = Math.round(
+      Math.min(
+        Math.max(window.innerHeight * SECTION_FOCUS_TABLE_FRACTION, DATA_TABLE_MIN_HEIGHT),
+        DATA_TABLE_MAX_HEIGHT,
+      ),
+    );
+    enterSectionFocus(section.id, focusHeight);
+  }, [enterSectionFocus]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, currentIndex: number) => {
     // Only handle keyboard events when the list item itself is focused,
@@ -125,13 +204,17 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         optionRefs.current[sections.length - 1]?.focus();
         break;
       case 'Enter':
+        // Enter = activate (keyboard equivalent of double-click): select + zoom
+        // to the section. Focus mode is reserved for the dedicated focus button.
         e.preventDefault();
         e.stopPropagation();
         if (sections[currentIndex]) {
           handleSectionClick(sections[currentIndex]);
+          triggerZoomToSection(sections[currentIndex].id);
         }
         break;
       case ' ':
+        // Space = select only (the keyboard equivalent of single-click).
         e.preventDefault();
         e.stopPropagation();
         if (sections[currentIndex]) {
@@ -144,7 +227,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         clearSelection();
         break;
     }
-  }, [sections, handleSectionClick, clearSelection]);
+  }, [sections, handleSectionClick, triggerZoomToSection, clearSelection]);
 
   const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
     // CRITICAL: Only clear when focus leaves the listbox ENTIRELY
@@ -169,30 +252,38 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     setHoveredSectionId(null);
   }, [setHoveredSectionId]);
 
-  const handleDeleteMouseDown = useCallback((e: React.MouseEvent) => {
-    // Stop propagation to prevent row selection
+  const handleFocusButtonMouseDown = useCallback((e: React.MouseEvent) => {
+    // Stop propagation so the row's own mouse-down handling doesn't double-fire.
     e.stopPropagation();
   }, []);
 
   const handleSectionDoubleClick = useCallback((section: Section, e: React.MouseEvent) => {
     // Only handle left mouse button
     if (e.button !== 0) return;
-    // Don't trigger if double-clicking nested controls (like delete button)
+    // Don't trigger if double-clicking nested controls (like the focus button)
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
-    // Ensure selection happens (in case mouseDown was prevented)
+    // Select, then zoom/frame the section on the map — without entering focus
+    // mode (that's what the dedicated per-row focus button is for).
     handleSectionClick(section, e);
-    // Trigger zoom to section. Note: single-click already zooms (#64), so a
-    // double-click fires this redundantly — harmless because fitToSection is
-    // idempotent (it stops any running animation). This stays until #50
-    // reassigns double-click to panel-expand.
-    setSource('sections-panel');
     triggerZoomToSection(section.id);
   }, [handleSectionClick, triggerZoomToSection]);
 
-  const handleDeleteDoubleClick = useCallback((e: React.MouseEvent) => {
-    // Stop propagation to prevent row zoom
+  const handleFocusButtonDoubleClick = useCallback((e: React.MouseEvent) => {
+    // The button enters focus on a single click; swallow the double-click so the
+    // row's double-click handler doesn't run a second entry.
     e.stopPropagation();
   }, []);
+
+  // Dedicated focus-mode entry button (replaces the old per-row delete control;
+  // section deletion now lives in the right-click / long-press context menu).
+  // Single click selects the section and enters focus mode — the same outcome as
+  // double-clicking the row, but discoverable as an explicit affordance.
+  const handleEnterFocusClick = useCallback((section: Section, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    handleSectionClick(section);
+    enterFocusFor(section);
+  }, [handleSectionClick, enterFocusFor]);
 
   const handleSectionFocus = useCallback((sectionId: SectionId, index: number) => {
     setFocusedIndex(index);
@@ -205,16 +296,6 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     setSource('sections-panel');
     openDialog('import');
   };
-
-  const handleDeleteSection = useCallback((sectionId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (geometryReadOnly) return;
-    setSource('sections-panel');
-    openDialog('confirm-delete', {
-      type: 'section',
-      sectionId,
-    });
-  }, [openDialog, geometryReadOnly]);
 
   const openSectionContextMenu = useCallback((sectionId: number, x: number, y: number) => {
     setSource('sections-panel');
@@ -248,7 +329,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       </div>
 
       {/* Section list */}
-      <div className="flex-1 overflow-auto" data-testid="sections-list">
+      <div ref={listContainerRef} className="flex-1 overflow-auto" data-testid="sections-list">
         {sections.length === 0 ? (
           <div className="p-4 text-center text-text-secondary text-sm">
             {t('sections.empty.message')}
@@ -274,7 +355,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 key={section.id}
                 section={section}
                 index={index}
-                isSelected={selection?.type === 'section' && selection.sectionId === section.id}
+                isSelected={selectedSectionId === section.id}
                 isHovered={effectiveHoveredSectionId === section.id}
                 isFocused={focusedIndex === index}
                 isDefaultFocus={focusedIndex === -1 && index === 0}
@@ -286,12 +367,11 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 onMouseLeave={handleSectionMouseLeave}
                 onFocus={handleSectionFocus}
                 onKeyDown={handleKeyDown}
-                onDelete={handleDeleteSection}
-                onDeleteMouseDown={handleDeleteMouseDown}
-                onDeleteDoubleClick={handleDeleteDoubleClick}
+                onEnterFocus={handleEnterFocusClick}
+                onEnterFocusMouseDown={handleFocusButtonMouseDown}
+                onEnterFocusDoubleClick={handleFocusButtonDoubleClick}
                 onLongPress={openSectionContextMenu}
                 optionRefs={optionRefs}
-                readOnly={geometryReadOnly}
               />
             ))}
           </ul>
@@ -365,13 +445,11 @@ interface SectionRowProps {
   onMouseLeave: () => void;
   onFocus: (sectionId: SectionId, index: number) => void;
   onKeyDown: (e: React.KeyboardEvent, index: number) => void;
-  onDelete: (sectionId: number, e: React.MouseEvent) => void;
-  onDeleteMouseDown: (e: React.MouseEvent) => void;
-  onDeleteDoubleClick: (e: React.MouseEvent) => void;
+  onEnterFocus: (section: Section, e: React.MouseEvent) => void;
+  onEnterFocusMouseDown: (e: React.MouseEvent) => void;
+  onEnterFocusDoubleClick: (e: React.MouseEvent) => void;
   onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
-  /** When true (closure-adjusted view), the per-row delete control is disabled. */
-  readOnly: boolean;
 }
 
 const SectionRow = memo(function SectionRow({
@@ -389,12 +467,11 @@ const SectionRow = memo(function SectionRow({
   onMouseLeave,
   onFocus,
   onKeyDown,
-  onDelete,
-  onDeleteMouseDown,
-  onDeleteDoubleClick,
+  onEnterFocus,
+  onEnterFocusMouseDown,
+  onEnterFocusDoubleClick,
   onLongPress,
   optionRefs,
-  readOnly,
 }: SectionRowProps) {
   const { t } = useTranslation();
   const stats = calculateSectionStats(section);
@@ -446,18 +523,17 @@ const SectionRow = memo(function SectionRow({
           {section.name ?? t('sections.defaultName', { id: section.id })}
         </span>
         <IconButton
-          onClick={(e) => onDelete(section.id, e)}
-          onMouseDown={onDeleteMouseDown}
-          onDoubleClick={onDeleteDoubleClick}
-          icon={<CloseIcon size={12} />}
+          onClick={(e) => onEnterFocus(section, e)}
+          onMouseDown={onEnterFocusMouseDown}
+          onDoubleClick={onEnterFocusDoubleClick}
+          icon={<ExternalLinkIcon size={12} />}
           size="sm"
           variant="ghost"
-          tooltip={t('sections.actions.delete')}
-          aria-label={t('sections.actions.delete')}
-          className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-error"
+          tooltip={t('sections.actions.focus')}
+          aria-label={t('sections.actions.focus')}
+          className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-accent"
           tabIndex={-1}
-          data-testid={`section-delete-${section.id}`}
-          disabled={readOnly}
+          data-testid={`section-focus-${section.id}`}
         />
       </div>
       <div className="text-xs text-text-secondary mt-1 ml-5">

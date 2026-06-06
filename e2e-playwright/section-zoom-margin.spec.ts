@@ -342,7 +342,8 @@ test.describe('Section zoom margin', () => {
     // Precondition: section must NOT satisfy margins after panning off-target
     await assertSectionOffScreen(page, sectionId);
 
-    // Find the section row and double-click it to trigger zoom-to-section
+    // Double-click the row: zooms/frames the section on the map (without entering
+    // focus mode). Margins must hold against the current viewport.
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.dblclick();
@@ -352,23 +353,47 @@ test.describe('Section zoom margin', () => {
     assertMargins(result, MIN_MARGIN_PCT);
   });
 
-  test('single-click on section row zooms with margin from viewport edges', async ({ page }) => {
-    // #64: selecting a section in the sidebar focuses the map on it.
+  test('single-click on section row selects WITHOUT moving the map', async ({ page }) => {
+    // #50 reverts #64: a single click only selects; it must not move the map.
     const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
 
-    // Pan off-target first (memory pitfall: avoid false passes from pre-centered state)
+    // Pan off-target and record the camera so we can prove the click leaves it.
     await panMapOffTarget(page);
+    const before = await page.evaluate(() => {
+      const m = (window as unknown as {
+        __stalagmight_map__?: { getZoom: () => number; getCenter: () => { lng: number; lat: number } };
+      }).__stalagmight_map__!;
+      const c = m.getCenter();
+      return { lng: c.lng, lat: c.lat, zoom: m.getZoom() };
+    });
 
-    // Precondition: section must NOT satisfy margins after panning off-target
-    await assertSectionOffScreen(page, sectionId);
-
-    // Single-click the row (fires onMouseDown -> select + zoom).
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.click();
 
-    const result = await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
-    assertMargins(result, MIN_MARGIN_PCT);
+    // It selects the section...
+    await expect.poll(async () =>
+      page.evaluate(() => {
+        const sel = (window as unknown as {
+          __E2E_TEST__?: { uiStore?: { getState: () => { selection: { type: string; sectionId?: number } | null } } };
+        }).__E2E_TEST__?.uiStore?.getState().selection;
+        return sel?.type === 'section' ? sel.sectionId ?? null : null;
+      }),
+    ).toBe(sectionId);
+
+    // ...but the camera must not have moved (no zoom-to-section on single click).
+    // Allow any erroneous animation a moment to start, then assert unchanged.
+    await page.waitForTimeout(400);
+    const after = await page.evaluate(() => {
+      const m = (window as unknown as {
+        __stalagmight_map__?: { getZoom: () => number; getCenter: () => { lng: number; lat: number } };
+      }).__stalagmight_map__!;
+      const c = m.getCenter();
+      return { lng: c.lng, lat: c.lat, zoom: m.getZoom() };
+    });
+    expect(Math.abs(after.zoom - before.zoom)).toBeLessThan(0.01);
+    expect(Math.abs(after.lng - before.lng)).toBeLessThan(1e-6);
+    expect(Math.abs(after.lat - before.lat)).toBeLessThan(1e-6);
   });
 
   test('center button zooms with margin from viewport edges', async ({ page }) => {
@@ -401,13 +426,19 @@ test.describe('Section zoom margin', () => {
     assertMargins(result, MIN_MARGIN_PCT);
   });
 
-  test('skip zoom-in when section already visible keeps section in viewport with margin', async ({ page }) => {
+  test('re-fitting an already-framed section keeps it in viewport with margin', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
 
-    // First, zoom to the section to get it visible and properly positioned
-    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
-    await expect(sectionRow).toBeVisible();
-    await sectionRow.dblclick();
+    // Frame the section via the store. (#50 makes single-click select-only and
+    // double-click enter focus mode + re-fit on the enlarged map — two fits at
+    // two container sizes, a racy baseline. Triggering the fit directly keeps the
+    // container stable so this isolates fitToSection's re-fit idempotence.)
+    await page.evaluate((secId) => {
+      const ui = (window as unknown as {
+        __E2E_TEST__?: { uiStore?: { getState: () => { triggerZoomToSection: (id: number) => void } } };
+      }).__E2E_TEST__?.uiStore;
+      ui?.getState().triggerZoomToSection(secId);
+    }, sectionId);
 
     // Wait for initial zoom to settle with margins
     await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
@@ -420,8 +451,14 @@ test.describe('Section zoom margin', () => {
       return map?.getZoom() ?? 0;
     });
 
-    // Trigger zoom-to-section again (should skip zoom-in, only center)
-    await sectionRow.dblclick();
+    // Re-fire the same zoom request via the store: re-fitting an already-framed
+    // section (same container) must not jump the zoom.
+    await page.evaluate((secId) => {
+      const ui = (window as unknown as {
+        __E2E_TEST__?: { uiStore?: { getState: () => { triggerZoomToSection: (id: number) => void } } };
+      }).__E2E_TEST__?.uiStore;
+      ui?.getState().triggerZoomToSection(secId);
+    }, sectionId);
 
     // Wait for second animation to complete
     await expect.poll(
@@ -449,5 +486,55 @@ test.describe('Section zoom margin', () => {
     const finalResult = await getStationScreenMargins(page, sectionId);
     expect(finalResult).not.toBeNull();
     assertMargins(finalResult!, MIN_MARGIN_PCT);
+  });
+
+  test('exiting focus mode returns to the whole-map (fit-to-bounds) view', async ({ page }) => {
+    const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
+    const getView = () =>
+      page.evaluate(() => {
+        const m = (window as unknown as {
+          __stalagmight_map__?: { getZoom: () => number; getCenter: () => { lng: number; lat: number } };
+        }).__stalagmight_map__!;
+        const c = m.getCenter();
+        return { lng: c.lng, lat: c.lat, zoom: m.getZoom() };
+      });
+    const mapIdle = () =>
+      page.evaluate(() => {
+        const m = (window as unknown as { __stalagmight_map__?: { isMoving: () => boolean } }).__stalagmight_map__;
+        return m ? !m.isMoving() : false;
+      });
+    const settle = async () => {
+      // Ride past the post-action re-fit delay (180ms here + 100ms in MapCanvas).
+      await page.waitForTimeout(400);
+      await expect.poll(mapIdle, { timeout: 15000 }).toBe(true);
+    };
+
+    // Enter focus via the dedicated per-row focus button, then exit via the map's
+    // top-left fit-to-view button (which doubles as exit-focus in focus mode).
+    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
+    await expect(sectionRow).toBeVisible();
+    await sectionRow.hover();
+    await page.getByTestId(`section-focus-${sectionId}`).click();
+    await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
+    await page.getByTestId('fit-to-view-button').click();
+    await expect(page.getByTestId('sections-panel')).toBeVisible();
+    await settle();
+    const exitView = await getView();
+
+    // Exit must already be at the whole-map fit-to-bounds view: triggering
+    // fit-to-bounds now must be a no-op (idempotent). If exit had instead stayed
+    // zoomed into the section (the bug), this would move the camera.
+    await page.evaluate(() => {
+      const ui = (window as unknown as {
+        __E2E_TEST__?: { uiStore?: { getState: () => { triggerFitToBounds: () => void } } };
+      }).__E2E_TEST__?.uiStore;
+      ui?.getState().triggerFitToBounds();
+    });
+    await settle();
+    const fitView = await getView();
+
+    expect(Math.abs(exitView.zoom - fitView.zoom)).toBeLessThan(0.25);
+    expect(Math.abs(exitView.lng - fitView.lng)).toBeLessThan(1e-5);
+    expect(Math.abs(exitView.lat - fitView.lat)).toBeLessThan(1e-5);
   });
 });

@@ -173,6 +173,16 @@ interface UIStore {
     dataTableHeight?: number
   ) => Promise<void>;
 
+  // Section focus mode (#50): double-clicking a section collapses both side
+  // panels and opens the data table so the screen is dedicated to one section.
+  // Exiting restores the layout captured at entry.
+  focusedSectionId: SectionId | null;
+  enterSectionFocus: (sectionId: SectionId, dataTableHeight: number) => void;
+  exitSectionFocus: () => void;
+  /** While focused, follow the selected section so the heading tracks the table
+   *  (does not re-snapshot layout or re-fit the map). */
+  setFocusedSection: (sectionId: SectionId) => void;
+
   // Map state
   mapCenter: [number, number];
   mapZoom: number;
@@ -329,10 +339,29 @@ export type DisplayToggleKey =
   | 'showShotComments'
   | 'showDevStats';
 
+/**
+ * Layout captured when entering section-focus mode (#50), restored on exit.
+ * Module-level (not store state) since it's internal bookkeeping the UI never
+ * reads. Re-focusing a different section while already focused keeps the
+ * original snapshot, so exiting always returns to the pre-focus layout.
+ */
+let focusLayoutSnapshot:
+  | {
+      sectionsPanelOpen: boolean;
+      detailPanelOpen: boolean;
+      dataTableOpen: boolean;
+      dataTableHeight: number;
+    }
+  | null = null;
+
 export const useUIStore = create<UIStore>((set) => ({
   // View state
   view: 'global',
   setView: (view) => {
+    // Section-focus mode (#50) is single-view, single-project scoped: drop it on
+    // any view switch so a stale focus can't outlive the view or project that
+    // opened it. No-op when not focused; restores the pre-focus panel layout.
+    useUIStore.getState().exitSectionFocus();
     setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
     if (view === 'single') {
       void advanceProjectSeq();
@@ -486,17 +515,23 @@ export const useUIStore = create<UIStore>((set) => ({
   toggleSectionsPanel: () => {
     const opening = !useUIStore.getState().sectionsPanelOpen;
     trackPanelToggle('sections', opening);
-    set({ sectionsPanelOpen: opening });
+    // Manually changing the layout drops section-focus mode (#50) so the toolbar
+    // can't keep showing a focused-section name with the panels reopened. Keep
+    // the user's new layout (no snapshot restore); discard the snapshot.
+    focusLayoutSnapshot = null;
+    set({ sectionsPanelOpen: opening, focusedSectionId: null });
   },
   toggleDetailPanel: () => {
     const opening = !useUIStore.getState().detailPanelOpen;
     trackPanelToggle('detail', opening);
-    set({ detailPanelOpen: opening });
+    focusLayoutSnapshot = null;
+    set({ detailPanelOpen: opening, focusedSectionId: null });
   },
   toggleDataTable: () => {
     const opening = !useUIStore.getState().dataTableOpen;
     trackPanelToggle('data-table', opening);
-    set({ dataTableOpen: opening });
+    focusLayoutSnapshot = null;
+    set({ dataTableOpen: opening, focusedSectionId: null });
   },
   setDetailPanelTab: (detailPanelTab) => set({ detailPanelTab }),
   setSectionsPanelWidth: (sectionsPanelWidth) => set({ sectionsPanelWidth }),
@@ -522,6 +557,56 @@ export const useUIStore = create<UIStore>((set) => ({
     } catch (e) {
       console.error('Failed to save panel sizes:', e);
     }
+  },
+
+  // Section focus mode (#50)
+  focusedSectionId: null,
+  enterSectionFocus: (focusedSectionId, dataTableHeight) => {
+    const s = useUIStore.getState();
+    // Focus mode is an editable workspace for one section. The closure-adjusted
+    // view (#70) is read-only, so entering focus leaves it and returns to the
+    // measured geometry — guaranteeing the focused data table is editable.
+    if (s.geometryMode !== 'measured') {
+      s.setGeometryMode('measured', 'sections-panel');
+    }
+    // Snapshot the layout only on first entry; re-focusing another section
+    // while already focused must not overwrite the pre-focus layout.
+    if (s.focusedSectionId === null) {
+      focusLayoutSnapshot = {
+        sectionsPanelOpen: s.sectionsPanelOpen,
+        detailPanelOpen: s.detailPanelOpen,
+        dataTableOpen: s.dataTableOpen,
+        dataTableHeight: s.dataTableHeight,
+      };
+    }
+    // Set the focus height directly (not via savePanelSizes) so the temporary
+    // focus layout is never persisted to the user's panel config. Only apply it
+    // when the table opens from closed: a fresh ResizablePanel mount seeds its
+    // (uncontrolled) size from this height. If the table is already open we leave
+    // its height alone rather than force a remount that would reset DataTable
+    // state (selection, scroll).
+    set({
+      focusedSectionId,
+      sectionsPanelOpen: false,
+      detailPanelOpen: false,
+      dataTableOpen: true,
+      ...(s.dataTableOpen ? {} : { dataTableHeight }),
+    });
+  },
+  exitSectionFocus: () => {
+    if (useUIStore.getState().focusedSectionId === null) return;
+    const snap = focusLayoutSnapshot;
+    focusLayoutSnapshot = null;
+    // Restores the captured panel layout. The geometry switch to 'measured' on
+    // entry is intentionally one-way (per the #50/#70 design resolution): exiting
+    // leaves you in measured to keep editing, not back in the read-only view.
+    set({ focusedSectionId: null, ...(snap ?? {}) });
+  },
+  setFocusedSection: (focusedSectionId) => {
+    // Only meaningful while already focused (follow the selection). Guarded so it
+    // can't enter focus without a layout snapshot.
+    if (useUIStore.getState().focusedSectionId === null) return;
+    set({ focusedSectionId });
   },
 
   // Map state

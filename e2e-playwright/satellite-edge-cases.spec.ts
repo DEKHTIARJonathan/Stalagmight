@@ -221,7 +221,7 @@ test.describe('Satellite Edge Cases', () => {
       await page.keyboard.press('Escape');
 
       // Go back to home (close project) using the "← Back" button
-      await page.click('button:has-text("Back")');
+      await page.getByTestId('back-button').click();
 
       // Handle unsaved changes dialog if it appears
       const discardButton = page.locator('button:has-text("Discard Changes")');
@@ -262,7 +262,7 @@ test.describe('Satellite Edge Cases', () => {
      */
     test('should toggle with empty project (no stations)', async ({ page }) => {
       // Go back to home and create empty project using the "← Back" button
-      await page.click('button:has-text("Back")');
+      await page.getByTestId('back-button').click();
 
       // Handle unsaved changes dialog if it appears
       const discardButton = page.locator('button:has-text("Discard Changes")');
@@ -382,7 +382,7 @@ test.describe('Satellite Edge Cases', () => {
      */
     async function openSettingsFromGlobalView(page: Page): Promise<void> {
       // Go back to GlobalView (close project) using the "← Back" button
-      await page.click('button:has-text("Back")');
+      await page.getByTestId('back-button').click();
 
       // Handle unsaved changes dialog if it appears
       const discardButton = page.locator('button:has-text("Discard Changes")');

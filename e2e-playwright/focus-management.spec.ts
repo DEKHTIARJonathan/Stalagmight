@@ -149,13 +149,23 @@ test.describe('Focus Management', () => {
     });
 
     test('closing dialog via Escape returns focus to trigger element', async ({ page }) => {
-      // Find and click the section delete button to open the ConfirmDialog
-      const deleteBtn = page.locator('[data-testid^="section-delete-"]').first();
-      // Hover to reveal the delete button (it's opacity-0 until group-hover)
-      const sectionItem = page.locator('[data-testid^="section-item-"]').first();
-      await sectionItem.hover();
-      await expect(deleteBtn).toBeVisible({ timeout: 5000 });
-      await deleteBtn.click();
+      // Use a stable, always-present control as the trigger. (Section delete moved
+      // to the context menu, whose item unmounts when the dialog opens — so it can
+      // no longer be the focus-return target.) Focus the Add-section button, then
+      // open the ConfirmDialog while it holds focus so the dialog captures it.
+      const trigger = page.getByTestId('sections-add-button');
+      await expect(trigger).toBeVisible({ timeout: 5000 });
+      await trigger.focus();
+      await expect(trigger).toBeFocused();
+
+      const sectionId = await page.evaluate(
+        () => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id,
+      );
+      await page.evaluate((id) => {
+        (window as any).__E2E_TEST__.uiStore
+          .getState()
+          .openDialog('confirm-delete', { type: 'section', sectionId: id });
+      }, sectionId);
 
       // ConfirmDialog should be open
       await expect(page.getByTestId('confirm-dialog')).toBeVisible({ timeout: 5000 });
@@ -164,15 +174,8 @@ test.describe('Focus Management', () => {
       await page.keyboard.press('Escape');
       await expect(page.getByTestId('confirm-dialog')).not.toBeVisible({ timeout: 3000 });
 
-      // Focus should return to the delete button (the trigger element).
-      // The button may have become hidden again (opacity-0) but should still be
-      // in the DOM and focusable. Assert the actual trigger element is focused.
-      const focusedOnTrigger = await page.evaluate(() => {
-        const ae = document.activeElement;
-        const testId = ae?.getAttribute('data-testid') ?? '';
-        return testId.startsWith('section-delete-');
-      });
-      expect(focusedOnTrigger).toBe(true);
+      // Focus should return to the trigger element.
+      expect(await focusedTestId(page)).toBe('sections-add-button');
     });
   });
 
@@ -265,12 +268,10 @@ test.describe('Focus Management', () => {
     });
 
     test('ConfirmDialog focuses the primary action button (Delete)', async ({ page }) => {
-      // Open ConfirmDialog via section delete button
-      const sectionItem = page.locator('[data-testid^="section-item-"]').first();
-      await sectionItem.hover();
-      const deleteBtn = page.locator('[data-testid^="section-delete-"]').first();
-      await expect(deleteBtn).toBeVisible({ timeout: 5000 });
-      await deleteBtn.click();
+      // Open ConfirmDialog via the section context menu (section delete moved
+      // there from the per-row button).
+      await page.locator('[data-testid^="section-row-"]').first().click({ button: 'right' });
+      await page.getByRole('button', { name: 'Delete Section' }).click();
 
       await expect(page.getByTestId('confirm-dialog')).toBeVisible({ timeout: 5000 });
 

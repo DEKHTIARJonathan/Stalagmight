@@ -1673,7 +1673,8 @@
     "actions": {
       "add": "Add section",
       "delete": "Delete section",
-      "zoom": "Double-click to zoom (Ctrl+G)"
+      "focus": "Focus this section",
+      "zoom": "Click to select · double-click to focus this section"
     },
     "ariaList": "Sections list",
     "confirmDelete": "Delete this section?",
@@ -1681,6 +1682,10 @@
     "empty": {
       "action": "Import data",
       "message": "No sections yet."
+    },
+    "focus": {
+      "exit": "Exit focus mode",
+      "exitLabel": "Exit focus"
     },
     "stats": "Shots: {{shots}} | {{length}}",
     "title": "Sections"
@@ -1724,6 +1729,7 @@
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",
       "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}",
+      "focusedSection": "Focused: {{name}}",
       "saved": "Saved",
       "saving": "Saving...",
       "unsavedChanges": "Unsaved changes",

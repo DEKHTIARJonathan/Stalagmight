@@ -27,6 +27,8 @@ import { defaultConfig } from '../../types/config';
 
 interface ToolbarProps {
   projectName: string;
+  /** When in section-focus mode (#50), the focused section's name. */
+  focusedSectionName: string | null;
   onBack: () => void;
   onSave: () => void;
   onImport: () => void;
@@ -121,6 +123,7 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
 
 export default function Toolbar({
   projectName,
+  focusedSectionName,
   onBack,
   onSave,
   onImport,
@@ -152,7 +155,7 @@ export default function Toolbar({
           icon={<ArrowLeftIcon size={14} />}
           data-testid="back-button"
         >
-          {t('common.actions.back')}
+          {t('common.actions.close')}
         </Button>
         <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
@@ -196,8 +199,19 @@ export default function Toolbar({
         </UndoHistoryDropdown>
       </div>
 
-      {/* Center - project name */}
-      <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
+      {/* Center - project name, or focused section name (#50). The name is a
+          plain heading; exiting focus mode is done via the map's exit-focus
+          button (top-left of the map), not from here. */}
+      {focusedSectionName !== null ? (
+        <h1
+          className="font-medium truncate max-w-[40vw]"
+          data-testid="toolbar-section-focus-name"
+        >
+          {focusedSectionName}
+        </h1>
+      ) : (
+        <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
+      )}
 
       {/* Right section - tools and display menu */}
       <div className="flex items-center gap-2">

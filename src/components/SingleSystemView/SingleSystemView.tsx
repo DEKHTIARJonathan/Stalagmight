@@ -4,6 +4,7 @@ import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import type { SectionId } from '../../types/project';
 import { useShallow } from 'zustand/react/shallow';
 import { ResizablePanel } from '../common/Panel';
 import { ErrorBoundary } from '../common/ErrorBoundary';
@@ -13,11 +14,18 @@ import SectionsPanel from './SectionsPanel';
 import DetailPanel from './DetailPanel';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
+import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
-import { withTrackingSuppressed } from '../../utils/telemetry';
+import { setSource, withTrackingSuppressed } from '../../utils/telemetry';
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+
+// #50: after double-click collapses the side panels, the map grows. fitToSection
+// reads the container size at call time, so re-fit once the layout has reflowed
+// and MapLibre's ResizeObserver has resized the map (a couple of frames). This
+// lives here rather than in SectionsPanel, which unmounts when it collapses.
+const SECTION_FOCUS_REFIT_DELAY_MS = 180;
 
 export default function SingleSystemView() {
   const { t } = useTranslation();
@@ -52,6 +60,12 @@ export default function SingleSystemView() {
     detailPanelWidth,
     dataTableOpen,
     dataTableHeight,
+    focusedSectionId,
+    exitSectionFocus,
+    setFocusedSection,
+    selection,
+    triggerZoomToSection,
+    triggerFitToBounds,
     toggleSectionsPanel,
     toggleDetailPanel,
     toggleDataTable,
@@ -66,6 +80,12 @@ export default function SingleSystemView() {
     detailPanelWidth: s.detailPanelWidth,
     dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
+    focusedSectionId: s.focusedSectionId,
+    exitSectionFocus: s.exitSectionFocus,
+    setFocusedSection: s.setFocusedSection,
+    selection: s.selection,
+    triggerZoomToSection: s.triggerZoomToSection,
+    triggerFitToBounds: s.triggerFitToBounds,
     toggleSectionsPanel: s.toggleSectionsPanel,
     toggleDetailPanel: s.toggleDetailPanel,
     toggleDataTable: s.toggleDataTable,
@@ -74,6 +94,74 @@ export default function SingleSystemView() {
     setDataTableHeight: s.setDataTableHeight,
     savePanelSizes: s.savePanelSizes,
   })));
+
+  // #50: name shown in place of the project name while focused on one section.
+  const focusedSectionExists =
+    focusedSectionId !== null && (project?.sections.some((s) => s.id === focusedSectionId) ?? false);
+  const focusedSectionName =
+    focusedSectionId !== null
+      ? project?.sections.find((s) => s.id === focusedSectionId)?.name
+          ?? t('sections.defaultName', { id: focusedSectionId })
+      : null;
+
+  // The section that owns the current selection (section / shot / station) — the
+  // same mapping the data table uses to pick its section.
+  const selectedSectionId: SectionId | undefined =
+    selection?.type === 'section' || selection?.type === 'shot'
+      ? selection.sectionId
+      : selection?.type === 'station'
+        ? selection.stationRef?.section_id
+        : undefined;
+
+  // #50: adjust the map once the layout settles, after the side panels collapse
+  // (entry) or return (exit). ENTRY (null -> id) frames the focused section in the
+  // enlarged map; EXIT (id -> null) returns to a neutral whole-map overview
+  // (fit-to-bounds) rather than staying zoomed into the section. NOT on a follow
+  // (id -> id'), so clicking another section never re-zooms — consistent with
+  // single-click no longer moving the map. Lives here (not in SectionsPanel,
+  // which unmounts on collapse) so the timer survives the panel mount/unmount.
+  const prevFocusedRef = useRef<SectionId | null>(null);
+  useEffect(() => {
+    const prev = prevFocusedRef.current;
+    prevFocusedRef.current = focusedSectionId;
+    const transition =
+      prev === null && focusedSectionId !== null
+        ? 'enter'
+        : prev !== null && focusedSectionId === null
+          ? 'exit'
+          : null; // follow / no transition
+    if (transition === null) return;
+    const enterId = focusedSectionId;
+    const timer = window.setTimeout(() => {
+      setSource('sections-panel');
+      if (transition === 'enter' && enterId !== null) {
+        triggerZoomToSection(enterId);
+      } else {
+        triggerFitToBounds();
+      }
+    }, SECTION_FOCUS_REFIT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [focusedSectionId, triggerZoomToSection, triggerFitToBounds]);
+
+  // #50: while focused, follow the selected section so the toolbar heading tracks
+  // the data table (clicking another section on the map updates both).
+  useEffect(() => {
+    if (
+      focusedSectionId !== null &&
+      selectedSectionId !== undefined &&
+      selectedSectionId !== focusedSectionId
+    ) {
+      setFocusedSection(selectedSectionId);
+    }
+  }, [focusedSectionId, selectedSectionId, setFocusedSection]);
+
+  // #50: if the focused section disappears (e.g. deleted while focused), exit
+  // focus mode rather than stay in the collapsed layout showing a stale name.
+  useEffect(() => {
+    if (focusedSectionId !== null && project && !focusedSectionExists) {
+      exitSectionFocus();
+    }
+  }, [focusedSectionId, focusedSectionExists, project, exitSectionFocus]);
 
   const sectionsPanelOpenedByOnboardingRef = useRef(false);
   const detailPanelOpenedByOnboardingRef = useRef(false);
@@ -180,6 +268,7 @@ export default function SingleSystemView() {
       {/* Toolbar */}
       <Toolbar
         projectName={project.name}
+        focusedSectionName={focusedSectionName}
         onBack={handleCloseProject}
         onSave={handleSaveProject}
         onImport={handleImportDmp}
@@ -254,10 +343,16 @@ export default function SingleSystemView() {
             <ResizablePanel
               direction="vertical"
               defaultSize={dataTableHeight}
-              minSize={100}
-              maxSize={500}
+              minSize={DATA_TABLE_MIN_HEIGHT}
+              maxSize={DATA_TABLE_MAX_HEIGHT}
               onResize={setDataTableHeight}
-              onResizeEnd={(size) => savePanelSizes(undefined, undefined, size)}
+              // Don't persist the temporary focus-mode height (#50): in focus
+              // mode the data table opens at ~30% and exit restores the prior
+              // height only in memory, so persisting a focus-time drag would
+              // leak that size into the next session.
+              onResizeEnd={(size) => {
+                if (focusedSectionId === null) savePanelSizes(undefined, undefined, size);
+              }}
               className="border-t border-border"
             >
               <div className="relative h-full">
@@ -352,6 +447,12 @@ export default function SingleSystemView() {
             shots: formatNumber(stats?.shot_count ?? 0),
             length: formatLength(stats?.total_length ?? 0, precision.length),
           })}
+          {focusedSectionName !== null && (
+            <span data-testid="status-focused-section" className="ml-2 text-accent">
+              {' | '}
+              {t('singleView.status.focusedSection', { name: focusedSectionName })}
+            </span>
+          )}
         </span>
         <SaveStatus status={autoSave.status} countdown={autoSave.countdown} isDirty={isDirty} />
       </footer>
