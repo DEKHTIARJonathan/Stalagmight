@@ -1463,9 +1463,11 @@ button.sh-tool.sh-tool--active {
   height: 0.8em;
   background: color-mix(in oklab, var(--o) 30%, var(--cc-border));
 }
-/* The monospace id glyphs sit high in their line box; nudge just the text down a
-   hair to optically center it (the divider, on the parent, stays centered). */
-.sh-pill-id-text {
+/* Cap-height glyphs (the monospace id, and numeric shot/station primaries) sit
+   high in their line box; nudge the text down a hair to optically center it.
+   Applied to the id text and to numeric primaries — not to lowercase section
+   names. The divider (on .sh-pill-id) stays centered. */
+.sh-pill-nudge {
   position: relative;
   top: 1px;
 }
