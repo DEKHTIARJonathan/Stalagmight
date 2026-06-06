@@ -267,8 +267,6 @@ export default function SingleSystemView() {
     <div className="h-full flex flex-col" data-testid="single-system-view">
       {/* Toolbar */}
       <Toolbar
-        projectName={project.name}
-        focusedSectionName={focusedSectionName}
         onBack={handleCloseProject}
         onSave={handleSaveProject}
         onImport={handleImportDmp}
@@ -416,7 +414,7 @@ export default function SingleSystemView() {
                   <ChevronRightIcon size={10} />
                 </span>
               </button>
-              <div className={placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}>
+              <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
                 <ErrorBoundary panelName="Details">
                   <DetailPanel />
                 </ErrorBoundary>

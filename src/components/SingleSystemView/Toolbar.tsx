@@ -18,9 +18,6 @@ import { setSource } from '../../utils/telemetry';
 import { defaultConfig } from '../../types/config';
 
 interface ToolbarProps {
-  projectName: string;
-  /** When in section-focus mode (#50), the focused section's name. */
-  focusedSectionName: string | null;
   onBack: () => void;
   onSave: () => void;
   onImport: () => void;
@@ -98,24 +95,22 @@ const TOOL_GROUP_LABEL_KEYS: Record<string, string> = {
 };
 
 /**
- * Toolbar layout definition.
- * [Select] | [Navigate group] | [Merge] [Measure] | [Comment group] | [Move group]
+ * Toolbar layout definition (#51): navigation tools, a divider, the action
+ * tools, a divider, then the standalone measure tool.
+ * [Select Pan/Zoom] | [Merge Comment Move] | [Measure]
  */
 const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'select', shortcut: 'S' },
-  { kind: 'separator' },
   { kind: 'group', groupId: 'navigate' },
   { kind: 'separator' },
   { kind: 'standalone', id: 'merge', shortcut: 'M' },
-  { kind: 'standalone', id: 'measure', shortcut: 'R' },
   { kind: 'group', groupId: 'comment' },
-  { kind: 'separator' },
   { kind: 'group', groupId: 'move' },
+  { kind: 'separator' },
+  { kind: 'standalone', id: 'measure', shortcut: 'R' },
 ];
 
 export default function Toolbar({
-  projectName,
-  focusedSectionName,
   onBack,
   onSave,
   onImport,
@@ -191,19 +186,19 @@ export default function Toolbar({
         </UndoHistoryDropdown>
       </div>
 
-      {/* Center - project name, or focused section name (#50). The name is a
-          plain heading; exiting focus mode is done via the map's exit-focus
-          button (top-left of the map), not from here. */}
-      {focusedSectionName !== null ? (
-        <h1
-          className="font-medium truncate max-w-[40vw]"
-          data-testid="toolbar-section-focus-name"
-        >
-          {focusedSectionName}
-        </h1>
-      ) : (
-        <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
-      )}
+      {/* Center - the active tool's name + duotone icon, tinted with its color
+          (#51). The project name/file path live in the Project Stats panel; the
+          focused section (if any) is shown in the status bar. */}
+      <div
+        className="flex items-center gap-1.5"
+        data-testid="toolbar-active-tool"
+        style={{ '--o': toolAccentVar(activeTool) } as CSSProperties}
+      >
+        <ToolGlyph tool={activeTool} size={18} />
+        <span className="font-medium" style={{ color: 'var(--o)' }}>
+          {t(TOOL_LABEL_KEYS[activeTool])}
+        </span>
+      </div>
 
       {/* Right section - tools and display menu */}
       <div className="flex items-center gap-2">

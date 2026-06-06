@@ -1153,8 +1153,27 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
       <div className="h-full bg-panel overflow-auto">
       <Panel title={t('detailPanel.projectStats.title')}>
         <div className="space-y-4">
+          {/* Project name + file path (#51: relocated from the toolbar center). */}
+          <div className="space-y-1">
+            <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+              {t('detailPanel.projectStats.project')}
+            </h4>
+            <div className="text-sm font-medium text-text-primary break-words" data-testid="project-stats-name">
+              {project.name}
+            </div>
+            {project.file_path && (
+              <div
+                className="text-xs text-text-secondary break-all"
+                data-testid="project-stats-path"
+                title={project.file_path}
+              >
+                {project.file_path}
+              </div>
+            )}
+          </div>
+
           {/* Survey overview */}
-          <div className="space-y-2">
+          <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
               {t('detailPanel.projectStats.overview')}
             </h4>

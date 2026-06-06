@@ -1324,6 +1324,7 @@
     "projectStats": {
       "title": "Project stats",
       "empty": "No project statistics available.",
+      "project": "Project",
       "overview": "Overview",
       "totalLength": "Total length",
       "penetration": "Penetration",
