@@ -10,8 +10,6 @@ import {
   HandIcon,
   SelectToolIcon,
   ZoomToolIcon,
-  DrawToolIcon,
-  DeleteToolIcon,
   MergeToolIcon,
   MeasureToolIcon,
   MoveStationToolIcon,
@@ -69,8 +67,6 @@ function getShortcutForTool(tool: ToolType, shortcuts: Record<string, string[]>)
     select: 'select',
     pan: 'pan',
     zoom: 'zoom',
-    draw: 'draw',
-    delete: 'delete_tool',
     merge: 'merge',
     measure: 'measure',
     move_station: 'move_station',
@@ -92,8 +88,6 @@ const TOOL_LABEL_KEYS: Record<ToolType, string> = {
   select: 'toolbar.tools.select',
   pan: 'toolbar.tools.pan',
   zoom: 'toolbar.tools.zoom',
-  draw: 'toolbar.tools.draw',
-  delete: 'toolbar.tools.delete',
   merge: 'toolbar.tools.merge',
   measure: 'toolbar.tools.measure',
   move_station: 'toolbar.tools.moveStation',
@@ -111,15 +105,13 @@ const TOOL_GROUP_LABEL_KEYS: Record<string, string> = {
 
 /**
  * Toolbar layout definition.
- * [Select] | [Navigate group] | [Draw] [Delete] [Merge] [Measure] | [Move group]
+ * [Select] | [Navigate group] | [Merge] [Measure] | [Move group]
  */
 const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'select', shortcut: 'S' },
   { kind: 'separator' },
   { kind: 'group', groupId: 'navigate' },
   { kind: 'separator' },
-  { kind: 'standalone', id: 'draw', shortcut: 'D' },
-  { kind: 'standalone', id: 'delete', shortcut: 'X' },
   { kind: 'standalone', id: 'merge', shortcut: 'M' },
   { kind: 'standalone', id: 'measure', shortcut: 'R' },
   { kind: 'group', groupId: 'comment' },
@@ -641,8 +633,6 @@ function ToolIcon({ tool }: { tool: ToolType }) {
     select: <SelectToolIcon size={20} />,
     pan: <HandIcon size={20} />,
     zoom: <ZoomToolIcon size={20} />,
-    draw: <DrawToolIcon size={20} />,
-    delete: <DeleteToolIcon size={20} />,
     merge: <MergeToolIcon size={20} />,
     measure: <MeasureToolIcon size={20} />,
     move_station: <MoveStationToolIcon size={20} />,

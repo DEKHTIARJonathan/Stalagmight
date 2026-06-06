@@ -18,7 +18,7 @@ export const SHORTCUT_CATEGORIES: ShortcutCategory[] = [
   {
     id: 'tools',
     labelKey: 'settings.shortcuts.categories.tools',
-    actions: ['select', 'pan', 'zoom', 'draw', 'delete_tool', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment_tool', 'move_comment_tool'],
+    actions: ['select', 'pan', 'zoom', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment_tool', 'move_comment_tool'],
   },
   {
     id: 'edit',

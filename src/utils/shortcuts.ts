@@ -518,8 +518,6 @@ const ACTION_NAME_KEYS: Record<string, string> = {
   select: 'settings.shortcuts.actions.select',
   pan: 'settings.shortcuts.actions.pan',
   zoom: 'settings.shortcuts.actions.zoom',
-  draw: 'settings.shortcuts.actions.draw',
-  delete_tool: 'settings.shortcuts.actions.deleteTool',
   merge: 'settings.shortcuts.actions.merge',
   measure: 'settings.shortcuts.actions.measure',
   move_station: 'settings.shortcuts.actions.moveStation',

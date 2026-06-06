@@ -8,7 +8,7 @@ import { DialogWrapper } from './DialogWrapper';
 import type { StationRef, ShotData } from '../../types/project';
 
 export default function DrawShotDialog() {
-  const { closeDialog, dialogData, setDrawFromStation, setSelection } = useUIStore();
+  const { closeDialog, dialogData, setSelection } = useUIStore();
   const { createShot, project, stations } = useProjectStore();
 
   const fromStation = dialogData.fromStation as StationRef | undefined;
@@ -90,7 +90,6 @@ export default function DrawShotDialog() {
   }, [currentStationDepth]); // Only run when currentStationDepth changes
 
   const handleClose = () => {
-    setDrawFromStation(null);
     closeDialog();
   };
 
@@ -169,7 +168,6 @@ export default function DrawShotDialog() {
             shotId: result.shot_id,
           });
         }
-        setDrawFromStation(null);
         trackDialogComplete('draw-shot');
         closeDialog();
       } else {
