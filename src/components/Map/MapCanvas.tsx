@@ -3001,12 +3001,14 @@ export default function MapCanvas() {
           same top-left button returns you to the overview. */}
       <button
         onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
-        className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
+        className="absolute top-2 left-2 flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
         title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
         aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
         data-testid="fit-to-view-button"
       >
         <FitToViewIcon size={16} />
+        {/* In focus mode the button also exits focus — label it so that's clear. */}
+        {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
       </button>
 
       {/* Placement mode indicator */}

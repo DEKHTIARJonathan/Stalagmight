@@ -1691,7 +1691,8 @@
       "message": "No sections yet."
     },
     "focus": {
-      "exit": "Exit focus mode"
+      "exit": "Exit focus mode",
+      "exitLabel": "Exit focus"
     },
     "stats": "Shots: {{shots}} | {{length}}",
     "title": "Sections"

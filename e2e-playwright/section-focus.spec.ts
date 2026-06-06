@@ -97,14 +97,20 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('detail-panel-collapsed-toggle')).toBeVisible();
     await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
 
-    // Exit via the map's top-left fit-to-view button (doubles as exit-focus).
-    await page.getByTestId('fit-to-view-button').click();
+    // The fit-to-view button gains an "Exit focus" label while focused.
+    const fitToView = page.getByTestId('fit-to-view-button');
+    await expect(fitToView).toContainText('Exit focus');
+
+    // Exit via that button (doubles as exit-focus).
+    await fitToView.click();
 
     // Layout restored: project name back, sections panel open, data table closed.
     await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
     await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
+    // Label is gone once out of focus mode.
+    await expect(fitToView).not.toContainText('Exit focus');
   });
 
   test('double-clicking a section zooms to it WITHOUT entering focus mode', async ({ page }) => {
