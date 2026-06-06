@@ -307,6 +307,35 @@ const datumStar: BadgeContent = (cx, cy, r) => (
   <path className="datum-star" d={starD(cx, cy, r * 1.02, r * 0.42)} />
 );
 
+/** Eye (open, or crossed with a slash) — visibility / reference state. */
+function eyeShape(cx: number, cy: number, r: number, crossed: boolean): ReactNode {
+  const rx = r * 0.98, ry = r * 0.62, pr = r * 0.32, a = r * 0.8;
+  return (
+    <g>
+      <ellipse className="eye" cx={cx} cy={cy} rx={rx} ry={ry} />
+      <circle className="eye-pupil" cx={cx} cy={cy} r={pr} />
+      {crossed && (
+        <path className="eye" d={`M${(cx - a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx + a).toFixed(2)} ${(cy + a).toFixed(2)}`} />
+      )}
+    </g>
+  );
+}
+/** Crossed eye (mark as jump/reference). */
+const crossedEye: BadgeContent = (cx, cy, r) => eyeShape(cx, cy, r, true);
+/** Open eye (mark as permanent). */
+const openEye: BadgeContent = (cx, cy, r) => eyeShape(cx, cy, r, false);
+
+/** Green plus (add). */
+const greenPlus: BadgeContent = (cx, cy, r) => {
+  const a = r * 0.6;
+  return (
+    <g>
+      <path className="plus" d={`M${(cx - a).toFixed(2)} ${cy} H${(cx + a).toFixed(2)}`} />
+      <path className="plus" d={`M${cx} ${(cy - a).toFixed(2)} V${(cy + a).toFixed(2)}`} />
+    </g>
+  );
+};
+
 /** Bottom-right action-badge placement (cx/cy/r) per entity. The entity itself is
  * the centered object glyph; the badge sits in the bottom-right corner (overlap
  * with the object is expected). */
@@ -362,6 +391,18 @@ export function EntityEditSymbol(props: EntitySymbolProps) {
 /** Duotone "zero datum on <entity>" (entity color + golden star badge). */
 export function EntityDatumSymbol(props: EntitySymbolProps) {
   return <EntityBadgedSymbol {...props} content={datumStar} />;
+}
+/** Duotone "mark <entity> as jump/reference" (entity color + crossed-eye badge). */
+export function EntityReferenceSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={crossedEye} />;
+}
+/** Duotone "mark <entity> as permanent" (entity color + open-eye badge). */
+export function EntityPermanentSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={openEye} />;
+}
+/** Duotone "add <entity>" (entity color + green plus badge). */
+export function EntityAddSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={greenPlus} />;
 }
 
 /** CSS `var(--sh-<role>)` reference for a tool's accent color (icon + button tint). */

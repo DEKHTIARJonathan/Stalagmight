@@ -6,8 +6,16 @@ import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { PlusIcon, LinkOffIcon, ArrowUpRightIcon } from './icons';
-import { EntityDeleteSymbol, EntityEditSymbol, EntityDatumSymbol, ToolGlyph } from './toolIcons';
+import { LinkOffIcon, ArrowUpRightIcon } from './icons';
+import {
+  EntityDeleteSymbol,
+  EntityEditSymbol,
+  EntityDatumSymbol,
+  EntityReferenceSymbol,
+  EntityPermanentSymbol,
+  EntityAddSymbol,
+  ToolGlyph,
+} from './toolIcons';
 
 interface ContextMenuItem {
   label: string;
@@ -498,7 +506,11 @@ export default function ContextMenu() {
         return <LinkOffIcon size={16} />;
       case 'Add Shot Before':
       case 'Add Shot After':
-        return <PlusIcon size={16} />;
+        return <EntityAddSymbol entity="shot" size={18} />;
+      case 'Mark as Jump/Reference':
+        return <EntityReferenceSymbol entity="shot" size={18} />;
+      case 'Mark as Permanent':
+        return <EntityPermanentSymbol entity="shot" size={18} />;
       case 'Set Zero Datum':
         return <EntityDatumSymbol entity="station" size={18} />;
       case 'Delete Section':
