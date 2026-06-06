@@ -124,11 +124,21 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // shot/station/section selected from the map, data table, or details panel).
   // Unlike the hover scroll, this is a persistent reveal — there's nothing to
   // restore — so it's kept separate from the hover save/restore bookkeeping.
+  const prevSelectedSectionIdRef = useRef<SectionId | null>(null);
   useEffect(() => {
+    const selectionChanged = prevSelectedSectionIdRef.current !== selectedSectionId;
+    prevSelectedSectionIdRef.current = selectedSectionId;
     if (selectedSectionId === null) return;
     const idx = sections.findIndex((s) => s.id === selectedSectionId);
     if (idx < 0) return;
     optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+    // A *new* selection becomes the panel's anchor. If it was made during an
+    // active external hover (e.g. hover a shot on the map, then click to select
+    // it), drop the pre-hover restore so un-hovering lands on the selection
+    // rather than snapping back to where the list was before the hover.
+    if (selectionChanged) {
+      preHoverScrollTopRef.current = null;
+    }
   }, [selectedSectionId, sections]);
 
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {

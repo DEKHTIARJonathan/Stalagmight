@@ -226,4 +226,42 @@ test.describe('Sections panel scrolling', () => {
     await expect(lastRow).toHaveAttribute('aria-selected', 'true');
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   });
+
+  test('selecting during a hover anchors un-hover to the selection, not the pre-hover position', async ({ page }) => {
+    await createProject(page, 'Hover Select Unhover Test');
+    const seeds: SectionSeed[] = Array.from({ length: 40 }, (_, i) => ({
+      name: `Section ${i + 1}`,
+      shots:
+        i === 39
+          ? [{ azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 }]
+          : [],
+    }));
+    await seedProjectWithSections(page, seeds);
+
+    const list = page.getByTestId('sections-list');
+    await expect(list).toBeVisible();
+
+    const ids = await getSectionIds(page);
+    const lastId = ids[ids.length - 1]!;
+
+    // Park at top — this is the pre-hover position that must NOT be restored.
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(0);
+
+    // Hover the off-screen last section (as a map shot hover would) → auto-scroll.
+    await setExternalSectionHover(page, lastId);
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+
+    // Click to select the shot while still hovering — selection becomes the anchor.
+    const shotId = await getFirstShotId(page, lastId);
+    await setSelection(page, { type: 'shot', sectionId: lastId, shotId });
+
+    // Un-hover: the list stays at the selected section, not back at the top.
+    await setExternalSectionHover(page, null);
+    // Give the restore effect a chance to (wrongly) run, then assert it didn't.
+    await page.waitForTimeout(150);
+    expect(await list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  });
 });
