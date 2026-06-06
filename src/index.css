@@ -1399,12 +1399,20 @@ tr[data-selected="true"]:hover {
    INSET ring in the tool's own color, so the selection highlight stays exactly
    within the back-color box (no oversized outline, no theme-accent color). */
 button.sh-tool {
+  /* A 2px transparent border is reserved on every tool button (box-sizing is
+     border-box, so the outer size is unchanged and there is no layout shift when
+     a tool becomes active). The background clips to border-box, so the back-color
+     still fills the whole button through the transparent border. Using a real
+     border — rather than an inset box-shadow — keeps the active ring pixel-even
+     on all sides at fractional UI-zoom (border width snaps uniformly; box-shadow
+     spread does not). */
   background: color-mix(in oklab, var(--o) 12%, var(--cc-panel));
+  border: 2px solid transparent;
 }
 button.sh-tool:hover:not(:disabled) {
   background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
 }
 button.sh-tool.sh-tool--active {
   background: color-mix(in oklab, var(--o) 24%, var(--cc-panel));
-  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--o) 72%, transparent);
+  border-color: color-mix(in oklab, var(--o) 72%, transparent);
 }

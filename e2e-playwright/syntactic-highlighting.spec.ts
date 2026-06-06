@@ -80,11 +80,19 @@ test.describe('Syntactic Highlighting', () => {
     expect(selectBg).not.toBe('rgba(0, 0, 0, 0)');
     expect(selectBg).not.toBe('transparent');
 
-    // The active tool (select is active by default) uses a tool-colored INSET
-    // ring (box-shadow), not the oversized theme-accent outline ring.
+    // The active tool (select is active by default) is ringed with a tool-colored
+    // border (not the theme accent), and the border is the same width on all four
+    // sides so it stays pixel-even at any UI zoom.
     await expect(selectButton).toHaveClass(/sh-tool--active/);
-    const selectShadow = await selectButton.evaluate((el) => getComputedStyle(el).boxShadow);
-    expect(selectShadow).toContain('inset');
+    const border = await selectButton.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        color: s.borderTopColor,
+        widths: [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth],
+      };
+    });
+    expect(border.color).not.toBe('rgba(0, 0, 0, 0)'); // ring present
+    expect(new Set(border.widths).size).toBe(1); // all four sides equal width
 
     // Pressing the old draw/delete shortcuts does nothing.
     await page.getByTestId('tool-select').click();
