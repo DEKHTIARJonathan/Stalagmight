@@ -336,6 +336,11 @@ test.describe('Focus Management', () => {
       await expect(generalTab).toHaveAttribute('aria-selected', 'true');
       await expect(appearanceTab).toHaveAttribute('aria-selected', 'false');
 
+      // Arrow Down again to Highlighting (Syntactic)
+      await page.keyboard.press('ArrowDown');
+      const syntacticTab = page.getByTestId('settings-tab-syntactic');
+      await expect(syntacticTab).toBeFocused({ timeout: 1000 });
+
       // Arrow Down again to Units
       await page.keyboard.press('ArrowDown');
       const unitsTab = page.getByTestId('settings-tab-units');

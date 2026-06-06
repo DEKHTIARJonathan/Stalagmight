@@ -34,6 +34,15 @@ night_color_theme = "dark"          # Color palette for dark/night mode
 #   dark, light, cave, dracula, one_dark,
 #   solarized_light, catppuccin_latte, nord, catppuccin_mocha
 
+[syntactic_highlighting]
+level = "full"                      # "off", "toolbar_only", or "full" (default)
+preset = "default"                  # "default", "deuteranopia", "protanopia", "tritanopia"
+# Per-preset, per-role color overrides (sparse; only customized colors are stored).
+# Roles: segment, section, shot, station, comment, delete, move,
+#        select, measure, merge, pan, zoom
+# [syntactic_highlighting.overrides.default]
+# station = "#36b96a"
+
 [import]
 overlap_mode = "skip"               # How to handle overlapping shots during import: "skip", "replace", "append"
 
