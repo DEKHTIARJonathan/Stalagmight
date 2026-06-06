@@ -195,7 +195,12 @@ export default function Toolbar({
         style={{ '--o': toolAccentVar(activeTool) } as CSSProperties}
       >
         <ToolGlyph tool={activeTool} size={18} />
-        <span className="font-medium" style={{ color: 'var(--o)' }}>
+        <span
+          className="font-medium"
+          /* Mix with the theme text color so the tool-tinted label stays legible
+             on light/cave toolbars (raw --o can be too pale on a light panel). */
+          style={{ color: 'color-mix(in oklab, var(--o) 80%, var(--cc-text-primary))' }}
+        >
           {t(TOOL_LABEL_KEYS[activeTool])}
         </span>
       </div>

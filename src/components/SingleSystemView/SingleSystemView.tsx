@@ -265,6 +265,13 @@ export default function SingleSystemView() {
 
   return (
     <div className="h-full flex flex-col" data-testid="single-system-view">
+      {/* Page heading for screen readers. The toolbar center now shows the
+          active tool name (#51), so the project/focused-section name — the real
+          page heading — lives here, visually hidden but still in the heading
+          outline (follows the focused section in focus mode, per #50). */}
+      <h1 className="sr-only" data-testid="page-heading">
+        {focusedSectionName ?? project.name}
+      </h1>
       {/* Toolbar */}
       <Toolbar
         onBack={handleCloseProject}
