@@ -170,12 +170,23 @@ test.describe('Syntactic Highlighting', () => {
     const linkPill = page.locator('[data-testid$="-link"]').first();
     const pill = await linkPill.evaluate((el) => {
       const s = getComputedStyle(el);
-      return { display: s.display, radius: parseFloat(s.borderTopLeftRadius), bg: s.backgroundColor };
+      return {
+        display: s.display,
+        radius: parseFloat(s.borderTopLeftRadius),
+        bg: s.backgroundColor,
+        borderWidth: parseFloat(s.borderTopWidth),
+        borderStyle: s.borderTopStyle,
+        borderColor: s.borderTopColor,
+      };
     });
     // inline-flex blockifies to flex when the link sits in a flex parent.
     expect(pill.display).toMatch(/flex/);
     expect(pill.radius).toBeGreaterThan(8); // rounded-full
     expect(pill.bg).not.toBe('rgba(0, 0, 0, 0)'); // tinted background
+    // The dim entity-tinted border actually renders (solid, non-zero, visible).
+    expect(pill.borderStyle).toBe('solid');
+    expect(pill.borderWidth).toBeGreaterThan(0);
+    expect(pill.borderColor).not.toBe('rgba(0, 0, 0, 0)');
 
     // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {

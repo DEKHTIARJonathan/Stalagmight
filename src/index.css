@@ -1417,12 +1417,13 @@ button.sh-tool.sh-tool--active {
   border-color: color-mix(in oklab, var(--o) 72%, transparent);
 }
 
-/* Entity-link pill: a tinted background + entity-colored border (--o set to
-   var(--sh-<entity>)), matching the icon-set legend chips. The entity symbol
-   sits inside. */
+/* Entity-link pill: a tinted background + dim, entity-tinted border (--o set to
+   var(--sh-<entity>)), matching the icon-set legend chips. The full `border`
+   shorthand is required because <button> doesn't get border-style: solid here,
+   so a width-only utility renders nothing. The entity symbol sits inside. */
 .sh-pill {
   background: color-mix(in oklab, var(--o) 14%, var(--cc-panel));
-  border-color: color-mix(in oklab, var(--o) 32%, var(--cc-border));
+  border: 1px solid color-mix(in oklab, var(--o) 30%, var(--cc-border));
 }
 .sh-pill:hover:not(:disabled) {
   background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));

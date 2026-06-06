@@ -192,7 +192,7 @@ export function DetailLink({
   // entity-colored border (the legend-chip look). Otherwise keep the plain
   // underline link.
   const computedClass = showSymbol
-    ? `sh-pill inline-flex items-center gap-1 align-middle rounded-full border px-2 py-0.5 text-xs leading-none text-text-primary ${focusClasses} ${cursorClass} ${className}`
+    ? `sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary ${focusClasses} ${cursorClass} ${className}`
     : `underline ${isMissing ? 'text-warning' : 'text-accent'} ${focusClasses} ${cursorClass} ${className}`;
   const pillStyle: CSSProperties | undefined = showSymbol
     ? ({ '--o': `var(--sh-${type})` } as CSSProperties)
