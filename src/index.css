@@ -1439,9 +1439,8 @@ button.sh-tool.sh-tool--active {
 .sh-pill-id {
   position: relative;
   margin-left: 0;
-  /* The divider sits at the very left of the id (left: 0 below), so the gap
-     before it is just the flex gap (~4px); padding-left then gives a larger gap
-     after it before the id text. */
+  /* Balanced gap around the divider: flex gap (~4px) + divider left (1px) ≈ 5px
+     before, padding-left − divider ≈ 5px after. */
   padding-left: 7px;
   padding-right: 5px;
   text-align: center;
@@ -1457,7 +1456,7 @@ button.sh-tool.sh-tool--active {
 .sh-pill-id::before {
   content: "";
   position: absolute;
-  left: 0;
+  left: 1px;
   top: 50%;
   transform: translateY(-50%);
   width: 1px;
