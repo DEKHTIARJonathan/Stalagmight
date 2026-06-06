@@ -242,7 +242,10 @@ export function DetailLink({
           <span>{pillPrimary}</span>
           {pillId !== null && (
             <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
-              <span className={hasPosition(target) ? 'sh-pill-nudge sh-pill-nudge--num' : 'sh-pill-nudge'}>
+              {/* The id suffix is always cap-height digits, so it gets the same
+                  downward nudge whether the primary is a digit (shot/station) or
+                  a lowercase name (section). */}
+              <span className="sh-pill-nudge sh-pill-nudge--num">
                 {pillId}
               </span>
             </span>
