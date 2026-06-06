@@ -219,6 +219,10 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     appearance: { ...base.appearance },
     import: { ...base.import },
     placement_suggestion: { ...(base.placement_suggestion ?? defaultConfig.placement_suggestion) },
+    syntactic_highlighting: {
+      ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting),
+      overrides: { ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting).overrides },
+    },
   };
 
   // Apply updates with deep merge for each key
@@ -301,6 +305,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   }
   if (updates.placement_suggestion) {
     result.placement_suggestion = { ...result.placement_suggestion, ...updates.placement_suggestion };
+  }
+  if (updates.syntactic_highlighting) {
+    result.syntactic_highlighting = { ...result.syntactic_highlighting, ...updates.syntactic_highlighting };
   }
 
   return result;

@@ -1304,3 +1304,89 @@ tr[data-selected="true"]:hover {
   background-color: var(--cc-accent);
   animation: splash-pulse 1.2s ease-in-out infinite;
 }
+
+/* ============================================================
+   Syntactic Highlighting
+   --sh-<role> custom properties are written at runtime by
+   useSyntacticHighlighting (preset + overrides, or a neutral
+   when the level is "off"). The defaults below mirror the
+   "default" preset so there is no flash before the hook runs.
+   Source of truth: src/theme/syntacticPalette.ts
+   ============================================================ */
+:root {
+  --sh-segment: #ff8000;
+  --sh-section: #a335ee;
+  --sh-shot: #0070dd;
+  --sh-station: #5fcf83;
+  --sh-comment: #eab946;
+  --sh-delete: #f75d59;
+  --sh-move: #c0d0e1;
+  --sh-select: #c2cfde;
+  --sh-measure: #e787d3;
+  --sh-merge: #35cbd2;
+  --sh-pan: #63c0ee;
+  --sh-zoom: #84a8fd;
+}
+
+/* Duotone tool icons: a soft accent-fill silhouette + a solid accent line.
+   Each icon sets --o (object/accent color) inline to a --sh-<role> var;
+   --sh-delete / --sh-move drive the shared action modifiers. Ported from the
+   Cave Survey icon spec. */
+.duotone {
+  --glyph: color-mix(in oklab, var(--o) 90%, var(--cc-text-primary));
+  display: block;
+}
+.duotone .s {
+  fill: none;
+  stroke: var(--glyph);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.duotone .f {
+  fill: color-mix(in oklab, var(--o) 38%, transparent);
+  stroke: none;
+}
+.duotone .d {
+  fill: var(--glyph);
+  stroke: none;
+}
+.duotone .ink {
+  stroke: color-mix(in oklab, var(--o) 68%, var(--cc-text-primary));
+}
+.duotone .thick {
+  stroke-width: 2.2;
+}
+.duotone .dash {
+  stroke-dasharray: 2 1.6;
+}
+.duotone .arrow {
+  stroke-width: 1.6;
+}
+.duotone .mvc-line {
+  fill: none;
+  stroke: color-mix(in oklab, var(--o) 55%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 1.6 1;
+  stroke-linecap: round;
+}
+/* delete badge */
+.duotone .badge-bg {
+  fill: var(--cc-panel);
+  stroke: none;
+}
+.duotone .x {
+  fill: none;
+  stroke: var(--sh-delete);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+/* move compass */
+.duotone .mvf {
+  fill: var(--sh-move);
+  stroke: none;
+}
+.duotone .mvc {
+  fill: var(--sh-move);
+  opacity: 0.34;
+}

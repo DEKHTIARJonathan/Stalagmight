@@ -11,7 +11,7 @@ export interface CommentTarget {
   screenPos: { x: number; y: number };
   currentComment: string;
 }
-import type { AppearanceConfig, PanelsConfig } from '../types/config';
+import type { AppearanceConfig, PanelsConfig, SyntacticHighlightingConfig, SyntacticHighlightLevel } from '../types/config';
 import type { DisplaySettings } from '../types/loading';
 import { DISPLAY_DEFAULTS } from './displaySelectors';
 
@@ -299,6 +299,14 @@ interface UIStore {
   /** Temporary theme override for live preview in Settings dialog */
   themePreview: AppearanceConfig | null;
   setThemePreview: (appearance: AppearanceConfig | null) => void;
+
+  // Syntactic highlighting state
+  /** Resolved highlighting level, mirrored from config by useSyntacticHighlighting. */
+  syntacticLevel: SyntacticHighlightLevel;
+  setSyntacticLevel: (level: SyntacticHighlightLevel) => void;
+  /** Temporary highlighting override for live preview in Settings dialog */
+  syntacticHighlightPreview: SyntacticHighlightingConfig | null;
+  setSyntacticHighlightPreview: (config: SyntacticHighlightingConfig | null) => void;
 
   // Comment tool state
   commentTarget: CommentTarget | null;
@@ -944,6 +952,12 @@ export const useUIStore = create<UIStore>((set) => ({
   setResolvedTheme: (resolvedTheme: ResolvedTheme) => set({ resolvedTheme }),
   themePreview: null,
   setThemePreview: (themePreview) => set({ themePreview }),
+
+  // Syntactic highlighting state (opt-out default: full)
+  syntacticLevel: 'full' as SyntacticHighlightLevel,
+  setSyntacticLevel: (syntacticLevel) => set({ syntacticLevel }),
+  syntacticHighlightPreview: null,
+  setSyntacticHighlightPreview: (syntacticHighlightPreview) => set({ syntacticHighlightPreview }),
 
   // Comment tool state
   commentTarget: null,
