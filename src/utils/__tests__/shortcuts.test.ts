@@ -612,7 +612,7 @@ describe('formatActionName', () => {
   it('handles single word', () => {
     expect(formatActionName('pan')).toBe('Pan');
     expect(formatActionName('zoom')).toBe('Zoom');
-    expect(formatActionName('draw')).toBe('Draw');
+    expect(formatActionName('merge')).toBe('Merge');
   });
 
   it('handles multiple underscores', () => {

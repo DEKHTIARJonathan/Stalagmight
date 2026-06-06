@@ -465,8 +465,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               select: ['S'],
               pan: ['P'],
               zoom: ['Z'],
-              draw: ['D'],
-              delete_tool: ['X'],
               merge: ['M'],
               measure: ['R'],
               move_station: ['T'],

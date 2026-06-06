@@ -473,8 +473,6 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
     test.describe.configure({ retries: 2 });
 
     const ctrlPanTools = [
-      { key: 'd', name: 'draw' },
-      { key: 'x', name: 'delete' },
       { key: 'm', name: 'merge' },
       { key: 'r', name: 'measure' },
     ];

@@ -72,7 +72,7 @@ Used for on-disk buffering and backward compatibility. Sent with
   "project_seq": 1,
   "events": {
     "command.create_shot": 42,
-    "action.tool.draw:keyboard": 10,
+    "action.tool.merge:keyboard": 10,
     "dialog-cancel.import": 2
   }
 }
@@ -121,7 +121,7 @@ UI-only events tracked via `trackAction`. Always include a source.
 
 | Category | Events | Sources |
 |----------|--------|---------|
-| Tool switches | `tool.select`, `tool.draw`, `tool.merge`, ... | `keyboard`, `toolbar` |
+| Tool switches | `tool.select`, `tool.merge`, `tool.measure`, ... | `keyboard`, `toolbar` |
 | Navigation | `nav.zoom`, `nav.pan`, `nav.fit-to-bounds`, `nav.zoom-to-section`, ... | `mouse`, `touch`, `keyboard`, `dblclick` |
 | Display toggles | `toggle.showStations`, `toggle.showGrid`, ... | `display-menu` |
 | Selection | `select.station`, `select.shot`, `select.section` | `map`, `data-table`, `sections-panel`, `detail-panel` |
@@ -177,7 +177,6 @@ the previous one.
 
 ```
 dwell.tool.select              — seconds with Select tool active
-dwell.tool.draw                — seconds with Draw tool active
 dwell.dialog.settings          — seconds in Settings dialog
 dwell.dialog.import            — seconds in Import dialog
 dwell.placement                — seconds in placement mode

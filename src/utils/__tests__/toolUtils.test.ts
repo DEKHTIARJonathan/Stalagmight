@@ -28,9 +28,5 @@ describe('toolUtils', () => {
     it('returns false for select', () => {
       expect(isNonInteractiveTool('select')).toBe(false);
     });
-
-    it('returns false for draw', () => {
-      expect(isNonInteractiveTool('draw')).toBe(false);
-    });
   });
 });

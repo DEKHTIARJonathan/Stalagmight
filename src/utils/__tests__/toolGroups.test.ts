@@ -58,8 +58,6 @@ describe('getGroupForTool', () => {
 
   it('returns undefined for standalone tools', () => {
     expect(getGroupForTool('select')).toBeUndefined();
-    expect(getGroupForTool('draw')).toBeUndefined();
-    expect(getGroupForTool('delete')).toBeUndefined();
     expect(getGroupForTool('merge')).toBeUndefined();
     expect(getGroupForTool('measure')).toBeUndefined();
   });
@@ -80,8 +78,6 @@ describe('isGroupedTool', () => {
 
   it('returns false for standalone tools', () => {
     expect(isGroupedTool('select')).toBe(false);
-    expect(isGroupedTool('draw')).toBe(false);
-    expect(isGroupedTool('delete')).toBe(false);
     expect(isGroupedTool('merge')).toBe(false);
     expect(isGroupedTool('measure')).toBe(false);
   });
@@ -104,8 +100,6 @@ describe('getStandaloneTools', () => {
   it('includes standalone tools', () => {
     const standalone = getStandaloneTools();
     expect(standalone).toContain('select');
-    expect(standalone).toContain('draw');
-    expect(standalone).toContain('delete');
     expect(standalone).toContain('merge');
     expect(standalone).toContain('measure');
   });

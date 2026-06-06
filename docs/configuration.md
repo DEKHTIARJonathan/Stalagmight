@@ -65,7 +65,6 @@ hit_area = 8                        # Clickable/hoverable area width in pixels (
 
 [map.snap]
 threshold = 10                      # Snap detection radius in pixels (1-50)
-enabled_draw = true                 # Enable snap-to-station in draw tool
 enabled_merge = true                # Enable snap-to-station in merge tool
 enabled_measure = true              # Enable snap-to-station in measure tool
 
@@ -120,8 +119,6 @@ export = ["Ctrl+E"]
 select = ["S"]
 pan = ["P"]
 zoom = ["Z"]
-draw = ["D"]
-delete_tool = ["X"]
 merge = ["M"]
 measure = ["R"]
 move_station = ["T"]
@@ -157,8 +154,6 @@ toggle_data_table = ["Ctrl+3"]
 | **Tools** | `select` | `S` | Select tool |
 | | `pan` | `P` | Pan/hand tool |
 | | `zoom` | `Z` | Zoom tool |
-| | `draw` | `D` | Draw tool |
-| | `delete_tool` | `X` | Delete tool |
 | | `merge` | `M` | Merge tool |
 | | `measure` | `R` | Measure tool |
 | | `move_station` | `T` | Move station tool |
@@ -227,7 +222,6 @@ The following settings have been removed and migrated to new locations:
 |-------------|-------------|
 | `display.station_size` | `map.station.radius` |
 | `display.line_thickness` | `map.shot.width` |
-| `snap.enabled_draw` | `map.snap.enabled_draw` |
 | `snap.enabled_merge` | `map.snap.enabled_merge` |
 | `snap.enabled_measure` | `map.snap.enabled_measure` |
 | `snap.threshold_pixels` | `map.snap.threshold` |

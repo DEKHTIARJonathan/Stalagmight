@@ -40,8 +40,6 @@ test.describe('Ctrl+Drag Panning', () => {
   // Supported tools that should allow Ctrl+drag panning
   const supportedTools = [
     { key: 's', name: 'select' },
-    { key: 'd', name: 'draw' },
-    { key: 'x', name: 'delete' },
     { key: 'm', name: 'merge' },
     { key: 'r', name: 'measure' },
     { key: 't', name: 'move_station' },

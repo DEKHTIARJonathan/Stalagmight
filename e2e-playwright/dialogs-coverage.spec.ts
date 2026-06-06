@@ -420,7 +420,7 @@ test.describe('Dialog Coverage - Settings Map', () => {
     await zoomMinInput.fill('5');
     await zoomMaxInput.fill('15');
 
-    const snapToggle = panel.getByTestId('toggle-snap-draw');
+    const snapToggle = panel.getByTestId('toggle-snap-merge');
     await snapToggle.click();
 
     await expect(saveButton).toBeEnabled();

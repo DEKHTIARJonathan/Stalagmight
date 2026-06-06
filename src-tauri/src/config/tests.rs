@@ -23,7 +23,6 @@ fn test_shot_config_defaults() {
 fn test_map_snap_config_defaults() {
     let config = MapSnapConfig::default();
     assert_eq!(config.threshold, 10.0);
-    assert!(config.enabled_draw);
     assert!(config.enabled_merge);
     assert!(config.enabled_measure);
 }
@@ -386,7 +385,6 @@ log_hit_detection = true
     assert_eq!(config.map.shot.width, 3.0);
     assert_eq!(config.map.shot.hit_area, 10.0);
     assert_eq!(config.map.snap.threshold, 15.0);
-    assert!(config.map.snap.enabled_draw);
     assert!(!config.map.snap.enabled_merge);
     assert!(config.map.snap.enabled_measure);
     assert_eq!(config.map.zoom_step, 1.5);
@@ -478,7 +476,6 @@ save = "Ctrl+S"
     assert_eq!(config.map.shot.width, 2.0); // default
     assert_eq!(config.map.shot.hit_area, 8.0); // default
     assert_eq!(config.map.snap.threshold, 10.0); // default
-    assert!(config.map.snap.enabled_draw); // default
     assert!(config.map.snap.enabled_merge); // default
     assert!(config.map.snap.enabled_measure); // default
     assert_eq!(config.map.zoom_step, 1.0); // default
@@ -600,7 +597,6 @@ fn test_config_serialization_preserves_custom_values() {
     config.map.shot.width = 4.0;
     config.map.shot.hit_area = 12.0;
     config.map.snap.threshold = 20.0;
-    config.map.snap.enabled_draw = false;
     config.debug.map.show_hitboxes = true;
 
     let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
@@ -611,7 +607,6 @@ fn test_config_serialization_preserves_custom_values() {
     assert_eq!(deserialized.map.shot.width, 4.0);
     assert_eq!(deserialized.map.shot.hit_area, 12.0);
     assert_eq!(deserialized.map.snap.threshold, 20.0);
-    assert!(!deserialized.map.snap.enabled_draw);
     assert!(deserialized.debug.map.show_hitboxes);
 }
 
@@ -719,7 +714,6 @@ threshold_pixels = 25
 
     // Before migration, map.snap has defaults
     assert_eq!(config.map.snap.threshold, 10.0);
-    assert!(config.map.snap.enabled_draw);
     assert!(config.map.snap.enabled_merge);
     assert!(config.map.snap.enabled_measure);
 
@@ -732,7 +726,6 @@ threshold_pixels = 25
 
     // After migration, map.snap should have the legacy values
     assert_eq!(config.map.snap.threshold, 25.0);
-    assert!(!config.map.snap.enabled_draw);
     assert!(config.map.snap.enabled_merge);
     assert!(!config.map.snap.enabled_measure);
 
@@ -831,7 +824,6 @@ threshold_pixels = 25
 
     // map.snap has explicit values (not defaults)
     assert_eq!(config.map.snap.threshold, 30.0);
-    assert!(config.map.snap.enabled_draw);
     assert!(!config.map.snap.enabled_merge);
     assert!(config.map.snap.enabled_measure);
 
@@ -842,7 +834,6 @@ threshold_pixels = 25
     // map.snap should NOT be overwritten by legacy values
     // (because map.snap was explicitly set, not defaults)
     assert_eq!(config.map.snap.threshold, 30.0);
-    assert!(config.map.snap.enabled_draw);
     assert!(!config.map.snap.enabled_merge);
     assert!(config.map.snap.enabled_measure);
 }
@@ -1091,47 +1082,6 @@ fn test_shortcut_config_normalize_invalid_falls_back() {
 // Legacy Delete Migration Tests
 // ========================================================================
 
-#[test]
-fn test_shortcut_legacy_delete_migration() {
-    // Old config with "delete" field should migrate to "delete_tool"
-    let toml_str = r#"
-select = "S"
-delete = "X"
-"#;
-    let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Legacy delete should parse");
-    config.normalize();
-
-    // delete_tool should have the migrated value
-    assert_eq!(config.delete_tool, vec!["X".to_string()]);
-}
-
-#[test]
-fn test_shortcut_legacy_delete_array_migration() {
-    // Legacy delete as array
-    let toml_str = r#"
-select = "S"
-delete = ["X", "Shift+X"]
-"#;
-    let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Legacy delete array should parse");
-    config.normalize();
-
-    assert_eq!(config.delete_tool, vec!["X".to_string(), "Shift+X".to_string()]);
-}
-
-#[test]
-fn test_shortcut_new_delete_tool_takes_precedence() {
-    // If both delete and delete_tool present, delete_tool wins
-    let toml_str = r#"
-delete_tool = ["Y"]
-delete = "X"
-"#;
-    let mut config: ShortcutsConfig = toml::from_str(toml_str).expect("Config should parse");
-    config.normalize();
-
-    // delete_tool should keep its value, not be overwritten by legacy delete
-    assert_eq!(config.delete_tool, vec!["Y".to_string()]);
-}
-
 // ========================================================================
 // New Actions Tests
 // ========================================================================
@@ -1141,7 +1091,6 @@ fn test_shortcut_new_actions_defaults() {
     let config = ShortcutsConfig::default();
 
     // Verify new actions have defaults
-    assert_eq!(config.delete_tool, vec!["X".to_string()]);
     assert_eq!(config.toggle_station_labels, vec!["L".to_string()]);
     assert_eq!(config.toggle_shot_labels, vec!["Shift+L".to_string()]);
     assert_eq!(config.toggle_section_labels, vec!["Ctrl+L".to_string()]);
@@ -1165,7 +1114,6 @@ fn test_shortcut_config_serialization_roundtrip() {
     let deserialized: ShortcutsConfig = toml::from_str(&serialized).expect("Should deserialize");
 
     assert_eq!(deserialized.select, original.select);
-    assert_eq!(deserialized.delete_tool, original.delete_tool);
     assert_eq!(deserialized.zoom_in, original.zoom_in);
     assert_eq!(deserialized.toggle_station_labels, original.toggle_station_labels);
 }

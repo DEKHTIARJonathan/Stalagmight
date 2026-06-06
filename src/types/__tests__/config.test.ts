@@ -68,7 +68,6 @@ describe('defaultConfig structure', () => {
   describe('map.snap defaults', () => {
     it('has correct snap default values', () => {
       expect(defaultConfig.map.snap.threshold).toBe(10.0);
-      expect(defaultConfig.map.snap.enabled_draw).toBe(true);
       expect(defaultConfig.map.snap.enabled_merge).toBe(true);
       expect(defaultConfig.map.snap.enabled_measure).toBe(true);
     });
@@ -76,7 +75,6 @@ describe('defaultConfig structure', () => {
     it('snap is a valid MapSnapConfig', () => {
       const snap: MapSnapConfig = defaultConfig.map.snap;
       expect(typeof snap.threshold).toBe('number');
-      expect(typeof snap.enabled_draw).toBe('boolean');
       expect(typeof snap.enabled_merge).toBe('boolean');
       expect(typeof snap.enabled_measure).toBe('boolean');
     });
