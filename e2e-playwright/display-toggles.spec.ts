@@ -631,7 +631,10 @@ test.describe('Toggle Relationship Tests', () => {
   });
 });
 
-test.describe('Tool Operation Tests', () => {
+// These exercise the Draw tool, which was removed in #71/#74 (the draw shortcut
+// is unbound and uiStore.setDrawFromStation no longer exists). Skipped as
+// obsolete — they predate the removal and were left behind on master.
+test.describe.skip('Tool Operation Tests', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
