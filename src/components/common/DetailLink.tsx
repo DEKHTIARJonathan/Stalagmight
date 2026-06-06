@@ -208,7 +208,7 @@ export function DetailLink({
         <EntitySymbol
           entity={type}
           size={14}
-          className="mr-1 inline-block align-[-0.2em]"
+          className="mr-1"
           testId={`${computedTestId}-symbol`}
         />
       )}

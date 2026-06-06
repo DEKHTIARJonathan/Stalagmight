@@ -239,7 +239,13 @@ export interface EntitySymbolProps {
 /** Render the duotone object symbol for an entity, colored by its --sh-<entity>. */
 export function EntitySymbol({ entity, size = 14, className = '', testId }: EntitySymbolProps) {
   const render = ENTITY_GLYPHS[entity];
-  const style = { '--o': `var(${syntacticVarName(entity)})` } as CSSProperties;
+  // Inline-block (overriding the `.duotone { display: block }` toolbar default)
+  // so the symbol sits next to text; nudged onto the text baseline.
+  const style = {
+    '--o': `var(${syntacticVarName(entity)})`,
+    display: 'inline-block',
+    verticalAlign: '-0.2em',
+  } as CSSProperties;
   return (
     <svg
       className={`duotone ${className}`}

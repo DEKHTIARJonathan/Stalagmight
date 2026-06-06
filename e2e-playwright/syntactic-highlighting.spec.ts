@@ -164,7 +164,11 @@ test.describe('Syntactic Highlighting', () => {
     // Full (default): entity blobs render in the table, and detail-panel links
     // render the entity symbol (a duotone svg, not a plain dot).
     await expect(page.locator('[data-entity]').first()).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('[data-testid$="-link-symbol"]').first()).toBeVisible({ timeout: 5000 });
+    const linkSymbol = page.locator('[data-testid$="-link-symbol"]').first();
+    await expect(linkSymbol).toBeVisible({ timeout: 5000 });
+    // The symbol sits inline next to the link text (not forced onto its own line
+    // by the .duotone block default).
+    expect(await linkSymbol.evaluate((el) => getComputedStyle(el).display)).toBe('inline-block');
 
     // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {
