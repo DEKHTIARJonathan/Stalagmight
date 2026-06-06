@@ -55,6 +55,18 @@ async function getSectionIdByName(page: Page, name: string): Promise<number> {
   return id;
 }
 
+/**
+ * Enter focus mode via the dedicated per-row focus button (revealed on hover).
+ * Double-clicking a row now only zooms to the section — focus is button-only.
+ */
+async function enterFocus(page: Page, sectionId: number): Promise<void> {
+  const row = page.locator(`[data-testid="section-row-${sectionId}"]`);
+  await expect(row).toBeVisible();
+  await row.hover();
+  await page.getByTestId(`section-focus-${sectionId}`).click();
+  await expect(page.getByTestId('toolbar-section-focus-name')).toBeVisible();
+}
+
 test.describe('Section focus mode', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -64,7 +76,7 @@ test.describe('Section focus mode', () => {
     await waitForMapIdle(page);
   });
 
-  test('double-clicking a section enters focus mode and the fit-to-view button exits', async ({ page }) => {
+  test('focus button enters focus mode and the fit-to-view button exits', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, SECTION_NAME);
 
     // Baseline: project name shown, sections panel open, data table closed.
@@ -72,14 +84,11 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
 
-    // Enter focus mode by double-clicking the section row.
-    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
-    await expect(sectionRow).toBeVisible();
-    await sectionRow.dblclick();
+    // Enter focus mode via the dedicated per-row focus button.
+    await enterFocus(page, sectionId);
 
     // Toolbar swaps the project name for the focused section name.
     const focusName = page.getByTestId('toolbar-section-focus-name');
-    await expect(focusName).toBeVisible();
     await expect(focusName).toContainText(SECTION_NAME);
     await expect(page.getByTestId('toolbar-project-name')).toHaveCount(0);
 
@@ -96,6 +105,22 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
+  });
+
+  test('double-clicking a section zooms to it WITHOUT entering focus mode', async ({ page }) => {
+    const sectionId = await getSectionIdByName(page, SECTION_NAME);
+
+    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
+    await expect(sectionRow).toBeVisible();
+    await sectionRow.dblclick();
+
+    // The section is selected, but focus mode is NOT entered: project name stays,
+    // the sections panel remains open, and the data table stays collapsed.
+    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
+    await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
+    await expect(page.getByTestId('sections-panel')).toBeVisible();
+    await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
   });
 
   test('the per-row focus button enters focus mode', async ({ page }) => {
@@ -127,7 +152,7 @@ test.describe('Section focus mode', () => {
     // Status entry is absent outside focus mode.
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
 
-    await page.locator(`[data-testid="section-row-${sectionId}"]`).dblclick();
+    await enterFocus(page, sectionId);
 
     // Focused section appears in the bottom-left status bar.
     const statusFocused = page.getByTestId('status-focused-section');
@@ -143,10 +168,7 @@ test.describe('Section focus mode', () => {
     const sectionId = await getSectionIdByName(page, SECTION_NAME);
 
     // Enter focus mode.
-    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
-    await expect(sectionRow).toBeVisible();
-    await sectionRow.dblclick();
-    await expect(page.getByTestId('toolbar-section-focus-name')).toBeVisible();
+    await enterFocus(page, sectionId);
 
     // Delete the focused section out from under focus mode (e.g. via undo, collab
     // sync, or a delete action). Focus must not linger on a section that's gone.
@@ -167,9 +189,7 @@ test.describe('Section focus mode', () => {
     const firstId = await getSectionIdByName(page, SECTION_NAME);
 
     // Enter focus on the first section.
-    const sectionRow = page.locator(`[data-testid="section-row-${firstId}"]`);
-    await expect(sectionRow).toBeVisible();
-    await sectionRow.dblclick();
+    await enterFocus(page, firstId);
     const focusName = page.getByTestId('toolbar-section-focus-name');
     await expect(focusName).toContainText(SECTION_NAME);
 

@@ -342,9 +342,8 @@ test.describe('Section zoom margin', () => {
     // Precondition: section must NOT satisfy margins after panning off-target
     await assertSectionOffScreen(page, sectionId);
 
-    // Double-click the row: #50 enters section-focus mode (collapses the side
-    // panels, opens the data table) and re-fits the section to the enlarged map.
-    // Margins must still hold against the post-collapse viewport.
+    // Double-click the row: zooms/frames the section on the map (without entering
+    // focus mode). Margins must hold against the current viewport.
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.dblclick();
@@ -510,11 +509,12 @@ test.describe('Section zoom margin', () => {
       await expect.poll(mapIdle, { timeout: 15000 }).toBe(true);
     };
 
-    // Enter focus, then exit via the map's top-left fit-to-view button (which
-    // doubles as exit-focus in focus mode).
+    // Enter focus via the dedicated per-row focus button, then exit via the map's
+    // top-left fit-to-view button (which doubles as exit-focus in focus mode).
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
-    await sectionRow.dblclick();
+    await sectionRow.hover();
+    await page.getByTestId(`section-focus-${sectionId}`).click();
     await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
     await page.getByTestId('fit-to-view-button').click();
     await expect(page.getByTestId('sections-panel')).toBeVisible();

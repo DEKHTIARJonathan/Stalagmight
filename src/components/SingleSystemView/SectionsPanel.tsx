@@ -26,7 +26,7 @@ const SECTION_FOCUS_TABLE_FRACTION = 0.3;
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus } = useUIStore(
+  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
       setSelection: s.setSelection,
@@ -37,6 +37,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       setHoveredSectionId: s.setHoveredSectionId,
       openDialog: s.openDialog,
       enterSectionFocus: s.enterSectionFocus,
+      triggerZoomToSection: s.triggerZoomToSection,
     }))
   );
 
@@ -203,12 +204,13 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         optionRefs.current[sections.length - 1]?.focus();
         break;
       case 'Enter':
-        // Enter = activate (the keyboard equivalent of double-click): focus.
+        // Enter = activate (keyboard equivalent of double-click): select + zoom
+        // to the section. Focus mode is reserved for the dedicated focus button.
         e.preventDefault();
         e.stopPropagation();
         if (sections[currentIndex]) {
           handleSectionClick(sections[currentIndex]);
-          enterFocusFor(sections[currentIndex]);
+          triggerZoomToSection(sections[currentIndex].id);
         }
         break;
       case ' ':
@@ -225,7 +227,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
         clearSelection();
         break;
     }
-  }, [sections, handleSectionClick, enterFocusFor, clearSelection]);
+  }, [sections, handleSectionClick, triggerZoomToSection, clearSelection]);
 
   const handleContainerBlur = (e: React.FocusEvent<HTMLUListElement>) => {
     // CRITICAL: Only clear when focus leaves the listbox ENTIRELY
@@ -258,14 +260,13 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const handleSectionDoubleClick = useCallback((section: Section, e: React.MouseEvent) => {
     // Only handle left mouse button
     if (e.button !== 0) return;
-    // Don't trigger if double-clicking nested controls (like delete button)
+    // Don't trigger if double-clicking nested controls (like the focus button)
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
-    // Ensure selection happens (in case mouseDown was prevented), then dedicate
-    // the screen to this section: collapse both side panels and open the data
-    // table to ~30% of the viewport. SingleSystemView re-fits the map on entry.
+    // Select, then zoom/frame the section on the map — without entering focus
+    // mode (that's what the dedicated per-row focus button is for).
     handleSectionClick(section, e);
-    enterFocusFor(section);
-  }, [handleSectionClick, enterFocusFor]);
+    triggerZoomToSection(section.id);
+  }, [handleSectionClick, triggerZoomToSection]);
 
   const handleFocusButtonDoubleClick = useCallback((e: React.MouseEvent) => {
     // The button enters focus on a single click; swallow the double-click so the
