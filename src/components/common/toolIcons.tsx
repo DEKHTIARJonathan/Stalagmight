@@ -336,6 +336,21 @@ const greenPlus: BadgeContent = (cx, cy, r) => {
   );
 };
 
+/** Broken chain (remove closure / unmerge) — two link hooks with a gap, mapped
+ * from the link-off art (20-unit space) into the badge. */
+const brokenChain: BadgeContent = (cx, cy, r) => {
+  const k = r * 0.108;
+  const px = (x: number) => (cx + (x - 10) * k).toFixed(2);
+  const py = (y: number) => (cy + (y - 10) * k).toFixed(2);
+  const ar = (3 * k).toFixed(2);
+  return (
+    <g>
+      <path className="chain" d={`M${px(8)} ${py(12)} L${px(6)} ${py(14)} A${ar} ${ar} 0 0 1 ${px(2)} ${py(10)} L${px(4)} ${py(8)}`} />
+      <path className="chain" d={`M${px(12)} ${py(8)} L${px(14)} ${py(6)} A${ar} ${ar} 0 0 1 ${px(18)} ${py(10)} L${px(16)} ${py(12)}`} />
+    </g>
+  );
+};
+
 /** Bottom-right action-badge placement (cx/cy/r) per entity. The entity itself is
  * the centered object glyph; the badge sits in the bottom-right corner (overlap
  * with the object is expected). */
@@ -403,6 +418,11 @@ export function EntityPermanentSymbol(props: EntitySymbolProps) {
 /** Duotone "add <entity>" (entity color + green plus badge). */
 export function EntityAddSymbol(props: EntitySymbolProps) {
   return <EntityBadgedSymbol {...props} content={greenPlus} />;
+}
+/** Duotone "unlink <entity>" (entity color + broken-chain badge) — remove
+ * closure / unmerge. */
+export function EntityUnlinkSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={brokenChain} />;
 }
 
 /** CSS `var(--sh-<role>)` reference for a tool's accent color (icon + button tint). */

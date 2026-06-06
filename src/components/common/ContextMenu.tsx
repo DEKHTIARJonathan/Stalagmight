@@ -6,7 +6,7 @@ import type { StationRef, SectionId, ShotId } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
-import { LinkOffIcon, ArrowUpRightIcon } from './icons';
+import { ArrowUpRightIcon } from './icons';
 import {
   EntityDeleteSymbol,
   EntityEditSymbol,
@@ -14,6 +14,7 @@ import {
   EntityReferenceSymbol,
   EntityPermanentSymbol,
   EntityAddSymbol,
+  EntityUnlinkSymbol,
   ToolGlyph,
 } from './toolIcons';
 
@@ -503,7 +504,7 @@ export default function ContextMenu() {
         return <ToolGlyph tool="merge" size={16} />;
       case 'Unmerge Stations':
       case 'Remove Closure':
-        return <LinkOffIcon size={16} />;
+        return <EntityUnlinkSymbol entity="station" size={18} />;
       case 'Add Shot Before':
       case 'Add Shot After':
         return <EntityAddSymbol entity="shot" size={18} />;
