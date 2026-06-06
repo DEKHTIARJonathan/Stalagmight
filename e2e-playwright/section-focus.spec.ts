@@ -64,7 +64,7 @@ test.describe('Section focus mode', () => {
     await waitForMapIdle(page);
   });
 
-  test('double-clicking a section enters focus mode and the name double-click exits', async ({ page }) => {
+  test('double-clicking a section enters focus mode and the fit-to-view button exits', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, SECTION_NAME);
 
     // Baseline: project name shown, sections panel open, data table closed.
@@ -88,8 +88,8 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('detail-panel-collapsed-toggle')).toBeVisible();
     await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
 
-    // Exit by double-clicking the section name in the toolbar.
-    await focusName.dblclick();
+    // Exit via the map's top-left fit-to-view button (doubles as exit-focus).
+    await page.getByTestId('fit-to-view-button').click();
 
     // Layout restored: project name back, sections panel open, data table closed.
     await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
@@ -119,6 +119,24 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('sections-panel-collapsed-toggle')).toBeVisible();
     await expect(page.getByTestId('detail-panel-collapsed-toggle')).toBeVisible();
     await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
+  });
+
+  test('focus mode shows the focused section in the status bar; fit-to-view exits', async ({ page }) => {
+    const sectionId = await getSectionIdByName(page, SECTION_NAME);
+
+    // Status entry is absent outside focus mode.
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
+
+    await page.locator(`[data-testid="section-row-${sectionId}"]`).dblclick();
+
+    // Focused section appears in the bottom-left status bar.
+    const statusFocused = page.getByTestId('status-focused-section');
+    await expect(statusFocused).toBeVisible();
+    await expect(statusFocused).toContainText(SECTION_NAME);
+
+    // The fit-to-view button doubles as exit-focus; clicking it clears the status.
+    await page.getByTestId('fit-to-view-button').click();
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
   });
 
   test('deleting the focused section exits focus mode', async ({ page }) => {

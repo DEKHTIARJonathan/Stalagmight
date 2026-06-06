@@ -247,6 +247,11 @@ export default function MapCanvas() {
   const setGeometryMode = useUIStore((s) => s.setGeometryMode);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
 
+  // #50: section-focus mode — show an exit-focus control at the map's top-left
+  // while focused.
+  const focusedSectionId = useUIStore((s) => s.focusedSectionId);
+  const exitSectionFocus = useUIStore((s) => s.exitSectionFocus);
+
   // Station coordinates for the active display mode. The map renders the active
   // geometry; coordinate-derived editing tools are disabled in the adjusted
   // (read-only) view, so other consumers continue to use measured `stations`.
@@ -2986,11 +2991,14 @@ export default function MapCanvas() {
         />
       )}
 
-      {/* Fit to view button */}
+      {/* Fit-to-view button. In section-focus mode (#50) it doubles as the
+          exit-focus control: leaving focus re-fits the whole map anyway, so the
+          same top-left button returns you to the overview. */}
       <button
-        onClick={() => fitToBounds()}
+        onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
         className="absolute top-2 left-2 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-        title={t('map.fitToViewTitle')}
+        title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
+        aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
         data-testid="fit-to-view-button"
       >
         <FitToViewIcon size={16} />

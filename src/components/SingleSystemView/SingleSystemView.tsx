@@ -269,7 +269,6 @@ export default function SingleSystemView() {
       <Toolbar
         projectName={project.name}
         focusedSectionName={focusedSectionName}
-        onExitFocus={exitSectionFocus}
         onBack={handleCloseProject}
         onSave={handleSaveProject}
         onImport={handleImportDmp}
@@ -448,6 +447,12 @@ export default function SingleSystemView() {
             shots: formatNumber(stats?.shot_count ?? 0),
             length: formatLength(stats?.total_length ?? 0, precision.length),
           })}
+          {focusedSectionName !== null && (
+            <span data-testid="status-focused-section" className="ml-2 text-accent">
+              {' | '}
+              {t('singleView.status.focusedSection', { name: focusedSectionName })}
+            </span>
+          )}
         </span>
         <SaveStatus status={autoSave.status} countdown={autoSave.countdown} isDirty={isDirty} />
       </footer>

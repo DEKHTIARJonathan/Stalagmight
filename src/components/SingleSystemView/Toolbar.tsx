@@ -8,7 +8,6 @@ import {
   BugIcon,
   ChevronDownIcon,
   HandIcon,
-  MapIcon,
   SelectToolIcon,
   ZoomToolIcon,
   DrawToolIcon,
@@ -32,8 +31,6 @@ interface ToolbarProps {
   projectName: string;
   /** When in section-focus mode (#50), the focused section's name. */
   focusedSectionName: string | null;
-  /** Exit section-focus mode and restore the multi-section layout. */
-  onExitFocus: () => void;
   onBack: () => void;
   onSave: () => void;
   onImport: () => void;
@@ -135,7 +132,6 @@ const TOOLBAR_ITEMS: ToolbarItem[] = [
 export default function Toolbar({
   projectName,
   focusedSectionName,
-  onExitFocus,
   onBack,
   onSave,
   onImport,
@@ -211,31 +207,15 @@ export default function Toolbar({
         </UndoHistoryDropdown>
       </div>
 
-      {/* Center - project name, or focused section name (#50). In focus mode the
-          map icon hints that double-clicking the name returns to the full map.
-          Keyboard users exit with Enter/Space (double-click isn't keyboard-fired). */}
+      {/* Center - project name, or focused section name (#50). The name is a
+          plain heading; exiting focus mode is done via the map's exit-focus
+          button (top-left of the map), not from here. */}
       {focusedSectionName !== null ? (
-        // Keep the level-1 heading semantics the project-name <h1> had (so
-        // heading navigation still finds the primary label) with the interactive
-        // exit control as a real <button> inside it.
-        <h1 className="font-medium" data-testid="toolbar-section-focus-heading">
-          <button
-            type="button"
-            onDoubleClick={onExitFocus}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onExitFocus();
-              }
-            }}
-            title={t('sections.focus.exitHint')}
-            aria-label={t('sections.focus.ariaLabel', { name: focusedSectionName })}
-            className="flex items-center gap-1.5 text-accent hover:text-accent/80 transition-colors"
-            data-testid="toolbar-section-focus-name"
-          >
-            <MapIcon size={14} aria-hidden="true" />
-            <span className="truncate max-w-[40vw]">{focusedSectionName}</span>
-          </button>
+        <h1
+          className="font-medium truncate max-w-[40vw]"
+          data-testid="toolbar-section-focus-name"
+        >
+          {focusedSectionName}
         </h1>
       ) : (
         <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>

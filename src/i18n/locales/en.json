@@ -1691,8 +1691,7 @@
       "message": "No sections yet."
     },
     "focus": {
-      "ariaLabel": "Focused on section {{name}}. Double-click to return to the full view.",
-      "exitHint": "Double-click to return to the full view"
+      "exit": "Exit focus mode"
     },
     "stats": "Shots: {{shots}} | {{length}}",
     "title": "Sections"
@@ -1736,6 +1735,7 @@
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",
       "summary": "Sections: {{sections}} | Shots: {{shots}} | Length: {{length}}",
+      "focusedSection": "Focused: {{name}}",
       "saved": "Saved",
       "saving": "Saving...",
       "unsavedChanges": "Unsaved changes",

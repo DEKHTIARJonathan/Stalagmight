@@ -510,12 +510,13 @@ test.describe('Section zoom margin', () => {
       await expect.poll(mapIdle, { timeout: 15000 }).toBe(true);
     };
 
-    // Enter focus, then exit via the toolbar section name.
+    // Enter focus, then exit via the map's top-left fit-to-view button (which
+    // doubles as exit-focus in focus mode).
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
     await expect(sectionRow).toBeVisible();
     await sectionRow.dblclick();
     await pollForMarginsSettled(page, sectionId, MIN_MARGIN_PCT);
-    await page.getByTestId('toolbar-section-focus-name').dblclick();
+    await page.getByTestId('fit-to-view-button').click();
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await settle();
     const exitView = await getView();
