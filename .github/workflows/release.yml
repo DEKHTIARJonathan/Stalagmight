@@ -53,10 +53,12 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          # Extract the section between this version header and the next version header
+          # Extract the section between this version header and the next version header.
+          # Tolerates both bracketed (## [0.2.0]) and unbracketed (## 0.2.0) headers,
+          # with or without a trailing date; terminates on the next "## " heading.
           BODY=$(awk -v ver="$VERSION" '
-            $0 ~ "^## \\[" ver "\\]" { found=1; next }
-            found && /^## \[/ { exit }
+            $0 ~ "^## +\\[?" ver "\\]?([^0-9.]|$)" { found=1; next }
+            found && /^## / { exit }
             found { print }
           ' CHANGELOG.md)
           # Fall back if empty
