@@ -295,14 +295,16 @@ export function ArrowUpRightIcon(props: IconProps) {
   );
 }
 
-// "External link" / open-out icon: a box with an arrow exiting the top-right
-// corner. Used as the section focus-mode entry affordance.
+// "External link" / open-out icon: a box with an arrow breaking out of the
+// open top-right corner. The arrowhead's two arms are collinear with the box's
+// top and right edges (aligned with the square), with a gap so the shapes stay
+// distinct. Used as the section focus-mode entry affordance.
 export function ExternalLinkIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <path d="M11 4 H6 a2 2 0 0 0 -2 2 v8 a2 2 0 0 0 2 2 h8 a2 2 0 0 0 2 -2 v-5" />
-      <polyline points="11 4 16 4 16 9" />
-      <line x1="9" y1="11" x2="16" y2="4" />
+      <path d="M8 5 H5 a2 2 0 0 0 -2 2 V15 a2 2 0 0 0 2 2 H13 a2 2 0 0 0 2 -2 V12" />
+      <polyline points="11 5 15 5 15 9" />
+      <line x1="9" y1="11" x2="15" y2="5" />
     </BaseIcon>
   );
 }
