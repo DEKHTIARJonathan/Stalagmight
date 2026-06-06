@@ -15,6 +15,8 @@
  */
 
 import { useCallback, useRef } from 'react';
+import { useUIStore } from '../../store/uiStore';
+import { syntacticVarName } from '../../theme/syntacticPalette';
 
 export type DetailLinkType = 'station' | 'shot' | 'section';
 
@@ -127,6 +129,12 @@ export function DetailLink({
   const computedTestId = testId ?? generateTestId(type, target);
   const ariaLabel = generateAriaLabel(type, displayText);
 
+  // Full highlighting: a leading entity-colored dot signals what the link points
+  // to (station = green, shot = blue, section = purple). Hidden for missing
+  // targets (the warning glyph already conveys state).
+  const syntacticLevel = useUIStore((s) => s.syntacticLevel);
+  const showBlob = syntacticLevel === 'full' && !isMissing;
+
   const handleClick = useCallback(() => {
     if (isMissing) {
       // Don't navigate to missing targets
@@ -196,6 +204,14 @@ export function DetailLink({
       data-testid={computedTestId}
       title={isMissing ? `${type} not found` : undefined}
     >
+      {showBlob && (
+        <span
+          aria-hidden="true"
+          className="inline-block w-2 h-2 rounded-full mr-1 align-middle"
+          style={{ backgroundColor: `var(${syntacticVarName(type)})` }}
+          data-testid={`${computedTestId}-blob`}
+        />
+      )}
       {displayText}
       {isMissing && (
         <span className="ml-1" aria-hidden="true" title={`${type} not found`}>

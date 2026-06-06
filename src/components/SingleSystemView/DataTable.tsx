@@ -7,6 +7,7 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
 import { Select, type SelectOption } from '../common/Select';
+import { EntityBlob } from '../common/EntityBlob';
 import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon, LinkIcon, LockIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
@@ -471,7 +472,9 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.stationColumns.index'),
       width: '60px',
       render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">{row.station_ref.section_id}.{row.station_ref.station_index}</span>,
+        <span className="px-2 py-1 inline-block">
+          <EntityBlob entity="station">{row.station_ref.section_id}.{row.station_ref.station_index}</EntityBlob>
+        </span>,
     },
     {
       key: '_x',
@@ -620,7 +623,9 @@ export default function DataTable({ sections }: DataTableProps) {
       header: t('dataTable.columns.idShort'),
       width: '60px',
       render: (_shot: Shot, index: number) =>
-        selectedSectionId !== null ? formatShotId(selectedSectionId, index + 1) : '',
+        selectedSectionId !== null
+          ? <EntityBlob entity="shot">{formatShotId(selectedSectionId, index + 1)}</EntityBlob>
+          : '',
     },
     {
       key: 'length',

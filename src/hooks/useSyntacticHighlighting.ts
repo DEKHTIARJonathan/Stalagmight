@@ -34,6 +34,7 @@ export function useSyntacticHighlighting(): SyntacticHighlightLevel {
   );
   const preview = useUIStore((s) => s.syntacticHighlightPreview);
   const setSyntacticLevel = useUIStore((s) => s.setSyntacticLevel);
+  const setSyntacticColors = useUIStore((s) => s.setSyntacticColors);
 
   const active = preview ?? configHighlighting ?? defaultConfig.syntactic_highlighting;
   const level = normalizeLevel(active.level);
@@ -51,9 +52,10 @@ export function useSyntacticHighlighting(): SyntacticHighlightLevel {
 
     root.dataset.shLevel = level;
     setSyntacticLevel(level);
+    setSyntacticColors(colors);
     // `overrides` is a stable-ish object from the store; stringify so the effect
     // re-runs when a color is edited during live preview.
-  }, [level, preset, JSON.stringify(overrides), setSyntacticLevel]);
+  }, [level, preset, JSON.stringify(overrides), setSyntacticLevel, setSyntacticColors]);
 
   return level;
 }
