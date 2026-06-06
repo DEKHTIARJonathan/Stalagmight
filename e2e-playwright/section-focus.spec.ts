@@ -121,4 +121,32 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
   });
+
+  test('focused heading follows section selection (e.g. clicking another section on the map)', async ({ page }) => {
+    const firstId = await getSectionIdByName(page, SECTION_NAME);
+
+    // Enter focus on the first section.
+    const sectionRow = page.locator(`[data-testid="section-row-${firstId}"]`);
+    await expect(sectionRow).toBeVisible();
+    await sectionRow.dblclick();
+    const focusName = page.getByTestId('toolbar-section-focus-name');
+    await expect(focusName).toContainText(SECTION_NAME);
+
+    // Select another section while focused (simulating a map click into it). The
+    // panel is collapsed, so drive the selection through the store as the map does.
+    await page.evaluate(() => {
+      const ui = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore?: { getState: () => { project: { sections: Array<{ id: number; name: string }> } | null } };
+          uiStore?: { getState: () => { setSelection: (s: { type: string; sectionId: number }) => void } };
+        };
+      }).__E2E_TEST__;
+      const other = ui?.projectStore?.getState().project?.sections.find((s) => s.name === 'Other Gallery');
+      if (other) ui?.uiStore?.getState().setSelection({ type: 'section', sectionId: other.id });
+    });
+
+    // The heading must update to the newly selected section.
+    await expect(focusName).toContainText('Other Gallery');
+    await expect(focusName).not.toContainText(SECTION_NAME);
+  });
 });

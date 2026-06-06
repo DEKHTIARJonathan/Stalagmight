@@ -604,9 +604,17 @@ export const useUIStore = create<UIStore>((set) => ({
     if (useUIStore.getState().focusedSectionId === null) return;
     const snap = focusLayoutSnapshot;
     focusLayoutSnapshot = null;
+    // Restores the captured panel layout. The geometry switch to 'measured' on
+    // entry is intentionally one-way (per the #50/#70 design resolution): exiting
+    // leaves you in measured to keep editing, not back in the read-only view.
     set({ focusedSectionId: null, ...(snap ?? {}) });
   },
-  setFocusedSection: (focusedSectionId) => set({ focusedSectionId }),
+  setFocusedSection: (focusedSectionId) => {
+    // Only meaningful while already focused (follow the selection). Guarded so it
+    // can't enter focus without a layout snapshot.
+    if (useUIStore.getState().focusedSectionId === null) return;
+    set({ focusedSectionId });
+  },
 
   // Map state
   mapCenter: [0, 0],
