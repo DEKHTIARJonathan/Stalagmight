@@ -187,11 +187,16 @@ test.describe('Syntactic Highlighting', () => {
     expect(pill.borderStyle).toBe('solid');
     expect(pill.borderWidth).toBeGreaterThan(0);
     expect(pill.borderColor).not.toBe('rgba(0, 0, 0, 0)');
-    // The fully-qualified id renders after a divider (a left border), e.g. "1:1".
+    // The fully-qualified id (e.g. "1:1"), monospace, after a short ::before divider.
     const linkId = page.locator('[data-testid$="-link-id"]').first();
     await expect(linkId).toBeVisible();
     expect((await linkId.textContent())?.trim()).toMatch(/^\d+:\d+$/);
-    expect(await linkId.evaluate((el) => parseFloat(getComputedStyle(el).borderLeftWidth))).toBeGreaterThan(0);
+    const idStyle = await linkId.evaluate((el) => ({
+      font: getComputedStyle(el).fontFamily,
+      dividerW: getComputedStyle(el, '::before').width,
+    }));
+    expect(idStyle.font.toLowerCase()).toMatch(/mono/);
+    expect(parseFloat(idStyle.dividerW)).toBeGreaterThan(0);
 
     // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {

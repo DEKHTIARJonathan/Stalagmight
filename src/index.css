@@ -1430,10 +1430,27 @@ button.sh-tool.sh-tool--active {
   border-color: color-mix(in oklab, var(--o) 48%, var(--cc-border));
 }
 /* The fully-qualified id after a divider, at the SAME font/size as the pill text
-   (just dimmer), separated by an entity-tinted left border. */
+   (just dimmer). The divider is a SHORT centered vertical bar (pseudo-element),
+   not a full-height border, so it doesn't span the whole line. */
 .sh-pill-id {
-  margin-left: 2px;
-  padding-left: 6px;
-  border-left: 1px solid color-mix(in oklab, var(--o) 30%, var(--cc-border));
+  position: relative;
+  margin-left: 1px;
+  padding-left: 7px;
+  /* Monospace id, like the example's tier text: semibold (600), sized to the same
+     proportion of the label as in the spec (10.5px tier / 12.5px label = 0.84). */
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 600;
+  font-size: 0.84em;
+  letter-spacing: 0.04em;
   color: color-mix(in oklab, var(--o) 55%, var(--cc-text-secondary));
+}
+.sh-pill-id::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 0.8em;
+  background: color-mix(in oklab, var(--o) 30%, var(--cc-border));
 }
