@@ -9,7 +9,7 @@ Releases are created through Claude Code. The process:
 3. Claude commits the changelog update
 4. Claude runs `./scripts/release.sh <patch|minor|major> --no-edit`
 5. Claude pushes the commit and tag
-6. Gitea Actions builds the app and creates a release with artifacts
+6. GitHub Actions builds the app and creates a release with artifacts
 
 ## Step-by-step (what Claude does)
 
@@ -65,7 +65,7 @@ git push origin master && git push origin --tags
 - **Trigger**: push of `v*` tags
 - **Steps**: TypeScript check, Rust tests, `pnpm tauri build`
 - **Artifacts**: `.deb`, `.rpm`, `.AppImage` (Linux only — current runner is Linux)
-- Creates a Gitea release via API with changelog content as the body
+- Creates a GitHub release via the `gh` CLI with changelog content as the body
 - Uploads all artifacts to the release
 
 ## Version locations
