@@ -208,7 +208,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   }, [handleSectionClick, enterFocusFor]);
 
   const handleDeleteDoubleClick = useCallback((e: React.MouseEvent) => {
-    // Stop propagation to prevent row zoom
+    // Stop propagation so double-clicking the delete button doesn't enter focus
     e.stopPropagation();
   }, []);
 

@@ -215,23 +215,28 @@ export default function Toolbar({
           map icon hints that double-clicking the name returns to the full map.
           Keyboard users exit with Enter/Space (double-click isn't keyboard-fired). */}
       {focusedSectionName !== null ? (
-        <button
-          type="button"
-          onDoubleClick={onExitFocus}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              onExitFocus();
-            }
-          }}
-          title={t('sections.focus.exitHint')}
-          aria-label={t('sections.focus.ariaLabel', { name: focusedSectionName })}
-          className="flex items-center gap-1.5 font-medium text-accent hover:text-accent/80 transition-colors"
-          data-testid="toolbar-section-focus-name"
-        >
-          <MapIcon size={14} aria-hidden="true" />
-          <span className="truncate max-w-[40vw]">{focusedSectionName}</span>
-        </button>
+        // Keep the level-1 heading semantics the project-name <h1> had (so
+        // heading navigation still finds the primary label) with the interactive
+        // exit control as a real <button> inside it.
+        <h1 className="font-medium" data-testid="toolbar-section-focus-heading">
+          <button
+            type="button"
+            onDoubleClick={onExitFocus}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onExitFocus();
+              }
+            }}
+            title={t('sections.focus.exitHint')}
+            aria-label={t('sections.focus.ariaLabel', { name: focusedSectionName })}
+            className="flex items-center gap-1.5 text-accent hover:text-accent/80 transition-colors"
+            data-testid="toolbar-section-focus-name"
+          >
+            <MapIcon size={14} aria-hidden="true" />
+            <span className="truncate max-w-[40vw]">{focusedSectionName}</span>
+          </button>
+        </h1>
       ) : (
         <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
       )}
