@@ -4,7 +4,7 @@ use super::{
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapSnapConfig, PanelsConfig, PlacementSuggestionConfig,
     SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig, StationConfig,
-    UnitsConfig, ValidationConfig,
+    SyntacticHighlightingConfig, UnitsConfig, ValidationConfig,
 };
 use super::types::{default_sigma_azimuth_deg, default_sigma_depth_m, default_sigma_length_m};
 
@@ -29,6 +29,7 @@ impl Default for Config {
             appearance: AppearanceConfig::default(),
             import: ImportConfig::default(),
             placement_suggestion: PlacementSuggestionConfig::default(),
+            syntactic_highlighting: SyntacticHighlightingConfig::default(),
             legacy_snap: None,
         }
     }

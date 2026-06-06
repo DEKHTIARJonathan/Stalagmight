@@ -33,6 +33,8 @@ pub struct Config {
     pub import: ImportConfig,
     #[serde(default)]
     pub placement_suggestion: PlacementSuggestionConfig,
+    #[serde(default)]
+    pub syntactic_highlighting: SyntacticHighlightingConfig,
 
     // Legacy fields for backwards compatibility (deserialize only, never serialize)
     // Uses alias to match old TOML key name while keeping internal field name distinct
@@ -458,6 +460,91 @@ impl AppearanceConfig {
             self.theme = ThemeMode::Dark;
         }
     }
+}
+
+/// Syntactic-highlighting level. Controls how far the color system reaches.
+/// - `Off`: monochrome toolbar, no entity coloring anywhere.
+/// - `ToolbarOnly`: color the toolbar icons only; rest of the app unchanged.
+/// - `Full`: toolbar + entity blobs in tables and detail-panel links.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SyntacticHighlightLevel {
+    Off,
+    ToolbarOnly,
+    /// Opt-out default: full highlighting is on for new users.
+    #[default]
+    Full,
+    /// Catch-all for unrecognized values; normalized to Full.
+    #[serde(other, rename = "unknown")]
+    Unknown,
+}
+
+/// Syntactic-highlighting color preset. `Default` follows the spec palette;
+/// the others are colorblind-safe (CVD) palettes tuned per deficiency.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SyntacticHighlightPreset {
+    #[default]
+    Default,
+    Deuteranopia,
+    Protanopia,
+    Tritanopia,
+    /// Catch-all for unrecognized values; normalized to Default.
+    #[serde(other, rename = "unknown")]
+    Unknown,
+}
+
+/// Syntactic-highlighting configuration.
+///
+/// `overrides` is a sparse map of `preset id -> (role id -> #rrggbb)`. The base
+/// palette for each preset lives in the frontend; only user-customized colors are
+/// stored here, so the resolved color for a role is `overrides[preset][role]`
+/// falling back to the built-in preset value.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct SyntacticHighlightingConfig {
+    #[serde(default)]
+    pub level: SyntacticHighlightLevel,
+    #[serde(default)]
+    pub preset: SyntacticHighlightPreset,
+    #[serde(default)]
+    pub overrides: HashMap<String, HashMap<String, String>>,
+}
+
+impl Default for SyntacticHighlightingConfig {
+    fn default() -> Self {
+        Self {
+            level: SyntacticHighlightLevel::default(),
+            preset: SyntacticHighlightPreset::default(),
+            overrides: HashMap::new(),
+        }
+    }
+}
+
+impl SyntacticHighlightingConfig {
+    /// Normalize: coerce unknown enum values to defaults and drop any override
+    /// entries whose value is not a valid `#rrggbb` hex color.
+    pub fn normalize(&mut self) {
+        if self.level == SyntacticHighlightLevel::Unknown {
+            self.level = SyntacticHighlightLevel::Full;
+        }
+        if self.preset == SyntacticHighlightPreset::Unknown {
+            self.preset = SyntacticHighlightPreset::Default;
+        }
+        for roles in self.overrides.values_mut() {
+            roles.retain(|_role, color| is_valid_hex_color(color));
+        }
+        self.overrides.retain(|_preset, roles| !roles.is_empty());
+    }
+}
+
+/// Whether a string is a `#rrggbb` hex color (case-insensitive).
+fn is_valid_hex_color(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 7
+        && bytes[0] == b'#'
+        && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
 }
 
 /// How overlap shots are handled during import connection
@@ -1443,6 +1530,7 @@ impl Config {
         self.appearance.normalize();
         self.closure_adjustment.normalize();
         self.placement_suggestion.normalize();
+        self.syntactic_highlighting.normalize();
         self.units.decimal_precision.normalize();
         if self.general.locale.trim().is_empty() {
             self.general.locale = default_locale();
