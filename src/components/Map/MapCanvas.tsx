@@ -38,7 +38,7 @@ import { setSource } from '../../utils/telemetry';
 import { debugLog } from '../../utils/debugLog';
 
 // Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
-const CTRL_PAN_TOOLS = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
+const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -355,7 +355,6 @@ export default function MapCanvas() {
     mergeStationB,
     measureStart,
     measureEnd,
-    drawFromStation,
     addToSelection,
     clearSelection,
     clearSelectionByType,
@@ -496,7 +495,6 @@ export default function MapCanvas() {
       // Note: Merge requires stations to be visible (can't select merge targets when hidden)
       const snapConfig = config.map.snap;
       const shouldSnap =
-        (activeTool === 'draw' && snapConfig.enabled_draw) ||
         (activeTool === 'merge' && snapConfig.enabled_merge && showStations) ||
         (activeTool === 'measure' && snapConfig.enabled_measure);
 
@@ -590,7 +588,7 @@ export default function MapCanvas() {
 
   // Clear snap when tool changes to non-snap tool
   useEffect(() => {
-    const isSnapTool = activeTool === 'draw' || activeTool === 'merge' || activeTool === 'measure' || activeTool === 'move_segment';
+    const isSnapTool = activeTool === 'merge' || activeTool === 'measure' || activeTool === 'move_segment';
     if (!isSnapTool && snappedStation) {
       snappedStationRef.current = null;
       setSnappedStation(null);
@@ -1627,7 +1625,7 @@ export default function MapCanvas() {
   // Hover sync effects moved to <MapHoverSync> child component to avoid
   // re-rendering this large component on every mousemove (~60fps).
 
-  // Sync highlight layer with snap/draw/merge state
+  // Sync highlight layer with snap/merge state
   // Shows snapped/origin stations even when stations layer is hidden
   useEffect(() => {
     if (!surveyLayerRef.current) return;
@@ -1637,9 +1635,6 @@ export default function MapCanvas() {
     const snappedId = stationRefToId(snappedStation);
     if (snappedId) highlightIds.push(snappedId);
 
-    const drawId = stationRefToId(drawFromStation);
-    if (drawId && !highlightIds.includes(drawId)) highlightIds.push(drawId);
-
     const mergeAId = stationRefToId(mergeStationA);
     if (mergeAId && !highlightIds.includes(mergeAId)) highlightIds.push(mergeAId);
 
@@ -1647,7 +1642,7 @@ export default function MapCanvas() {
     if (mergeBId && !highlightIds.includes(mergeBId)) highlightIds.push(mergeBId);
 
     surveyLayerRef.current.setHighlightedStations(highlightIds);
-  }, [snappedStation, drawFromStation, mergeStationA, mergeStationB, mapLoaded]);
+  }, [snappedStation, mergeStationA, mergeStationB, mapLoaded]);
 
   // Sync shot data labels visibility with SurveyLayer (gated by showShots)
   useEffect(() => {
@@ -1748,7 +1743,7 @@ export default function MapCanvas() {
       if (placementMode) {
         handlePlacementCancel();
       }
-      // Note: Do NOT clear drawFromStation, snappedStation, or measure state
+      // Note: Do NOT clear snappedStation or measure state
       // These operations work with hidden stations - highlight layer shows them
     }
   }, [showStations, clearSelectionByType, setHoveredStation, clearMergeStations, placementMode, handlePlacementCancel]);
@@ -1807,8 +1802,6 @@ export default function MapCanvas() {
       select: 'default',
       pan: 'grab',
       zoom: 'zoom-in',
-      draw: 'crosshair',
-      delete: 'not-allowed',
       merge: 'cell',
       measure: 'crosshair',
       move_station: 'move',
@@ -1836,7 +1829,7 @@ export default function MapCanvas() {
   useEffect(() => {
     if (!map.current) return;
 
-    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
+    const noPanTools = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
 
     if (noPanTools.includes(activeTool)) {
       map.current.dragPan.disable();
@@ -2736,7 +2729,7 @@ export default function MapCanvas() {
       map.current.dragPan.disable();
     } else {
       // Re-enable drag pan when placement mode ends (unless current tool should disable it)
-      const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
+      const noPanTools = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
       if (!noPanTools.includes(activeTool)) {
         map.current.dragPan.enable();
       }
@@ -2745,8 +2738,6 @@ export default function MapCanvas() {
         select: 'default',
         pan: 'grab',
         zoom: 'zoom-in',
-        draw: 'crosshair',
-        delete: 'crosshair',
         merge: 'crosshair',
         measure: 'crosshair',
         move_section: 'move',
@@ -2762,7 +2753,7 @@ export default function MapCanvas() {
 
   // Determine touch-action: block browser gestures for interactive tools, allow pan/zoom for pan tool
   const touchAction = useMemo(() => {
-    const noPanTools = ['select', 'zoom', 'draw', 'delete', 'merge', 'measure',
+    const noPanTools = ['select', 'zoom', 'merge', 'measure',
       'move_station', 'move_segment', 'move_shot', 'comment', 'move_comment'];
     return (placementMode || noPanTools.includes(activeTool)) ? 'none' : 'manipulation';
   }, [activeTool, placementMode]);

@@ -95,28 +95,6 @@ export function ZoomToolIcon(props: IconProps) {
   );
 }
 
-export function DrawToolIcon(props: IconProps) {
-  return (
-    <BaseIcon24 {...props}>
-      <path d="M4 20L5.5 14L14 5.5L18.5 10L10 18.5Z" />
-      <line x1="13" y1="6.5" x2="17.5" y2="11" />
-      <circle cx="4" cy="20" r="1.5" fill="currentColor" stroke="none" />
-    </BaseIcon24>
-  );
-}
-
-export function DeleteToolIcon(props: IconProps) {
-  return (
-    <BaseIcon24 {...props}>
-      <line x1="4" y1="7" x2="20" y2="7" />
-      <path d="M8 7V5A1 1 0 0 1 9 4H15A1 1 0 0 1 16 4V7" />
-      <path d="M6 7L7 19A1 1 0 0 0 8 20H16A1 1 0 0 0 17 19L18 7" />
-      <line x1="10" y1="10" x2="10" y2="17" />
-      <line x1="14" y1="10" x2="14" y2="17" />
-    </BaseIcon24>
-  );
-}
-
 export function MergeToolIcon(props: IconProps) {
   return (
     <BaseIcon24 {...props}>

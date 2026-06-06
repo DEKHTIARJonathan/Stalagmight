@@ -23,7 +23,7 @@ export function isGroupedTool(tool: ToolType): boolean {
 export function getStandaloneTools(): ToolType[] {
   const groupedTools = new Set<ToolType>(TOOL_GROUPS.flatMap((g) => g.tools));
   const allTools: ToolType[] = [
-    'select', 'pan', 'zoom', 'draw', 'delete', 'merge', 'measure',
+    'select', 'pan', 'zoom', 'merge', 'measure',
     'comment', 'move_comment',
     'move_station', 'move_segment', 'move_shot',
   ];

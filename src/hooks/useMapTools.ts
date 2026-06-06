@@ -44,7 +44,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setMeasureStart,
     setMeasureEnd,
     clearMeasure,
-    setDrawFromStation,
     setHoveredStation,
     setHoveredShot,
     openDialog,
@@ -186,17 +185,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           break;
         }
 
-        case 'delete': {
-          // For now, we can't delete individual stations - need to delete shots
-          // Show a message or open a dialog explaining this
-          openDialog('confirm-delete', {
-            type: 'station',
-            stationRef: ref,
-            message: 'Deleting a station will also delete all connected shots.',
-          });
-          break;
-        }
-
         case 'merge': {
           if (isCheckingConnectivity) break;
           if (!mergeStationA) {
@@ -229,12 +217,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             }
             // Keep the measurement displayed but allow new measurement
           }
-          break;
-        }
-
-        case 'draw': {
-          setDrawFromStation(ref);
-          openDialog('draw-shot', { fromStation: ref });
           break;
         }
 
@@ -331,7 +313,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       openDialog,
       options,
       project?.sections,
-      setDrawFromStation,
       setMeasureEnd,
       setMeasureStart,
       setMergeStationA,
@@ -368,16 +349,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           } else {
             setSelection(sel);
           }
-          break;
-        }
-
-        case 'delete': {
-          openDialog('confirm-delete', {
-            type: 'shot',
-            sectionId,
-            shotId,
-            message: 'Are you sure you want to delete this shot?',
-          });
           break;
         }
 
@@ -483,15 +454,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   const handleEmptyClick = useCallback(
     (_event: { originalEvent: MouseEvent }) => {
       // If we have a snapped station, use it instead of treating as empty click
-      // This enables snap functionality for draw/merge/measure tools
+      // This enables snap functionality for merge/measure tools
       if (snappedStation) {
         switch (activeTool) {
-          case 'draw':
-            setSource('map');
-            setDrawFromStation(snappedStation);
-            openDialog('draw-shot', { fromStation: snappedStation });
-            return;
-
           case 'merge':
             // GUARD: Block merge snap when stations are hidden
             if (!showStations) {
@@ -571,7 +536,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       clearSelection,
       openDialog,
       options,
-      setDrawFromStation,
       setMeasureEnd,
       setMeasureStart,
       setMergeStationA,

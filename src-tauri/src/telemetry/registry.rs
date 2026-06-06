@@ -757,10 +757,30 @@ mod tests {
             .map(|n| n.to_string())
             .collect();
 
+        // Tools removed from the UI whose telemetry IDs stay frozen in the
+        // append-only registry (their events simply never fire anymore). The
+        // registry is allowed to retain these even though they're gone from
+        // ToolType — but every *current* tool must still be covered.
+        const RETIRED_TOOLS: &[&str] = &["draw", "delete"];
+        let retired_action: HashSet<String> = RETIRED_TOOLS
+            .iter()
+            .map(|t| format!("action.tool.{t}"))
+            .collect();
+        let retired_dwell: HashSet<String> = RETIRED_TOOLS
+            .iter()
+            .map(|t| format!("dwell.tool.{t}"))
+            .collect();
+
         let missing_action: Vec<_> = code_action.difference(&reg_action).collect();
-        let stale_action: Vec<_> = reg_action.difference(&code_action).collect();
+        let stale_action: Vec<_> = reg_action
+            .difference(&code_action)
+            .filter(|n| !retired_action.contains(*n))
+            .collect();
         let missing_dwell: Vec<_> = code_dwell.difference(&reg_dwell).collect();
-        let stale_dwell: Vec<_> = reg_dwell.difference(&code_dwell).collect();
+        let stale_dwell: Vec<_> = reg_dwell
+            .difference(&code_dwell)
+            .filter(|n| !retired_dwell.contains(*n))
+            .collect();
 
         assert!(
             missing_action.is_empty()

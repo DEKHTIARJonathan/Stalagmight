@@ -525,7 +525,7 @@ describe('Shortcuts Settings Accessibility', () => {
     it('live region announces recording state changes for screen readers', async () => {
       // The ShortcutRecorder component has an internal live region that announces
       // state changes for screen readers. Test that it updates appropriately.
-      const recorder = await $('[data-testid="shortcut-primary-draw"]');
+      const recorder = await $('[data-testid="shortcut-primary-merge"]');
       const liveRegion = await recorder.$('[aria-live="polite"]');
       await expect(liveRegion).toBeExisting();
 

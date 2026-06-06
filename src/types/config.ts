@@ -115,7 +115,6 @@ export const defaultConfig: Config = {
     },
     snap: {
       threshold: 10.0,
-      enabled_draw: true,
       enabled_merge: true,
       enabled_measure: true,
     },
@@ -154,8 +153,6 @@ export const defaultConfig: Config = {
     select: ['S'],
     pan: ['P'],
     zoom: ['Z'],
-    draw: ['D'],
-    delete_tool: ['X'],
     merge: ['M'],
     measure: ['R'],
     move_station: ['T'],

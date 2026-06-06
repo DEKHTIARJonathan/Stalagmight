@@ -43,8 +43,6 @@ export type ToolType =
   | 'select'
   | 'pan'
   | 'zoom'
-  | 'draw'
-  | 'delete'
   | 'merge'
   | 'measure'
   | 'move_station'
@@ -152,9 +150,6 @@ interface UIStore {
   setMeasureStart: (point: StationRef | Coordinates | null) => void;
   setMeasureEnd: (point: StationRef | Coordinates | null) => void;
   clearMeasure: () => void;
-
-  drawFromStation: StationRef | null;
-  setDrawFromStation: (ref: StationRef | null) => void;
 
   // Panel state
   sectionsPanelOpen: boolean;
@@ -479,8 +474,6 @@ export const useUIStore = create<UIStore>((set) => ({
   setMeasureEnd: (measureEnd) => set({ measureEnd }),
   clearMeasure: () => set({ measureStart: null, measureEnd: null }),
 
-  drawFromStation: null,
-  setDrawFromStation: (drawFromStation) => set({ drawFromStation }),
 
   // Panel state
   sectionsPanelOpen: true,

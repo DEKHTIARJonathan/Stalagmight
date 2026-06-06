@@ -779,8 +779,6 @@
         "select": "Select",
         "pan": "Pan",
         "zoom": "Zoom",
-        "draw": "Draw",
-        "deleteTool": "Delete",
         "merge": "Merge",
         "measure": "Measure",
         "moveStation": "Move Station",
@@ -926,11 +924,6 @@
           "label": "Snap threshold",
           "help": "Distance in pixels to snap to stations (1-50)",
           "aria": "Snap threshold"
-        },
-        "draw": {
-          "label": "Snap in Draw tool",
-          "help": "Enable snap-to-station when drawing",
-          "aria": "Enable snap in Draw tool"
         },
         "merge": {
           "label": "Snap in Merge tool",
@@ -1748,8 +1741,6 @@
     "tools": {
       "comment": "Comment",
       "moveComment": "Move comment",
-      "delete": "Delete",
-      "draw": "Draw",
       "measure": "Measure",
       "merge": "Merge",
       "moveSegment": "Move segment",
@@ -2056,8 +2047,6 @@
           "select": "Select stations, shots, or sections.",
           "pan": "Move the map view without editing data.",
           "zoom": "Box-zoom to focus on an area. Left/right click zooms in/out.",
-          "draw": "Extend existing sections with new shots.",
-          "delete": "Remove shots entered by mistake, or split sections.",
           "merge": "Merge stations together.",
           "measure": "Measure distance and depth difference.",
           "comment": "Add comments to station/shot.",
@@ -2131,7 +2120,7 @@
       "whatWeCollect": "What we collect",
       "collect": {
         "commands": "Which commands are used (e.g., import, export, undo)",
-        "tools": "Which map tools are activated (e.g., measure, draw)",
+        "tools": "Which map tools are activated (e.g., measure, merge)",
         "session": "Session duration and OS type",
         "noPII": "No names, no file paths, no survey data"
       },

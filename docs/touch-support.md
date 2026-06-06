@@ -65,7 +65,7 @@ A `useMemo` computes `touch-action` based on the active tool:
 | Active tool | `touch-action` | Reason |
 |-------------|----------------|--------|
 | `pan` | `manipulation` | Let MapLibre handle touch pan/pinch-zoom |
-| All others (select, draw, zoom, move_*, etc.) | `none` | App handles the gesture |
+| All others (select, zoom, move_*, etc.) | `none` | App handles the gesture |
 
 ### Pan tool guard
 
@@ -171,4 +171,4 @@ Desktop: mouse click, right-click, hover flyouts, panel resize, and all map
 tools should work identically to before.
 
 Android tablet: verify panel resize via drag, long-press context menus,
-tap-to-open toolbar flyouts, and map draw/move/select tools via touch.
+tap-to-open toolbar flyouts, and map move/select tools via touch.

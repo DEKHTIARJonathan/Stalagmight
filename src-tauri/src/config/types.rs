@@ -45,8 +45,6 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub(super) struct LegacySnapConfig {
     #[serde(default)]
-    enabled_draw: Option<bool>,
-    #[serde(default)]
     enabled_merge: Option<bool>,
     #[serde(default)]
     enabled_measure: Option<bool>,
@@ -191,9 +189,6 @@ pub struct MapSnapConfig {
     /// Snap threshold in pixels (1.0-50.0)
     #[serde(default = "default_snap_threshold")]
     pub threshold: f64,
-    /// Enable snap for draw tool
-    #[serde(default = "default_true")]
-    pub enabled_draw: bool,
     /// Enable snap for merge tool
     #[serde(default = "default_true")]
     pub enabled_merge: bool,
@@ -215,7 +210,6 @@ impl Default for MapSnapConfig {
     fn default() -> Self {
         Self {
             threshold: default_snap_threshold(),
-            enabled_draw: true,
             enabled_merge: true,
             enabled_measure: true,
         }
@@ -1005,10 +999,6 @@ pub struct ShortcutsConfig {
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub zoom: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
-    pub draw: Vec<String>,
-    #[serde(deserialize_with = "deserialize_shortcut_vec")]
-    pub delete_tool: Vec<String>,
-    #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub merge: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub measure: Vec<String>,
@@ -1070,18 +1060,6 @@ pub struct ShortcutsConfig {
     pub import_dmp: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub export: Vec<String>,
-
-    // Legacy field for migration (accepts old "delete" key, maps to delete_tool)
-    #[serde(default, skip_serializing, rename = "delete")]
-    pub(super) legacy_delete: Option<LegacyShortcut>,
-}
-
-/// Helper enum to deserialize legacy single-string shortcut for migration
-#[derive(Debug, Clone, Deserialize, TS)]
-#[serde(untagged)]
-pub(super) enum LegacyShortcut {
-    Single(String),
-    Multiple(Vec<String>),
 }
 
 impl ShortcutsConfig {
@@ -1093,19 +1071,6 @@ impl ShortcutsConfig {
     /// - Logs warnings for invalid shortcuts
     pub fn normalize(&mut self) {
         let defaults = ShortcutsConfig::default();
-
-        // Migrate legacy "delete" field to delete_tool
-        // Only migrate if delete_tool still has its default value (wasn't explicitly set)
-        if let Some(legacy) = self.legacy_delete.take() {
-            let delete_tool_is_default = self.delete_tool == defaults.delete_tool;
-            if delete_tool_is_default {
-                self.delete_tool = match legacy {
-                    LegacyShortcut::Single(s) => vec![s],
-                    LegacyShortcut::Multiple(v) => v,
-                };
-                tracing::info!("Migrated legacy 'delete' shortcut to 'delete_tool'");
-            }
-        }
 
         // Migrate shortcut reassignments from pre-move-segment era:
         // G was toggle_depth_gradient, now it's move_shot; toggle_depth_gradient moves to Shift+D
@@ -1119,8 +1084,6 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.select, &defaults.select, "select");
         normalize_shortcut_field(&mut self.pan, &defaults.pan, "pan");
         normalize_shortcut_field(&mut self.zoom, &defaults.zoom, "zoom");
-        normalize_shortcut_field(&mut self.draw, &defaults.draw, "draw");
-        normalize_shortcut_field(&mut self.delete_tool, &defaults.delete_tool, "delete_tool");
         normalize_shortcut_field(&mut self.merge, &defaults.merge, "merge");
         normalize_shortcut_field(&mut self.measure, &defaults.measure, "measure");
         normalize_shortcut_field(&mut self.move_station, &defaults.move_station, "move_station");
@@ -1505,14 +1468,10 @@ impl Config {
             // Limitation: Cannot distinguish explicit defaults from missing section
             let snap_is_default = (self.map.snap.threshold - default_snap_threshold()).abs()
                 < f64::EPSILON
-                && self.map.snap.enabled_draw
                 && self.map.snap.enabled_merge
                 && self.map.snap.enabled_measure;
 
             if snap_is_default {
-                if let Some(enabled_draw) = legacy.enabled_draw {
-                    self.map.snap.enabled_draw = enabled_draw;
-                }
                 if let Some(enabled_merge) = legacy.enabled_merge {
                     self.map.snap.enabled_merge = enabled_merge;
                 }

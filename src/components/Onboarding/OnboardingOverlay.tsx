@@ -6,8 +6,6 @@ import type { OnboardingIllustration, OnboardingPlacement } from '../../onboardi
 import {
   CenterMapIcon,
   CommentToolIcon,
-  DeleteToolIcon,
-  DrawToolIcon,
   FitToViewIcon,
   MeasureToolIcon,
   MergeToolIcon,
@@ -311,16 +309,6 @@ function renderStepIllustration(
         description: t('onboarding.illustrations.tools.items.zoom'),
         icon: <ZoomToolIcon size={16} />,
       },
-      draw: {
-        label: t('toolbar.tools.draw'),
-        description: t('onboarding.illustrations.tools.items.draw'),
-        icon: <DrawToolIcon size={16} />,
-      },
-      delete: {
-        label: t('toolbar.tools.delete'),
-        description: t('onboarding.illustrations.tools.items.delete'),
-        icon: <DeleteToolIcon size={16} />,
-      },
       merge: {
         label: t('toolbar.tools.merge'),
         description: t('onboarding.illustrations.tools.items.merge'),
@@ -372,7 +360,7 @@ function renderStepIllustration(
       {
         id: 'edit',
         title: t('onboarding.illustrations.tools.groups.edit'),
-        items: ['draw', 'delete', 'merge', 'measure'],
+        items: ['merge', 'measure'],
       },
       {
         id: 'comment',

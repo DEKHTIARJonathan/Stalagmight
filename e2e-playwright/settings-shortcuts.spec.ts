@@ -278,22 +278,22 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
       await openSettingsDialog(page);
       await navigateToShortcutsCategory(page);
 
-      // First, set primary slot of draw to 'K'
-      const primaryRecorder = page.locator('[data-testid="shortcut-primary-draw"]');
+      // First, set primary slot of merge to 'K'
+      const primaryRecorder = page.locator('[data-testid="shortcut-primary-merge"]');
       await primaryRecorder.click();
-      await waitForRecording(page, 'shortcut-primary-draw', true);
+      await waitForRecording(page, 'shortcut-primary-merge', true);
       await page.keyboard.press('K');
-      await waitForRecording(page, 'shortcut-primary-draw', false);
+      await waitForRecording(page, 'shortcut-primary-merge', false);
 
       // Clear any previous error
       await page.waitForTimeout(100);
 
       // Try to assign same key to secondary slot
-      const secondaryRecorder = page.locator('[data-testid="shortcut-secondary-draw"]');
+      const secondaryRecorder = page.locator('[data-testid="shortcut-secondary-merge"]');
       await secondaryRecorder.click();
-      await waitForRecording(page, 'shortcut-secondary-draw', true);
+      await waitForRecording(page, 'shortcut-secondary-merge', true);
       await page.keyboard.press('K');
-      await waitForRecording(page, 'shortcut-secondary-draw', false);
+      await waitForRecording(page, 'shortcut-secondary-merge', false);
 
       // Should show error about intra-action duplicate
       await expect(page.locator('[data-testid="shortcut-error"]')).toBeVisible({ timeout: 2000 });

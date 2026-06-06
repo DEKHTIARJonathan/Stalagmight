@@ -59,20 +59,18 @@ test.describe('Map Tools', () => {
     await expect(canvas).toBeVisible();
 
     // Test each tool shortcut as defined in DEFAULT_SHORTCUTS:
-    // s: 'select', p: 'pan', z: 'zoom', d: 'draw', x: 'delete', m: 'merge', r: 'measure', v: 'move_segment', t: 'move_station'
+    // s: 'select', p: 'pan', z: 'zoom', m: 'merge', r: 'measure', v: 'move_segment', t: 'move_station'
     const toolShortcuts = [
       { key: 's', tool: 'select' },
       { key: 'p', tool: 'pan' },
       { key: 'z', tool: 'zoom' },
-      { key: 'd', tool: 'draw' },
-      { key: 'x', tool: 'delete' },
       { key: 'm', tool: 'merge' },
       { key: 'r', tool: 'measure' },
       { key: 'v', tool: 'move_segment' },
       { key: 't', tool: 'move_station' },
     ];
     // Standalone toolbar buttons (not inside tool groups)
-    const toolbarTools = new Set(['select', 'draw', 'delete', 'merge', 'measure']);
+    const toolbarTools = new Set(['select', 'merge', 'measure']);
 
     for (const { key, tool } of toolShortcuts) {
       await page.keyboard.press(key);

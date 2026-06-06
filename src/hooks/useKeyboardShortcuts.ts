@@ -29,8 +29,6 @@ type ShortcutAction =
   | 'select'
   | 'pan'
   | 'zoom'
-  | 'draw'
-  | 'delete_tool'
   | 'merge'
   | 'measure'
   | 'move_station'
@@ -70,8 +68,6 @@ const TOOL_ACTIONS: Partial<Record<ShortcutAction, ToolType>> = {
   select: 'select',
   pan: 'pan',
   zoom: 'zoom',
-  draw: 'draw',
-  delete_tool: 'delete',
   merge: 'merge',
   measure: 'measure',
   move_station: 'move_station',
@@ -118,8 +114,6 @@ const ACTION_LABELS: Record<ShortcutAction, string> = {
   select: 'Select tool',
   pan: 'Pan tool',
   zoom: 'Zoom tool',
-  draw: 'Draw tool',
-  delete_tool: 'Delete tool',
   merge: 'Merge tool',
   measure: 'Measure tool',
   move_station: 'Move station tool',
@@ -186,8 +180,6 @@ function buildShortcutMap(shortcuts: ShortcutsConfig): Map<string, ShortcutActio
     'select',
     'pan',
     'zoom',
-    'draw',
-    'delete_tool',
     'merge',
     'measure',
     'move_station',
@@ -303,7 +295,6 @@ export function useKeyboardShortcuts() {
     openDialog,
     clearMergeStations,
     clearMeasure,
-    setDrawFromStation,
     showStations,
     showToast,
   } = useUIStore();
@@ -379,7 +370,6 @@ export function useKeyboardShortcuts() {
         clearSelection();
         clearMergeStations();
         clearMeasure();
-        setDrawFromStation(null);
         useUIStore.getState().clearCommentTarget();
         // Cancel move comment — no backend restore needed (pickup doesn't mutate backend)
         useUIStore.getState().clearMoveCommentSource();
@@ -517,8 +507,6 @@ export function useKeyboardShortcuts() {
         // Tool actions
         case 'select':
         case 'pan':
-        case 'draw':
-        case 'delete_tool':
         case 'merge':
         case 'measure':
         case 'move_station':
@@ -834,7 +822,6 @@ export function useKeyboardShortcuts() {
       clearSelection,
       clearMergeStations,
       clearMeasure,
-      setDrawFromStation,
       selection,
       openDialog,
       project,

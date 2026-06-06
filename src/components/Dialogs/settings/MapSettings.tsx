@@ -192,8 +192,6 @@ export function MapSettings({
   // --- Snap settings ---
   const handleSnapThresholdChange = createNumericHandler(onChange,
     (n) => ({ map: { ...config.map, snap: { ...config.map.snap, threshold: n } } }));
-  const handleSnapDrawChange = createToggleHandler(onChange,
-    (v) => ({ map: { ...config.map, snap: { ...config.map.snap, enabled_draw: v } } }));
   const handleSnapMergeChange = createToggleHandler(onChange,
     (v) => ({ map: { ...config.map, snap: { ...config.map.snap, enabled_merge: v } } }));
   const handleSnapMeasureChange = createToggleHandler(onChange,
@@ -629,22 +627,6 @@ export function MapSettings({
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
             aria-label={t('settings.map.snap.threshold.aria')}
             data-testid="input-snap-threshold"
-          />
-        </SettingRow>
-
-        <SettingRow
-          label={t('settings.map.snap.draw.label')}
-          helpText={t('settings.map.snap.draw.help')}
-          isChanged={isFieldChanged(changedFields, 'map.snap.enabled_draw')}
-          data-testid="setting-snap-draw"
-          onReset={() => onChange({ map: { ...config.map, snap: { ...config.map.snap, enabled_draw: defaultConfig.map.snap.enabled_draw } } })}
-          isDefault={config.map.snap.enabled_draw === defaultConfig.map.snap.enabled_draw}
-        >
-          <Toggle
-            checked={config.map.snap.enabled_draw}
-            onChange={handleSnapDrawChange}
-            aria-label={t('settings.map.snap.draw.aria')}
-            data-testid="toggle-snap-draw"
           />
         </SettingRow>
 

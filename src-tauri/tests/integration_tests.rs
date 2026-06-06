@@ -1094,7 +1094,7 @@ fn test_config_normalize_clamps_values() {
     let mut map_config = MapConfig {
         station: StationConfig { radius: 0.1, hit_area: 0.5, ..Default::default() },  // Below min
         shot: ShotConfig { width: 100.0, hit_area: 50.0, ..Default::default() },       // Above max
-        snap: MapSnapConfig { threshold: -5.0, enabled_draw: true, enabled_merge: true, enabled_measure: true },
+        snap: MapSnapConfig { threshold: -5.0, enabled_merge: true, enabled_measure: true },
         ..Default::default()
     };
 
@@ -1120,7 +1120,7 @@ fn test_config_normalize_handles_nan_inf() {
     let mut map_config = MapConfig {
         station: StationConfig { radius: f64::NAN, hit_area: f64::INFINITY, ..Default::default() },
         shot: ShotConfig { width: f64::NEG_INFINITY, hit_area: f64::NAN, ..Default::default() },
-        snap: MapSnapConfig { threshold: f64::NAN, enabled_draw: true, enabled_merge: true, enabled_measure: true },
+        snap: MapSnapConfig { threshold: f64::NAN, enabled_merge: true, enabled_measure: true },
         ..Default::default()
     };
 
