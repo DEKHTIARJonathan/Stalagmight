@@ -1471,3 +1471,9 @@ button.sh-tool.sh-tool--active {
   position: relative;
   top: 1px;
 }
+/* Shot/station ids (next to a cap-height digit primary) read higher than the
+   section id (next to a lowercase name), so they need a touch more downward
+   nudge to look centered. */
+.sh-pill-nudge--num {
+  top: 2px;
+}

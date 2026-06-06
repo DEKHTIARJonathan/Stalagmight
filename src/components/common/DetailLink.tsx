@@ -242,7 +242,9 @@ export function DetailLink({
           <span>{pillPrimary}</span>
           {pillId !== null && (
             <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
-              <span className="sh-pill-nudge">{pillId}</span>
+              <span className={hasPosition(target) ? 'sh-pill-nudge sh-pill-nudge--num' : 'sh-pill-nudge'}>
+                {pillId}
+              </span>
             </span>
           )}
         </>
