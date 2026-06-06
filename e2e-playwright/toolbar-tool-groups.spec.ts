@@ -251,11 +251,11 @@ test.describe('Toolbar Tool Groups', () => {
     const toolbar = page.getByTestId('toolbar');
     await expect(toolbar).toBeVisible();
 
-    // Separators are rendered as div.w-px.h-6.bg-border elements inside the tools container
-    const separators = toolbar.locator('.bg-background .w-px.h-6.bg-border');
-    // We expect 3 separators: before navigate group, after navigate group, before move group
+    // Separators are rendered as div.w-px.h-6.bg-border elements inside the tools group.
+    const separators = page.getByTestId('toolbar-tools-group').locator('.w-px.h-6.bg-border');
+    // Layout (#51): [Select Pan/Zoom] | [Merge Comment Move] | [Measure] → 2 dividers.
     const count = await separators.count();
-    expect(count).toBeGreaterThanOrEqual(3);
+    expect(count).toBe(2);
   });
 
   test('anchored sections are faded when Move Segment tool is active', async ({ page }) => {
