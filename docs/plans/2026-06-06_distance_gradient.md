@@ -12,6 +12,11 @@
 - [x] **Backend seam refactor** — `build_survey_graph` + `dijkstra` +
   `compute_distances_from(roots)`; `compute_penetration_distances` now a caller.
   Tests pass, no behavior change. (`7e938f88`)
+- [x] **Jump-vs-reference reachability heuristic** in `build_survey_graph` — keep
+  an `is_reference` shot only when it bridges otherwise-disconnected components
+  (a jump); drop redundant ones (double-count). Shared graph, so
+  penetration/export use the corrected reachability. Temporary → retire under
+  **#77**. Tests green (1511+80). (`626b2f95`)
 - [ ] IPC: `get_station_distances_from(Option<StationRef>) -> DistanceField` +
   ts-rs export + `pnpm gen:ipc-types`.
 - [ ] Frontend: uiStore state, Display toggle, click-to-pick, paint expression,
@@ -136,14 +141,21 @@ the tradeoffs, not a blocker.
 - ~~Multi-source / default origin~~ → **default = the map's zero-datum**
   (entrance penetration); click a station to re-root. Multi-source falls out of
   the engine for free.
+- ~~Jumps vs references in reachability~~ → include jumps, exclude references
+  (references double-count; missing jumps falsely show cave as unreachable).
+  Model conflates them in `is_reference`, so a **temporary connectivity heuristic**
+  (keep bridging `is_reference` shots, drop redundant ones) on **one shared
+  graph**; real distinction tracked in **[#77]**. *Daniel may want to weigh in —
+  this shifts existing penetration/export numbers.*
 
 ## Verification
 - `cargo test --manifest-path src-tauri/Cargo.toml` (+ `--features telemetry`
   for registry): distances-from-station correctness, unreachable, zero-cost
   edges.
 - `pnpm gen:ipc-types` clean; `pnpm tsc --noEmit`.
-- `pnpm test:ui`: context-menu "Distance from here" colors the map + legend
-  appears; toggle off clears; depth-gradient mutual exclusion.
+- `pnpm test:ui`: Display-menu toggle colors the map from the entrance + legend
+  appears; clicking a station re-roots; toggle off clears; depth-gradient mutual
+  exclusion.
 - Manual (`./scripts/dev.sh`): pick entrance → gradient + legend; pick a deep
   station → recolors; unreachable greyed; origin marker visible.
 
@@ -165,3 +177,7 @@ the tradeoffs, not a blocker.
 - **2026-06-06** — Scope tightened: **#34 does zero colorblind work**; it only
   reads the active palette (owned by #75) so it respects the user's choice. No
   open #34 questions remain — ready to build.
+- **2026-06-06** — Built: backend seam refactor (`7e938f88`) + **jump-vs-reference
+  reachability heuristic** (`626b2f95`). Jumps counted, redundant references
+  dropped, on one shared graph (penetration/export included). Heuristic is
+  temporary; real model distinction tracked in **#77**. Full Rust suite green.
