@@ -75,11 +75,16 @@ test.describe('Syntactic Highlighting', () => {
 
     // Tool buttons have a per-tool tinted background ("back-color"), not the
     // default transparent ghost background.
-    const selectBg = await page
-      .getByTestId('tool-select')
-      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    const selectButton = page.getByTestId('tool-select');
+    const selectBg = await selectButton.evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(selectBg).not.toBe('rgba(0, 0, 0, 0)');
     expect(selectBg).not.toBe('transparent');
+
+    // The active tool (select is active by default) uses a tool-colored INSET
+    // ring (box-shadow), not the oversized theme-accent outline ring.
+    await expect(selectButton).toHaveClass(/sh-tool--active/);
+    const selectShadow = await selectButton.evaluate((el) => getComputedStyle(el).boxShadow);
+    expect(selectShadow).toContain('inset');
 
     // Pressing the old draw/delete shortcuts does nothing.
     await page.getByTestId('tool-select').click();

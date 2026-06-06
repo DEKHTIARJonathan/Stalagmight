@@ -1395,13 +1395,16 @@ tr[data-selected="true"]:hover {
    accent color so the chip reads as colored even at a glance. `--o` is set per
    button to var(--sh-<role>). Element-qualified to win over the ghost button's
    hover background regardless of source order. In the "off" level --sh-* resolve
-   to a neutral, so the wash is a subtle monochrome gray. */
+   to a neutral, so the wash is a subtle monochrome gray. The active state uses an
+   INSET ring in the tool's own color, so the selection highlight stays exactly
+   within the back-color box (no oversized outline, no theme-accent color). */
 button.sh-tool {
-  background: color-mix(in oklab, var(--o) 12%, var(--cc-background));
+  background: color-mix(in oklab, var(--o) 12%, var(--cc-panel));
 }
 button.sh-tool:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--o) 22%, var(--cc-background));
+  background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
 }
 button.sh-tool.sh-tool--active {
-  background: color-mix(in oklab, var(--o) 24%, var(--cc-background));
+  background: color-mix(in oklab, var(--o) 24%, var(--cc-panel));
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--o) 72%, transparent);
 }

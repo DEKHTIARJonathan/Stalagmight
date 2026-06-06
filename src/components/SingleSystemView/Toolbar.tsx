@@ -208,7 +208,7 @@ export default function Toolbar({
       {/* Right section - tools and display menu */}
       <div className="flex items-center gap-2">
         <div
-          className={`flex items-center gap-1 bg-background rounded px-1 py-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+          className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
           data-testid="toolbar-tools-group"
         >
           {TOOLBAR_ITEMS.map((item, index) => {
@@ -329,7 +329,6 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
     >
       <IconButton
         icon={<ToolIcon tool={tool} />}
-        active={active}
         onClick={handleClick}
         disabled={disabled}
         aria-label={t(TOOL_LABEL_KEYS[tool])}
@@ -585,7 +584,6 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
           </span>
         )}
         size="sm"
-        active={isGroupActive}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         disabled={disabled}
