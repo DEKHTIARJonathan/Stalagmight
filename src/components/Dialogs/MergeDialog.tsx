@@ -85,11 +85,17 @@ export default function MergeDialog() {
         <div className="space-y-2">
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
-            <span><EntityBlob entity="station">{formatStationId(stationA.section_id, stationA.station_index)}</EntityBlob> ({sectionAName})</span>
+            <span className="inline-flex items-center gap-1.5">
+              <EntityBlob entity="station">{formatStationId(stationA.section_id, stationA.station_index)}</EntityBlob>
+              <EntityBlob entity="section">{sectionAName}</EntityBlob>
+            </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
-            <span><EntityBlob entity="station">{formatStationId(stationB.section_id, stationB.station_index)}</EntityBlob> ({sectionBName})</span>
+            <span className="inline-flex items-center gap-1.5">
+              <EntityBlob entity="station">{formatStationId(stationB.section_id, stationB.station_index)}</EntityBlob>
+              <EntityBlob entity="section">{sectionBName}</EntityBlob>
+            </span>
           </div>
         </div>
 

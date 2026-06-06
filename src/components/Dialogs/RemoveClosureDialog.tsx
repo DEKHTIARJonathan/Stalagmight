@@ -70,9 +70,10 @@ export default function RemoveClosureDialog() {
     const section = project?.sections.find((item) => item.id === ref.section_id);
     const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
     return (
-      <>
-        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob> ({sectionLabel})
-      </>
+      <span className="inline-flex items-center gap-1.5 align-middle">
+        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
+        <EntityBlob entity="section">{sectionLabel}</EntityBlob>
+      </span>
     );
   };
 

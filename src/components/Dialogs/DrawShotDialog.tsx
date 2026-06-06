@@ -217,8 +217,9 @@ export default function DrawShotDialog() {
         {/* From station info */}
         <div className="p-3 bg-background rounded">
           <span className="text-text-secondary">From:</span>{' '}
-          <span className="font-medium">
-            <EntityBlob entity="station">{formatStationId(fromStation.section_id, fromStation.station_index)}</EntityBlob> ({sectionName})
+          <span className="inline-flex items-center gap-1.5 align-middle font-medium">
+            <EntityBlob entity="station">{formatStationId(fromStation.section_id, fromStation.station_index)}</EntityBlob>
+            <EntityBlob entity="section">{sectionName}</EntityBlob>
           </span>
         </div>
 
