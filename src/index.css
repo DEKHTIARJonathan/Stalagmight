@@ -1435,7 +1435,11 @@ button.sh-tool.sh-tool--active {
 .sh-pill-id {
   position: relative;
   margin-left: 1px;
+  /* Equal left/right padding centers the id text in its own cell (the divider
+     sits in the left padding) without moving the symbol or primary label. */
   padding-left: 7px;
+  padding-right: 7px;
+  text-align: center;
   /* Monospace id, like the example's tier text: semibold (600), sized to the same
      proportion of the label as in the spec (10.5px tier / 12.5px label = 0.84). */
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
