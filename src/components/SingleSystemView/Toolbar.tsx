@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -7,17 +7,8 @@ import {
   ArrowLeftIcon,
   BugIcon,
   ChevronDownIcon,
-  HandIcon,
-  SelectToolIcon,
-  ZoomToolIcon,
-  MergeToolIcon,
-  MeasureToolIcon,
-  MoveStationToolIcon,
-  MoveSegmentToolIcon,
-  MoveShotToolIcon,
-  CommentToolIcon,
-  MoveCommentToolIcon,
 } from '../common/icons';
+import { ToolGlyph } from '../common/toolIcons';
 import DisplayMenu from './DisplayMenu';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
@@ -107,7 +98,7 @@ const TOOL_GROUP_LABEL_KEYS: Record<string, string> = {
 
 /**
  * Toolbar layout definition.
- * [Select] | [Navigate group] | [Merge] [Measure] | [Move group]
+ * [Select] | [Navigate group] | [Merge] [Measure] | [Comment group] | [Move group]
  */
 const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'select', shortcut: 'S' },
@@ -643,18 +634,9 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
 }
 
 function ToolIcon({ tool }: { tool: ToolType }) {
-  const icons: Record<ToolType, ReactNode> = {
-    select: <SelectToolIcon size={20} />,
-    pan: <HandIcon size={20} />,
-    zoom: <ZoomToolIcon size={20} />,
-    merge: <MergeToolIcon size={20} />,
-    measure: <MeasureToolIcon size={20} />,
-    move_station: <MoveStationToolIcon size={20} />,
-    move_segment: <MoveSegmentToolIcon size={20} />,
-    move_shot: <MoveShotToolIcon size={20} />,
-    comment: <CommentToolIcon size={20} />,
-    move_comment: <MoveCommentToolIcon size={20} />,
-  };
-
-  return <span className="inline-flex items-center justify-center">{icons[tool]}</span>;
+  return (
+    <span className="inline-flex items-center justify-center">
+      <ToolGlyph tool={tool} size={20} />
+    </span>
+  );
 }
