@@ -14,7 +14,7 @@
  *   when user moves mouse away but keeps element focused).
  */
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, type CSSProperties } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { EntitySymbol } from './toolIcons';
 
@@ -184,9 +184,19 @@ export function DetailLink({
   }, [isMissing, onHoverEnd]);
 
   // Build class list conditionally to avoid conflicting Tailwind utilities
-  const baseClasses = 'underline focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset';
-  const colorClass = isMissing ? 'text-warning' : 'text-accent';
+  const focusClasses = 'focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset';
   const cursorClass = isMissing ? 'cursor-not-allowed' : 'cursor-pointer';
+
+  // In Full highlighting, render the link as an entity pill: the duotone symbol
+  // plus the id inside a rounded chip with a tinted background and an
+  // entity-colored border (the legend-chip look). Otherwise keep the plain
+  // underline link.
+  const computedClass = showSymbol
+    ? `sh-pill inline-flex items-center gap-1 align-middle rounded-full border px-2 py-0.5 text-xs leading-none text-text-primary ${focusClasses} ${cursorClass} ${className}`
+    : `underline ${isMissing ? 'text-warning' : 'text-accent'} ${focusClasses} ${cursorClass} ${className}`;
+  const pillStyle: CSSProperties | undefined = showSymbol
+    ? ({ '--o': `var(--sh-${type})` } as CSSProperties)
+    : undefined;
 
   return (
     <button
@@ -198,19 +208,15 @@ export function DetailLink({
       onMouseLeave={handleMouseLeave}
       onFocus={handleFocus}
       onBlur={handleBlur}
-      className={`${baseClasses} ${colorClass} ${cursorClass} ${className}`}
+      className={computedClass}
+      style={pillStyle}
       aria-label={ariaLabel}
       aria-disabled={isMissing}
       data-testid={computedTestId}
       title={isMissing ? `${type} not found` : undefined}
     >
       {showSymbol && (
-        <EntitySymbol
-          entity={type}
-          size={14}
-          className="mr-1"
-          testId={`${computedTestId}-symbol`}
-        />
+        <EntitySymbol entity={type} size={14} testId={`${computedTestId}-symbol`} />
       )}
       {displayText}
       {isMissing && (

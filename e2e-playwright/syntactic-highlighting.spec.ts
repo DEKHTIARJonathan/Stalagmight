@@ -164,11 +164,18 @@ test.describe('Syntactic Highlighting', () => {
     // Full (default): entity blobs render in the table, and detail-panel links
     // render the entity symbol (a duotone svg, not a plain dot).
     await expect(page.locator('[data-entity]').first()).toBeVisible({ timeout: 5000 });
-    const linkSymbol = page.locator('[data-testid$="-link-symbol"]').first();
-    await expect(linkSymbol).toBeVisible({ timeout: 5000 });
-    // The symbol sits inline next to the link text (not forced onto its own line
-    // by the .duotone block default).
-    expect(await linkSymbol.evaluate((el) => getComputedStyle(el).display)).toBe('inline-block');
+    await expect(page.locator('[data-testid$="-link-symbol"]').first()).toBeVisible({ timeout: 5000 });
+    // The link renders as an entity pill: inline-flex (symbol next to text),
+    // rounded, with a tinted background.
+    const linkPill = page.locator('[data-testid$="-link"]').first();
+    const pill = await linkPill.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { display: s.display, radius: parseFloat(s.borderTopLeftRadius), bg: s.backgroundColor };
+    });
+    // inline-flex blockifies to flex when the link sits in a flex parent.
+    expect(pill.display).toMatch(/flex/);
+    expect(pill.radius).toBeGreaterThan(8); // rounded-full
+    expect(pill.bg).not.toBe('rgba(0, 0, 0, 0)'); // tinted background
 
     // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {
