@@ -472,6 +472,7 @@ test.describe('Ctrl+Drag Pan - Content Movement Verification', () => {
     // Configure retries for MapLibre timing flakiness
     test.describe.configure({ retries: 2 });
 
+    // draw (d) / delete (x) were removed from the toolbar and unbound.
     const ctrlPanTools = [
       { key: 'm', name: 'merge' },
       { key: 'r', name: 'measure' },

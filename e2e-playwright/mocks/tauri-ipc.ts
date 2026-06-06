@@ -2345,6 +2345,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 day_color_theme: 'light',
                 night_color_theme: 'cave',
               },
+              syntactic_highlighting: {
+                level: 'full',
+                preset: 'default',
+                overrides: {},
+              },
             };
 
           case 'update_config':
@@ -2526,6 +2531,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 theme: 'dark',
                 day_color_theme: 'light',
                 night_color_theme: 'cave',
+              },
+              syntactic_highlighting: {
+                level: 'full',
+                preset: 'default',
+                overrides: {},
               },
             };
             return baseConfig;
