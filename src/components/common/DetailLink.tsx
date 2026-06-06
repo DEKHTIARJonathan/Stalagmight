@@ -72,6 +72,12 @@ export interface DetailLinkProps {
   onHoverStart?: () => void;
   /** Callback when hover/focus ends (for map highlighting). */
   onHoverEnd?: () => void;
+  /**
+   * Short primary label for the Full-mode entity pill, shown before the dim id
+   * suffix. Used for sections (the bare name, e.g. "Main Line"); station/shot
+   * links derive their primary from the target position automatically.
+   */
+  pillLabel?: string;
 }
 
 /**
@@ -123,6 +129,7 @@ export function DetailLink({
   className = '',
   onHoverStart,
   onHoverEnd,
+  pillLabel,
 }: DetailLinkProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const mouseDownRef = useRef(false);
@@ -198,6 +205,20 @@ export function DetailLink({
     ? ({ '--o': `var(--sh-${type})` } as CSSProperties)
     : undefined;
 
+  // Pill content: a short primary label + the fully-qualified id after a divider,
+  // both at the same text size (shot "55 | 110:55", section "Main Line | 110").
+  let pillPrimary = displayText;
+  let pillId: string | null = null;
+  if (showSymbol) {
+    if (hasPosition(target)) {
+      pillPrimary = String(target.position);
+      pillId = displayText; // already the formatted "sectionId:position"
+    } else {
+      pillPrimary = pillLabel ?? displayText;
+      pillId = String(target.sectionId);
+    }
+  }
+
   return (
     <button
       ref={buttonRef}
@@ -215,14 +236,23 @@ export function DetailLink({
       data-testid={computedTestId}
       title={isMissing ? `${type} not found` : undefined}
     >
-      {showSymbol && (
-        <EntitySymbol entity={type} size={14} testId={`${computedTestId}-symbol`} />
-      )}
-      {displayText}
-      {isMissing && (
-        <span className="ml-1" aria-hidden="true" title={`${type} not found`}>
-          &#x26A0;
-        </span>
+      {showSymbol ? (
+        <>
+          <EntitySymbol entity={type} size={14} testId={`${computedTestId}-symbol`} />
+          <span>{pillPrimary}</span>
+          {pillId !== null && (
+            <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>{pillId}</span>
+          )}
+        </>
+      ) : (
+        <>
+          {displayText}
+          {isMissing && (
+            <span className="ml-1" aria-hidden="true" title={`${type} not found`}>
+              &#x26A0;
+            </span>
+          )}
+        </>
       )}
     </button>
   );

@@ -592,6 +592,7 @@ function StationDetail({ station }: { station: Station }) {
                   type="section"
                   target={{ sectionId }}
                   displayText={sectionDisplayText}
+                  pillLabel={sectionName}
                   onSelect={handleSelectSection}
                   onAnnounce={announceSelection}
                   onHoverStart={() => setHoveredSectionId(sectionId)}
@@ -809,6 +810,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                   type="section"
                   target={{ sectionId: section.id }}
                   displayText={sectionDisplayText}
+                  pillLabel={sectionName}
                   onSelect={handleSelectSection}
                   onAnnounce={announceSelection}
                   onHoverStart={() => setHoveredSectionId(section.id)}

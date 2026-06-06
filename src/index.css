@@ -1429,3 +1429,11 @@ button.sh-tool.sh-tool--active {
   background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
   border-color: color-mix(in oklab, var(--o) 48%, var(--cc-border));
 }
+/* The fully-qualified id after a divider, at the SAME font/size as the pill text
+   (just dimmer), separated by an entity-tinted left border. */
+.sh-pill-id {
+  margin-left: 2px;
+  padding-left: 6px;
+  border-left: 1px solid color-mix(in oklab, var(--o) 30%, var(--cc-border));
+  color: color-mix(in oklab, var(--o) 55%, var(--cc-text-secondary));
+}

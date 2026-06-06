@@ -187,6 +187,11 @@ test.describe('Syntactic Highlighting', () => {
     expect(pill.borderStyle).toBe('solid');
     expect(pill.borderWidth).toBeGreaterThan(0);
     expect(pill.borderColor).not.toBe('rgba(0, 0, 0, 0)');
+    // The fully-qualified id renders after a divider (a left border), e.g. "1:1".
+    const linkId = page.locator('[data-testid$="-link-id"]').first();
+    await expect(linkId).toBeVisible();
+    expect((await linkId.textContent())?.trim()).toMatch(/^\d+:\d+$/);
+    expect(await linkId.evaluate((el) => parseFloat(getComputedStyle(el).borderLeftWidth))).toBeGreaterThan(0);
 
     // Switch to Off via the store preview: blobs and symbols disappear.
     await page.evaluate(() => {
@@ -197,5 +202,6 @@ test.describe('Syntactic Highlighting', () => {
     });
     await expect(page.locator('[data-entity]')).toHaveCount(0);
     await expect(page.locator('[data-testid$="-link-symbol"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid$="-link-id"]')).toHaveCount(0);
   });
 });
