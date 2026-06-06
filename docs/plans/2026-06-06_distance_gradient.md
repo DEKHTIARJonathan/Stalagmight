@@ -8,6 +8,17 @@
 
 ---
 
+## Progress
+- [x] **Backend seam refactor** — `build_survey_graph` + `dijkstra` +
+  `compute_distances_from(roots)`; `compute_penetration_distances` now a caller.
+  Tests pass, no behavior change. (`7e938f88`)
+- [ ] IPC: `get_station_distances_from(Option<StationRef>) -> DistanceField` +
+  ts-rs export + `pnpm gen:ipc-types`.
+- [ ] Frontend: uiStore state, Display toggle, click-to-pick, paint expression,
+  legend + origin marker, i18n.
+- [ ] Telemetry events (append-only).
+- [ ] Verification (tsc, test:ui, cargo ±telemetry).
+
 ## Context
 
 Issue #34 asks to **color the map as a gradient by distance from a user-chosen
