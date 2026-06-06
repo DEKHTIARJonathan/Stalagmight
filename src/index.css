@@ -1424,6 +1424,10 @@ button.sh-tool.sh-tool--active {
 .sh-pill {
   background: color-mix(in oklab, var(--o) 14%, var(--cc-panel));
   border: 1px solid color-mix(in oklab, var(--o) 30%, var(--cc-border));
+  /* Tight line-height so the label glyph doesn't sit low in a tall text-xs line
+     box (which made the smaller id read as "too high"). Doesn't change the pill
+     height — the row stretches it. */
+  line-height: 1;
 }
 .sh-pill:hover:not(:disabled) {
   background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
@@ -1440,6 +1444,7 @@ button.sh-tool.sh-tool--active {
   padding-left: 7px;
   padding-right: 7px;
   text-align: center;
+  line-height: 1;
   /* Monospace id, like the example's tier text: semibold (600), sized to the same
      proportion of the label as in the spec (10.5px tier / 12.5px label = 0.84). */
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -1457,4 +1462,10 @@ button.sh-tool.sh-tool--active {
   width: 1px;
   height: 0.8em;
   background: color-mix(in oklab, var(--o) 30%, var(--cc-border));
+}
+/* The monospace id glyphs sit high in their line box; nudge just the text down a
+   hair to optically center it (the divider, on the parent, stays centered). */
+.sh-pill-id-text {
+  position: relative;
+  top: 1px;
 }

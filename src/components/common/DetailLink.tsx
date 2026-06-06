@@ -241,7 +241,9 @@ export function DetailLink({
           <EntitySymbol entity={type} size={14} testId={`${computedTestId}-symbol`} />
           <span>{pillPrimary}</span>
           {pillId !== null && (
-            <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>{pillId}</span>
+            <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
+              <span className="sh-pill-id-text">{pillId}</span>
+            </span>
           )}
         </>
       ) : (
