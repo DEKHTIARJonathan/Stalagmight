@@ -3,8 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Select } from '../../common/Select';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
-import { getPanelId, getTabId } from '../SettingsSidebar';
-import type { SettingsCategoryProps } from './types';
+import type { Config } from '../../../types/config';
 import { isFieldChanged, createSelectHandler } from './types';
 import type {
   SyntacticHighlightLevel,
@@ -17,17 +16,24 @@ import {
   type SyntacticRoleGroup,
 } from '../../../theme/syntacticPalette';
 
+interface SyntacticHighlightingSettingsProps {
+  config: Config;
+  onChange: (updates: Partial<Config>) => void;
+  changedFields: Set<string>;
+}
+
 /**
  * Syntactic Highlighting settings: level (off / toolbar only / full), color
  * preset (default + colorblind-safe), and per-role color overrides scoped to the
  * active preset (with per-row and whole-preset reset).
+ *
+ * Rendered inline within the Appearance settings panel (not its own tab).
  */
 export function SyntacticHighlightingSettings({
   config,
   onChange,
   changedFields,
-  panelIdBase,
-}: SettingsCategoryProps) {
+}: SyntacticHighlightingSettingsProps) {
   const { t } = useTranslation();
   const sh = config.syntactic_highlighting;
   const preset = sh.preset;
@@ -102,13 +108,10 @@ export function SyntacticHighlightingSettings({
   ];
 
   return (
-    <div
-      role="tabpanel"
-      id={getPanelId(panelIdBase, 'syntactic')}
-      aria-labelledby={getTabId(panelIdBase, 'syntactic')}
-      data-testid="settings-panel-syntactic"
-    >
-      <h2 className="text-lg font-medium mb-4">{t('settings.syntactic.title')}</h2>
+    <div data-testid="settings-syntactic">
+      <h3 className="text-base font-semibold mt-8 mb-3 pt-5 border-t border-border">
+        {t('settings.syntactic.title')}
+      </h3>
 
       <SettingsSection title={t('settings.syntactic.sections.level')} data-testid="section-syntactic-level">
         <SettingRow

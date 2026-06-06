@@ -21,7 +21,6 @@ import { ShortcutsSettings } from './settings/ShortcutsSettings';
 import { CacheSettings } from './settings/CacheSettings';
 import { AdvancedSettings } from './settings/AdvancedSettings';
 import { AppearanceSettings } from './settings/AppearanceSettings';
-import { SyntacticHighlightingSettings } from './settings/SyntacticHighlightingSettings';
 import type { Config } from '../../types/config';
 import {
   defaultConfig,
@@ -105,9 +104,10 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
     case 'cache':
       return { cache: { ...defaultConfig.cache } };
     case 'appearance':
-      return { appearance: { ...defaultConfig.appearance } };
-    case 'syntactic':
+      // Highlighting controls live in the Appearance tab, so resetting Appearance
+      // also resets syntactic highlighting.
       return {
+        appearance: { ...defaultConfig.appearance },
         syntactic_highlighting: {
           ...defaultConfig.syntactic_highlighting,
           overrides: {},
@@ -579,8 +579,6 @@ export default function SettingsDialog() {
         return <CacheSettings {...commonProps} />;
       case 'appearance':
         return <AppearanceSettings {...commonProps} />;
-      case 'syntactic':
-        return <SyntacticHighlightingSettings {...commonProps} />;
       case 'advanced':
         return <AdvancedSettings {...commonProps} />;
       default:

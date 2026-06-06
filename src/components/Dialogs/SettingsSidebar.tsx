@@ -14,8 +14,7 @@ export type SettingsCategory =
   | 'shortcuts'
   | 'cache'
   | 'advanced'
-  | 'appearance'
-  | 'syntactic';
+  | 'appearance';
 
 /**
  * Category configuration with display labels.
@@ -28,7 +27,6 @@ interface CategoryConfig {
 const CATEGORIES: CategoryConfig[] = [
   { id: 'general', labelKey: 'settings.sidebar.general' },
   { id: 'appearance', labelKey: 'settings.sidebar.appearance' },
-  { id: 'syntactic', labelKey: 'settings.sidebar.syntactic' },
   { id: 'units', labelKey: 'settings.sidebar.units' },
   { id: 'display', labelKey: 'settings.sidebar.display' },
   { id: 'map', labelKey: 'settings.sidebar.map' },

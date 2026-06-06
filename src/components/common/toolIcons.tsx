@@ -176,3 +176,8 @@ export function ToolGlyph({ tool, size = 20 }: ToolGlyphProps) {
 export function hasToolGlyph(tool: ToolType): boolean {
   return GLYPHS[tool] !== undefined;
 }
+
+/** CSS `var(--sh-<role>)` reference for a tool's accent color (icon + button tint). */
+export function toolAccentVar(tool: ToolType): string {
+  return `var(${syntacticVarName(TOOL_ROLE_MAP[tool])})`;
+}

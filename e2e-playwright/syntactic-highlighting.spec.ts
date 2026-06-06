@@ -38,13 +38,15 @@ function activeTool(page: Page): Promise<string> {
 }
 
 async function openSyntacticSettings(page: Page): Promise<void> {
+  // The highlighting controls live in the Appearance settings tab.
   await page.evaluate(() => {
     const e2e = (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { openDialog: (d: string) => void } } } }).__E2E_TEST__;
     e2e.uiStore.getState().openDialog('settings');
   });
   await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
-  await page.getByTestId('settings-tab-syntactic').click();
-  await expect(page.getByTestId('settings-panel-syntactic')).toBeVisible();
+  await page.getByTestId('settings-tab-appearance').click();
+  await expect(page.getByTestId('settings-panel-appearance')).toBeVisible();
+  await expect(page.getByTestId('settings-syntactic')).toBeVisible();
 }
 
 async function pickOption(page: Page, selectTestId: string, optionName: string): Promise<void> {
@@ -70,6 +72,14 @@ test.describe('Syntactic Highlighting', () => {
 
     // Duotone glyphs are present in the toolbar.
     await expect(page.locator('[data-testid="toolbar-tools-group"] svg.duotone').first()).toBeVisible();
+
+    // Tool buttons have a per-tool tinted background ("back-color"), not the
+    // default transparent ghost background.
+    const selectBg = await page
+      .getByTestId('tool-select')
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(selectBg).not.toBe('rgba(0, 0, 0, 0)');
+    expect(selectBg).not.toBe('transparent');
 
     // Pressing the old draw/delete shortcuts does nothing.
     await page.getByTestId('tool-select').click();

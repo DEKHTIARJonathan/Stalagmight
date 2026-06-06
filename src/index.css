@@ -1390,3 +1390,18 @@ tr[data-selected="true"]:hover {
   fill: var(--sh-move);
   opacity: 0.34;
 }
+
+/* Per-tool tinted button background ("back-color"): a soft wash of the tool's
+   accent color so the chip reads as colored even at a glance. `--o` is set per
+   button to var(--sh-<role>). Element-qualified to win over the ghost button's
+   hover background regardless of source order. In the "off" level --sh-* resolve
+   to a neutral, so the wash is a subtle monochrome gray. */
+button.sh-tool {
+  background: color-mix(in oklab, var(--o) 12%, var(--cc-background));
+}
+button.sh-tool:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--o) 22%, var(--cc-background));
+}
+button.sh-tool.sh-tool--active {
+  background: color-mix(in oklab, var(--o) 24%, var(--cc-background));
+}

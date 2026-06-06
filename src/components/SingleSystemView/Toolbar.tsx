@@ -8,7 +8,8 @@ import {
   BugIcon,
   ChevronDownIcon,
 } from '../common/icons';
-import { ToolGlyph } from '../common/toolIcons';
+import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
+import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
@@ -334,6 +335,8 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
         aria-label={t(TOOL_LABEL_KEYS[tool])}
         size="sm"
         aria-pressed={active}
+        className={`sh-tool ${active ? 'sh-tool--active' : ''}`}
+        style={{ '--o': toolAccentVar(tool) } as CSSProperties}
         data-testid={`tool-${tool}`}
       />
 
@@ -590,6 +593,8 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
         aria-pressed={isGroupActive}
         aria-haspopup="true"
         aria-expanded={flyoutOpen}
+        className={`sh-tool ${isGroupActive ? 'sh-tool--active' : ''}`}
+        style={{ '--o': toolAccentVar(displayTool) } as CSSProperties}
         data-testid={`tool-group-${group.id}`}
       />
 
