@@ -1,5 +1,29 @@
-import { test, expect } from './fixtures/coverage';
+import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage, createProject, seedProjectWithSections, type SectionSeed } from './helpers/app';
+
+/** Read every section id in project order. */
+async function getSectionIds(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: { getState: () => { project: { sections: Array<{ id: number }> } | null } };
+      };
+    }).__E2E_TEST__;
+    return stores?.projectStore.getState().project?.sections.map((s) => s.id) ?? [];
+  });
+}
+
+/** Simulate an external (map / data table / details) hover via the store setter. */
+async function setExternalSectionHover(page: Page, sectionId: number | null): Promise<void> {
+  await page.evaluate((id) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: { getState: () => { setHoveredSectionId: (id: number | null) => void } };
+      };
+    }).__E2E_TEST__;
+    stores?.uiStore.getState().setHoveredSectionId(id);
+  }, sectionId);
+}
 
 /**
  * Regression: the sections sidebar must scroll when its content overflows.
@@ -41,5 +65,69 @@ test.describe('Sections panel scrolling', () => {
     });
     const scrolledTop = await list.evaluate((el) => el.scrollTop);
     expect(scrolledTop).toBeGreaterThan(0);
+  });
+
+  test('external hover auto-scrolls the list, then restores scroll on un-hover', async ({ page }) => {
+    await createProject(page, 'Restore Test');
+    const seeds: SectionSeed[] = Array.from({ length: 40 }, (_, i) => ({
+      name: `Section ${i + 1}`,
+      shots: [],
+    }));
+    await seedProjectWithSections(page, seeds);
+
+    const list = page.getByTestId('sections-list');
+    await expect(list).toBeVisible();
+
+    const ids = await getSectionIds(page);
+    expect(ids.length).toBe(40);
+    const lastId = ids[ids.length - 1]!;
+
+    // Park the list at the top — this is the position we expect restored.
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(0);
+
+    // An external hover on the off-screen last section scrolls it into view.
+    await setExternalSectionHover(page, lastId);
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+
+    // Clearing the hover (nothing hovered anywhere) restores the pre-hover scroll.
+    await setExternalSectionHover(page, null);
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBe(0);
+  });
+
+  test('restores to a non-zero manual scroll position after external hover', async ({ page }) => {
+    await createProject(page, 'Restore Midscroll Test');
+    const seeds: SectionSeed[] = Array.from({ length: 40 }, (_, i) => ({
+      name: `Section ${i + 1}`,
+      shots: [],
+    }));
+    await seedProjectWithSections(page, seeds);
+
+    const list = page.getByTestId('sections-list');
+    await expect(list).toBeVisible();
+
+    const ids = await getSectionIds(page);
+    const firstId = ids[0]!;
+    const lastId = ids[ids.length - 1]!;
+
+    // Manually scroll to the bottom, then back up a little so both directions of
+    // auto-scroll (down to last, up to first) move away from this baseline.
+    const baseline = await list.evaluate((el) => {
+      el.scrollTop = Math.round(el.scrollHeight / 2);
+      return el.scrollTop;
+    });
+    expect(baseline).toBeGreaterThan(0);
+
+    // Hover the last (below) section, then the first (above) section.
+    await setExternalSectionHover(page, lastId);
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(baseline);
+    await setExternalSectionHover(page, firstId);
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeLessThan(baseline);
+
+    // Un-hover restores the original manual position, not either hovered extreme.
+    await setExternalSectionHover(page, null);
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBe(baseline);
   });
 });

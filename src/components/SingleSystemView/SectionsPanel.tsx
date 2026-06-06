@@ -54,6 +54,14 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
 
+  // Scroll container for the section list, plus the scroll position captured
+  // before an *external* hover (map / data table / details panel) auto-scrolled
+  // the hovered row into view. Restored once nothing is hovered again so the
+  // panel doesn't drift while the user skims other surfaces. `null` means there
+  // is no external-hover scroll to undo.
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
+  const preHoverScrollTopRef = useRef<number | null>(null);
+
   // Keyboard accessibility: track focused index and refs for roving tabindex
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const optionRefs = useRef<(HTMLLIElement | null)[]>([]);
@@ -74,10 +82,29 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // Scroll the hovered section's row into view when it's off-screen.
   // block: 'nearest' is a no-op when the row is already visible, so this
   // is silent for panel-internal hovers and only acts on external (map) hovers.
+  //
+  // For external hovers (map / data table / details panel — the panel itself did
+  // not set the hover, so `lastHoveredIdRef` is null) we remember the scroll
+  // position before the first auto-scroll and restore it once nothing is hovered
+  // anywhere, so skimming other surfaces doesn't permanently move the list.
   useEffect(() => {
-    if (effectiveHoveredSectionId === null) return;
+    const container = listContainerRef.current;
+    if (effectiveHoveredSectionId === null) {
+      // Nothing hovered anywhere — undo any external-hover auto-scroll.
+      if (preHoverScrollTopRef.current !== null && container) {
+        container.scrollTop = preHoverScrollTopRef.current;
+      }
+      preHoverScrollTopRef.current = null;
+      return;
+    }
     const idx = sections.findIndex((s) => s.id === effectiveHoveredSectionId);
     if (idx < 0) return;
+    // Panel-internal row hovers (lastHoveredIdRef set) are the user already
+    // interacting with the list — don't capture/restore for those.
+    const isExternalHover = lastHoveredIdRef.current === null;
+    if (isExternalHover && preHoverScrollTopRef.current === null && container) {
+      preHoverScrollTopRef.current = container.scrollTop;
+    }
     optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
   }, [effectiveHoveredSectionId, sections]);
 
@@ -266,7 +293,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       </div>
 
       {/* Section list */}
-      <div className="flex-1 overflow-auto" data-testid="sections-list">
+      <div ref={listContainerRef} className="flex-1 overflow-auto" data-testid="sections-list">
         {sections.length === 0 ? (
           <div className="p-4 text-center text-text-secondary text-sm">
             {t('sections.empty.message')}
