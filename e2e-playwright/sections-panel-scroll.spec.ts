@@ -25,6 +25,33 @@ async function setExternalSectionHover(page: Page, sectionId: number | null): Pr
   }, sectionId);
 }
 
+/** First shot id in a section, or -1. */
+async function getFirstShotId(page: Page, sectionId: number): Promise<number> {
+  return page.evaluate((secId) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => {
+            project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } | null;
+          };
+        };
+      };
+    }).__E2E_TEST__;
+    const section = stores?.projectStore.getState().project?.sections.find((s) => s.id === secId);
+    return section?.shots[0]?.id ?? -1;
+  }, sectionId);
+}
+
+/** Set the selection via the store, as the map / data table / details panel do. */
+async function setSelection(page: Page, selection: unknown): Promise<void> {
+  await page.evaluate((sel) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: { uiStore: { getState: () => { setSelection: (s: unknown) => void } } };
+    }).__E2E_TEST__;
+    stores?.uiStore.getState().setSelection(sel);
+  }, selection);
+}
+
 /**
  * Regression: the sections sidebar must scroll when its content overflows.
  *
@@ -129,5 +156,74 @@ test.describe('Sections panel scrolling', () => {
     // Un-hover restores the original manual position, not either hovered extreme.
     await setExternalSectionHover(page, null);
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBe(baseline);
+  });
+
+  test('selecting a shot scrolls to and selects the owning section row', async ({ page }) => {
+    await createProject(page, 'Select Shot Scroll Test');
+    // Only the last (off-screen) section has a shot to select.
+    const seeds: SectionSeed[] = Array.from({ length: 40 }, (_, i) => ({
+      name: `Section ${i + 1}`,
+      shots:
+        i === 39
+          ? [{ azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 }]
+          : [],
+    }));
+    await seedProjectWithSections(page, seeds);
+
+    const list = page.getByTestId('sections-list');
+    await expect(list).toBeVisible();
+
+    const ids = await getSectionIds(page);
+    const lastId = ids[ids.length - 1]!;
+    const lastRow = page.locator(`[data-testid="section-row-${lastId}"]`);
+
+    // Park at top; the owning row starts unselected.
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(0);
+    await expect(lastRow).toHaveAttribute('aria-selected', 'false');
+
+    // Select a shot in the last section, as the map / data table / details would.
+    const shotId = await getFirstShotId(page, lastId);
+    expect(shotId).toBeGreaterThan(0);
+    await setSelection(page, { type: 'shot', sectionId: lastId, shotId });
+
+    // The owning section row is now selected and revealed.
+    await expect(lastRow).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  });
+
+  test('selecting a station scrolls to and selects the owning section row', async ({ page }) => {
+    await createProject(page, 'Select Station Scroll Test');
+    const seeds: SectionSeed[] = Array.from({ length: 40 }, (_, i) => ({
+      name: `Section ${i + 1}`,
+      shots:
+        i === 39
+          ? [{ azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 }]
+          : [],
+    }));
+    await seedProjectWithSections(page, seeds);
+
+    const list = page.getByTestId('sections-list');
+    await expect(list).toBeVisible();
+
+    const ids = await getSectionIds(page);
+    const lastId = ids[ids.length - 1]!;
+    const lastRow = page.locator(`[data-testid="section-row-${lastId}"]`);
+
+    await list.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(lastRow).toHaveAttribute('aria-selected', 'false');
+
+    // Select the section's first station (station_index 0), as the map would.
+    await setSelection(page, {
+      type: 'station',
+      stationRef: { section_id: lastId, station_index: 0 },
+    });
+
+    await expect(lastRow).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   });
 });

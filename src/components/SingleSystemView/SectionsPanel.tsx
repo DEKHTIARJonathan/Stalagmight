@@ -51,6 +51,18 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const effectiveHoveredSectionId: SectionId | null =
     hoveredSectionId ?? hoveredShot?.sectionId ?? hoveredStation?.section_id ?? null;
 
+  // The section that owns the current selection — a directly selected section, or
+  // the section of a selected shot/station (selected from the map, data table, or
+  // details panel). The matching row is highlighted and scrolled into view so the
+  // Sections panel always reflects what's selected elsewhere. Same mapping used by
+  // SingleSystemView / the data table.
+  const selectedSectionId: SectionId | null =
+    selection?.type === 'section' || selection?.type === 'shot'
+      ? selection.sectionId ?? null
+      : selection?.type === 'station'
+        ? selection.stationRef?.section_id ?? null
+        : null;
+
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
 
@@ -107,6 +119,17 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     }
     optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
   }, [effectiveHoveredSectionId, sections]);
+
+  // Scroll the selected section's row into view when the selection changes (a
+  // shot/station/section selected from the map, data table, or details panel).
+  // Unlike the hover scroll, this is a persistent reveal — there's nothing to
+  // restore — so it's kept separate from the hover save/restore bookkeeping.
+  useEffect(() => {
+    if (selectedSectionId === null) return;
+    const idx = sections.findIndex((s) => s.id === selectedSectionId);
+    if (idx < 0) return;
+    optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
+  }, [selectedSectionId, sections]);
 
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
@@ -319,7 +342,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 key={section.id}
                 section={section}
                 index={index}
-                isSelected={selection?.type === 'section' && selection.sectionId === section.id}
+                isSelected={selectedSectionId === section.id}
                 isHovered={effectiveHoveredSectionId === section.id}
                 isFocused={focusedIndex === index}
                 isDefaultFocus={focusedIndex === -1 && index === 0}
