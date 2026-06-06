@@ -1345,6 +1345,7 @@
       "scaleBar": "Scale bar",
       "satellite": "Satellite",
       "depthGradient": "Depth Gradient",
+      "distanceGradient": "Distance Gradient",
       "devStats": "Dev stats"
     },
     "descriptions": {
@@ -1361,6 +1362,7 @@
       "scaleBar": "Show scale bar",
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
+      "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
       "devStats": "Show developer stats overlay"
     }
   },

@@ -10,7 +10,9 @@ import { setSource } from '../../utils/telemetry';
 import { hasEligibleClosures } from '../../utils/closures';
 
 interface DisplayOption {
-  key: DisplayToggleKey;
+  // 'showDistanceGradient' is a runtime-only overlay (#34), not a persisted
+  // DisplayToggleKey — it's toggled via its own store action.
+  key: DisplayToggleKey | 'showDistanceGradient';
   labelKey: string;
   descriptionKey?: string;
   disabledWhen?: DisplayToggleKey;
@@ -38,6 +40,7 @@ const displayOptions: { groupKey: string; items: DisplayOption[] }[] = [
       { key: 'showScaleBar', labelKey: 'displayMenu.items.scaleBar', descriptionKey: 'displayMenu.descriptions.scaleBar' },
       { key: 'showSatellite', labelKey: 'displayMenu.items.satellite', descriptionKey: 'displayMenu.descriptions.satellite' },
       { key: 'showDepthGradient', labelKey: 'displayMenu.items.depthGradient', descriptionKey: 'displayMenu.descriptions.depthGradient' },
+      { key: 'showDistanceGradient', labelKey: 'displayMenu.items.distanceGradient', descriptionKey: 'displayMenu.descriptions.distanceGradient' },
     ],
   },
   {
@@ -70,9 +73,11 @@ export default function DisplayMenu() {
     showStationComments,
     showShotComments,
     showDevStats,
+    showDistanceGradient,
     gridSpacing,
     geometryMode,
     toggleDisplay,
+    toggleDistanceGradient,
     setGridSpacing,
     setGeometryMode,
   } = useUIStore(useShallow((s) => ({
@@ -90,9 +95,11 @@ export default function DisplayMenu() {
     showStationComments: s.showStationComments,
     showShotComments: s.showShotComments,
     showDevStats: s.showDevStats,
+    showDistanceGradient: s.showDistanceGradient,
     gridSpacing: s.gridSpacing,
     geometryMode: s.geometryMode,
     toggleDisplay: s.toggleDisplay,
+    toggleDistanceGradient: s.toggleDistanceGradient,
     setGridSpacing: s.setGridSpacing,
     setGeometryMode: s.setGeometryMode,
   })));
@@ -305,10 +312,21 @@ export default function DisplayMenu() {
               <div className="pb-1">
                 {group.items.map((item) => {
                   const disabled = isDisabled(item);
+                  // 'showDistanceGradient' is runtime-only (#34) — read/toggle it
+                  // via its dedicated store field/action, not the persisted path.
+                  // Compare item.key directly so TS narrows it in each branch.
+                  const checked =
+                    item.key === 'showDistanceGradient' ? showDistanceGradient : toggleValues[item.key];
+                  const onToggle = () => {
+                    if (disabled) return;
+                    setSource('display-menu');
+                    if (item.key === 'showDistanceGradient') toggleDistanceGradient();
+                    else toggleDisplay(item.key);
+                  };
                   return (
                   <div key={item.key}>
                     <button
-                      onClick={() => { if (disabled) return; setSource('display-menu'); toggleDisplay(item.key); }}
+                      onClick={onToggle}
                       disabled={disabled}
                       aria-disabled={disabled || undefined}
                       className={`
@@ -326,7 +344,7 @@ export default function DisplayMenu() {
                       <div
                         className={`
                           w-5 h-5 rounded flex items-center justify-center text-xs
-                          ${toggleValues[item.key]
+                          ${checked
                             ? 'bg-accent text-accent-on'
                             : 'bg-background border border-border text-transparent'
                           }

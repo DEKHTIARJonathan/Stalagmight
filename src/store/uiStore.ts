@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackSelect, trackSelectAdd } from '../utils/telemetry';
-import type { Coordinates, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+import type { Coordinates, DistanceField, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
   type: 'station' | 'shot';
@@ -227,6 +227,19 @@ interface UIStore {
   resetDisplaySettings: () => void;
   /** Apply display settings from backend (merges with existing state using ??) */
   applyDisplaySettings: (settings: DisplaySettings) => void;
+
+  // Distance-gradient overlay (#34). Runtime-only — deliberately NOT a
+  // DisplayToggleKey: it's a transient analytical overlay (defaults to the
+  // entrance each session), so it is never persisted via saveDisplaySetting.
+  showDistanceGradient: boolean;
+  /** Chosen origin station; `null` = the zero-datum entrance default. */
+  distanceGradientOrigin: StationRef | null;
+  /** Latest per-station distance field from the backend (null until fetched). */
+  distanceField: DistanceField | null;
+  /** Toggle the overlay; turning it off clears the origin + cached field. */
+  toggleDistanceGradient: () => void;
+  setDistanceGradientOrigin: (ref: StationRef | null) => void;
+  setDistanceField: (field: DistanceField | null) => void;
 
   // Geometry display mode (measured vs non-destructive closure-adjusted)
   geometryMode: GeometryMode;
@@ -661,6 +674,22 @@ export const useUIStore = create<UIStore>((set) => ({
   showShotComments: DISPLAY_DEFAULTS.showShotComments,
   showDevStats: DISPLAY_DEFAULTS.showDevStats,
   gridSpacing: DISPLAY_DEFAULTS.gridSpacing,
+  // Distance-gradient overlay (#34) — runtime-only state, never persisted.
+  showDistanceGradient: false,
+  distanceGradientOrigin: null,
+  distanceField: null,
+  toggleDistanceGradient: () => {
+    const on = !useUIStore.getState().showDistanceGradient;
+    // Turning the overlay off clears the origin + cached field, so re-enabling
+    // starts fresh at the entrance (zero-datum) default.
+    set(
+      on
+        ? { showDistanceGradient: true }
+        : { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
+    );
+  },
+  setDistanceGradientOrigin: (distanceGradientOrigin) => set({ distanceGradientOrigin }),
+  setDistanceField: (distanceField) => set({ distanceField }),
   toggleDisplay: (key) => {
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
