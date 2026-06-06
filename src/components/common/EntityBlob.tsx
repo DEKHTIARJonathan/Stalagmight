@@ -35,7 +35,7 @@ export function EntityBlob({ entity, children, title, className = '', testId }: 
 
   return (
     <span
-      className={`sh-pill inline-flex items-center gap-1 align-middle relative -top-0.5 rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums ${className}`}
+      className={`sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums ${className}`}
       style={{ '--o': `var(${syntacticVarName(entity)})` } as CSSProperties}
       data-entity={entity}
       data-testid={testId}

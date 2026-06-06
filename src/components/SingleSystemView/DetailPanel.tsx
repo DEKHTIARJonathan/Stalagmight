@@ -8,6 +8,7 @@ import { Button } from '../common/Button';
 import { Toggle } from '../common/Toggle';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
+import { EntityBlob } from '../common/EntityBlob';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
@@ -281,7 +282,21 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
-                      {warning.message}
+                      {(() => {
+                        // Messages start with "Shot <sectionId>:<position> …"; at the
+                        // Full level swap that leading reference for the shot pill.
+                        const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
+                        if (!m) return warning.message;
+                        return (
+                          <>
+                            <EntityBlob entity="shot">
+                              {formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                            </EntityBlob>
+                            {' '}
+                            {warning.message.slice(m[0].length)}
+                          </>
+                        );
+                      })()}
                     </div>
                     {!showPills && (
                       <div className="text-xs text-text-secondary mt-0.5">
@@ -325,13 +340,6 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                     setSelection({ type: 'section', sectionId: warning.sectionId });
                     setDetailPanelTab('details');
                   }}
-                  onAnnounce={announceSelection}
-                />
-                <DetailLink
-                  type="shot"
-                  target={{ sectionId: warning.sectionId, position: warning.shotIndex + 1 }}
-                  displayText={formatShotId(warning.sectionId, warning.shotIndex + 1)}
-                  onSelect={() => onWarningClick(warning)}
                   onAnnounce={announceSelection}
                 />
               </div>

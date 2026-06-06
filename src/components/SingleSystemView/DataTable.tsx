@@ -473,7 +473,7 @@ export default function DataTable({ sections }: DataTableProps) {
       width: '60px',
       render: (row: StationRow) =>
         <span className="px-2 py-1 inline-block">
-          <EntityBlob entity="station">{row.station_ref.section_id}.{row.station_ref.station_index}</EntityBlob>
+          <EntityBlob entity="station" className="relative -top-0.5">{row.station_ref.section_id}.{row.station_ref.station_index}</EntityBlob>
         </span>,
     },
     {
@@ -624,7 +624,7 @@ export default function DataTable({ sections }: DataTableProps) {
       width: '60px',
       render: (_shot: Shot, index: number) =>
         selectedSectionId !== null
-          ? <EntityBlob entity="shot">{formatShotId(selectedSectionId, index + 1)}</EntityBlob>
+          ? <EntityBlob entity="shot" className="relative -top-0.5">{formatShotId(selectedSectionId, index + 1)}</EntityBlob>
           : '',
     },
     {
