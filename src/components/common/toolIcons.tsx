@@ -131,13 +131,17 @@ const GLYPHS: Partial<Record<ToolType, () => ReactNode>> = {
     </g>
   ),
   move_segment: () => (
+    // A segment is a BRANCHING run of shots — the fork (extra path + node)
+    // distinguishes it from a plain section polyline, matching delete-segment.
     <g>
       <MoveDeco />
       <path className="s" d="M7.5 15.5 L11 11 L14 13.5 L16.5 9.5" />
+      <path className="s" d="M11 11 L8.5 7.5" />
       <circle className="d" cx="7.5" cy="15.5" r="1.3" />
       <circle className="d" cx="11" cy="11" r="1.3" />
       <circle className="d" cx="14" cy="13.5" r="1.3" />
       <circle className="d" cx="16.5" cy="9.5" r="1.3" />
+      <circle className="d" cx="8.5" cy="7.5" r="1.3" />
     </g>
   ),
 };
