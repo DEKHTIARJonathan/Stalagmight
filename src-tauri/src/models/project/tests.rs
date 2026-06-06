@@ -3083,6 +3083,86 @@ fn calculate_penetration_no_datums_returns_zero() {
     );
 }
 
+#[test]
+fn compute_distances_from_chosen_station() {
+    // Generalized API rooted at an arbitrary (non-datum) station: the gradient's
+    // click-to-pick case. Chain of 3 stations at y = 0, 10, 15.
+    let mut project = Project::new("DistFromStation".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    let stations = project.compute_station_coordinates();
+    let idx = |i: u32| {
+        stations
+            .iter()
+            .position(|s| s.station_ref == StationRef::new(section_id, i))
+            .unwrap()
+    };
+
+    // Root at the middle station (index 1) — no zero datum needed: distances are
+    // 10 (to station 0), 0 (self), 5 (to station 2).
+    let dist = project.compute_distances_from(&stations, &[idx(1)]);
+    assert!((dist[idx(0)] - 10.0).abs() < 1e-6, "got {}", dist[idx(0)]);
+    assert!((dist[idx(1)] - 0.0).abs() < 1e-6, "got {}", dist[idx(1)]);
+    assert!((dist[idx(2)] - 5.0).abs() < 1e-6, "got {}", dist[idx(2)]);
+}
+
+#[test]
+fn compute_distances_from_empty_roots_all_infinity() {
+    let mut project = Project::new("DistNoRoots".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    });
+    let stations = project.compute_station_coordinates();
+    let dist = project.compute_distances_from(&stations, &[]);
+    assert_eq!(dist.len(), stations.len());
+    assert!(dist.iter().all(|d| d.is_infinite()));
+}
+
+#[test]
+fn compute_distances_from_zero_datum_roots_matches_penetration() {
+    // The generalized API, seeded with the zero-datum indices, must reproduce
+    // compute_penetration_distances exactly (penetration is the default origin).
+    let mut project = Project::new("DistMatchesPen".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(section_id, 0).into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+
+    let stations = project.compute_station_coordinates();
+    let datum_idx = stations
+        .iter()
+        .position(|s| s.station_ref == StationRef::new(section_id, 0))
+        .unwrap();
+
+    let pen = project.compute_penetration_distances(&stations);
+    let from = project.compute_distances_from(&stations, &[datum_idx]);
+    assert_eq!(pen.len(), from.len());
+    for (a, b) in pen.iter().zip(from.iter()) {
+        assert!(
+            (a - b).abs() < 1e-6 || (a.is_infinite() && b.is_infinite()),
+            "penetration={a} distances_from={b}"
+        );
+    }
+}
+
 // === Loop Closure Algorithm Tests ===
 
 // Group A: create_loop_closure validation (new tests only; see existing tests above for basic/duplicate/deferred)
