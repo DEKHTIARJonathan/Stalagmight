@@ -248,6 +248,19 @@ pub struct ProjectMetadata {
     pub collab_enabled: bool,
 }
 
+/// Per-station along-cave distance field from a chosen origin (or the zero-datum
+/// entrance default). `distances[i]` corresponds to `station_refs[i]`; `None`
+/// marks an unreachable station (JSON can't carry infinity). `max_reachable` is
+/// the largest finite distance (0.0 if nothing is reachable), for auto-scaling
+/// the gradient legend. Backs the distance-gradient overlay (#34); reuses the
+/// shared reachability graph (jumps in, references out — see `build_survey_graph`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct DistanceField {
+    pub distances: Vec<Option<f64>>,
+    pub station_refs: Vec<StationRef>,
+    pub max_reachable: f64,
+}
+
 /// Overall project statistics
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectStats {
@@ -6082,6 +6095,49 @@ impl Project {
             .into_iter()
             .filter(|d| d.is_finite())
             .fold(0.0_f64, f64::max)
+    }
+
+    /// Per-station distance field from a chosen origin `from` station, or from the
+    /// zero datum(s) when `from` is `None` (the gradient's entrance default).
+    /// Reuses the shared reachability graph; unreachable stations come back as
+    /// `None`. Index-aligned with `stations` via the returned `station_refs`.
+    pub fn distance_field_from(
+        &self,
+        stations: &[Station],
+        from: Option<&StationRef>,
+    ) -> DistanceField {
+        let station_index = Self::station_index_map(stations);
+        let roots: Vec<usize> = match from {
+            Some(r) => {
+                let key: StationKey = (*r).into();
+                self.resolve_key(&key)
+                    .and_then(|sr| station_index.get(&sr).copied())
+                    .into_iter()
+                    .collect()
+            }
+            None => self.zero_datum_roots(&station_index),
+        };
+        let raw = self.compute_distances_from(stations, &roots);
+        let mut max_reachable = 0.0_f64;
+        let distances: Vec<Option<f64>> = raw
+            .iter()
+            .map(|&d| {
+                if d.is_finite() {
+                    if d > max_reachable {
+                        max_reachable = d;
+                    }
+                    Some(d)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let station_refs: Vec<StationRef> = stations.iter().map(|s| s.station_ref).collect();
+        DistanceField {
+            distances,
+            station_refs,
+            max_reachable,
+        }
     }
 
     /// Get metadata for this project

@@ -4,7 +4,9 @@ use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
-use crate::models::{FrozenShotRef, Project, ProjectMetadata, ProjectStats, Station};
+use crate::models::{
+    DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats, Station, StationRef,
+};
 
 /// Create a new in-memory project (no database file created).
 ///
@@ -100,6 +102,20 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
         stats,
         frozen_shots,
     })
+}
+
+/// Per-station along-cave distance from a chosen origin station, or from the
+/// zero-datum entrance(s) when `from` is null — backs the distance-gradient
+/// overlay (#34). The returned `distances` are index-aligned with `station_refs`;
+/// `null` entries are unreachable, and `max_reachable` scales the legend.
+#[tauri::command]
+pub fn get_station_distances_from(
+    state: State<AppState>,
+    from: Option<StationRef>,
+) -> Option<DistanceField> {
+    let project = state.get_project_state()?;
+    let stations = project.compute_station_coordinates();
+    Some(project.distance_field_from(&stations, from.as_ref()))
 }
 
 /// Get closure-adjusted station coordinates for the current project.

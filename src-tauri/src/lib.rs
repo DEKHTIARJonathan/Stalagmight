@@ -1124,6 +1124,7 @@ pub fn run() {
             commands::project::close_project,
             commands::project::get_project_state,
             commands::project::get_adjusted_stations,
+            commands::project::get_station_distances_from,
             commands::project::list_recent_projects,
             commands::project::remove_from_recent_projects,
             commands::project::set_project_name_for_path,

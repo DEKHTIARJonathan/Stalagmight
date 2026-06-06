@@ -30,7 +30,7 @@ use stalagmight_lib::export::{
 };
 use stalagmight_lib::models::{
     ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
-    ConnectivityResult, Coordinates, DeleteShotImpact, FrozenShotRef, GpsBounds, GpsCoordinates,
+    ConnectivityResult, Coordinates, DeleteShotImpact, DistanceField, FrozenShotRef, GpsBounds, GpsCoordinates,
     ImportPlacement, ExistingShotUpdate, ImportSectionConfig, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, Section, SectionData, SectionRelationships, SectionStats,
     SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire,
@@ -99,6 +99,7 @@ fn main() {
     export::<MatchQuality>(&out_dir);
     export::<ProjectMetadata>(&out_dir);
     export::<ProjectStats>(&out_dir);
+    export::<DistanceField>(&out_dir);
     export::<Section>(&out_dir);
     export::<SectionData>(&out_dir);
     export::<SectionUpdates>(&out_dir);
@@ -269,6 +270,7 @@ fn main() {
         "Project",
         "ProjectMetadata",
         "ProjectStats",
+        "DistanceField",
         "Section",
         "SectionData",
         "SectionUpdates",
