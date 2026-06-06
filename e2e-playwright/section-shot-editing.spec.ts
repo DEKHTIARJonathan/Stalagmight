@@ -286,12 +286,10 @@ test.describe('Section and Shot Editing', () => {
   test('should delete section with confirmation', async ({ page }) => {
     const sectionId = await selectSectionInStore(page, 'Side Tunnel');
 
-    const sectionItem = page.getByTestId(`section-item-${sectionId}`);
-    await sectionItem.hover();
-
-    const deleteButton = page.getByTestId(`section-delete-${sectionId}`);
-    await expect(deleteButton).toBeVisible();
-    await deleteButton.click();
+    // Section delete now lives in the right-click / long-press context menu
+    // (the per-row button is the focus-mode affordance).
+    await page.getByTestId(`section-row-${sectionId}`).click({ button: 'right' });
+    await page.getByRole('button', { name: 'Delete Section' }).click();
 
     const confirmDialog = page.getByTestId('confirm-dialog');
     await expect(confirmDialog).toBeVisible({ timeout: 3000 });

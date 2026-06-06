@@ -295,6 +295,18 @@ export function ArrowUpRightIcon(props: IconProps) {
   );
 }
 
+// "External link" / open-out icon: a box with an arrow exiting the top-right
+// corner. Used as the section focus-mode entry affordance.
+export function ExternalLinkIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M11 4 H6 a2 2 0 0 0 -2 2 v8 a2 2 0 0 0 2 2 h8 a2 2 0 0 0 2 -2 v-5" />
+      <polyline points="11 4 16 4 16 9" />
+      <line x1="9" y1="11" x2="16" y2="4" />
+    </BaseIcon>
+  );
+}
+
 export function PlusIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>

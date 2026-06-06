@@ -8,7 +8,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { IconButton } from '../common/Button';
-import { CloseIcon, PlusIcon } from '../common/icons';
+import { ExternalLinkIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
 import { useLongPress } from '../../hooks';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
@@ -250,8 +250,8 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     setHoveredSectionId(null);
   }, [setHoveredSectionId]);
 
-  const handleDeleteMouseDown = useCallback((e: React.MouseEvent) => {
-    // Stop propagation to prevent row selection
+  const handleFocusButtonMouseDown = useCallback((e: React.MouseEvent) => {
+    // Stop propagation so the row's own mouse-down handling doesn't double-fire.
     e.stopPropagation();
   }, []);
 
@@ -267,10 +267,22 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     enterFocusFor(section);
   }, [handleSectionClick, enterFocusFor]);
 
-  const handleDeleteDoubleClick = useCallback((e: React.MouseEvent) => {
-    // Stop propagation so double-clicking the delete button doesn't enter focus
+  const handleFocusButtonDoubleClick = useCallback((e: React.MouseEvent) => {
+    // The button enters focus on a single click; swallow the double-click so the
+    // row's double-click handler doesn't run a second entry.
     e.stopPropagation();
   }, []);
+
+  // Dedicated focus-mode entry button (replaces the old per-row delete control;
+  // section deletion now lives in the right-click / long-press context menu).
+  // Single click selects the section and enters focus mode — the same outcome as
+  // double-clicking the row, but discoverable as an explicit affordance.
+  const handleEnterFocusClick = useCallback((section: Section, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    handleSectionClick(section);
+    enterFocusFor(section);
+  }, [handleSectionClick, enterFocusFor]);
 
   const handleSectionFocus = useCallback((sectionId: SectionId, index: number) => {
     setFocusedIndex(index);
@@ -283,16 +295,6 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     setSource('sections-panel');
     openDialog('import');
   };
-
-  const handleDeleteSection = useCallback((sectionId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (geometryReadOnly) return;
-    setSource('sections-panel');
-    openDialog('confirm-delete', {
-      type: 'section',
-      sectionId,
-    });
-  }, [openDialog, geometryReadOnly]);
 
   const openSectionContextMenu = useCallback((sectionId: number, x: number, y: number) => {
     setSource('sections-panel');
@@ -364,12 +366,11 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                 onMouseLeave={handleSectionMouseLeave}
                 onFocus={handleSectionFocus}
                 onKeyDown={handleKeyDown}
-                onDelete={handleDeleteSection}
-                onDeleteMouseDown={handleDeleteMouseDown}
-                onDeleteDoubleClick={handleDeleteDoubleClick}
+                onEnterFocus={handleEnterFocusClick}
+                onEnterFocusMouseDown={handleFocusButtonMouseDown}
+                onEnterFocusDoubleClick={handleFocusButtonDoubleClick}
                 onLongPress={openSectionContextMenu}
                 optionRefs={optionRefs}
-                readOnly={geometryReadOnly}
               />
             ))}
           </ul>
@@ -443,13 +444,11 @@ interface SectionRowProps {
   onMouseLeave: () => void;
   onFocus: (sectionId: SectionId, index: number) => void;
   onKeyDown: (e: React.KeyboardEvent, index: number) => void;
-  onDelete: (sectionId: number, e: React.MouseEvent) => void;
-  onDeleteMouseDown: (e: React.MouseEvent) => void;
-  onDeleteDoubleClick: (e: React.MouseEvent) => void;
+  onEnterFocus: (section: Section, e: React.MouseEvent) => void;
+  onEnterFocusMouseDown: (e: React.MouseEvent) => void;
+  onEnterFocusDoubleClick: (e: React.MouseEvent) => void;
   onLongPress: (sectionId: number, x: number, y: number) => void;
   optionRefs: React.MutableRefObject<(HTMLLIElement | null)[]>;
-  /** When true (closure-adjusted view), the per-row delete control is disabled. */
-  readOnly: boolean;
 }
 
 const SectionRow = memo(function SectionRow({
@@ -467,12 +466,11 @@ const SectionRow = memo(function SectionRow({
   onMouseLeave,
   onFocus,
   onKeyDown,
-  onDelete,
-  onDeleteMouseDown,
-  onDeleteDoubleClick,
+  onEnterFocus,
+  onEnterFocusMouseDown,
+  onEnterFocusDoubleClick,
   onLongPress,
   optionRefs,
-  readOnly,
 }: SectionRowProps) {
   const { t } = useTranslation();
   const stats = calculateSectionStats(section);
@@ -524,18 +522,17 @@ const SectionRow = memo(function SectionRow({
           {section.name ?? t('sections.defaultName', { id: section.id })}
         </span>
         <IconButton
-          onClick={(e) => onDelete(section.id, e)}
-          onMouseDown={onDeleteMouseDown}
-          onDoubleClick={onDeleteDoubleClick}
-          icon={<CloseIcon size={12} />}
+          onClick={(e) => onEnterFocus(section, e)}
+          onMouseDown={onEnterFocusMouseDown}
+          onDoubleClick={onEnterFocusDoubleClick}
+          icon={<ExternalLinkIcon size={12} />}
           size="sm"
           variant="ghost"
-          tooltip={t('sections.actions.delete')}
-          aria-label={t('sections.actions.delete')}
-          className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-error"
+          tooltip={t('sections.actions.focus')}
+          aria-label={t('sections.actions.focus')}
+          className="opacity-0 group-hover:opacity-100 text-text-secondary hover:text-accent"
           tabIndex={-1}
-          data-testid={`section-delete-${section.id}`}
-          disabled={readOnly}
+          data-testid={`section-focus-${section.id}`}
         />
       </div>
       <div className="text-xs text-text-secondary mt-1 ml-5">

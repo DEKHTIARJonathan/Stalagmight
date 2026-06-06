@@ -98,6 +98,29 @@ test.describe('Section focus mode', () => {
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
   });
 
+  test('the per-row focus button enters focus mode', async ({ page }) => {
+    const sectionId = await getSectionIdByName(page, SECTION_NAME);
+
+    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
+
+    // The focus button is revealed on row hover (opacity-0 otherwise).
+    const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
+    await sectionRow.hover();
+    const focusButton = page.getByTestId(`section-focus-${sectionId}`);
+    await expect(focusButton).toBeVisible();
+    await focusButton.click();
+
+    // A single click on the button enters focus mode, just like double-clicking
+    // the row: toolbar shows the section name, side panels collapse, table opens.
+    const focusName = page.getByTestId('toolbar-section-focus-name');
+    await expect(focusName).toBeVisible();
+    await expect(focusName).toContainText(SECTION_NAME);
+    await expect(page.getByTestId('toolbar-project-name')).toHaveCount(0);
+    await expect(page.getByTestId('sections-panel-collapsed-toggle')).toBeVisible();
+    await expect(page.getByTestId('detail-panel-collapsed-toggle')).toBeVisible();
+    await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
+  });
+
   test('deleting the focused section exits focus mode', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, SECTION_NAME);
 
