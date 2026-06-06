@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, createProject } from './helpers/app';
 
 /**
  * E2E for the structural-integrity warn + repair banner (#17). The mock's
@@ -22,7 +22,10 @@ async function seedAndCheck(page: Page, issues: string[]): Promise<void> {
 test.describe('Structural-integrity banner', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
-    await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });
+    // The integrity banner is tied to an OPEN project: checkProjectIntegrity
+    // drops its result when no project is loaded (so it can't leak onto the
+    // global view). Open a project so the banner can render.
+    await createProject(page, 'Integrity Test');
   });
 
   test('no banner when the project is structurally sound', async ({ page }) => {
