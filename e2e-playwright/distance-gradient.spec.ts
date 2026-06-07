@@ -77,6 +77,25 @@ async function stationColorPaint(page: Page): Promise<string> {
   });
 }
 
+/** Whether ANY rendered station carries a numeric `dist` feature-state. Robust to
+ * render order and to unreachable stations (which may lack a dist). */
+async function anyStationHasDist(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__?: {
+        queryRenderedFeatures: (o: { layers: string[] }) => Array<{ id?: number }>;
+        getFeatureState: (f: { source: string; id: number }) => { dist?: number };
+      };
+    }).__stalagmight_map__;
+    if (!map) return false;
+    return map.queryRenderedFeatures({ layers: ['survey-stations'] }).some((f) => {
+      if (f.id == null) return false;
+      const state = map.getFeatureState({ source: 'survey-data-stations', id: f.id });
+      return typeof state?.dist === 'number';
+    });
+  });
+}
+
 /** `dist` feature-state of the first rendered station, if any. */
 async function firstStationDist(page: Page): Promise<number | null> {
   return page.evaluate(() => {
@@ -139,21 +158,43 @@ test.describe('Distance Gradient', () => {
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).not.toContain('feature-state');
   });
 
-  test('overlay survives a feature rebuild (feature-state re-applied)', async ({ page }) => {
+  test('enabling depth gradient disables the distance overlay (mutually exclusive)', async ({ page }) => {
+    await openDisplayMenu(page);
+    await toggleDisplayOption(page, 'showDistanceGradient');
+    await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('feature-state');
+    await expect(page.locator('[data-testid="distance-legend"]')).toBeVisible({ timeout: 3000 });
+
+    // Depth and distance both paint the shots layer, so they're mutually exclusive
+    // (#34, Daniel's report of mixed depth-colored shots + distance-colored
+    // stations). Enabling depth turns the distance overlay off.
+    await toggleDisplayOption(page, 'showDepthGradient');
+
+    expect(await isToggleOn(page, 'showDistanceGradient')).toBe(false);
+    await expect(page.locator('[data-testid="distance-legend"]')).not.toBeVisible();
+    await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
+    await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).not.toContain('feature-state');
+  });
+
+  test('distance feature-state survives a feature rebuild (re-applied)', async ({ page }) => {
     await openDisplayMenu(page);
     await toggleDisplayOption(page, 'showDistanceGradient');
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('feature-state');
     await expect.poll(() => firstStationDist(page), { timeout: 3000 }).not.toBeNull();
 
-    // Toggling depth gradient forces a full feature rebuild (setData), which wipes
-    // feature-state. The distance overlay must re-apply it (updateVisualState).
-    await toggleDisplayOption(page, 'showDepthGradient');
+    // A survey edit bumps the project: the layer rebuilds features (setData wipes
+    // feature-state) and the field refetches. The overlay must re-apply its `dist`
+    // feature-state afterward — the key MapLibre correctness risk. (Depth toggle can
+    // no longer be the trigger since it now disables distance.)
+    await seedProjectWithSections(page, [
+      {
+        name: 'Distance C',
+        direction: 'in',
+        shots: [{ azimuth_in: 0, azimuth_out: 180, length: 5, depth_in: -3, depth_out: -9 }],
+      },
+    ]);
 
-    // Still the distance paint, and `dist` feature-state is back.
     await expect.poll(() => stationColorPaint(page), { timeout: 3000 }).toContain('feature-state');
-    await expect.poll(() => firstStationDist(page), { timeout: 3000 }).not.toBeNull();
-    // Distance wins → its legend shows, the depth legend is suppressed.
+    await expect.poll(() => anyStationHasDist(page), { timeout: 3000 }).toBe(true);
     await expect(page.locator('[data-testid="distance-legend"]')).toBeVisible();
-    await expect(page.locator('[data-testid="depth-legend"]')).not.toBeVisible();
   });
 });

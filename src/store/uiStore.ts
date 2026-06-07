@@ -680,11 +680,16 @@ export const useUIStore = create<UIStore>((set) => ({
   distanceField: null,
   toggleDistanceGradient: () => {
     const on = !useUIStore.getState().showDistanceGradient;
-    // Turning the overlay off clears the origin + cached field, so re-enabling
-    // starts fresh at the entrance (zero-datum) default.
+    // Distance and depth gradients are mutually exclusive — both paint the shots
+    // layer, so enabling one suppresses the other (#34, Daniel's report of mixed
+    // depth-colored shots + distance-colored stations). We flip only depth's
+    // *runtime* flag, not its persisted setting, so distance acts as a transient
+    // overlay and the depth preference returns next session (distance is always
+    // off on load). Turning the overlay off clears the origin + cached field, so
+    // re-enabling starts fresh at the entrance (zero-datum) default.
     set(
       on
-        ? { showDistanceGradient: true }
+        ? { showDistanceGradient: true, showDepthGradient: false }
         : { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
     );
   },
@@ -697,7 +702,13 @@ export const useUIStore = create<UIStore>((set) => ({
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
     const newValue = !state[key];
-    set({ [key]: newValue });
+    // Enabling the depth gradient turns off the (runtime-only) distance gradient —
+    // the two are mutually exclusive since both paint the shots layer (#34).
+    const exclusive =
+      key === 'showDepthGradient' && newValue && state.showDistanceGradient
+        ? { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
+        : {};
+    set({ [key]: newValue, ...exclusive });
     // Persist the setting asynchronously via the helper
     state.saveDisplaySetting(key, newValue);
   },
