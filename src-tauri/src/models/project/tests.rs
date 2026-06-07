@@ -3266,6 +3266,94 @@ fn reachability_drops_redundant_reference_shots() {
     );
 }
 
+#[test]
+fn station_refs_in_order_matches_computed_stations() {
+    // The cheap enumeration MUST yield the exact same refs, in the same order,
+    // as the (trig-solving) compute_station_coordinates — incl. an empty section,
+    // a merge, and an aligned closure — so distance stays on the same node set as
+    // penetration and index-aligned with ProjectState.stations. (risk #1)
+    let mut project = Project::new("RefsOrder".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    // An empty (zero-shot) section: must still contribute exactly station 0.
+    let _empty = project
+        .add_section(SectionData {
+            shots: vec![],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(b, 0), StationRef::new(a, 2))
+        .unwrap();
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(b, 1).into(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+
+    let computed: Vec<StationRef> = project
+        .compute_station_coordinates()
+        .iter()
+        .map(|s| s.station_ref)
+        .collect();
+    let ordered = project.station_refs_in_order();
+    assert_eq!(ordered, computed);
+}
+
+#[test]
+fn distance_field_invariant_to_coordinate_perturbation() {
+    // Distance is topological (shot lengths + graph), not geometric — perturbing
+    // station coordinates must not change it. This guards against any accidental
+    // coordinate dependency (risk #5). distance_field_from is also structurally
+    // coordinate-free (it takes only refs).
+    let mut project = Project::new("DistInvariant".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+
+    let refs = project.station_refs_in_order();
+    let before = project.distance_field_from(&refs, None);
+
+    // Shift a station's coordinates; distances must be byte-identical.
+    project
+        .station_offsets
+        .insert(StationRef::new(a, 1).into(), (123.0, -45.0, 67.0));
+    let after = project.distance_field_from(&refs, None);
+
+    assert_eq!(before.distances, after.distances);
+    assert!((before.max_reachable - after.max_reachable).abs() < 1e-9);
+}
+
 // === Loop Closure Algorithm Tests ===
 
 // Group A: create_loop_closure validation (new tests only; see existing tests above for basic/duplicate/deferred)

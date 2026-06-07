@@ -114,8 +114,10 @@ pub fn get_station_distances_from(
     from: Option<StationRef>,
 ) -> Option<DistanceField> {
     let project = state.get_project_state()?;
-    let stations = project.compute_station_coordinates();
-    Some(project.distance_field_from(&stations, from.as_ref()))
+    // Distance is purely topological — enumerate station refs without the xyz
+    // trig solve (compute_station_coordinates) that we don't need here.
+    let station_refs = project.station_refs_in_order();
+    Some(project.distance_field_from(&station_refs, from.as_ref()))
 }
 
 /// Get closure-adjusted station coordinates for the current project.
