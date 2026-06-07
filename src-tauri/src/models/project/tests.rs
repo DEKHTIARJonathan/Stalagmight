@@ -4473,8 +4473,12 @@ fn solve_reduced_laplacian_matches_dense() {
         let ref_x = dense_solve(&ax, &atb_x);
         let ref_y = dense_solve(&ay, &atb_y);
 
-        let (sol_x, sol_y) =
-            Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj);
+        // Strictly SPD (grounded) → unique solution, so a zero warm start matches
+        // the dense reference exactly.
+        let x0 = vec![0.0; n];
+        let (sol_x, sol_y) = Project::solve_reduced_laplacian(
+            n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0, &x0,
+        );
 
         for i in 0..n {
             assert!(
@@ -4491,6 +4495,35 @@ fn solve_reduced_laplacian_matches_dense() {
             );
         }
     }
+}
+
+/// Regression for the warm-start fix (Codex #86): a node that is unconstrained on
+/// one axis (zero pivot, zero-weight edge → null-space row) must keep its measured
+/// position on that axis rather than snapping to world 0.
+#[test]
+fn solve_reduced_laplacian_preserves_unconstrained_axis_warm_start() {
+    // Two nodes. Node 0 is grounded on both axes. Node 1 couples to node 0 on Y
+    // only (the X off-diagonal weight is 0), and has zero X diagonal + zero X rhs
+    // — i.e. nothing constrains its X. Its warm-start X (42) must survive.
+    let n = 2;
+    let diag_x = vec![1.0, 0.0];
+    let diag_y = vec![2.0, 1.0];
+    let atb_x = vec![5.0, 0.0];
+    let atb_y = vec![0.0, 0.0];
+    let adj = vec![vec![(1usize, 0.0, -1.0)], vec![(0usize, 0.0, -1.0)]];
+    let x0_x = vec![0.0, 42.0];
+    let x0_y = vec![0.0, 0.0];
+
+    let (sol_x, _sol_y) =
+        Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
+
+    assert!(
+        (sol_x[1] - 42.0).abs() < 1e-9,
+        "unconstrained-X node should retain its warm-start X (42), got {}",
+        sol_x[1]
+    );
+    // The constrained node still solves normally.
+    assert!((sol_x[0] - 5.0).abs() < 1e-9, "node 0 X should be 5, got {}", sol_x[0]);
 }
 
 /// Analytic golden: a loop with a hand-computable least-squares optimum.
