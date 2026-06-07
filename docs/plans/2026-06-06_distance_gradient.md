@@ -20,25 +20,32 @@
 - [x] **IPC** — `DistanceField` + `Project::distance_field_from(Option<&StationRef>)`
   (None = entrance default) + `get_station_distances_from` command + ts-rs +
   telemetry event (Rust+worker). cargo(+telemetry) & tsc green. (`9c4b7eb6`)
-- [ ] Frontend: uiStore state, Display toggle, click-to-pick, paint expression,
-  legend + origin marker, i18n. **Paused here for review** (visual/UX work +
-  one decision below). Integration points fully mapped: depth-gradient is the
-  template — `uiStore.ts` display toggle plumbing, `displaySelectors.ts`
-  DISPLAY_DEFAULTS, `DisplayMenu.tsx` Overlays group, `surveyLayer/features.ts`
-  + `SurveyLayer.tsx` paint, `DepthLegend.tsx` → new `DistanceLegend.tsx`,
-  `useMapTools.ts` station-click origin pick, `utils/ipc.ts` `invokeIpc`.
+- [x] **Display toggle** — runtime-only (NOT persisted; transient overlay) in
+  uiStore + DisplayMenu Overlays group + i18n. (`aaa6bbb7`)
+- [x] **Perf: distance field skips the trig solve** — `station_refs_in_order()`;
+  `distance_field_from(&[StationRef])`; command no longer calls
+  `compute_station_coordinates`. Validated: enumeration == computed order;
+  coordinate-invariant. (`fd046db7`)
 - [x] Telemetry event (append-only) — `command.get_station_distances_from`
   added (Rust + worker), len 317→318. (`9c4b7eb6`)
-- [ ] Verification (tsc ✅ so far, test:ui, cargo ±telemetry ✅ so far).
+- [ ] **Phase 2 — Render (Approach A)**: SurveyLayer `setFeatureState` +
+  paint-swap interpolate (gold→purple, grey=unreachable), **re-applied in
+  `updateVisualState()` so it survives setData rebuilds** (the #1 risk);
+  `useDistanceGradient` fetch effect; click-to-pick; depth mutual-exclusion.
+- [ ] **Phase 3 — Legend + origin marker + e2e** (mirror `depth-gradient.spec.ts`).
+- [ ] Verification (cargo ✅; tsc/vitest/test:ui after Phase 2/3).
 
-### Open decision before frontend (for Nico)
-**Should the distance-gradient toggle persist across sessions?** Depth gradient
-does, but it goes through the typed Rust `DisplaySettings` struct
-(`core/loading.rs:197`; a test asserts the field count). Distance gradient is a
-*transient* analytical overlay that defaults to the entrance each time, so
-persisting it is likely wrong. **Recommendation: runtime-only** (a plain uiStore
-field + a DisplayMenu item that doesn't route through `saveDisplaySetting`), which
-avoids the cross-stack Rust/ts-rs change. Confirm before wiring the toggle.
+> **Approved approach + full validation plan:** see
+> `~/.claude/plans/imperative-chasing-snowflake.md` (Approach A; feature-state
+> survives-rebuild is the key test; runtime-only toggle decided). Backend/IPC is
+> done & green; remaining work is the visual render (Phase 2/3), held for Nico's
+> review per the validation-first request.
+
+### Resolved: toggle persistence → **runtime-only**
+The distance-gradient toggle is NOT persisted (transient overlay; defaults to the
+entrance each session) — a plain uiStore field + a DisplayMenu item that bypasses
+`saveDisplaySetting`, avoiding the cross-stack Rust/ts-rs change. Done in
+`aaa6bbb7`.
 
 ## Context
 
