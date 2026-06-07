@@ -27,7 +27,9 @@ export function MarqueeText({
   return (
     <span
       ref={containerRef}
-      className={`relative block overflow-hidden whitespace-nowrap text-ellipsis ${className}`}
+      // The ellipsis only applies at rest — while scrolling it would otherwise
+      // stay pinned at the clip edge over the moving overlay.
+      className={`relative block overflow-hidden whitespace-nowrap ${scrolling ? '' : 'text-ellipsis'} ${className}`}
       data-testid={dataTestId}
       data-full-text={text}
       aria-label={text}
