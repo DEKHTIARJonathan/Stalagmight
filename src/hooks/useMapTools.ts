@@ -328,6 +328,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       showToast,
       stations,
       toggleSelection,
+      showDistanceGradient,
+      setDistanceGradientOrigin,
     ]
   );
 
@@ -355,6 +357,22 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             toggleSelection(sel);
           } else {
             setSelection(sel);
+          }
+          // Distance gradient (#34): re-root on a shot click too. With stations
+          // hidden — common (and nicer-looking) while the gradient is on — you
+          // can't click a station, so re-root to the shot's lower-numbered
+          // endpoint station (section_id, shotIndex).
+          if (
+            showDistanceGradient &&
+            !mouseEvent.shiftKey &&
+            !mouseEvent.ctrlKey &&
+            !mouseEvent.metaKey
+          ) {
+            const section = project?.sections.find((s) => s.id === sectionId);
+            const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
+            if (shotIndex !== -1) {
+              setDistanceGradientOrigin({ section_id: sectionId, station_index: shotIndex });
+            }
           }
           break;
         }
