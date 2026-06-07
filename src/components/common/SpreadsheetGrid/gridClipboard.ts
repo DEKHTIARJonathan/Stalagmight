@@ -1,0 +1,123 @@
+/**
+ * Clipboard + locale helpers for SpreadsheetGrid. Pure and unit-tested.
+ *
+ * Clean-room: standard TSV (tab-separated columns, newline-separated rows) with
+ * RFC-4180-style quoting for fields containing tabs/newlines/quotes — the same
+ * shape Excel and Google Sheets put on the clipboard's `text/plain`. No grid
+ * library source referenced.
+ */
+
+/** Decimal + group separators for a locale, derived from Intl. */
+export function getLocaleSeparators(locale: string): { decimal: string; group: string } {
+  let decimal = '.';
+  let group = ',';
+  try {
+    for (const part of new Intl.NumberFormat(locale).formatToParts(11111.1)) {
+      if (part.type === 'decimal') decimal = part.value;
+      else if (part.type === 'group') group = part.value;
+    }
+  } catch {
+    /* unknown locale → keep en defaults */
+  }
+  return { decimal, group };
+}
+
+const SPACE_RE = /[\s  ]/g; // incl. NBSP / narrow NBSP used as group sep
+
+/**
+ * Parse a typed/pasted string into a number using the active locale's
+ * separators. Returns `undefined` when the input is empty or not a finite
+ * number (callers MUST treat `undefined` as "skip", never as 0).
+ *
+ * This replaces the bare `parseFloat` in the edit paths, which silently
+ * corrupts comma-decimal locales (`parseFloat("1,5") === 1`).
+ */
+export function parseLocaleNumber(raw: string, locale: string): number | undefined {
+  const s = raw.trim();
+  if (s === '') return undefined;
+  const { decimal, group } = getLocaleSeparators(locale);
+  let normalized = s;
+  if (group) normalized = normalized.split(group).join('');
+  if (decimal && decimal !== '.') normalized = normalized.split(decimal).join('.');
+  normalized = normalized.replace(SPACE_RE, '');
+  const n = Number(normalized);
+  if (Number.isFinite(n)) return n;
+  // Dot-fallback: a plain "1.5" pasted in a comma-decimal locale.
+  const fallback = Number(s.replace(SPACE_RE, ''));
+  return Number.isFinite(fallback) ? fallback : undefined;
+}
+
+/** Quote a single cell for TSV if it contains a tab, newline, or quote. */
+export function serializeCell(value: string): string {
+  if (/[\t\n\r"]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+/** Serialize a 2D matrix of display strings to clipboard TSV. */
+export function serializeRangeToTSV(grid: string[][]): string {
+  return grid.map((row) => row.map(serializeCell).join('\t')).join('\n');
+}
+
+/**
+ * Parse clipboard text (TSV from Excel/Sheets, or our own) into a 2D matrix.
+ * State machine: honours quoted fields containing tabs/newlines and doubled
+ * quotes; treats CRLF and LF as row separators; drops a single trailing newline
+ * so a copied block doesn't gain a phantom empty row.
+ */
+export function parseTSV(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      field += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+    if (ch === '\t') {
+      row.push(field);
+      field = '';
+      i++;
+      continue;
+    }
+    if (ch === '\n' || ch === '\r') {
+      row.push(field);
+      field = '';
+      rows.push(row);
+      row = [];
+      i += ch === '\r' && text[i + 1] === '\n' ? 2 : 1;
+      continue;
+    }
+    field += ch;
+    i++;
+  }
+  row.push(field);
+  rows.push(row);
+  // Drop a trailing empty row produced by a terminal newline.
+  if (rows.length > 1) {
+    const last = rows[rows.length - 1];
+    if (last && last.length === 1 && last[0] === '') rows.pop();
+  }
+  return rows;
+}

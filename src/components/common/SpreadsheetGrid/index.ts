@@ -1,0 +1,9 @@
+export { SpreadsheetGrid, type SpreadsheetGridProps } from './SpreadsheetGrid';
+export type { GridColumn, CellCoord, GridSelection, CellEdit } from './types';
+export { DEFAULT_COL_WIDTH, ROW_HEIGHT } from './types';
+export {
+  parseLocaleNumber,
+  serializeRangeToTSV,
+  parseTSV,
+  getLocaleSeparators,
+} from './gridClipboard';
