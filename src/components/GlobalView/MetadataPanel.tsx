@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
+import { ElidedPath } from '../common/ElidedPath';
 import { Button } from '../common/Button';
 import { Toggle } from '../common/Toggle';
 import { PencilIcon, CheckIcon, CloseIcon } from '../common/icons';
@@ -400,12 +401,12 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 testId="metadata-location"
               />
 
-              {/* File Path */}
+              {/* File Path — abbreviated to fit; scrolls in full on hover. */}
               <MetadataField
                 label={t('globalView.metadata.fields.file')}
                 value={singleProject.file_path}
                 testId="metadata-file-path"
-                truncate
+                path
               />
 
               {/* Modified Date */}
@@ -545,21 +546,29 @@ interface MetadataFieldProps {
   value: string;
   testId: string;
   truncate?: boolean;
+  /** Render the value as a file path: abbreviated to fit, scrolled in full on hover. */
+  path?: boolean;
 }
 
 /**
  * A single metadata field with label and value.
  */
-const MetadataField: FC<MetadataFieldProps> = ({ label, value, testId, truncate }) => (
+const MetadataField: FC<MetadataFieldProps> = ({ label, value, testId, truncate, path }) => (
   <div className="flex flex-col gap-0.5">
     <dt className="text-xs text-text-secondary font-medium">{label}</dt>
-    <dd
-      className={`text-sm text-text-primary ${truncate ? 'truncate' : ''}`}
-      data-testid={testId}
-      title={truncate ? value : undefined}
-    >
-      {value}
-    </dd>
+    {path ? (
+      <dd>
+        <ElidedPath path={value} data-testid={testId} className="text-sm text-text-primary" />
+      </dd>
+    ) : (
+      <dd
+        className={`text-sm text-text-primary ${truncate ? 'truncate' : ''}`}
+        data-testid={testId}
+        title={truncate ? value : undefined}
+      >
+        {value}
+      </dd>
+    )}
   </div>
 );
 
