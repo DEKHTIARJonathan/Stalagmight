@@ -55,11 +55,17 @@ export interface CellCoord {
   colKey: string;
 }
 
-/** Inclusive rectangle between two corners. `anchor` is fixed; `focus` is the
- *  moving corner and is the active cell (where typing/editing happens). */
+/** A selection rectangle plus the active cell.
+ *  - `anchor` / `focus` are the rectangle corners (`focus` is the moving corner
+ *    while extending).
+ *  - `active` is where typing/editing happens and the unfilled "white" cell.
+ *    During a range extension it stays put (Google-Sheets behaviour); Tab/Enter
+ *    cycle it within the rectangle. For a single-cell selection all three are
+ *    equal. */
 export interface GridSelection {
   anchor: CellCoord;
   focus: CellCoord;
+  active: CellCoord;
 }
 
 /** A single resolved edit emitted to the host. `value` is already coerced. */

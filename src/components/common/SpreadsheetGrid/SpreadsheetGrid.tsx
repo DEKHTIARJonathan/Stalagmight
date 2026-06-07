@@ -23,9 +23,11 @@ import {
   arrowTarget,
   clamp,
   columnOffsets,
+  cycleActiveInRect,
   fillTargets,
   isInRect,
   placePaste,
+  rectIsSingleCell,
   selectionRect,
   tabTarget,
   type Rect,
@@ -134,7 +136,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const firstWritable = writableColIdxs[0] ?? 0;
   const [selection, setSelection] = useState<GridSelection>(() => {
     const key = colKeys[firstWritable] ?? colKeys[0] ?? '';
-    return { anchor: { row: 0, colKey: key }, focus: { row: 0, colKey: key } };
+    const c = { row: 0, colKey: key };
+    return { anchor: c, focus: c, active: c };
   });
   const [editing, setEditing] = useState<EditState | null>(null);
   const [copiedRect, setCopiedRect] = useState<Rect | null>(null);
@@ -148,6 +151,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [scrolled, setScrolled] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -160,6 +164,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // --- Derived rectangle ----------------------------------------------------
   const rect = useMemo(() => selectionRect(selection, colIndexOf), [selection, colIndexOf]);
   const focusColIdx = colIndexOf(selection.focus.colKey);
+  const activeColIdx = colIndexOf(selection.active.colKey);
+  const multiCell = !rectIsSingleCell(rect);
 
   // --- Helpers --------------------------------------------------------------
   const colAt = useCallback((idx: number) => visibleColumns[idx], [visibleColumns]);
@@ -205,12 +211,17 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const key = colKeys[clamp(colIdx, 0, Math.max(0, colCount - 1))];
       if (key === undefined) return;
       const r = clamp(row, 0, Math.max(0, rowCount - 1));
+      const cell = { row: r, colKey: key };
       setSelection((prev) => ({
-        anchor: extend ? prev.anchor : { row: r, colKey: key },
-        focus: { row: r, colKey: key },
+        anchor: extend ? prev.anchor : cell,
+        focus: cell,
+        // During an extension the active cell stays put (GS); a plain move
+        // collapses the selection onto the new cell.
+        active: extend ? prev.active : cell,
       }));
       virtualizer.scrollToIndex(r, { align: 'auto' });
-      onActiveCellChange?.(r, key);
+      // The active cell only changes on a plain (collapsing) move.
+      if (!extend) onActiveCellChange?.(r, key);
     },
     [colKeys, colCount, rowCount, virtualizer, onActiveCellChange],
   );
@@ -384,6 +395,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         setSelection({
           anchor: { row: preview.r0, colKey: a },
           focus: { row: preview.r1, colKey: f },
+          active: { row: preview.r0, colKey: a },
         });
       }
     },
@@ -439,9 +451,40 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         return;
       }
 
-      const row = selection.focus.row;
-      const colIdx = focusColIdx;
+      // Most operations originate at the ACTIVE cell; only shift-extension moves
+      // the FOCUS (the opposite corner).
+      const row = selection.active.row;
+      const colIdx = colIndexOf(selection.active.colKey);
+      const fRow = selection.focus.row;
+      const fColIdx = focusColIdx;
       const ctrl = e.ctrlKey || e.metaKey;
+
+      // Ctrl+Space → select the active cell's column; Shift+Space → its row.
+      if (e.key === ' ' && ctrl) {
+        e.preventDefault();
+        const key = colKeys[colIdx];
+        if (key !== undefined && rowCount > 0) {
+          setSelection((prev) => ({
+            anchor: { row: 0, colKey: key },
+            focus: { row: rowCount - 1, colKey: key },
+            active: prev.active,
+          }));
+        }
+        return;
+      }
+      if (e.key === ' ' && e.shiftKey) {
+        e.preventDefault();
+        const firstKey = colKeys[0];
+        const lastKey = colKeys[colCount - 1];
+        if (firstKey !== undefined && lastKey !== undefined) {
+          setSelection((prev) => ({
+            anchor: { row: prev.active.row, colKey: firstKey },
+            focus: { row: prev.active.row, colKey: lastKey },
+            active: prev.active,
+          }));
+        }
+        return;
+      }
 
       // Clipboard / fill / select-all
       if (ctrl && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); void doCopy(); return; }
@@ -454,27 +497,52 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         const firstKey = colKeys[0];
         const lastKey = colKeys[colCount - 1];
         if (firstKey !== undefined && lastKey !== undefined) {
-          setSelection({ anchor: { row: 0, colKey: firstKey }, focus: { row: rowCount - 1, colKey: lastKey } });
+          setSelection((prev) => ({
+            anchor: { row: 0, colKey: firstKey },
+            focus: { row: rowCount - 1, colKey: lastKey },
+            active: prev.active, // keep the active cell (it's within all)
+          }));
         }
         return;
       }
 
+      // Shift-extension moves the focus corner; a plain move starts at active.
+      const oR = e.shiftKey ? fRow : row;
+      const oC = e.shiftKey ? fColIdx : colIdx;
+      // Move the active cell WITHIN a multi-cell selection (Tab/Enter cycling).
+      const cycle = (horizontal: boolean) => {
+        const n = cycleActiveInRect(rect, row, colIdx, horizontal, e.shiftKey);
+        const key = colKeys[n.colIdx];
+        if (key === undefined) return;
+        setSelection((prev) => ({ ...prev, active: { row: n.row, colKey: key } }));
+        virtualizer.scrollToIndex(n.row, { align: 'auto' });
+        onActiveCellChange?.(n.row, key);
+      };
+
       switch (e.key) {
-        case 'ArrowDown': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, 1, 0) : arrowTarget(row, colIdx, 1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'ArrowUp': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, -1, 0) : arrowTarget(row, colIdx, -1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'ArrowRight': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, 0, 1) : arrowTarget(row, colIdx, 0, 1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'ArrowLeft': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, 0, -1) : arrowTarget(row, colIdx, 0, -1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'Home': e.preventDefault(); moveFocusTo(ctrl ? 0 : row, 0, e.shiftKey); return;
-        case 'End': e.preventDefault(); moveFocusTo(ctrl ? rowCount - 1 : row, colCount - 1, e.shiftKey); return;
-        case 'PageDown': e.preventDefault(); { const page = Math.max(1, Math.floor(height / ROW_HEIGHT) - 1); const t = arrowTarget(row, colIdx, page, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'PageUp': e.preventDefault(); { const page = Math.max(1, Math.floor(height / ROW_HEIGHT) - 1); const t = arrowTarget(row, colIdx, -page, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowDown': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(oR, oC, 1, 0) : arrowTarget(oR, oC, 1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowUp': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(oR, oC, -1, 0) : arrowTarget(oR, oC, -1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowRight': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(oR, oC, 0, 1) : arrowTarget(oR, oC, 0, 1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowLeft': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(oR, oC, 0, -1) : arrowTarget(oR, oC, 0, -1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'Home': e.preventDefault(); moveFocusTo(ctrl ? 0 : oR, 0, e.shiftKey); return;
+        case 'End': e.preventDefault(); moveFocusTo(ctrl ? rowCount - 1 : oR, colCount - 1, e.shiftKey); return;
+        case 'PageDown': e.preventDefault(); { const page = Math.max(1, Math.floor(height / ROW_HEIGHT) - 1); const t = arrowTarget(oR, oC, page, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'PageUp': e.preventDefault(); { const page = Math.max(1, Math.floor(height / ROW_HEIGHT) - 1); const t = arrowTarget(oR, oC, -page, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
         case 'Tab': {
           e.preventDefault();
+          if (!rectIsSingleCell(rect)) { cycle(true); return; }
           const t = tabTarget(row, colIdx, e.shiftKey ? -1 : 1, writableColIdxs, rowCount);
           if (t) moveFocusTo(t.row, t.colIdx, false);
           return;
         }
-        case 'Enter': e.preventDefault(); beginEdit(row, colIdx, null); return;
+        case 'Enter': {
+          e.preventDefault();
+          if (!rectIsSingleCell(rect)) { cycle(false); return; }
+          // GS: Enter on a single cell moves down (Shift+Enter up); F2/typing edits.
+          const t = arrowTarget(row, colIdx, e.shiftKey ? -1 : 1, 0, rowCount, colCount);
+          moveFocusTo(t.row, t.colIdx, false);
+          return;
+        }
         case 'F2': e.preventDefault(); beginEdit(row, colIdx, null); return;
         case 'Delete':
         case 'Backspace': e.preventDefault(); doClear(); return;
@@ -494,6 +562,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       editing, selection.focus.row, focusColIdx, colKeys, colCount, rowCount, height,
       writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
       doCopy, doPaste, doFill, doClear, colAt, cellEditable,
+      rect, selection.active, onActiveCellChange, virtualizer,
     ],
   );
 
@@ -509,8 +578,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       setCopiedRect(null);
       setSelection((prev) =>
         e.shiftKey
-          ? { anchor: prev.anchor, focus: { row: rowIdx, colKey: key } }
-          : { anchor: { row: rowIdx, colKey: key }, focus: { row: rowIdx, colKey: key } },
+          ? { anchor: prev.anchor, focus: { row: rowIdx, colKey: key }, active: prev.active }
+          : {
+              anchor: { row: rowIdx, colKey: key },
+              focus: { row: rowIdx, colKey: key },
+              active: { row: rowIdx, colKey: key },
+            },
       );
       onActiveCellChange?.(rowIdx, key);
     },
@@ -545,7 +618,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (!dragging.current) return;
       const key = colKeys[colIdx];
       if (key === undefined) return;
-      setSelection((prev) => ({ anchor: prev.anchor, focus: { row: rowIdx, colKey: key } }));
+      setSelection((prev) => ({ anchor: prev.anchor, focus: { row: rowIdx, colKey: key }, active: prev.active }));
     },
     [colKeys, rect],
   );
@@ -566,6 +639,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       setSelection((prev) => ({
         anchor: shiftKey ? { row: 0, colKey: prev.anchor.colKey } : { row: 0, colKey: key },
         focus: { row: rowCount - 1, colKey: key },
+        active: shiftKey ? prev.active : { row: 0, colKey: key },
       }));
     },
     [colKeys, rowCount],
@@ -594,7 +668,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (row: number) => {
       if (fillDragging.current)
         setFillPreview({ r0: Math.min(rect.r0, row), r1: Math.max(rect.r1, row), c0: rect.c0, c1: rect.c1 });
-      else setSelection((prev) => ({ anchor: prev.anchor, focus: { row, colKey: prev.focus.colKey } }));
+      else setSelection((prev) => ({ anchor: prev.anchor, focus: { row, colKey: prev.focus.colKey }, active: prev.active }));
     },
     [rect],
   );
@@ -656,6 +730,39 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       window.removeEventListener('mouseup', up);
     };
   }, []);
+
+  const onCellContextMenu = useCallback(
+    (rowIdx: number, c: number, e: ReactMouseEvent) => {
+      e.preventDefault();
+      scrollRef.current?.focus();
+      // Right-clicking outside the current selection moves the selection there.
+      if (!isInRect(rect, rowIdx, c)) {
+        const key = colKeys[c];
+        if (key !== undefined) {
+          const cell = { row: rowIdx, colKey: key };
+          setSelection({ anchor: cell, focus: cell, active: cell });
+        }
+      }
+      setCtxMenu({ x: e.clientX, y: e.clientY });
+    },
+    [rect, colKeys],
+  );
+
+  useEffect(() => {
+    if (!ctxMenu) return undefined;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [ctxMenu]);
 
   // --- Column hide / reorder ------------------------------------------------
   const [menuOpen, setMenuOpen] = useState(false);
@@ -823,7 +930,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 >
                   {visibleColumns.map((col, c) => {
                     const inSel = isInRect(rect, rowIdx, c);
-                    const isFocus = rowIdx === selection.focus.row && c === focusColIdx;
+                    const isActive = rowIdx === selection.active.row && c === activeColIdx;
                     const isEditingCell = editing?.row === rowIdx && editing.colKey === col.key;
                     return (
                       <div
@@ -835,13 +942,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                           width: widths[c],
                           minWidth: widths[c],
                           // Range fill, but leave the active cell unfilled (GS look).
-                          backgroundColor: inSel && !isFocus ? 'var(--sg-blue-fill)' : undefined,
+                          backgroundColor: inSel && !isActive ? 'var(--sg-blue-fill)' : undefined,
+                          // Thin ring on the active cell inside a multi-cell range.
+                          boxShadow: isActive && multiCell ? 'inset 0 0 0 1px var(--sg-blue)' : undefined,
                         }}
                         data-testid={`grid-cell-${rowIdx}-${col.key}`}
                         data-in-selection={inSel ? 'true' : undefined}
-                        data-active-cell={isFocus ? 'true' : undefined}
+                        data-active-cell={isActive ? 'true' : undefined}
                         onMouseDown={(e) => onCellMouseDown(rowIdx, c, e)}
                         onMouseEnter={() => onCellMouseEnter(rowIdx, c)}
+                        onContextMenu={(e) => onCellContextMenu(rowIdx, c, e)}
                         onDoubleClick={(e) => { e.stopPropagation(); beginEdit(rowIdx, c, null); }}
                       >
                         {isEditingCell ? (
@@ -904,6 +1014,21 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           </div>
         </div>
       </div>
+
+      {ctxMenu && (
+        <div
+          className="sg-context-menu bg-panel text-text-primary"
+          data-testid="grid-context-menu"
+          style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>Copy</button>
+          <button type="button" onClick={() => { void doCopy(); doClear(); setCtxMenu(null); }}>Cut</button>
+          <button type="button" onClick={() => { void doPaste(); setCtxMenu(null); }}>Paste</button>
+          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>Clear</button>
+          <button type="button" onClick={() => { doFill(true); setCtxMenu(null); }}>Fill down</button>
+        </div>
+      )}
     </div>
   );
 }

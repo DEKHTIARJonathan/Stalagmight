@@ -9,6 +9,7 @@ import {
   tabTarget,
   placePaste,
   fillTargets,
+  cycleActiveInRect,
   type Rect,
 } from '../gridGeometry';
 
@@ -25,11 +26,19 @@ describe('clamp', () => {
 
 describe('selectionRect', () => {
   it('normalizes anchor/focus regardless of order', () => {
-    const sel = { anchor: { row: 5, colKey: 'c' }, focus: { row: 2, colKey: 'a' } };
+    const sel = {
+      anchor: { row: 5, colKey: 'c' },
+      focus: { row: 2, colKey: 'a' },
+      active: { row: 5, colKey: 'c' },
+    };
     expect(selectionRect(sel, colIndexOf)).toEqual({ r0: 2, r1: 5, c0: 1, c1: 3 });
   });
   it('single cell', () => {
-    const sel = { anchor: { row: 1, colKey: 'b' }, focus: { row: 1, colKey: 'b' } };
+    const sel = {
+      anchor: { row: 1, colKey: 'b' },
+      focus: { row: 1, colKey: 'b' },
+      active: { row: 1, colKey: 'b' },
+    };
     const rect = selectionRect(sel, colIndexOf);
     expect(rect).toEqual({ r0: 1, r1: 1, c0: 2, c1: 2 });
     expect(rectIsSingleCell(rect)).toBe(true);
@@ -132,5 +141,27 @@ describe('fillTargets', () => {
       { row: 0, colIdx: 2, srcRow: 0, srcColIdx: 1 },
       { row: 0, colIdx: 3, srcRow: 0, srcColIdx: 1 },
     ]);
+  });
+});
+
+describe('cycleActiveInRect (Tab/Enter within a selection)', () => {
+  const rect: Rect = { r0: 1, r1: 2, c0: 1, c1: 2 }; // 2x2 block
+
+  it('Tab order is row-major and wraps around the whole rectangle', () => {
+    // (1,1) -> (1,2) -> (2,1) -> (2,2) -> back to (1,1)
+    expect(cycleActiveInRect(rect, 1, 1, true, false)).toEqual({ row: 1, colIdx: 2 });
+    expect(cycleActiveInRect(rect, 1, 2, true, false)).toEqual({ row: 2, colIdx: 1 });
+    expect(cycleActiveInRect(rect, 2, 2, true, false)).toEqual({ row: 1, colIdx: 1 });
+  });
+
+  it('Shift+Tab reverses', () => {
+    expect(cycleActiveInRect(rect, 1, 1, true, true)).toEqual({ row: 2, colIdx: 2 });
+  });
+
+  it('Enter order is column-major and wraps', () => {
+    // (1,1) -> (2,1) -> (1,2) -> (2,2) -> back to (1,1)
+    expect(cycleActiveInRect(rect, 1, 1, false, false)).toEqual({ row: 2, colIdx: 1 });
+    expect(cycleActiveInRect(rect, 2, 1, false, false)).toEqual({ row: 1, colIdx: 2 });
+    expect(cycleActiveInRect(rect, 2, 2, false, false)).toEqual({ row: 1, colIdx: 1 });
   });
 });

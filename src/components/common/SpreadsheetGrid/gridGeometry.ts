@@ -95,6 +95,32 @@ export function tabTarget(
   return { row, colIdx: first }; // clamp at grid start
 }
 
+/**
+ * Cycle the active cell WITHIN a fixed selection rectangle (Google-Sheets
+ * Tab/Enter-in-selection). `horizontal` = Tab order (row-major, left→right then
+ * wrap to next row); `!horizontal` = Enter order (column-major, top→bottom then
+ * wrap to next column). Wraps around the whole rectangle. `reverse` for
+ * Shift+Tab / Shift+Enter.
+ */
+export function cycleActiveInRect(
+  rect: Rect,
+  activeRow: number,
+  activeColIdx: number,
+  horizontal: boolean,
+  reverse: boolean,
+): { row: number; colIdx: number } {
+  const w = rect.c1 - rect.c0 + 1;
+  const h = rect.r1 - rect.r0 + 1;
+  const n = w * h;
+  const dr = clamp(activeRow, rect.r0, rect.r1) - rect.r0;
+  const dc = clamp(activeColIdx, rect.c0, rect.c1) - rect.c0;
+  let pos = horizontal ? dr * w + dc : dc * h + dr;
+  pos = (pos + (reverse ? -1 : 1) + n) % n;
+  return horizontal
+    ? { row: rect.r0 + Math.floor(pos / w), colIdx: rect.c0 + (pos % w) }
+    : { row: rect.r0 + (pos % h), colIdx: rect.c0 + Math.floor(pos / h) };
+}
+
 export interface PasteTarget {
   row: number;
   colIdx: number;
