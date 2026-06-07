@@ -86,3 +86,25 @@
 .sg-header:hover {
   background-color: rgba(255, 255, 255, 0.04);
 }
+
+/* Drag-to-resize affordance on a header's right edge. */
+.sg-col-resize {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.sg-col-resize:hover {
+  background-color: var(--sg-blue);
+}
+
+/* Sticky-header drop shadow once the body is scrolled. */
+.sg-header-bar {
+  transition: box-shadow 120ms ease-out;
+}
+.sg-header-bar.sg-scrolled {
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.45);
+}

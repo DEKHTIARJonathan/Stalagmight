@@ -32,6 +32,8 @@ import {
 } from './gridGeometry';
 
 const HEADER_HEIGHT = 33;
+const MIN_COL_WIDTH = 40;
+const EDGE_SCROLL_ZONE = 26;
 
 export interface SpreadsheetGridProps<Row> {
   columns: GridColumn<Row>[];
@@ -111,10 +113,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     return ordered.filter((c) => !hidden.has(c.key));
   }, [columns, columnOrder, hiddenColumns]);
 
+  const [colWidthOverrides, setColWidthOverrides] = useState<Record<string, number>>({});
   const colKeys = useMemo(() => visibleColumns.map((c) => c.key), [visibleColumns]);
   const widths = useMemo(
-    () => visibleColumns.map((c) => c.width ?? DEFAULT_COL_WIDTH),
-    [visibleColumns],
+    () => visibleColumns.map((c) => colWidthOverrides[c.key] ?? c.width ?? DEFAULT_COL_WIDTH),
+    [visibleColumns, colWidthOverrides],
   );
   const offsets = useMemo(() => columnOffsets(widths), [widths]);
   const totalWidth = offsets[offsets.length - 1] ?? 0;
@@ -139,8 +142,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const [interacting, setInteracting] = useState(false);
   const dragging = useRef(false);
   const fillDragging = useRef(false);
+  const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
+  const dragMouseY = useRef(0);
+  const autoScrollRAF = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const [scrolled, setScrolled] = useState(false);
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -206,6 +213,41 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       onActiveCellChange?.(r, key);
     },
     [colKeys, colCount, rowCount, virtualizer, onActiveCellChange],
+  );
+
+  // Google-Sheets Ctrl+Arrow: jump to the edge of the contiguous data block in a
+  // direction — skip a gap to the next non-empty cell, or run to the last
+  // non-empty cell before a gap / the grid boundary.
+  const dataEdgeTarget = useCallback(
+    (startRow: number, startColIdx: number, dRow: number, dCol: number) => {
+      const vertical = dRow !== 0;
+      const count = vertical ? rowCount : colCount;
+      const step = vertical ? dRow : dCol;
+      const isEmpty = (i: number): boolean => {
+        const r = vertical ? i : startRow;
+        const ci = vertical ? startColIdx : i;
+        const col = colAt(ci);
+        const data = rows[r];
+        if (!col || data === undefined) return true;
+        const v = col.getValue(data);
+        return v == null || v === '';
+      };
+      let i = vertical ? startRow : startColIdx;
+      const next = i + step;
+      if (next < 0 || next >= count) {
+        // already at the boundary — stay put
+      } else if (isEmpty(i) || isEmpty(next)) {
+        let j = next;
+        while (j >= 0 && j < count && isEmpty(j)) j += step;
+        i = j < 0 || j >= count ? clamp(j - step, 0, count - 1) : j;
+      } else {
+        let j = i;
+        while (j + step >= 0 && j + step < count && !isEmpty(j + step)) j += step;
+        i = j;
+      }
+      return vertical ? { row: i, colIdx: startColIdx } : { row: startRow, colIdx: i };
+    },
+    [rowCount, colCount, colAt, rows],
   );
 
   // --- Editing --------------------------------------------------------------
@@ -418,10 +460,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
 
       switch (e.key) {
-        case 'ArrowDown': e.preventDefault(); { const t = arrowTarget(row, colIdx, 1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'ArrowUp': e.preventDefault(); { const t = arrowTarget(row, colIdx, -1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'ArrowRight': e.preventDefault(); { const t = arrowTarget(row, colIdx, 0, 1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
-        case 'ArrowLeft': e.preventDefault(); { const t = arrowTarget(row, colIdx, 0, -1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowDown': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, 1, 0) : arrowTarget(row, colIdx, 1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowUp': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, -1, 0) : arrowTarget(row, colIdx, -1, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowRight': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, 0, 1) : arrowTarget(row, colIdx, 0, 1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
+        case 'ArrowLeft': e.preventDefault(); { const t = ctrl ? dataEdgeTarget(row, colIdx, 0, -1) : arrowTarget(row, colIdx, 0, -1, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
         case 'Home': e.preventDefault(); moveFocusTo(ctrl ? 0 : row, 0, e.shiftKey); return;
         case 'End': e.preventDefault(); moveFocusTo(ctrl ? rowCount - 1 : row, colCount - 1, e.shiftKey); return;
         case 'PageDown': e.preventDefault(); { const page = Math.max(1, Math.floor(height / ROW_HEIGHT) - 1); const t = arrowTarget(row, colIdx, page, 0, rowCount, colCount); moveFocusTo(t.row, t.colIdx, e.shiftKey); } return;
@@ -450,7 +492,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     },
     [
       editing, selection.focus.row, focusColIdx, colKeys, colCount, rowCount, height,
-      writableColIdxs, colIndexOf, moveFocusTo, beginEdit, commitEdit, cancelEdit,
+      writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
       doCopy, doPaste, doFill, doClear, colAt, cellEditable,
     ],
   );
@@ -508,20 +550,111 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [colKeys, rect],
   );
 
-  // Stable window mouseup that runs the latest release logic (commit a fill-drag
-  // or end a selection-drag) via a ref so closures stay fresh.
-  const onPointerUpRef = useRef<() => void>(() => {});
-  onPointerUpRef.current = () => {
+  const startResize = useCallback((e: ReactMouseEvent, key: string, startW: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizing.current = { key, startX: e.clientX, startW };
+    setInteracting(true);
+  }, []);
+
+  const onHeaderSelectColumn = useCallback(
+    (colIdx: number, shiftKey: boolean) => {
+      const key = colKeys[colIdx];
+      if (key === undefined || rowCount === 0) return;
+      scrollRef.current?.focus();
+      setCopiedRect(null);
+      setSelection((prev) => ({
+        anchor: shiftKey ? { row: 0, colKey: prev.anchor.colKey } : { row: 0, colKey: key },
+        focus: { row: rowCount - 1, colKey: key },
+      }));
+    },
+    [colKeys, rowCount],
+  );
+
+  // Double-click the fill handle: fill down to the data extent of the left
+  // neighbour column (Google-Sheets auto-fill), or the selection's own column.
+  const onFillHandleDoubleClick = useCallback(() => {
+    const guide = colAt(rect.c0 > 0 ? rect.c0 - 1 : rect.c0);
+    if (!guide) return;
+    let end = rect.r1;
+    for (let r = rect.r1 + 1; r < rowCount; r++) {
+      const data = rows[r];
+      if (!data) break;
+      const v = guide.getValue(data);
+      if (v == null || v === '') break;
+      end = r;
+    }
+    if (end > rect.r1) commitFill({ r0: rect.r0, r1: end, c0: rect.c0, c1: rect.c1 });
+  }, [colAt, rect, rowCount, rows, commitFill]);
+
+  // Window-level pointer handling: drag-select extension past the viewport
+  // (auto-scroll), column resize, and release. Refs keep closures fresh behind
+  // stable listeners.
+  const extendToRow = useCallback(
+    (row: number) => {
+      if (fillDragging.current)
+        setFillPreview({ r0: Math.min(rect.r0, row), r1: Math.max(rect.r1, row), c0: rect.c0, c1: rect.c1 });
+      else setSelection((prev) => ({ anchor: prev.anchor, focus: { row, colKey: prev.focus.colKey } }));
+    },
+    [rect],
+  );
+
+  const autoScrollTick = useCallback(() => {
+    autoScrollRAF.current = 0;
+    const el = scrollRef.current;
+    if (!el || (!dragging.current && !fillDragging.current)) return;
+    const r = el.getBoundingClientRect();
+    const topZone = r.top + HEADER_HEIGHT + EDGE_SCROLL_ZONE;
+    const botZone = r.bottom - EDGE_SCROLL_ZONE;
+    const dir = dragMouseY.current < topZone ? -1 : dragMouseY.current > botZone ? 1 : 0;
+    if (dir === 0) return;
+    el.scrollTop += dir * 18;
+    const y = dir < 0 ? topZone : botZone;
+    const idx = Math.floor((el.scrollTop + (y - r.top) - HEADER_HEIGHT) / ROW_HEIGHT);
+    extendToRow(clamp(idx, 0, rowCount - 1));
+    autoScrollRAF.current = requestAnimationFrame(autoScrollTick);
+  }, [extendToRow, rowCount]);
+
+  const onMoveRef = useRef<(e: MouseEvent) => void>(() => {});
+  const onUpRef = useRef<() => void>(() => {});
+  onMoveRef.current = (e) => {
+    if (resizing.current) {
+      const { key, startX, startW } = resizing.current;
+      setColWidthOverrides((m) => ({ ...m, [key]: Math.max(MIN_COL_WIDTH, startW + (e.clientX - startX)) }));
+      return;
+    }
+    if (dragging.current || fillDragging.current) {
+      dragMouseY.current = e.clientY;
+      const el = scrollRef.current;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        const nearEdge =
+          e.clientY < r.top + HEADER_HEIGHT + EDGE_SCROLL_ZONE || e.clientY > r.bottom - EDGE_SCROLL_ZONE;
+        if (nearEdge && autoScrollRAF.current === 0) autoScrollRAF.current = requestAnimationFrame(autoScrollTick);
+      }
+    }
+  };
+  onUpRef.current = () => {
     if (fillDragging.current && fillPreview) commitFill(fillPreview);
     dragging.current = false;
     fillDragging.current = false;
+    resizing.current = null;
+    if (autoScrollRAF.current) {
+      cancelAnimationFrame(autoScrollRAF.current);
+      autoScrollRAF.current = 0;
+    }
     setInteracting(false);
     setFillPreview(null);
   };
   useEffect(() => {
-    const up = () => onPointerUpRef.current();
+    const mv = (e: MouseEvent) => onMoveRef.current(e);
+    const up = () => onUpRef.current();
+    window.addEventListener('mousemove', mv);
     window.addEventListener('mouseup', up);
-    return () => window.removeEventListener('mouseup', up);
+    return () => {
+      window.removeEventListener('mousemove', mv);
+      window.removeEventListener('mouseup', up);
+    };
   }, []);
 
   // --- Column hide / reorder ------------------------------------------------
@@ -637,6 +770,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         style={{ height: maximized ? undefined : height }}
         tabIndex={0}
         onKeyDown={onKeyDown}
+        onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
         role="grid"
         aria-rowcount={rowCount}
         aria-colcount={colCount}
@@ -644,13 +778,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         <div style={{ width: totalWidth, position: 'relative' }}>
           {/* Sticky header */}
           <div
-            className="sticky top-0 z-10 flex bg-panel"
+            className={`sg-header-bar sticky top-0 z-10 flex bg-panel ${scrolled ? 'sg-scrolled' : ''}`}
             style={{ height: HEADER_HEIGHT }}
           >
             {visibleColumns.map((c, i) => (
               <div
                 key={c.key}
-                className={`sg-header flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
+                className={`sg-header relative flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
                   i >= rect.c0 && i <= rect.c1 ? 'sg-header-selected text-text-primary' : ''
                 }`}
                 style={{ width: widths[i], minWidth: widths[i] }}
@@ -658,9 +792,18 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 onDragStart={() => { dragColKey.current = c.key; }}
                 onDragOver={(e) => { if (dragColKey.current) e.preventDefault(); }}
                 onDrop={() => onHeaderDrop(c.key)}
+                onClick={(e) => onHeaderSelectColumn(i, e.shiftKey)}
                 data-testid={`grid-header-${c.key}`}
               >
-                {c.header}
+                <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{c.header}</span>
+                {/* Drag this edge to resize the column. */}
+                <div
+                  className="sg-col-resize"
+                  data-testid={`grid-col-resize-${c.key}`}
+                  onMouseDown={(e) => startResize(e, c.key, widths[i] ?? DEFAULT_COL_WIDTH)}
+                  onClick={(e) => e.stopPropagation()}
+                  onDragStart={(e) => e.preventDefault()}
+                />
               </div>
             ))}
           </div>
@@ -753,6 +896,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     className="sg-fill-handle"
                     data-testid="grid-fill-handle"
                     onMouseDown={onFillHandleDown}
+                    onDoubleClick={onFillHandleDoubleClick}
                   />
                 )}
               </div>
