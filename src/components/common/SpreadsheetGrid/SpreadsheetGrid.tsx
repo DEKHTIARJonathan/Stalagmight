@@ -6,9 +6,11 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import './SpreadsheetGrid.css';
 import {
   type GridColumn,
   type GridSelection,
@@ -26,6 +28,7 @@ import {
   placePaste,
   selectionRect,
   tabTarget,
+  type Rect,
 } from './gridGeometry';
 
 const HEADER_HEIGHT = 33;
@@ -131,7 +134,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     return { anchor: { row: 0, colKey: key }, focus: { row: 0, colKey: key } };
   });
   const [editing, setEditing] = useState<EditState | null>(null);
+  const [copiedRect, setCopiedRect] = useState<Rect | null>(null);
+  const [fillPreview, setFillPreview] = useState<Rect | null>(null);
+  const [interacting, setInteracting] = useState(false);
   const dragging = useRef(false);
+  const fillDragging = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
 
@@ -207,6 +214,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const col = colAt(colIdx);
       if (!col || !cellEditable(rowIdx, col)) return;
       const draft = seed ?? displayAt(rowIdx, col);
+      setCopiedRect(null);
       setEditing({ row: rowIdx, colKey: col.key, draft });
     },
     [colAt, cellEditable, displayAt],
@@ -265,12 +273,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   }, [rect, colAt, displayAt]);
 
   const doCopy = useCallback(async () => {
+    setCopiedRect(rect); // marching-ants until paste / Esc / edit
     try {
       await navigator.clipboard.writeText(serializeRangeToTSV(buildRangeMatrix()));
     } catch {
       /* clipboard may be unavailable in the webview; integration adds a fallback */
     }
-  }, [buildRangeMatrix]);
+  }, [buildRangeMatrix, rect]);
 
   const applyEdits = useCallback(
     (edits: CellEdit[]) => {
@@ -304,7 +313,40 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (value !== undefined) edits.push({ row: t.row, colKey: col.key, value });
     }
     applyEdits(edits);
+    setCopiedRect(null);
   }, [rect, rowCount, colCount, colAt, cellEditable, parseForColumn, applyEdits]);
+
+  // Copy-fill the selection block across `preview`'s extension (tiled).
+  const commitFill = useCallback(
+    (preview: Rect) => {
+      const srcH = rect.r1 - rect.r0 + 1;
+      const srcW = rect.c1 - rect.c0 + 1;
+      const edits: CellEdit[] = [];
+      for (let r = preview.r0; r <= preview.r1; r++) {
+        for (let c = preview.c0; c <= preview.c1; c++) {
+          if (isInRect(rect, r, c)) continue; // keep the source intact
+          const col = colAt(c);
+          if (!col || !cellEditable(r, col)) continue;
+          const srcR = rect.r0 + ((((r - rect.r0) % srcH) + srcH) % srcH);
+          const srcC = rect.c0 + ((((c - rect.c0) % srcW) + srcW) % srcW);
+          const srcCol = colAt(srcC);
+          if (!srcCol) continue;
+          const value = parseForColumn(col, displayAt(srcR, srcCol), r);
+          if (value !== undefined) edits.push({ row: r, colKey: col.key, value });
+        }
+      }
+      applyEdits(edits);
+      const a = colKeys[preview.c0];
+      const f = colKeys[preview.c1];
+      if (a !== undefined && f !== undefined) {
+        setSelection({
+          anchor: { row: preview.r0, colKey: a },
+          focus: { row: preview.r1, colKey: f },
+        });
+      }
+    },
+    [rect, colAt, cellEditable, parseForColumn, displayAt, applyEdits, colKeys],
+  );
 
   const doFill = useCallback(
     (down: boolean) => {
@@ -394,7 +436,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         case 'F2': e.preventDefault(); beginEdit(row, colIdx, null); return;
         case 'Delete':
         case 'Backspace': e.preventDefault(); doClear(); return;
-        case 'Escape': return;
+        case 'Escape': setCopiedRect(null); return;
         default:
           // Type-to-edit: a printable character starts an edit seeded with it.
           if (!ctrl && !e.altKey && PRINTABLE.test(e.key) && !e.nativeEvent.isComposing) {
@@ -413,13 +455,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     ],
   );
 
-  // --- Mouse selection ------------------------------------------------------
+  // --- Mouse selection + fill-handle drag ----------------------------------
   const onCellMouseDown = useCallback(
-    (rowIdx: number, colIdx: number, e: { shiftKey: boolean }) => {
+    (rowIdx: number, colIdx: number, e: ReactMouseEvent) => {
       const key = colKeys[colIdx];
       if (key === undefined) return;
-      scrollRef.current?.focus(); // ensure the grid receives keyboard after a click
+      e.preventDefault(); // suppress native text selection; the grid owns selection
+      scrollRef.current?.focus(); // receive keyboard after a click
       dragging.current = true;
+      setInteracting(true);
+      setCopiedRect(null);
       setSelection((prev) =>
         e.shiftKey
           ? { anchor: prev.anchor, focus: { row: rowIdx, colKey: key } }
@@ -430,18 +475,51 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [colKeys, onActiveCellChange],
   );
 
+  const onFillHandleDown = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      fillDragging.current = true;
+      setInteracting(true);
+      setFillPreview(rect);
+    },
+    [rect],
+  );
+
   const onCellMouseEnter = useCallback(
     (rowIdx: number, colIdx: number) => {
+      if (fillDragging.current) {
+        // Extend the fill preview from the selection toward the entered cell,
+        // along the dominant axis (Google-Sheets behaviour).
+        const vMax = Math.max(rowIdx - rect.r1, rect.r0 - rowIdx, 0);
+        const hMax = Math.max(colIdx - rect.c1, rect.c0 - colIdx, 0);
+        if (vMax === 0 && hMax === 0) setFillPreview(rect);
+        else if (vMax >= hMax)
+          setFillPreview({ r0: Math.min(rect.r0, rowIdx), r1: Math.max(rect.r1, rowIdx), c0: rect.c0, c1: rect.c1 });
+        else
+          setFillPreview({ r0: rect.r0, r1: rect.r1, c0: Math.min(rect.c0, colIdx), c1: Math.max(rect.c1, colIdx) });
+        return;
+      }
       if (!dragging.current) return;
       const key = colKeys[colIdx];
       if (key === undefined) return;
       setSelection((prev) => ({ anchor: prev.anchor, focus: { row: rowIdx, colKey: key } }));
     },
-    [colKeys],
+    [colKeys, rect],
   );
 
+  // Stable window mouseup that runs the latest release logic (commit a fill-drag
+  // or end a selection-drag) via a ref so closures stay fresh.
+  const onPointerUpRef = useRef<() => void>(() => {});
+  onPointerUpRef.current = () => {
+    if (fillDragging.current && fillPreview) commitFill(fillPreview);
+    dragging.current = false;
+    fillDragging.current = false;
+    setInteracting(false);
+    setFillPreview(null);
+  };
   useEffect(() => {
-    const up = () => { dragging.current = false; };
+    const up = () => onPointerUpRef.current();
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
   }, []);
@@ -488,15 +566,24 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     left: offsets[rect.c0] ?? 0,
     width: (offsets[rect.c1 + 1] ?? 0) - (offsets[rect.c0] ?? 0),
     height: (rect.r1 - rect.r0 + 1) * ROW_HEIGHT,
-    border: '2px solid #3b82f6',
+    border: '2px solid var(--sg-blue)',
     boxSizing: 'border-box',
     pointerEvents: 'none',
     zIndex: 3,
   };
 
+  const rectOverlay = (r: Rect): CSSProperties => ({
+    position: 'absolute',
+    top: r.r0 * ROW_HEIGHT,
+    left: offsets[r.c0] ?? 0,
+    width: (offsets[r.c1 + 1] ?? 0) - (offsets[r.c0] ?? 0),
+    height: (r.r1 - r.r0 + 1) * ROW_HEIGHT,
+    pointerEvents: 'none',
+  });
+
   return (
     <div
-      className={`relative flex flex-col ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
+      className={`sg-grid relative flex flex-col ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
       data-testid="spreadsheet-grid"
     >
       {(onHiddenColumnsChange || onToggleMaximize) && (
@@ -563,7 +650,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             {visibleColumns.map((c, i) => (
               <div
                 key={c.key}
-                className="flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary select-none"
+                className={`sg-header flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
+                  i >= rect.c0 && i <= rect.c1 ? 'sg-header-selected text-text-primary' : ''
+                }`}
                 style={{ width: widths[i], minWidth: widths[i] }}
                 draggable={!!onColumnOrderChange}
                 onDragStart={() => { dragColKey.current = c.key; }}
@@ -596,10 +685,15 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     return (
                       <div
                         key={col.key}
-                        className={`flex items-center overflow-hidden border-b border-r border-white/5 px-2 text-xs ${
-                          inSel ? 'bg-accent-10' : ''
-                        } ${col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''}`}
-                        style={{ width: widths[c], minWidth: widths[c] }}
+                        className={`sg-cell flex items-center overflow-hidden border-b border-r border-white/5 px-2 text-xs ${
+                          col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''
+                        }`}
+                        style={{
+                          width: widths[c],
+                          minWidth: widths[c],
+                          // Range fill, but leave the active cell unfilled (GS look).
+                          backgroundColor: inSel && !isFocus ? 'var(--sg-blue-fill)' : undefined,
+                        }}
                         data-testid={`grid-cell-${rowIdx}-${col.key}`}
                         data-in-selection={inSel ? 'true' : undefined}
                         data-active-cell={isFocus ? 'true' : undefined}
@@ -632,9 +726,36 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               );
             })}
 
-            {/* Selection rectangle overlay (survives row virtualization) */}
+            {/* Marching-ants for a copied / cut range. */}
+            {copiedRect && (
+              <div
+                className="sg-marching-ants"
+                data-testid="grid-copy-marquee"
+                style={{ ...rectOverlay(copiedRect), zIndex: 3 }}
+              />
+            )}
+
+            {/* Fill-drag preview. */}
+            {fillPreview && (
+              <div className="sg-fill-preview" style={{ ...rectOverlay(fillPreview), zIndex: 4 }} />
+            )}
+
+            {/* Selection rectangle overlay (survives row virtualization). */}
             {rowCount > 0 && colCount > 0 && (
-              <div style={overlayStyle} data-testid="grid-selection-overlay" data-rect={`${rect.r0},${rect.c0},${rect.r1},${rect.c1}`} />
+              <div
+                className={`sg-selection-overlay ${interacting ? 'sg-no-anim' : ''}`}
+                style={overlayStyle}
+                data-testid="grid-selection-overlay"
+                data-rect={`${rect.r0},${rect.c0},${rect.r1},${rect.c1}`}
+              >
+                {!editing && (
+                  <div
+                    className="sg-fill-handle"
+                    data-testid="grid-fill-handle"
+                    onMouseDown={onFillHandleDown}
+                  />
+                )}
+              </div>
             )}
           </div>
         </div>
