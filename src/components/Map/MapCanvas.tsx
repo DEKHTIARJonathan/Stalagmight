@@ -179,6 +179,7 @@ export default function MapCanvas() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
+  const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [measureResult, setMeasureResult] = useState<{ distance: number; depthDiff: number } | null>(null);
@@ -1567,6 +1568,42 @@ export default function MapCanvas() {
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
   }, [showDistanceGradient, distanceField, project, mapLoaded, surveyLayerRef]);
+
+  // Distance-gradient origin marker (#34): a ring on the chosen origin station.
+  // A MapLibre Marker so it auto-tracks the camera and shows even when the
+  // stations layer is hidden (common with the gradient on). Only for a *picked*
+  // origin — the entrance default is the zero datum(s), already starred.
+  useEffect(() => {
+    originMarkerRef.current?.remove();
+    originMarkerRef.current = null;
+    if (!map.current || !mapLoaded || !showDistanceGradient || !distanceGradientOrigin) {
+      return undefined;
+    }
+    const originStation = activeStations.find(
+      (s) =>
+        s.station_ref.section_id === distanceGradientOrigin.section_id &&
+        s.station_ref.station_index === distanceGradientOrigin.station_index
+    );
+    if (!originStation) return undefined;
+    const lngLat = metersToMapCoords(
+      originStation.coordinates.x,
+      originStation.coordinates.y,
+      gpsOrigin
+    ) as [number, number];
+    const el = document.createElement('div');
+    el.setAttribute('data-testid', 'distance-origin-marker');
+    el.style.cssText =
+      'width:18px;height:18px;border-radius:50%;border:3px solid #7d3c98;' +
+      'box-shadow:0 0 0 2px #ffffff,0 0 4px rgba(0,0,0,0.6);' +
+      'background:rgba(255,255,255,0.15);pointer-events:none;';
+    originMarkerRef.current = new maplibregl.Marker({ element: el })
+      .setLngLat(lngLat)
+      .addTo(map.current);
+    return () => {
+      originMarkerRef.current?.remove();
+      originMarkerRef.current = null;
+    };
+  }, [showDistanceGradient, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
