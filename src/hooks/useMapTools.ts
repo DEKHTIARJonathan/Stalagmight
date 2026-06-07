@@ -51,6 +51,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showStations,
     showShots,
     showToast,
+    showDistanceGradient,
+    setDistanceGradientOrigin,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest));
 
@@ -181,6 +183,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             toggleSelection(sel);
           } else {
             setSelection(sel);
+          }
+          // Distance gradient (#34): a plain select-click re-roots the overlay to
+          // the clicked station (additive — selection still happens).
+          if (showDistanceGradient && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
+            setDistanceGradientOrigin(ref);
           }
           break;
         }
@@ -447,7 +454,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
       }
     },
-    [activeTool, addToSelection, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection]
+    [activeTool, addToSelection, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
   );
 
   // Handle empty click (no feature) - but use snapped station if available

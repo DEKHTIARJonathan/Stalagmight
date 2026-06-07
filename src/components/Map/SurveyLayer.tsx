@@ -1,4 +1,4 @@
-import type { Map as MaplibreMap, MapMouseEvent } from 'maplibre-gl';
+import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 'maplibre-gl';
 import type maplibregl from 'maplibre-gl';
 import type {
   LoopClosure,
@@ -24,6 +24,12 @@ import {
   type GhostSectionData,
 } from './surveyLayer/features';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
+import {
+  distanceColorExpression,
+  DISTANCE_NEAR,
+  DISTANCE_FAR,
+  type DistanceFeatureState,
+} from '../../utils/distanceGradient';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
@@ -223,6 +229,12 @@ export default class SurveyLayer {
   // Depth gradient mode state (used during update() for feature color calculation)
   private showDepthGradient: boolean = false;
   private depthRange: DepthRange = { min: 0, max: 50 };
+
+  // Distance-gradient overlay (#34). feature-state based so re-root needs no
+  // feature rebuild; re-applied in updateVisualState() because MapLibre clears
+  // feature-state on every setData().
+  private distanceMode: boolean = false;
+  private distanceState: DistanceFeatureState | null = null;
 
   // Theme colors for MapLibre paint properties (MapLibre cannot read CSS vars)
   // Seeded at construction so first paint uses current theme, not legacy fallbacks
@@ -1703,6 +1715,69 @@ export default class SurveyLayer {
       this.prevSelectedSectionStationIds = newSelectedStationIds;
     }
 
+    // Re-apply distance-gradient feature-state (#34). MapLibre wipes feature-state
+    // on every setData(); updateVisualState() runs after each rebuild, so this is
+    // what keeps the gradient alive across edits / label-zoom / depth toggles
+    // instead of silently reverting to the section color.
+    if (this.distanceMode) {
+      this.applyDistanceFeatureState();
+    }
+  }
+
+  /**
+   * Apply the distance-gradient overlay (#34). `enabled` swaps the shots/stations
+   * color paint to the distance ramp (or restores section/depth color); `state`
+   * carries per-feature `dist` (feature-id → distance, -1 = unreachable).
+   * Re-rooting just calls this again — no feature rebuild.
+   */
+  setDistanceGradient(enabled: boolean, state: DistanceFeatureState | null): void {
+    this.distanceMode = enabled;
+    this.distanceState = state;
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    this.applyDistancePaint();
+    this.applyDistanceFeatureState();
+  }
+
+  /** Swap shots/stations color to the distance ramp (or restore), and suspend the
+   *  depth sub-segment layer so distance wins cleanly. */
+  private applyDistancePaint(): void {
+    if (!this.map) return;
+    const color: ExpressionSpecification = this.distanceMode
+      ? distanceColorExpression(
+          DISTANCE_NEAR,
+          DISTANCE_FAR,
+          this.distanceState?.max ?? 0,
+          this.themeColors.grayLine,
+        )
+      : (['get', 'color'] as ExpressionSpecification);
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.setPaintProperty(this.shotsLayerId, 'line-color', color);
+    }
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', color);
+    }
+    // Depth's per-segment gradient renders above the main shot line; hide it while
+    // distance is active so it can't cover the distance colors.
+    if (this.map.getLayer(this.shotGradientsLayerId)) {
+      this.map.setLayoutProperty(
+        this.shotGradientsLayerId,
+        'visibility',
+        this.distanceMode ? 'none' : 'visible',
+      );
+    }
+  }
+
+  /** Push per-feature `dist` into feature-state (no-op when the overlay is off). */
+  private applyDistanceFeatureState(): void {
+    if (!this.map || !this.distanceMode || !this.distanceState) return;
+    const shotsSource = this.sourceId + '-shots';
+    const stationsSource = this.sourceId + '-stations';
+    for (const [id, dist] of this.distanceState.shots) {
+      this.map.setFeatureState({ source: shotsSource, id }, { dist });
+    }
+    for (const [id, dist] of this.distanceState.stations) {
+      this.map.setFeatureState({ source: stationsSource, id }, { dist });
+    }
   }
 
   // Update hitbox layer sizes from config

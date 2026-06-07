@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
-import type { SectionId, ShotId, StationRef } from '../../types/project';
+import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
@@ -15,7 +15,8 @@ import {
   getEffectiveShowStationComments,
   getEffectiveShowShotComments,
 } from '../../store/displaySelectors';
-import { getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage, invokeIpc } from '../../utils/ipc';
+import { buildDistanceFeatureState } from '../../utils/distanceGradient';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
@@ -354,6 +355,10 @@ export default function MapCanvas() {
     showShots,
     showReferenceShots,
     showDepthGradient,
+    showDistanceGradient,
+    distanceGradientOrigin,
+    distanceField,
+    setDistanceField,
     showDevStats,
     selection,
     mergeStationA,
@@ -1532,6 +1537,35 @@ export default function MapCanvas() {
       );
     }
   }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
+
+  // Distance-gradient overlay (#34): fetch the per-station distance field from the
+  // backend when the overlay is on and the origin / project data changes. NOT
+  // keyed on geometryMode — distance is topological (invariant to display
+  // coordinates). `from` null = the zero-datum entrance default.
+  useEffect(() => {
+    if (!showDistanceGradient) return undefined;
+    let cancelled = false;
+    invokeIpc<DistanceField>(
+      'get_station_distances_from',
+      { from: distanceGradientOrigin ?? null },
+      { purpose: 'distance gradient field', fields: { origin: distanceGradientOrigin ?? 'entrance' } }
+    )
+      .then((field) => { if (!cancelled) setDistanceField(field); })
+      .catch((e) => console.warn('[distance-gradient] field fetch failed', e));
+    return () => { cancelled = true; };
+  }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
+
+  // Apply the fetched field to the layer (feature-state + paint swap). Separate
+  // from the rebuild path so re-rooting never triggers a feature rebuild.
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    if (showDistanceGradient && distanceField && project) {
+      const state = buildDistanceFeatureState(project.sections, distanceField);
+      surveyLayerRef.current.setDistanceGradient(true, state);
+    } else {
+      surveyLayerRef.current.setDistanceGradient(false, null);
+    }
+  }, [showDistanceGradient, distanceField, project, mapLoaded, surveyLayerRef]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
