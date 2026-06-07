@@ -418,6 +418,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (rowIdx: number, colIdx: number, e: { shiftKey: boolean }) => {
       const key = colKeys[colIdx];
       if (key === undefined) return;
+      scrollRef.current?.focus(); // ensure the grid receives keyboard after a click
       dragging.current = true;
       setSelection((prev) =>
         e.shiftKey
@@ -481,7 +482,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   const overlayStyle: CSSProperties = {
     position: 'absolute',
-    top: HEADER_HEIGHT + rect.r0 * ROW_HEIGHT,
+    // The overlay lives INSIDE the rows-area (which starts below the sticky
+    // header), where row 0 is at y=0 — so no header offset here.
+    top: rect.r0 * ROW_HEIGHT,
     left: offsets[rect.c0] ?? 0,
     width: (offsets[rect.c1 + 1] ?? 0) - (offsets[rect.c0] ?? 0),
     height: (rect.r1 - rect.r0 + 1) * ROW_HEIGHT,
