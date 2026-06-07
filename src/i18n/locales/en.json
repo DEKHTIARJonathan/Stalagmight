@@ -1235,6 +1235,7 @@
       "center": "Center map on station {{id}}",
       "comment": "Comment",
       "zeroDatum": "Zero datum station",
+      "distanceGradientRoot": "Distance gradient root",
       "mergedWith": "Merged with",
       "connected": "Connected",
       "previousShot": "Previous shot",

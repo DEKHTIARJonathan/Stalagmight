@@ -318,6 +318,8 @@ function StationDetail({ station }: { station: Station }) {
   const precision = useDecimalPrecision();
   // Closure-adjusted view is read-only: disable mutation controls (edits happen in measured view).
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const distanceGradientOrigin = useUIStore((s) => s.distanceGradientOrigin);
+  const showDistanceGradient = useUIStore((s) => s.showDistanceGradient);
   // Show the active geometry's coordinates so inspection matches the map; falls
   // back to the passed (measured) station before the adjusted set is fetched.
   const activeStations = useActiveStations();
@@ -336,6 +338,13 @@ function StationDetail({ station }: { station: Station }) {
   const stationIndex = station.station_ref.station_index;
   const stationPosition = stationIndex;
   const sectionId = station.station_ref.section_id;
+
+  // Distance-gradient origin (#34): flag this station when it's the chosen root.
+  const isDistanceGradientRoot =
+    showDistanceGradient &&
+    distanceGradientOrigin != null &&
+    distanceGradientOrigin.section_id === station.station_ref.section_id &&
+    distanceGradientOrigin.station_index === station.station_ref.station_index;
 
   // Station-to-Shot mapping:
   // Station at station_index has:
@@ -471,6 +480,14 @@ function StationDetail({ station }: { station: Station }) {
           <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.depth')} value={`${formatFixed(displayStation.coordinates.z, undefined, precision.depth)} ${t('common.units.meters')}`} />
+
+          {isDistanceGradientRoot && (
+            <div className="pt-2 border-t border-border">
+              <span className="text-accent" data-testid="distance-gradient-root">
+                &#9678; {t('detailPanel.station.distanceGradientRoot')}
+              </span>
+            </div>
+          )}
 
           {station.comment && (
             <div className="pt-2 border-t border-border">
