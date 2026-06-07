@@ -113,6 +113,19 @@
   box-sizing: border-box;
 }
 
+/* Grabbable edges of the selection for cut-and-drop move. */
+.sg-move-edge {
+  position: absolute;
+  pointer-events: auto;
+  cursor: move;
+}
+/* Destination outline while moving cells. */
+.sg-move-target {
+  border: 2px solid var(--sg-blue);
+  box-sizing: border-box;
+  background: rgba(26, 115, 232, 0.06);
+}
+
 /* Column-move drop indicator (thick line between columns). */
 .sg-drop-line {
   background: var(--sg-blue);

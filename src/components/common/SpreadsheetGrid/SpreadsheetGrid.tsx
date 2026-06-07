@@ -170,6 +170,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const [colGhost, setColGhost] = useState<{ x: number; y: number; label: string; count: number } | null>(null);
   const rowDrag = useRef<{ mode: 'select' | 'move'; anchorRow: number; fromR0: number; fromR1: number } | null>(null);
   const [rowMoveDrop, setRowMoveDrop] = useState<{ index: number; lineY: number } | null>(null);
+  // Drag the selection border to move the cells' contents (cut-and-drop).
+  const cellMove = useRef<{ grabRow: number; grabCol: number; src: Rect } | null>(null);
+  const [cellMoveDrop, setCellMoveDrop] = useState<Rect | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -816,6 +819,93 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [rect],
   );
 
+  // The (row, visible-col) under a viewport point.
+  const cellAtClient = useCallback(
+    (clientX: number, clientY: number): { row: number; col: number } => {
+      const el = scrollRef.current;
+      if (!el) return { row: 0, col: 0 };
+      const r = el.getBoundingClientRect();
+      const yC = clientY - r.top + el.scrollTop - HEADER_HEIGHT;
+      const xC = clientX - r.left + el.scrollLeft - GUTTER_WIDTH;
+      const row = clamp(Math.floor(yC / ROW_HEIGHT), 0, Math.max(0, rowCount - 1));
+      let col = 0;
+      for (let i = 0; i < colCount; i++) {
+        if (xC >= (offsets[i] ?? 0)) col = i;
+        else break;
+      }
+      return { row, col: clamp(col, 0, Math.max(0, colCount - 1)) };
+    },
+    [rowCount, colCount, offsets],
+  );
+
+  // Cut-and-drop: move the source rect's values to the destination rect (same
+  // size, translated), clearing source cells the destination doesn't cover.
+  const moveCells = useCallback(
+    (src: Rect, dst: Rect) => {
+      if (src.r0 === dst.r0 && src.c0 === dst.c0) return;
+      const h = src.r1 - src.r0;
+      const w = src.c1 - src.c0;
+      // Snapshot source display values first (src/dst may overlap).
+      const vals: string[][] = [];
+      for (let dr = 0; dr <= h; dr++) {
+        const line: string[] = [];
+        for (let dc = 0; dc <= w; dc++) {
+          const col = colAt(src.c0 + dc);
+          line.push(col ? displayAt(src.r0 + dr, col) : '');
+        }
+        vals.push(line);
+      }
+      const edits: CellEdit[] = [];
+      const seen = new Set<string>();
+      for (let dr = 0; dr <= h; dr++) {
+        for (let dc = 0; dc <= w; dc++) {
+          const col = colAt(dst.c0 + dc);
+          const drow = dst.r0 + dr;
+          if (!col || !cellEditable(drow, col)) continue;
+          const value = parseForColumn(col, vals[dr]?.[dc] ?? '', drow);
+          if (value !== undefined) {
+            edits.push({ row: drow, colKey: col.key, value });
+            seen.add(`${drow}:${col.key}`);
+          }
+        }
+      }
+      // Clear source cells the destination doesn't overwrite.
+      const inDst = (r: number, c: number) => r >= dst.r0 && r <= dst.r1 && c >= dst.c0 && c <= dst.c1;
+      for (let r = src.r0; r <= src.r1; r++) {
+        for (let c = src.c0; c <= src.c1; c++) {
+          if (inDst(r, c)) continue;
+          const col = colAt(c);
+          if (!col || !cellEditable(r, col) || col.kind === 'number') continue;
+          if (seen.has(`${r}:${col.key}`)) continue;
+          edits.push({ row: r, colKey: col.key, value: col.kind === 'number-nullable' ? null : '' });
+        }
+      }
+      applyEdits(edits);
+      const ak = colKeys[dst.c0];
+      const fk = colKeys[dst.c1];
+      if (ak !== undefined && fk !== undefined) {
+        setExtraRanges([]);
+        setSelection({
+          anchor: { row: dst.r0, colKey: ak },
+          focus: { row: dst.r1, colKey: fk },
+          active: { row: dst.r0, colKey: ak },
+        });
+      }
+    },
+    [colAt, displayAt, cellEditable, parseForColumn, applyEdits, colKeys],
+  );
+
+  const onMoveBorderDown = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const c = cellAtClient(e.clientX, e.clientY);
+      cellMove.current = { grabRow: c.row, grabCol: c.col, src: rect };
+      setInteracting(true);
+    },
+    [cellAtClient, rect],
+  );
+
   const autoScrollTick = useCallback(() => {
     autoScrollRAF.current = 0;
     const el = scrollRef.current;
@@ -835,6 +925,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const onMoveRef = useRef<(e: MouseEvent) => void>(() => {});
   const onUpRef = useRef<() => void>(() => {});
   onMoveRef.current = (e) => {
+    if (cellMove.current) {
+      const c = cellAtClient(e.clientX, e.clientY);
+      const src = cellMove.current.src;
+      const h = src.r1 - src.r0;
+      const w = src.c1 - src.c0;
+      const r0 = clamp(c.row - (cellMove.current.grabRow - src.r0), 0, Math.max(0, rowCount - 1 - h));
+      const c0 = clamp(c.col - (cellMove.current.grabCol - src.c0), 0, Math.max(0, colCount - 1 - w));
+      setCellMoveDrop({ r0, r1: r0 + h, c0, c1: c0 + w });
+      return;
+    }
     if (colDrag.current?.mode === 'move') {
       const el = scrollRef.current;
       if (!el) return;
@@ -893,10 +993,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     if (rowDrag.current?.mode === 'move' && rowMoveDrop) {
       reorderRows(rowDrag.current.fromR0, rowDrag.current.fromR1, rowMoveDrop.index);
     }
+    if (cellMove.current && cellMoveDrop) moveCells(cellMove.current.src, cellMoveDrop);
     if (fillDragging.current && fillPreview) commitFill(fillPreview);
     colDrag.current = null;
     rowDrag.current = null;
+    cellMove.current = null;
     setRowMoveDrop(null);
+    setCellMoveDrop(null);
     dragging.current = false;
     fillDragging.current = false;
     resizing.current = null;
@@ -1223,6 +1326,15 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               <div className="sg-fill-preview" style={{ ...rectOverlay(fillPreview), zIndex: 4 }} />
             )}
 
+            {/* Cut-and-drop move target outline. */}
+            {cellMoveDrop && (
+              <div
+                className="sg-move-target"
+                data-testid="grid-move-target"
+                style={{ ...rectOverlay(cellMoveDrop), zIndex: 5 }}
+              />
+            )}
+
             {/* Border for each non-contiguous (Ctrl+click) extra range. */}
             {extraRanges.map((er, i) => (
               <div
@@ -1240,6 +1352,15 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 data-testid="grid-selection-overlay"
                 data-rect={`${rect.r0},${rect.c0},${rect.r1},${rect.c1}`}
               >
+                {/* Grab any edge (not the interior) to move the cells. */}
+                {!editing && onBatchEdit && (
+                  <>
+                    <div className="sg-move-edge" style={{ top: -3, left: 0, right: 0, height: 6 }} onMouseDown={onMoveBorderDown} />
+                    <div className="sg-move-edge" style={{ bottom: -3, left: 0, right: 0, height: 6 }} onMouseDown={onMoveBorderDown} />
+                    <div className="sg-move-edge" style={{ top: 0, bottom: 0, left: -3, width: 6 }} onMouseDown={onMoveBorderDown} />
+                    <div className="sg-move-edge" style={{ top: 0, bottom: 0, right: -3, width: 6 }} onMouseDown={onMoveBorderDown} />
+                  </>
+                )}
                 {!editing && (
                   <div
                     className="sg-fill-handle"
