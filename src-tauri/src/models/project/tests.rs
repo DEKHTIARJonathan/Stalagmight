@@ -4365,67 +4365,196 @@ fn compute_adjusted_is_deterministic_and_keeps_measured_stable() {
     }
 }
 
+/// Exactness guard for the degree-≤2 graph-reduction solver (#81): on a range of
+/// random SPD weighted-Laplacian systems (chains, single cycles, and densely
+/// connected cores), `solve_reduced_laplacian` must match a reference dense
+/// Gaussian elimination on both axes.
+#[test]
+fn solve_reduced_laplacian_matches_dense() {
+    // Deterministic xorshift RNG → reproducible [0,1) draws (no rand dep).
+    fn next(state: &mut u64) -> f64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        ((x >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+
+    // Dense SPD solve via Gaussian elimination with partial pivoting.
+    fn dense_solve(mat: &[Vec<f64>], rhs: &[f64]) -> Vec<f64> {
+        let n = rhs.len();
+        let mut a: Vec<Vec<f64>> = mat.to_vec();
+        let mut b = rhs.to_vec();
+        for col in 0..n {
+            let mut piv = col;
+            for r in (col + 1)..n {
+                if a[r][col].abs() > a[piv][col].abs() {
+                    piv = r;
+                }
+            }
+            a.swap(col, piv);
+            b.swap(col, piv);
+            let d = a[col][col];
+            for r in (col + 1)..n {
+                let f = a[r][col] / d;
+                for c in col..n {
+                    a[r][c] -= f * a[col][c];
+                }
+                b[r] -= f * b[col];
+            }
+        }
+        let mut x = vec![0.0; n];
+        for col in (0..n).rev() {
+            let mut s = b[col];
+            for c in (col + 1)..n {
+                s -= a[col][c] * x[c];
+            }
+            x[col] = s / a[col][col];
+        }
+        x
+    }
+
+    // (n, extra_random_edges) — 0 extra = pure chain (fully peels, empty core);
+    // a few = small cycle core; many = a denser core that exercises the PCG path.
+    let configs = [(2, 0), (6, 0), (8, 2), (20, 5), (40, 30), (60, 80)];
+    let mut seed = 0x9E3779B97F4A7C15u64;
+
+    for (n, extra) in configs {
+        let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
+        let mut diag_x = vec![0.0; n];
+        let mut diag_y = vec![0.0; n];
+
+        let mut add_edge = |a: usize, b: usize, seed: &mut u64,
+                            adj: &mut Vec<Vec<(usize, f64, f64)>>,
+                            dx: &mut Vec<f64>, dy: &mut Vec<f64>| {
+            let wx = 0.5 + next(seed);
+            let wy = 0.5 + next(seed);
+            adj[a].push((b, -wx, -wy));
+            adj[b].push((a, -wx, -wy));
+            dx[a] += wx;
+            dx[b] += wx;
+            dy[a] += wy;
+            dy[b] += wy;
+        };
+
+        // Spanning chain keeps the graph connected.
+        for i in 0..n.saturating_sub(1) {
+            add_edge(i, i + 1, &mut seed, &mut adj, &mut diag_x, &mut diag_y);
+        }
+        // Extra edges introduce loops (a non-trivial 2-core).
+        for _ in 0..extra {
+            let a = (next(&mut seed) * n as f64) as usize % n;
+            let b = (next(&mut seed) * n as f64) as usize % n;
+            if a != b {
+                add_edge(a, b, &mut seed, &mut adj, &mut diag_x, &mut diag_y);
+            }
+        }
+        // Grounding term on every diagonal → strictly SPD (mimics fixed-node edges).
+        for i in 0..n {
+            diag_x[i] += 0.25 + next(&mut seed);
+            diag_y[i] += 0.25 + next(&mut seed);
+        }
+        let atb_x: Vec<f64> = (0..n).map(|_| next(&mut seed) * 4.0 - 2.0).collect();
+        let atb_y: Vec<f64> = (0..n).map(|_| next(&mut seed) * 4.0 - 2.0).collect();
+
+        // Dense reference matrices built from the SAME adj/diag (duplicate edges
+        // summed identically to the solver).
+        let mut ax = vec![vec![0.0; n]; n];
+        let mut ay = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            ax[i][i] = diag_x[i];
+            ay[i][i] = diag_y[i];
+            for &(j, ox, oy) in &adj[i] {
+                ax[i][j] += ox;
+                ay[i][j] += oy;
+            }
+        }
+        let ref_x = dense_solve(&ax, &atb_x);
+        let ref_y = dense_solve(&ay, &atb_y);
+
+        let (sol_x, sol_y) =
+            Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj);
+
+        for i in 0..n {
+            assert!(
+                (sol_x[i] - ref_x[i]).abs() < 1e-6,
+                "n={n} extra={extra} x[{i}]: reduced={} dense={}",
+                sol_x[i],
+                ref_x[i]
+            );
+            assert!(
+                (sol_y[i] - ref_y[i]).abs() < 1e-6,
+                "n={n} extra={extra} y[{i}]: reduced={} dense={}",
+                sol_y[i],
+                ref_y[i]
+            );
+        }
+    }
+}
+
 /// Profiling harness for the closure-adjusted solve (#81). Ignored by default.
 /// Run with:
 ///   cargo test --manifest-path src-tauri/Cargo.toml --release \
 ///     profile_closure_solve_large -- --ignored --nocapture
 ///
-/// Builds a single-closure survey of ~6k stations shaped as one big loop made of
-/// two long degree-2 chains joined at both ends. That is the worst case for the
-/// per-station coordinate walk in `adjust_least_squares` (each chain interior is
-/// degree 2, so the old per-station `compute_station_raw_coords` calls were
-/// O(index) → O(n^2) overall). Prints the wall-clock cost of one cold
-/// `compute_adjusted_station_coordinates`.
+/// Builds single-closure surveys shaped as one big loop made of two long
+/// degree-2 chains joined at both ends — the worst case for the closure solve
+/// (a single high-diameter loop). Sweeping the size demonstrates the scaling:
+/// with the degree-≤2 graph reduction the loop peels to a ~1-node core, so the
+/// whole `compute_adjusted_station_coordinates` is O(n) (it was O(n²) before #81
+/// — both the per-station coordinate walk and the O(diameter) PCG iterations).
 #[test]
 #[ignore]
 fn profile_closure_solve_large() {
-    const N: usize = 3000; // shots per chain → ~2N+2 stations
+    for n_shots in [1500usize, 3000, 6000, 12000] {
+        let mut project = Project::new("ProfileLoop".to_string(), None);
 
-    let mut project = Project::new("ProfileLoop".to_string(), None);
+        // Path A: eastward shots of length 5.0.
+        let a = project
+            .add_section(SectionData {
+                shots: (0..n_shots).map(|_| shot(90.0, 90.0, 5.0, 0.0, 0.0)).collect(),
+                ..Default::default()
+            })
+            .id;
+        // Path B: same count, slightly longer so the far ends disagree (a real
+        // misclosure for the solve to distribute).
+        let b = project
+            .add_section(SectionData {
+                shots: (0..n_shots).map(|_| shot(90.0, 90.0, 5.001, 0.0, 0.0)).collect(),
+                ..Default::default()
+            })
+            .id;
 
-    // Path A: N eastward shots of length 5.0.
-    let a = project
-        .add_section(SectionData {
-            shots: (0..N).map(|_| shot(90.0, 90.0, 5.0, 0.0, 0.0)).collect(),
-            ..Default::default()
-        })
-        .id;
-    // Path B: N eastward shots, slightly longer so the far ends disagree
-    // (a real misclosure for the solve to distribute).
-    let b = project
-        .add_section(SectionData {
-            shots: (0..N).map(|_| shot(90.0, 90.0, 5.001, 0.0, 0.0)).collect(),
-            ..Default::default()
-        })
-        .id;
+        project
+            .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+            .unwrap();
+        // Join the two chains at the origin and close the far ends → one big loop.
+        project
+            .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+            .unwrap();
+        project
+            .create_loop_closure(
+                StationRef::new(a, n_shots as u32),
+                StationRef::new(b, n_shots as u32),
+                ClosureStrategy::Batch,
+            )
+            .unwrap();
 
-    project
-        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
-        .unwrap();
-    // Join the two chains at the origin and close the far ends → one big loop.
-    project
-        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
-        .unwrap();
-    project
-        .create_loop_closure(
-            StationRef::new(a, N as u32),
-            StationRef::new(b, N as u32),
-            ClosureStrategy::Batch,
-        )
-        .unwrap();
+        let n_stations = project.compute_station_coordinates().len();
 
-    let n_stations = project.compute_station_coordinates().len();
+        let t = std::time::Instant::now();
+        let adjusted =
+            project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+        let elapsed = t.elapsed();
 
-    let t = std::time::Instant::now();
-    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
-    let elapsed = t.elapsed();
-
-    eprintln!(
-        "profile_closure_solve_large: {} stations, 1 closure → compute_adjusted = {} ms ({} adjusted)",
-        n_stations,
-        elapsed.as_millis(),
-        adjusted.len(),
-    );
+        eprintln!(
+            "profile_closure_solve_large: {} stations, 1 closure → compute_adjusted = {} ms ({} adjusted)",
+            n_stations,
+            elapsed.as_millis(),
+            adjusted.len(),
+        );
+    }
 }
 
 #[test]
