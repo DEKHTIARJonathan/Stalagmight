@@ -3165,9 +3165,9 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
 
 #[test]
 fn reachability_keeps_jump_reference_shots() {
-    // TEMPORARY heuristic (#77): an is_reference shot that is the ONLY link to a
-    // tail station is a "jump" — dropping it would falsely mark that station
-    // unreachable, so it must be kept.
+    // A jump/reference shot is a real measured leg: an is_reference shot that is
+    // the only link to a tail station keeps it reachable (it's included in the
+    // graph like any other shot).
     let mut project = Project::new("JumpKept".to_string(), None);
     let section_id = project
         .add_section(SectionData {
@@ -3203,12 +3203,12 @@ fn reachability_keeps_jump_reference_shots() {
 }
 
 #[test]
-fn reachability_drops_redundant_reference_shots() {
-    // TEMPORARY heuristic (#77): B's reference shot directly links B0-B1 (len 5),
-    // but B0 and B1 are ALSO connected through section A (A0-A1-A2 = 20) via
-    // merges. The direct reference is redundant → dropped, so B0->B1 measures the
-    // long way (20), not the 5 it would give if (double-)counted.
-    let mut project = Project::new("RefDropped".to_string(), None);
+fn reachability_uses_reference_shot_shortcut() {
+    // A reference shot is a real connection: B's reference shot links B0-B1 (len
+    // 5). Even though B0/B1 are ALSO connected the long way through section A
+    // (A0-A1-A2 = 20), shortest-path takes the direct reference (5) — references
+    // are included, not dropped, so a real jump shortcut is honored. (#34)
+    let mut project = Project::new("RefShortcut".to_string(), None);
     let a = project
         .add_section(SectionData {
             shots: vec![
@@ -3260,10 +3260,58 @@ fn reachability_drops_redundant_reference_shots() {
     };
     let dist = project.compute_distances_from(&stations, &[pos(b, 0)]);
     assert!(
-        (dist[pos(b, 1)] - 20.0).abs() < 1e-6,
-        "redundant reference must be dropped (B1 via A = 20), got {}",
+        (dist[pos(b, 1)] - 5.0).abs() < 1e-6,
+        "reference shortcut must be used (B1 direct = 5, not 20 via A), got {}",
         dist[pos(b, 1)]
     );
+}
+
+#[test]
+fn reachability_includes_non_aligned_closures() {
+    // A non-aligned (e.g. Batch) loop closure is still a real physical connection.
+    // Section B is reachable from A's zero datum ONLY across a non-aligned closure
+    // — it must NOT show as unreachable. (#34: areas connected via closure)
+    let mut project = Project::new("NonAlignedClosure".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], // A0->A1
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)], // B0->B1, disconnected from A
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+    // A1 <-> B0 via a NON-aligned closure (is_aligned = false).
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    let refs = project.station_refs_in_order();
+    let field = project.distance_field_from(&refs, None); // from the zero datum
+    let pos = |sec, i| {
+        refs.iter()
+            .position(|r| *r == StationRef::new(sec, i))
+            .unwrap()
+    };
+    // A0=0, A1=10, B0=10 (closure, 0-cost), B1=17 — all finite (reachable).
+    assert_eq!(field.distances[pos(b, 0)], Some(10.0), "B0 reachable via closure");
+    assert_eq!(field.distances[pos(b, 1)], Some(17.0), "B1 reachable via closure");
 }
 
 #[test]

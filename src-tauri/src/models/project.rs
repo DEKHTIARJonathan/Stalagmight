@@ -5850,79 +5850,35 @@ impl Project {
         m
     }
 
-    /// Build the survey distance graph as an adjacency list over the `n`
-    /// stations (nodes indexed by position; `station_index` maps refs to those
-    /// indices). Edges: every **permanent** shot weighted by its measured
-    /// `length`, plus zero-cost edges for `station_merges` and aligned
-    /// `loop_closures` (both collapse two stations onto the same physical
-    /// point). This is the single, reusable graph behind every distance query —
-    /// keep graph/geometry logic in this domain layer, never in the UI.
+    /// Build the survey distance graph as an adjacency list over the `n` stations
+    /// (nodes indexed by position; `station_index` maps refs to those indices).
+    /// Edges are **every real topological connection**:
+    /// - every shot — permanent AND jump/reference — weighted by its measured
+    ///   `length` (reference shots are real measured legs / jumps a diver swims);
+    /// - `station_merges` (zero cost — the same physical point);
+    /// - every `loop_closures` entry (zero cost — a closed loop means the two
+    ///   stations are the same physical point), **regardless of `is_aligned`**;
+    ///   alignment is only a geometry-reconciliation strategy (`Move` vs `Batch`),
+    ///   so the topological connection exists either way.
     ///
-    /// ## Jump-vs-reference heuristic (TEMPORARY — see issue #77)
-    /// `is_reference` shots conflate two physically different things: real
-    /// **jumps** (a diver swims them — must count, or chunks of cave look
-    /// unreachable) and redundant **references** (counting them double-counts
-    /// distance). The model can't yet tell them apart, so we approximate: an
-    /// `is_reference` shot is kept **only if it bridges two otherwise-
-    /// disconnected components** (a real jump needed for reachability); if its
-    /// endpoints are already connected through permanent passage / merges /
-    /// closures it's a redundant reference and is dropped. Shorter bridging
-    /// shots win. Delete this whole block once #77 gives jumps and references a
-    /// first-class distinction.
+    /// We deliberately include everything. Distances are shortest-path (Dijkstra
+    /// always takes the minimum), so an extra real edge can only ever yield a
+    /// shorter, more correct route — never inflate one. Excluding real
+    /// connections is what hides reachable areas or routes "the long way".
+    ///
+    /// NOTE (#77): the one residual risk is a *non-physical* reference tie (a pure
+    /// survey backsight, not swimmable) creating a false shortcut that understates
+    /// distance. Telling those apart from real jumps needs a first-class model;
+    /// until then we favor completeness — real data showed over-exclusion (a
+    /// dropped jump shortcut, excluded non-aligned closures) was the actual bug.
     fn build_survey_graph(
         &self,
         n: usize,
         station_index: &HashMap<StationRef, usize>,
     ) -> Vec<Vec<(usize, f64)>> {
-        // Minimal union-find, local to the temporary heuristic below (#77).
-        struct UnionFind {
-            parent: Vec<usize>,
-            rank: Vec<u8>,
-        }
-        impl UnionFind {
-            fn new(n: usize) -> Self {
-                Self {
-                    parent: (0..n).collect(),
-                    rank: vec![0; n],
-                }
-            }
-            fn find(&mut self, x: usize) -> usize {
-                let mut root = x;
-                while self.parent[root] != root {
-                    root = self.parent[root];
-                }
-                let mut cur = x;
-                while self.parent[cur] != root {
-                    let next = self.parent[cur];
-                    self.parent[cur] = root;
-                    cur = next;
-                }
-                root
-            }
-            /// Union the sets; returns `true` only when they were distinct (i.e.
-            /// this edge bridges two components).
-            fn union(&mut self, a: usize, b: usize) -> bool {
-                let (ra, rb) = (self.find(a), self.find(b));
-                if ra == rb {
-                    return false;
-                }
-                match self.rank[ra].cmp(&self.rank[rb]) {
-                    Ordering::Less => self.parent[ra] = rb,
-                    Ordering::Greater => self.parent[rb] = ra,
-                    Ordering::Equal => {
-                        self.parent[rb] = ra;
-                        self.rank[ra] += 1;
-                    }
-                }
-                true
-            }
-        }
-
         let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-        let mut uf = UnionFind::new(n);
-        // Reference-shot edges are deferred to the heuristic pass below.
-        let mut reference_edges: Vec<(usize, usize, f64)> = Vec::new();
 
+        // Shots (permanent and jump/reference), weighted by measured length.
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {
                 let from = StationRef::new(section.id, i as u32);
@@ -5931,16 +5887,12 @@ impl Project {
                     (station_index.get(&from), station_index.get(&to))
                 {
                     let w = shot.length.max(0.0);
-                    if shot.is_reference {
-                        reference_edges.push((fi, ti, w));
-                    } else {
-                        adj[fi].push((ti, w));
-                        adj[ti].push((fi, w));
-                        uf.union(fi, ti);
-                    }
+                    adj[fi].push((ti, w));
+                    adj[ti].push((fi, w));
                 }
             }
         }
+        // Station merges: zero-cost (same physical point).
         for merge in &self.station_merges {
             if let (Some(a_sr), Some(b_sr)) = (
                 self.resolve_key(&merge.station_a),
@@ -5951,14 +5903,12 @@ impl Project {
                 {
                     adj[a].push((b, 0.0));
                     adj[b].push((a, 0.0));
-                    uf.union(a, b);
                 }
             }
         }
+        // Loop closures: zero-cost, INCLUDING non-aligned ones — a closed loop is
+        // a real physical connection no matter the reconciliation strategy.
         for closure in &self.loop_closures {
-            if !closure.is_aligned {
-                continue;
-            }
             if let (Some(a_sr), Some(b_sr)) = (
                 self.resolve_key(&closure.station_a),
                 self.resolve_key(&closure.station_b),
@@ -5968,20 +5918,7 @@ impl Project {
                 {
                     adj[a].push((b, 0.0));
                     adj[b].push((a, 0.0));
-                    uf.union(a, b);
                 }
-            }
-        }
-
-        // TEMPORARY heuristic (#77): keep an is_reference shot only when it
-        // bridges two otherwise-disconnected components (a real jump); drop it
-        // when redundant (a reference that would double-count). Shortest first
-        // so the cheapest bridging shot represents the jump.
-        reference_edges.sort_by(|x, y| x.2.partial_cmp(&y.2).unwrap_or(Ordering::Equal));
-        for (a, b, w) in reference_edges {
-            if uf.union(a, b) {
-                adj[a].push((b, w));
-                adj[b].push((a, w));
             }
         }
 
