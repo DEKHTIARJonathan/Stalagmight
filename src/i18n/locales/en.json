@@ -1575,7 +1575,8 @@
       "title": "Distance",
       "aria": "Distance scale from {{min}} (near) to {{max}} (far)",
       "fromEntrance": "from entrance",
-      "fromStation": "from {{id}}"
+      "fromStation": "from {{id}}",
+      "computing": "Distance: computing…"
     },
     "placement": {
       "title": "Placement",

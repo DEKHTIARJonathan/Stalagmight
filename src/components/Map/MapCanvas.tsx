@@ -361,6 +361,7 @@ export default function MapCanvas() {
     distanceGradientOrigin,
     distanceField,
     setDistanceField,
+    setDistanceGradientOrigin,
     showDevStats,
     selection,
     mergeStationA,
@@ -1540,10 +1541,18 @@ export default function MapCanvas() {
     }
   }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
 
+  // On a project switch (created_at is stable across edits, changes on switch),
+  // reset the distance origin to the entrance default and drop the stale field —
+  // otherwise the previous project's distances paint the new project gray. (#34)
+  useEffect(() => {
+    setDistanceGradientOrigin(null);
+  }, [project?.created_at, setDistanceGradientOrigin]);
+
   // Distance-gradient overlay (#34): fetch the per-station distance field from the
-  // backend when the overlay is on and the origin / project data changes. NOT
-  // keyed on geometryMode — distance is topological (invariant to display
-  // coordinates). `from` null = the zero-datum entrance default.
+  // backend when the overlay is on and the origin, project data, OR closure
+  // config changes. Distances are computed on closure-adjusted coordinates, so a
+  // closure-adjustment change must refetch — but display geometryMode does not
+  // (distance always uses the adjusted geometry). `from` null = entrance default.
   useEffect(() => {
     if (!showDistanceGradient) return undefined;
     let cancelled = false;
@@ -1555,7 +1564,15 @@ export default function MapCanvas() {
       .then((field) => { if (!cancelled) setDistanceField(field); })
       .catch((e) => console.warn('[distance-gradient] field fetch failed', e));
     return () => { cancelled = true; };
-  }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
+  }, [
+    showDistanceGradient,
+    distanceGradientOrigin,
+    project?.modified_at,
+    config?.closure_adjustment?.base_sigma_length_m,
+    config?.closure_adjustment?.base_sigma_azimuth_deg,
+    config?.closure_adjustment?.base_sigma_depth_m,
+    setDistanceField,
+  ]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
@@ -3045,6 +3062,26 @@ export default function MapCanvas() {
       {/* Distance legend (#34): color key + "which overlay" cue. */}
       {showDistanceGradient && distanceField && (
         <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
+      )}
+      {/* While the field is being (re)computed — first toggle / re-root — show a
+          lightweight cue so a slow closure solve doesn't look frozen. */}
+      {showDistanceGradient && !distanceField && (
+        <div
+          data-testid="distance-legend-loading"
+          style={{
+            position: 'absolute',
+            bottom: 50,
+            left: 10,
+            background: 'var(--cc-text-halo-alt)',
+            color: 'var(--cc-depth-text)',
+            borderRadius: 4,
+            padding: 8,
+            zIndex: 1,
+            fontSize: 11,
+          }}
+        >
+          {t('map.distanceLegend.computing')}
+        </div>
       )}
 
       {/* Developer stats overlay */}

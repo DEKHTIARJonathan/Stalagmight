@@ -688,7 +688,10 @@ export const useUIStore = create<UIStore>((set) => ({
         : { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
     );
   },
-  setDistanceGradientOrigin: (distanceGradientOrigin) => set({ distanceGradientOrigin }),
+  setDistanceGradientOrigin: (distanceGradientOrigin) =>
+    // Clear the cached field so stale colors from the previous origin aren't shown
+    // under the new origin's legend/marker while the new field is being fetched.
+    set({ distanceGradientOrigin, distanceField: null }),
   setDistanceField: (distanceField) => set({ distanceField }),
   toggleDisplay: (key) => {
     trackAction(`toggle.${key}`);
