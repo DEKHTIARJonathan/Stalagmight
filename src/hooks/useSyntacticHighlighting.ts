@@ -1,4 +1,4 @@
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useMemo } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import type { SyntacticHighlightLevel } from '../types/config';
@@ -34,17 +34,26 @@ export function useSyntacticHighlighting(): SyntacticHighlightLevel {
   );
   const preview = useUIStore((s) => s.syntacticHighlightPreview);
   const setSyntacticLevel = useUIStore((s) => s.setSyntacticLevel);
-  const setSyntacticColors = useUIStore((s) => s.setSyntacticColors);
 
   const active = preview ?? configHighlighting ?? defaultConfig.syntactic_highlighting;
   const level = normalizeLevel(active.level);
   const preset = active.preset;
   const overrides = active.overrides;
 
+  // `overrides` is a stable object from the store except during Settings live
+  // preview, so serialize it only when its reference changes — not on every
+  // App-root render (this hook runs at the top of App, which re-renders often).
+  const overridesKey = useMemo(() => JSON.stringify(overrides), [overrides]);
+  const colors = useMemo(
+    () => resolveSyntacticColors(preset, overrides),
+    // overridesKey stands in for `overrides` so we re-resolve on preset/override
+    // changes only, not on unrelated renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [preset, overridesKey],
+  );
+
   useLayoutEffect(() => {
     const root = document.documentElement;
-    const colors = resolveSyntacticColors(preset, overrides);
-
     for (const { id } of SYNTACTIC_ROLES) {
       const value = level === 'off' ? OFF_NEUTRAL : colors[id];
       root.style.setProperty(syntacticVarName(id), value);
@@ -52,10 +61,7 @@ export function useSyntacticHighlighting(): SyntacticHighlightLevel {
 
     root.dataset.shLevel = level;
     setSyntacticLevel(level);
-    setSyntacticColors(colors);
-    // `overrides` is a stable-ish object from the store; stringify so the effect
-    // re-runs when a color is edited during live preview.
-  }, [level, preset, JSON.stringify(overrides), setSyntacticLevel, setSyntacticColors]);
+  }, [level, colors, setSyntacticLevel]);
 
   return level;
 }

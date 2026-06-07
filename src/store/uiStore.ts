@@ -18,7 +18,6 @@ import { DISPLAY_DEFAULTS } from './displaySelectors';
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
 import { getGroupForTool } from '../utils/toolGroups';
-import { SYNTACTIC_PRESETS } from '../theme/syntacticPalette';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
 export type ResolvedTheme = 'dark' | 'light' | 'cave' | 'dracula' | 'one_dark' | 'solarized_light' | 'catppuccin_latte' | 'nord' | 'catppuccin_mocha';
@@ -305,9 +304,6 @@ interface UIStore {
   /** Resolved highlighting level, mirrored from config by useSyntacticHighlighting. */
   syntacticLevel: SyntacticHighlightLevel;
   setSyntacticLevel: (level: SyntacticHighlightLevel) => void;
-  /** Resolved role -> hex colors (preset + overrides), for blob text contrast. */
-  syntacticColors: Record<string, string>;
-  setSyntacticColors: (colors: Record<string, string>) => void;
   /** Temporary highlighting override for live preview in Settings dialog */
   syntacticHighlightPreview: SyntacticHighlightingConfig | null;
   setSyntacticHighlightPreview: (config: SyntacticHighlightingConfig | null) => void;
@@ -960,8 +956,6 @@ export const useUIStore = create<UIStore>((set) => ({
   // Syntactic highlighting state (opt-out default: full)
   syntacticLevel: 'full' as SyntacticHighlightLevel,
   setSyntacticLevel: (syntacticLevel) => set({ syntacticLevel }),
-  syntacticColors: { ...SYNTACTIC_PRESETS.default },
-  setSyntacticColors: (syntacticColors) => set({ syntacticColors }),
   syntacticHighlightPreview: null,
   setSyntacticHighlightPreview: (syntacticHighlightPreview) => set({ syntacticHighlightPreview }),
 
