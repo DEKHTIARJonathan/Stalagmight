@@ -5875,10 +5875,14 @@ impl Project {
         &self,
         n: usize,
         station_index: &HashMap<StationRef, usize>,
+        coords: Option<&[Coordinates]>,
     ) -> Vec<Vec<(usize, f64)>> {
         let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
 
-        // Shots (permanent and jump/reference), weighted by measured length.
+        // Shots (permanent and jump/reference). Edge weight = straight-line
+        // distance between the endpoints' `coords` when supplied (the
+        // closure-adjusted geometry, for the distance gradient), else the
+        // measured shot length (penetration / topological queries).
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {
                 let from = StationRef::new(section.id, i as u32);
@@ -5886,7 +5890,14 @@ impl Project {
                 if let (Some(&fi), Some(&ti)) =
                     (station_index.get(&from), station_index.get(&to))
                 {
-                    let w = shot.length.max(0.0);
+                    let w = match coords {
+                        Some(c) => {
+                            let (a, b) = (&c[fi], &c[ti]);
+                            let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
+                            (dx * dx + dy * dy + dz * dz).sqrt()
+                        }
+                        None => shot.length.max(0.0),
+                    };
                     adj[fi].push((ti, w));
                     adj[ti].push((fi, w));
                 }
@@ -5999,7 +6010,7 @@ impl Project {
             return vec![f64::INFINITY; n];
         }
         let station_index = Self::station_index_map(stations);
-        let adj = self.build_survey_graph(n, &station_index);
+        let adj = self.build_survey_graph(n, &station_index, None);
         Self::dijkstra(&adj, roots)
     }
 
@@ -6020,7 +6031,7 @@ impl Project {
         }
         let station_index = Self::station_index_map(stations);
         let roots = self.zero_datum_roots(&station_index);
-        let adj = self.build_survey_graph(n, &station_index);
+        let adj = self.build_survey_graph(n, &station_index, None);
         Self::dijkstra(&adj, &roots)
     }
 
@@ -6034,38 +6045,22 @@ impl Project {
             .fold(0.0_f64, f64::max)
     }
 
-    /// Enumerate every station's ref in the canonical `(section → station index)`
-    /// order — the SAME order `compute_station_coordinates` emits (verified: it
-    /// pushes station 0 then one per shot, per section) — but WITHOUT the xyz
-    /// trig solve. Distance queries need only topology + the station list, so
-    /// this avoids paying for a full coordinate solve on every re-root. Stays
-    /// index-aligned with `ProjectState.stations`.
-    pub fn station_refs_in_order(&self) -> Vec<StationRef> {
-        let mut refs = Vec::new();
-        for section in &self.sections {
-            for i in 0..=section.shots.len() {
-                refs.push(StationRef::new(section.id, i as u32));
-            }
-        }
-        refs
-    }
-
     /// Per-station distance field from a chosen origin `from` station, or from the
     /// zero datum(s) when `from` is `None` (the gradient's entrance default).
-    /// Takes the station refs (not full `Station`s) — distance is purely
-    /// topological, so no coordinates are read. Reuses the shared reachability
-    /// graph; unreachable stations come back as `None`. The returned
-    /// `station_refs` echo the input, so the field is self-describing.
+    ///
+    /// Edge weights come from each station's **coordinates** in `stations` — pass
+    /// the closure-adjusted stations so the gradient's distances match the
+    /// corrected geometry drawn on the map (#34). Merges/closures stay zero-cost.
+    /// Unreachable stations come back as `None`; the returned `station_refs` echo
+    /// the input, so the field is self-describing.
     pub fn distance_field_from(
         &self,
-        station_refs: &[StationRef],
+        stations: &[Station],
         from: Option<&StationRef>,
     ) -> DistanceField {
-        let n = station_refs.len();
-        let mut station_index: HashMap<StationRef, usize> = HashMap::with_capacity(n);
-        for (i, r) in station_refs.iter().enumerate() {
-            station_index.insert(*r, i);
-        }
+        let n = stations.len();
+        let station_index = Self::station_index_map(stations);
+        let coords: Vec<Coordinates> = stations.iter().map(|s| s.coordinates).collect();
         let roots: Vec<usize> = match from {
             Some(r) => {
                 let key: StationKey = (*r).into();
@@ -6079,7 +6074,7 @@ impl Project {
         let raw = if n == 0 || roots.is_empty() {
             vec![f64::INFINITY; n]
         } else {
-            let adj = self.build_survey_graph(n, &station_index);
+            let adj = self.build_survey_graph(n, &station_index, Some(&coords));
             Self::dijkstra(&adj, &roots)
         };
         let mut max_reachable = 0.0_f64;
@@ -6098,7 +6093,7 @@ impl Project {
             .collect();
         DistanceField {
             distances,
-            station_refs: station_refs.to_vec(),
+            station_refs: stations.iter().map(|s| s.station_ref).collect(),
             max_reachable,
         }
     }

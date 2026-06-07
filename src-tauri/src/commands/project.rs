@@ -106,18 +106,29 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
 
 /// Per-station along-cave distance from a chosen origin station, or from the
 /// zero-datum entrance(s) when `from` is null — backs the distance-gradient
-/// overlay (#34). The returned `distances` are index-aligned with `station_refs`;
-/// `null` entries are unreachable, and `max_reachable` scales the legend.
+/// overlay (#34). Distances are computed on the **closure-adjusted** geometry so
+/// they match the corrected map (falls back to measured when there are no
+/// eligible closures). `distances` are index-aligned with `station_refs`; `null`
+/// entries are unreachable, and `max_reachable` scales the legend.
+///
+/// Async + `spawn_blocking` (mirrors `get_adjusted_stations`): the adjusted-coord
+/// solve is memoized in `AppState`, and we keep the heavy work off the UI thread.
 #[tauri::command]
-pub fn get_station_distances_from(
-    state: State<AppState>,
+pub async fn get_station_distances_from(
+    app_handle: tauri::AppHandle,
     from: Option<StationRef>,
 ) -> Option<DistanceField> {
-    let project = state.get_project_state()?;
-    // Distance is purely topological — enumerate station refs without the xyz
-    // trig solve (compute_station_coordinates) that we don't need here.
-    let station_refs = project.station_refs_in_order();
-    Some(project.distance_field_from(&station_refs, from.as_ref()))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let inner = state.inner();
+        // Closure-adjusted station coordinates (memoized; measured fallback).
+        let stations = inner.get_adjusted_stations()?;
+        let project = inner.get_project_state()?;
+        Some(project.distance_field_from(&stations, from.as_ref()))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Get closure-adjusted station coordinates for the current project.

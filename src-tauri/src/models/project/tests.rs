@@ -3302,11 +3302,12 @@ fn reachability_includes_non_aligned_closures() {
         is_aligned: false,
     });
 
-    let refs = project.station_refs_in_order();
-    let field = project.distance_field_from(&refs, None); // from the zero datum
+    let stations = project.compute_station_coordinates();
+    let field = project.distance_field_from(&stations, None); // from the zero datum
     let pos = |sec, i| {
-        refs.iter()
-            .position(|r| *r == StationRef::new(sec, i))
+        stations
+            .iter()
+            .position(|s| s.station_ref == StationRef::new(sec, i))
             .unwrap()
     };
     // A0=0, A1=10, B0=10 (closure, 0-cost), B1=17 — all finite (reachable).
@@ -3315,72 +3316,14 @@ fn reachability_includes_non_aligned_closures() {
 }
 
 #[test]
-fn station_refs_in_order_matches_computed_stations() {
-    // The cheap enumeration MUST yield the exact same refs, in the same order,
-    // as the (trig-solving) compute_station_coordinates — incl. an empty section,
-    // a merge, and an aligned closure — so distance stays on the same node set as
-    // penetration and index-aligned with ProjectState.stations. (risk #1)
-    let mut project = Project::new("RefsOrder".to_string(), None);
+fn distance_field_uses_coordinate_distances() {
+    // #2 (#34): edge weights come from the station coordinates passed in, so the
+    // gradient's distances reflect the (closure-adjusted) geometry on the map,
+    // not the raw measured shot length.
+    let mut project = Project::new("DistCoords".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 5.0, 0.0, 0.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-    // An empty (zero-shot) section: must still contribute exactly station 0.
-    let _empty = project
-        .add_section(SectionData {
-            shots: vec![],
-            ..Default::default()
-        })
-        .id;
-    let b = project
-        .add_section(SectionData {
-            shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)],
-            ..Default::default()
-        })
-        .id;
-    project
-        .merge_stations(StationRef::new(b, 0), StationRef::new(a, 2))
-        .unwrap();
-    project.loop_closures.push(LoopClosure {
-        id: 1,
-        station_a: StationRef::new(a, 0).into(),
-        station_b: StationRef::new(b, 1).into(),
-        path_length: 0.0,
-        misclosure_distance: 0.0,
-        error_percentage: 0.0,
-        horizontal_misclosure: 0.0,
-        vertical_misclosure: 0.0,
-        strategy: ClosureStrategy::default(),
-        is_aligned: true,
-    });
-
-    let computed: Vec<StationRef> = project
-        .compute_station_coordinates()
-        .iter()
-        .map(|s| s.station_ref)
-        .collect();
-    let ordered = project.station_refs_in_order();
-    assert_eq!(ordered, computed);
-}
-
-#[test]
-fn distance_field_invariant_to_coordinate_perturbation() {
-    // Distance is topological (shot lengths + graph), not geometric — perturbing
-    // station coordinates must not change it. This guards against any accidental
-    // coordinate dependency (risk #5). distance_field_from is also structurally
-    // coordinate-free (it takes only refs).
-    let mut project = Project::new("DistInvariant".to_string(), None);
-    let a = project
-        .add_section(SectionData {
-            shots: vec![
-                shot(0.0, 0.0, 10.0, 0.0, 0.0),
-                shot(0.0, 0.0, 5.0, 0.0, 0.0),
-            ],
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
         .id;
@@ -3389,17 +3332,22 @@ fn distance_field_invariant_to_coordinate_perturbation() {
         gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
     });
 
-    let refs = project.station_refs_in_order();
-    let before = project.distance_field_from(&refs, None);
-
-    // Shift a station's coordinates; distances must be byte-identical.
-    project
-        .station_offsets
-        .insert(StationRef::new(a, 1).into(), (123.0, -45.0, 67.0));
-    let after = project.distance_field_from(&refs, None);
-
-    assert_eq!(before.distances, after.distances);
-    assert!((before.max_reachable - after.max_reachable).abs() < 1e-9);
+    let mut stations = project.compute_station_coordinates();
+    let i1 = stations
+        .iter()
+        .position(|s| s.station_ref == StationRef::new(a, 1))
+        .unwrap();
+    // Baseline: a1 sits 10 m out (matches the measured shot length).
+    assert_eq!(
+        project.distance_field_from(&stations, None).distances[i1],
+        Some(10.0)
+    );
+    // Move a1 to 25 m out → the distance follows the coordinate, not the length.
+    stations[i1].coordinates = Coordinates::new(0.0, 25.0, 0.0);
+    assert_eq!(
+        project.distance_field_from(&stations, None).distances[i1],
+        Some(25.0)
+    );
 }
 
 // === Loop Closure Algorithm Tests ===
