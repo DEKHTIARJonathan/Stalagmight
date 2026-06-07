@@ -36,6 +36,7 @@ import {
 const HEADER_HEIGHT = 33;
 const MIN_COL_WIDTH = 40;
 const EDGE_SCROLL_ZONE = 26;
+const GUTTER_WIDTH = 48; // frozen row-number gutter on the left
 
 export interface SpreadsheetGridProps<Row> {
   columns: GridColumn<Row>[];
@@ -122,7 +123,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [visibleColumns, colWidthOverrides],
   );
   const offsets = useMemo(() => columnOffsets(widths), [widths]);
-  const totalWidth = offsets[offsets.length - 1] ?? 0;
+  const totalWidth = GUTTER_WIDTH + (offsets[offsets.length - 1] ?? 0);
   const colIndexOf = useCallback((key: string) => colKeys.indexOf(key), [colKeys]);
   const writableColIdxs = useMemo(
     () => visibleColumns.map((c, i) => (isColWritable(c) ? i : -1)).filter((i) => i >= 0),
@@ -645,6 +646,37 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [colKeys, rowCount],
   );
 
+  const onGutterSelectRow = useCallback(
+    (rowIdx: number, shiftKey: boolean) => {
+      const firstKey = colKeys[0];
+      const lastKey = colKeys[colCount - 1];
+      if (firstKey === undefined || lastKey === undefined) return;
+      scrollRef.current?.focus();
+      setCopiedRect(null);
+      setSelection((prev) => ({
+        anchor: shiftKey ? { row: prev.anchor.row, colKey: firstKey } : { row: rowIdx, colKey: firstKey },
+        focus: { row: rowIdx, colKey: lastKey },
+        active: shiftKey ? prev.active : { row: rowIdx, colKey: firstKey },
+      }));
+    },
+    [colKeys, colCount],
+  );
+
+  // Double-click a resize border → fit the column to its widest VISIBLE content
+  // (virtualized, so off-screen rows aren't measured — a pragmatic approximation).
+  const autoFitColumn = useCallback((key: string) => {
+    const root = scrollRef.current;
+    if (!root) return;
+    let max = 0;
+    const header = root.querySelector(`[data-testid="grid-header-${key}"] span`);
+    if (header) max = Math.max(max, (header as HTMLElement).scrollWidth);
+    root.querySelectorAll('[data-testid^="grid-cell-"]').forEach((el) => {
+      const node = el as HTMLElement;
+      if (node.dataset.testid?.endsWith(`-${key}`)) max = Math.max(max, node.scrollWidth);
+    });
+    if (max > 0) setColWidthOverrides((m) => ({ ...m, [key]: clamp(max + 18, MIN_COL_WIDTH, 600) }));
+  }, []);
+
   // Double-click the fill handle: fill down to the data extent of the left
   // neighbour column (Google-Sheets auto-fill), or the selection's own column.
   const onFillHandleDoubleClick = useCallback(() => {
@@ -803,7 +835,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     // The overlay lives INSIDE the rows-area (which starts below the sticky
     // header), where row 0 is at y=0 — so no header offset here.
     top: rect.r0 * ROW_HEIGHT,
-    left: offsets[rect.c0] ?? 0,
+    left: GUTTER_WIDTH + (offsets[rect.c0] ?? 0),
     width: (offsets[rect.c1 + 1] ?? 0) - (offsets[rect.c0] ?? 0),
     height: (rect.r1 - rect.r0 + 1) * ROW_HEIGHT,
     border: '2px solid var(--sg-blue)',
@@ -815,7 +847,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const rectOverlay = (r: Rect): CSSProperties => ({
     position: 'absolute',
     top: r.r0 * ROW_HEIGHT,
-    left: offsets[r.c0] ?? 0,
+    left: GUTTER_WIDTH + (offsets[r.c0] ?? 0),
     width: (offsets[r.c1 + 1] ?? 0) - (offsets[r.c0] ?? 0),
     height: (r.r1 - r.r0 + 1) * ROW_HEIGHT,
     pointerEvents: 'none',
@@ -888,6 +920,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             className={`sg-header-bar sticky top-0 z-10 flex bg-panel ${scrolled ? 'sg-scrolled' : ''}`}
             style={{ height: HEADER_HEIGHT }}
           >
+            {/* Frozen top-left corner above the row-number gutter. */}
+            <div
+              className="sticky left-0 z-30 flex items-center justify-center border-b border-r border-white/10 bg-panel"
+              style={{ width: GUTTER_WIDTH, minWidth: GUTTER_WIDTH }}
+            />
             {visibleColumns.map((c, i) => (
               <div
                 key={c.key}
@@ -909,6 +946,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   data-testid={`grid-col-resize-${c.key}`}
                   onMouseDown={(e) => startResize(e, c.key, widths[i] ?? DEFAULT_COL_WIDTH)}
                   onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(c.key); }}
                   onDragStart={(e) => e.preventDefault()}
                 />
               </div>
@@ -928,6 +966,17 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   style={{ top: vr.start - HEADER_HEIGHT, height: ROW_HEIGHT, width: totalWidth }}
                   data-testid={`grid-row-${rowIdx}`}
                 >
+                  {/* Frozen row-number gutter; click to select the row. */}
+                  <div
+                    className={`sg-gutter sticky left-0 z-20 flex items-center justify-center border-b border-r border-white/10 bg-panel text-text-secondary ${
+                      rowIdx >= rect.r0 && rowIdx <= rect.r1 ? 'sg-gutter-selected' : ''
+                    }`}
+                    style={{ width: GUTTER_WIDTH, minWidth: GUTTER_WIDTH }}
+                    data-testid={`grid-gutter-${rowIdx}`}
+                    onMouseDown={(e) => { e.preventDefault(); onGutterSelectRow(rowIdx, e.shiftKey); }}
+                  >
+                    {rowIdx + 1}
+                  </div>
                   {visibleColumns.map((col, c) => {
                     const inSel = isInRect(rect, rowIdx, c);
                     const isActive = rowIdx === selection.active.row && c === activeColIdx;

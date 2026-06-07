@@ -109,6 +109,22 @@
   box-shadow: 0 3px 6px rgba(0, 0, 0, 0.45);
 }
 
+/* Frozen row-number gutter. */
+.sg-gutter {
+  cursor: pointer;
+  font-size: 11px;
+  user-select: none;
+  transition: box-shadow 90ms ease-out;
+}
+.sg-gutter:hover {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.05);
+}
+/* Layered insets keep the gutter opaque (bg-panel) while tinting + marking it. */
+.sg-gutter-selected {
+  box-shadow: inset 0 0 0 999px var(--sg-blue-fill), inset -2px 0 0 0 var(--sg-blue);
+  color: var(--color-text-primary, #fff);
+}
+
 /* Right-click context menu. */
 .sg-context-menu {
   min-width: 140px;
