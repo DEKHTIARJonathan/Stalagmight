@@ -29,6 +29,10 @@ const NAV_KEYS = new Set([
   'Escape',
 ]);
 
+// Space and Enter activate controls (so they should reveal the ring), but they
+// are also text entry inside a field — there they must NOT flip modality.
+const ACTIVATION_KEYS = new Set([' ', 'Enter']);
+
 type Modality = 'pointer' | 'keyboard';
 
 function setModality(m: Modality): void {
@@ -36,6 +40,32 @@ function setModality(m: Modality): void {
   if (el.dataset.inputModality !== m) {
     el.dataset.inputModality = m;
   }
+}
+
+// Input types where Space/Enter act on the control (so they should reveal the
+// ring) rather than entering text.
+const NON_TEXT_INPUT_TYPES = new Set([
+  'checkbox',
+  'radio',
+  'button',
+  'submit',
+  'reset',
+  'range',
+  'color',
+  'file',
+  'image',
+]);
+
+/** True for elements where Space/Enter are text entry rather than activation. */
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  if (tag === 'TEXTAREA') return true;
+  if (tag === 'INPUT') {
+    return !NON_TEXT_INPUT_TYPES.has((target as HTMLInputElement).type);
+  }
+  return false;
 }
 
 let installed = false;
@@ -49,7 +79,11 @@ export function initInputModalityTracking(): void {
 
   const onPointer = () => setModality('pointer');
   const onKey = (e: KeyboardEvent) => {
-    if (NAV_KEYS.has(e.key)) setModality('keyboard');
+    if (!NAV_KEYS.has(e.key)) return;
+    // Typing Space/Enter into a text field is text entry, not navigation — don't
+    // reveal the ring mid-typing (keeps a clicked-then-typed field ringless).
+    if (ACTIVATION_KEYS.has(e.key) && isTextEntry(e.target)) return;
+    setModality('keyboard');
   };
 
   // Capture phase so modality is set before focus/click handlers run.
