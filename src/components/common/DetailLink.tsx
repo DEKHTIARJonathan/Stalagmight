@@ -14,7 +14,10 @@
  *   when user moves mouse away but keeps element focused).
  */
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, type CSSProperties } from 'react';
+import { useUIStore } from '../../store/uiStore';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import { EntitySymbol } from './toolIcons';
 
 export type DetailLinkType = 'station' | 'shot' | 'section';
 
@@ -70,6 +73,12 @@ export interface DetailLinkProps {
   onHoverStart?: () => void;
   /** Callback when hover/focus ends (for map highlighting). */
   onHoverEnd?: () => void;
+  /**
+   * Short primary label for the Full-mode entity pill, shown before the dim id
+   * suffix. Used for sections (the bare name, e.g. "Main Line"); station/shot
+   * links derive their primary from the target position automatically.
+   */
+  pillLabel?: string;
 }
 
 /**
@@ -121,11 +130,18 @@ export function DetailLink({
   className = '',
   onHoverStart,
   onHoverEnd,
+  pillLabel,
 }: DetailLinkProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const mouseDownRef = useRef(false);
   const computedTestId = testId ?? generateTestId(type, target);
   const ariaLabel = generateAriaLabel(type, displayText);
+
+  // Full highlighting: a leading entity symbol signals what the link points to
+  // (station ring, shot line, section zigzag), colored by entity. Hidden for
+  // missing targets (the warning glyph already conveys state).
+  const syntacticLevel = useUIStore((s) => s.syntacticLevel);
+  const showSymbol = syntacticLevelAtLeast(syntacticLevel, 'full') && !isMissing;
 
   const handleClick = useCallback(() => {
     if (isMissing) {
@@ -176,9 +192,33 @@ export function DetailLink({
   }, [isMissing, onHoverEnd]);
 
   // Build class list conditionally to avoid conflicting Tailwind utilities
-  const baseClasses = 'underline focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset';
-  const colorClass = isMissing ? 'text-warning' : 'text-accent';
+  const focusClasses = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset';
   const cursorClass = isMissing ? 'cursor-not-allowed' : 'cursor-pointer';
+
+  // In Full highlighting, render the link as an entity pill: the duotone symbol
+  // plus the id inside a rounded chip with a tinted background and an
+  // entity-colored border (the legend-chip look). Otherwise keep the plain
+  // underline link.
+  const computedClass = showSymbol
+    ? `sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary ${focusClasses} ${cursorClass} ${className}`
+    : `underline ${isMissing ? 'text-warning' : 'text-accent'} ${focusClasses} ${cursorClass} ${className}`;
+  const pillStyle: CSSProperties | undefined = showSymbol
+    ? ({ '--o': `var(--sh-${type})` } as CSSProperties)
+    : undefined;
+
+  // Pill content: a short primary label + the fully-qualified id after a divider,
+  // both at the same text size (shot "55 | 110:55", section "Main Line | 110").
+  let pillPrimary = displayText;
+  let pillId: string | null = null;
+  if (showSymbol) {
+    if (hasPosition(target)) {
+      pillPrimary = String(target.position);
+      pillId = displayText; // already the formatted "sectionId:position"
+    } else {
+      pillPrimary = pillLabel ?? displayText;
+      pillId = String(target.sectionId);
+    }
+  }
 
   return (
     <button
@@ -190,17 +230,37 @@ export function DetailLink({
       onMouseLeave={handleMouseLeave}
       onFocus={handleFocus}
       onBlur={handleBlur}
-      className={`${baseClasses} ${colorClass} ${cursorClass} ${className}`}
+      className={computedClass}
+      style={pillStyle}
       aria-label={ariaLabel}
       aria-disabled={isMissing}
       data-testid={computedTestId}
       title={isMissing ? `${type} not found` : undefined}
     >
-      {displayText}
-      {isMissing && (
-        <span className="ml-1" aria-hidden="true" title={`${type} not found`}>
-          &#x26A0;
-        </span>
+      {showSymbol ? (
+        <>
+          <EntitySymbol entity={type} size={14} testId={`${computedTestId}-symbol`} />
+          <span>{pillPrimary}</span>
+          {pillId !== null && (
+            <span className="sh-pill-id" data-testid={`${computedTestId}-id`}>
+              {/* The id suffix is always cap-height digits, so it gets the same
+                  downward nudge whether the primary is a digit (shot/station) or
+                  a lowercase name (section). */}
+              <span className="sh-pill-nudge sh-pill-nudge--num">
+                {pillId}
+              </span>
+            </span>
+          )}
+        </>
+      ) : (
+        <>
+          {displayText}
+          {isMissing && (
+            <span className="ml-1" aria-hidden="true" title={`${type} not found`}>
+              &#x26A0;
+            </span>
+          )}
+        </>
       )}
     </button>
   );

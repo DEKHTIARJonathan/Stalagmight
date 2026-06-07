@@ -981,11 +981,42 @@ body {
   outline-offset: var(--cc-focus-ring-offset, 2px);
 }
 
-label:focus-within {
+/* Keyboard-only: ring the label only when its control is keyboard-focused
+   (:has(:focus-visible)), not on a mouse click (was :focus-within). */
+label:has(:focus-visible) {
   outline: 2px solid var(--cc-focus-ring, #4ecdc4);
   outline-offset: var(--cc-focus-ring-offset, 2px);
   box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow, rgba(78, 205, 196, 0.5));
   border-radius: 4px;
+}
+
+/* Cross-engine keyboard-only focus ring. Some engines (notably the WebKitGTK
+   webview Tauri uses) draw the focus ring on mouse clicks — via :focus and/or
+   matching :focus-visible on click — so gating on :focus-visible alone leaks the
+   ring. An input-modality tracker (utils/inputModality.ts) tags <html> with
+   data-input-modality; on pointer interaction we suppress the focus outline and
+   the Tailwind ring for both :focus and :focus-visible. Selection stays visible
+   via background/border styles, and rings reappear on keyboard navigation. */
+html[data-input-modality='pointer'] :focus,
+html[data-input-modality='pointer'] :focus-visible {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+html[data-input-modality='pointer'] label:focus-within,
+html[data-input-modality='pointer'] label:has(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+/* The element-level button/checkbox/radio :focus rules below add a literal
+   box-shadow *glow* (a soft, semi-transparent ring) — not the Tailwind ring var
+   — so neutralize box-shadow for them on pointer too. */
+html[data-input-modality='pointer'] button:focus,
+html[data-input-modality='pointer'] input[type='checkbox']:focus,
+html[data-input-modality='pointer'] input[type='checkbox']:focus-visible,
+html[data-input-modality='pointer'] input[type='radio']:focus,
+html[data-input-modality='pointer'] input[type='radio']:focus-visible {
+  box-shadow: none !important;
 }
 
 @supports selector(:focus-visible) {
@@ -1278,6 +1309,20 @@ tr[data-selected="true"]:hover {
   to { transform: rotate(360deg); }
 }
 
+/* ElidedPath hover marquee: reveal an abbreviated path in full by scrolling it
+   within its clip box (replaces the path tooltip). The distance is set per
+   element via --elided-scroll-distance; `alternate` ping-pongs, and the holds at
+   0–12% / 88–100% pause at each end so the start and filename stay readable. */
+@keyframes elided-path-scroll {
+  0%, 12% { transform: translateX(0); }
+  88%, 100% { transform: translateX(var(--elided-scroll-distance, 0)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No marquee for reduced-motion users; the full path is still revealed (the
+     leading folders show, clipped) while hovering. */
+  span[style*="elided-path-scroll"] { animation: none !important; }
+}
+
 /* Disable animations/transitions on e-ink displays to prevent ghosting */
 [data-theme="kaleido_eink"] * {
   transition: none !important;
@@ -1303,4 +1348,224 @@ tr[data-selected="true"]:hover {
   border-radius: 50%;
   background-color: var(--cc-accent);
   animation: splash-pulse 1.2s ease-in-out infinite;
+}
+
+/* ============================================================
+   Syntactic Highlighting
+   --sh-<role> custom properties are written at runtime by
+   useSyntacticHighlighting (preset + overrides, or a neutral
+   when the level is "off"). The defaults below mirror the
+   "default" preset so there is no flash before the hook runs.
+   Source of truth: src/theme/syntacticPalette.ts
+   ============================================================ */
+:root {
+  --sh-segment: #ff8000;
+  --sh-section: #a335ee;
+  --sh-shot: #0070dd;
+  --sh-station: #5fcf83;
+  --sh-comment: #eab946;
+  --sh-delete: #f75d59;
+  --sh-move: #c0d0e1;
+  --sh-select: #c2cfde;
+  --sh-measure: #e787d3;
+  --sh-merge: #35cbd2;
+  --sh-pan: #63c0ee;
+  --sh-zoom: #84a8fd;
+}
+
+/* Duotone tool icons: a soft accent-fill silhouette + a solid accent line.
+   Each icon sets --o (object/accent color) inline to a --sh-<role> var;
+   --sh-delete / --sh-move drive the shared action modifiers. Ported from the
+   Cave Survey icon spec. */
+.duotone {
+  --glyph: color-mix(in oklab, var(--o) 90%, var(--cc-text-primary));
+  display: block;
+}
+/* Re-derive --glyph from a locally-overridden --o, so a subtree of a duotone
+   icon can use a different object color (e.g. the station circles inside the
+   merge icon, which set --o to var(--sh-station)). */
+.duotone .sh-tone {
+  --glyph: color-mix(in oklab, var(--o) 90%, var(--cc-text-primary));
+}
+.duotone .s {
+  fill: none;
+  stroke: var(--glyph);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.duotone .f {
+  fill: color-mix(in oklab, var(--o) 38%, transparent);
+  stroke: none;
+}
+.duotone .d {
+  fill: var(--glyph);
+  stroke: none;
+}
+.duotone .ink {
+  stroke: color-mix(in oklab, var(--o) 68%, var(--cc-text-primary));
+}
+.duotone .thick {
+  stroke-width: 2.2;
+}
+.duotone .dash {
+  stroke-dasharray: 2 1.6;
+}
+.duotone .arrow {
+  stroke-width: 1.6;
+}
+.duotone .mvc-line {
+  fill: none;
+  stroke: color-mix(in oklab, var(--o) 55%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 1.6 1;
+  stroke-linecap: round;
+}
+/* delete badge */
+.duotone .badge-bg {
+  fill: var(--cc-panel);
+  stroke: none;
+}
+.duotone .x {
+  fill: none;
+  stroke: var(--sh-delete);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+/* edit badge: orange pencil */
+.duotone .edit-pencil {
+  fill: #ff8c1a;
+  stroke: none;
+}
+/* zero-datum badge: golden star */
+.duotone .datum-star {
+  fill: var(--cc-zero-datum, #ffd23f);
+  stroke: none;
+}
+/* reference badge: slate eye (crossed = jump/reference, open = permanent) */
+.duotone .eye {
+  fill: none;
+  stroke: #b8c6d6;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.duotone .eye-pupil {
+  fill: #b8c6d6;
+  stroke: none;
+}
+/* add badge: green plus */
+.duotone .plus {
+  fill: none;
+  stroke: #3fb950;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+/* unlink badge: broken chain (remove closure / unmerge) */
+.duotone .chain {
+  fill: none;
+  stroke: #b8c6d6;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* move compass */
+.duotone .mvf {
+  fill: var(--sh-move);
+  stroke: none;
+}
+.duotone .mvc {
+  fill: var(--sh-move);
+  opacity: 0.34;
+}
+
+/* Per-tool tinted button background ("back-color"): a soft wash of the tool's
+   accent color so the chip reads as colored even at a glance. `--o` is set per
+   button to var(--sh-<role>). Element-qualified to win over the ghost button's
+   hover background regardless of source order. In the "off" level --sh-* resolve
+   to a neutral, so the wash is a subtle monochrome gray. The active state uses an
+   INSET ring in the tool's own color, so the selection highlight stays exactly
+   within the back-color box (no oversized outline, no theme-accent color). */
+button.sh-tool {
+  /* A 2px transparent border is reserved on every tool button (box-sizing is
+     border-box, so the outer size is unchanged and there is no layout shift when
+     a tool becomes active). The background clips to border-box, so the back-color
+     still fills the whole button through the transparent border. Using a real
+     border — rather than an inset box-shadow — keeps the active ring pixel-even
+     on all sides at fractional UI-zoom (border width snaps uniformly; box-shadow
+     spread does not). */
+  background: color-mix(in oklab, var(--o) 12%, var(--cc-panel));
+  border: 2px solid transparent;
+  /* Only animate the background wash. The active-ring border must snap in/out —
+     animating border-color via the inherited `transition-colors` reads as a hard
+     border "blink" when the active tool changes (clicking a tool or a flyout
+     entry). box-shadow/outline are excluded too (focus ring snaps). */
+  transition-property: background-color;
+}
+button.sh-tool:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
+}
+button.sh-tool.sh-tool--active {
+  background: color-mix(in oklab, var(--o) 24%, var(--cc-panel));
+  border-color: color-mix(in oklab, var(--o) 72%, transparent);
+}
+
+/* Entity-link pill: a tinted background + dim, entity-tinted border (--o set to
+   var(--sh-<entity>)), matching the icon-set legend chips. The full `border`
+   shorthand is required because <button> doesn't get border-style: solid here,
+   so a width-only utility renders nothing. The entity symbol sits inside. */
+.sh-pill {
+  background: color-mix(in oklab, var(--o) 14%, var(--cc-panel));
+  border: 1px solid color-mix(in oklab, var(--o) 30%, var(--cc-border));
+  /* Tight line-height so the label glyph doesn't sit low in a tall text-xs line
+     box (which made the smaller id read as "too high"). Doesn't change the pill
+     height — the row stretches it. */
+  line-height: 1;
+}
+.sh-pill:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
+  border-color: color-mix(in oklab, var(--o) 48%, var(--cc-border));
+}
+/* The fully-qualified id after a divider, at the SAME font/size as the pill text
+   (just dimmer). The divider is a SHORT centered vertical bar (pseudo-element),
+   not a full-height border, so it doesn't span the whole line. */
+.sh-pill-id {
+  position: relative;
+  margin-left: 0;
+  /* Balanced gap around the divider: flex gap (~4px) + divider left (1px) ≈ 5px
+     before, padding-left − divider ≈ 5px after. */
+  padding-left: 7px;
+  padding-right: 5px;
+  text-align: center;
+  line-height: 1;
+  /* Monospace id, like the example's tier text: semibold (600), sized to the same
+     proportion of the label as in the spec (10.5px tier / 12.5px label = 0.84). */
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 600;
+  font-size: 0.84em;
+  letter-spacing: 0.04em;
+  color: color-mix(in oklab, var(--o) 55%, var(--cc-text-secondary));
+}
+.sh-pill-id::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 0.8em;
+  background: color-mix(in oklab, var(--o) 30%, var(--cc-border));
+}
+/* Cap-height glyphs (the monospace id, and numeric shot/station primaries) sit
+   high in their line box; nudge the text down a hair to optically center it.
+   Applied to the id text and to numeric primaries — not to lowercase section
+   names. The divider (on .sh-pill-id) stays centered. */
+.sh-pill-nudge {
+  position: relative;
+  top: 1px;
+}
+/* Shot/station ids (next to a cap-height digit primary) read higher than the
+   section id (next to a lowercase name), so they need a touch more downward
+   nudge to look centered. */
+.sh-pill-nudge--num {
+  top: 2px;
 }

@@ -8,6 +8,8 @@ import { Button } from '../common/Button';
 import { Toggle } from '../common/Toggle';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
+import { EntityBlob } from '../common/EntityBlob';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
@@ -181,6 +183,16 @@ interface WarningsContentProps {
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
   const { resolveWarning, resolveAllWarnings, unresolveWarning } = useProjectStore();
+  const { setSelection, setDetailPanelTab, announceSelection } = useUIStore(
+    useShallow((s) => ({
+      setSelection: s.setSelection,
+      setDetailPanelTab: s.setDetailPanelTab,
+      announceSelection: s.announceSelection,
+    })),
+  );
+  // At the Full level the location subtitle is shown as entity pills (section +
+  // shot), matching the rest of the detail panel; otherwise it stays plain text.
+  const showPills = syntacticLevelAtLeast(useUIStore((s) => s.syntacticLevel), 'full');
   const [showResolved, setShowResolved] = useState(false);
 
   const unresolvedCount = warnings.filter((w) => !w.isResolved).length;
@@ -271,14 +283,30 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
-                      {warning.message}
+                      {(() => {
+                        // Messages start with "Shot <sectionId>:<position> …"; at the
+                        // Full level swap that leading reference for the shot pill.
+                        const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
+                        if (!m) return warning.message;
+                        return (
+                          <>
+                            <EntityBlob entity="shot">
+                              {formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                            </EntityBlob>
+                            {' '}
+                            {warning.message.slice(m[0].length)}
+                          </>
+                        );
+                      })()}
                     </div>
-                    <div className="text-xs text-text-secondary mt-0.5">
-                      {t('detailPanel.warnings.location', {
-                        section: getSectionName(warning.sectionId),
-                        shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
-                      })}
-                    </div>
+                    {!showPills && (
+                      <div className="text-xs text-text-secondary mt-0.5">
+                        {t('detailPanel.warnings.location', {
+                          section: getSectionName(warning.sectionId),
+                          shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </button>
@@ -302,6 +330,21 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 </button>
               )}
             </div>
+            {showPills && (
+              <div className="mt-1 pl-6 flex items-center gap-1.5 flex-wrap">
+                <DetailLink
+                  type="section"
+                  target={{ sectionId: warning.sectionId }}
+                  displayText={getSectionName(warning.sectionId)}
+                  pillLabel={getSectionName(warning.sectionId)}
+                  onSelect={() => {
+                    setSelection({ type: 'section', sectionId: warning.sectionId });
+                    setDetailPanelTab('details');
+                  }}
+                  onAnnounce={announceSelection}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -441,7 +484,7 @@ function StationDetail({ station }: { station: Station }) {
     <button
       type="button"
       onClick={handleCenterOnStation}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.station.center', {
         id: formatStationId(sectionId, stationPosition),
       })}
@@ -520,7 +563,7 @@ function StationDetail({ station }: { station: Station }) {
                       onClick={() => {
                         void handleUnmergeFromStation(ref);
                       }}
-                      className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Unmerge Stations"
                       aria-label={`Unmerge station ${formatStationId(ref.section_id, ref.station_index)}`}
                       data-testid={`detail-unmerge-${ref.section_id}-${ref.station_index}`}
@@ -592,6 +635,7 @@ function StationDetail({ station }: { station: Station }) {
                   type="section"
                   target={{ sectionId }}
                   displayText={sectionDisplayText}
+                  pillLabel={sectionName}
                   onSelect={handleSelectSection}
                   onAnnounce={announceSelection}
                   onHoverStart={() => setHoveredSectionId(sectionId)}
@@ -711,7 +755,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     <button
       type="button"
       onClick={handleCenterOnShot}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.shot.center', {
         id: formatShotId(section.id, shotPosition),
       })}
@@ -809,6 +853,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
                   type="section"
                   target={{ sectionId: section.id }}
                   displayText={sectionDisplayText}
+                  pillLabel={sectionName}
                   onSelect={handleSelectSection}
                   onAnnounce={announceSelection}
                   onHoverStart={() => setHoveredSectionId(section.id)}
@@ -925,7 +970,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     <button
       type="button"
       onClick={handleCenterOnSection}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.section.center', { id: section.id, name: sectionDisplayName })}
       data-testid="center-section-button"
     >
@@ -1109,8 +1154,27 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
       <div className="h-full bg-panel overflow-auto">
       <Panel title={t('detailPanel.projectStats.title')}>
         <div className="space-y-4">
+          {/* Project name + file path (#51: relocated from the toolbar center). */}
+          <div className="space-y-1">
+            <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
+              {t('detailPanel.projectStats.project')}
+            </h4>
+            <div className="text-sm font-medium text-text-primary break-words" data-testid="project-stats-name">
+              {project.name}
+            </div>
+            {project.file_path && (
+              <div
+                className="text-xs text-text-secondary break-all"
+                data-testid="project-stats-path"
+                title={project.file_path}
+              >
+                {project.file_path}
+              </div>
+            )}
+          </div>
+
           {/* Survey overview */}
-          <div className="space-y-2">
+          <div className="space-y-2 pt-2 border-t border-border">
             <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
               {t('detailPanel.projectStats.overview')}
             </h4>
@@ -1433,7 +1497,7 @@ function ClosuresSection({
                     onClick={() => {
                       void handleRemoveClosure(closureId);
                     }}
-                    className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Remove Closure"
                     aria-label={`Remove closure ${closureIdLabel}`}
                     data-testid={`detail-remove-closure-${closureIdLabel}`}

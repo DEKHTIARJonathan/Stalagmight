@@ -1200,12 +1200,12 @@ test.describe('Detail Panel Links', () => {
       // Verify Start Station link shows position 0 (0-indexed)
       const startLink = page.getByTestId(`station-${mainSectionId}-0-link`);
       await expect(startLink).toBeVisible();
-      await expect(startLink).toHaveText(`${mainSectionId}:0`);
+      await expect(startLink).toContainText(`${mainSectionId}:0`); // pill shows "pos | sectionId:0"
 
       // Verify End Station link shows position 1 (0-indexed)
       const endLink = page.getByTestId(`station-${mainSectionId}-1-link`);
       await expect(endLink).toBeVisible();
-      await expect(endLink).toHaveText(`${mainSectionId}:1`);
+      await expect(endLink).toContainText(`${mainSectionId}:1`); // pill shows "pos | sectionId:1"
     });
 
     test('verifies station at index 0 has no previous shot', async ({ page }) => {

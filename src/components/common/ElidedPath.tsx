@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { pathElisionCandidates } from '../../utils/pathElision';
-import { Tooltip } from './Tooltip';
+import { useHoverMarquee, getTextMeasureContext } from './useHoverMarquee';
 
 interface ElidedPathProps {
   /** The full file path to display (and reveal in full on hover). */
@@ -11,16 +11,6 @@ interface ElidedPathProps {
   'data-testid'?: string;
 }
 
-/** Cached canvas 2d context for text measurement (created lazily, reused). */
-let measureCtx: CanvasRenderingContext2D | null = null;
-function getMeasureContext(): CanvasRenderingContext2D | null {
-  if (measureCtx) return measureCtx;
-  if (typeof document === 'undefined') return null;
-  const canvas = document.createElement('canvas');
-  measureCtx = canvas.getContext('2d');
-  return measureCtx;
-}
-
 /**
  * Renders a file path on a single line, abbreviated to fit its available width:
  * leading folders collapse to single letters, then the middle is truncated with
@@ -28,18 +18,24 @@ function getMeasureContext(): CanvasRenderingContext2D | null {
  *
  * Fitting is pixel-based — the candidate is chosen by measuring against the
  * element's real width using the element's computed font, re-fitting on resize.
- * The full path is always available via a themed tooltip on hover.
+ *
+ * When the path is abbreviated, hovering reveals the full path by scrolling it
+ * (marquee) within the same clip box — no tooltip — for as long as the pointer
+ * stays over it. The scrolling copy is absolutely positioned, so it never widens
+ * its container (e.g. it won't stretch a table column).
  */
 export function ElidedPath({
   path,
   className = '',
   'data-testid': dataTestId,
 }: ElidedPathProps) {
-  const ref = useRef<HTMLSpanElement>(null);
+  const containerRef = useRef<HTMLSpanElement>(null);
   const [display, setDisplay] = useState(path);
+  const { scrolling, overlayStyle, onMouseEnter, onMouseLeave } = useHoverMarquee(path, containerRef);
 
+  // Fit the abbreviated (resting) display to the available width.
   useLayoutEffect(() => {
-    const el = ref.current;
+    const el = containerRef.current;
     if (!el) return;
 
     const fit = () => {
@@ -51,7 +47,7 @@ export function ElidedPath({
         return;
       }
 
-      const ctx = getMeasureContext();
+      const ctx = getTextMeasureContext();
       if (!ctx) {
         setDisplay(candidates[0] ?? path);
         return;
@@ -76,16 +72,30 @@ export function ElidedPath({
   }, [path]);
 
   return (
-    <Tooltip content={path} className="block w-full" tooltipClassName="max-w-none">
-      <span
-        ref={ref}
-        className={`block w-full overflow-hidden whitespace-nowrap ${className}`}
-        data-testid={dataTestId}
-        data-full-path={path}
-      >
-        {display}
-      </span>
-    </Tooltip>
+    <span
+      ref={containerRef}
+      className={`relative block w-full overflow-hidden whitespace-nowrap ${className}`}
+      data-testid={dataTestId}
+      data-full-path={path}
+      aria-label={path}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {/* In-flow copy: sizes the element and provides height. Hidden (size kept)
+          while the marquee overlay scrolls, so the container never grows. */}
+      <span className={scrolling ? 'invisible' : undefined}>{display}</span>
+      {/* Marquee overlay: absolute (out of flow) → never widens a table column. */}
+      {scrolling && (
+        <span
+          className="absolute inset-y-0 left-0 flex items-center whitespace-nowrap"
+          style={overlayStyle}
+          data-elided-overlay=""
+          aria-hidden="true"
+        >
+          {path}
+        </span>
+      )}
+    </span>
   );
 }
 

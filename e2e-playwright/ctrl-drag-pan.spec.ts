@@ -37,7 +37,8 @@ test.describe('Ctrl+Drag Panning', () => {
     await createProjectWithMap(page);
   });
 
-  // Supported tools that should allow Ctrl+drag panning
+  // Supported tools that should allow Ctrl+drag panning.
+  // NOTE: draw (d) / delete (x) were removed from the toolbar and unbound.
   const supportedTools = [
     { key: 's', name: 'select' },
     { key: 'm', name: 'merge' },

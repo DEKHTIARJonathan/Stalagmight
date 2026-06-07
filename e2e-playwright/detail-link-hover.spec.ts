@@ -971,9 +971,9 @@ test.describe('Detail Link Focus Highlighting', () => {
       );
       expect(hoverState.hoveredSectionId).toBe(sideSectionId);
 
-      // Move mouse away
-      const header = page.locator('h1');
-      await header.hover();
+      // Move mouse away to a neutral toolbar element (the active-tool label;
+      // the old visible toolbar <h1> was replaced by the active tool name in #51).
+      await page.getByTestId('toolbar-active-tool').hover();
 
       // Verify hover state cleared
       await pollHoverState(page, (state) => state.hoveredSectionId === null);

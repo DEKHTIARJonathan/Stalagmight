@@ -50,6 +50,23 @@ test.describe('Map Tools', () => {
     await setupMockedPage(page);
   });
 
+  test('toolbar center shows the active tool name and updates on switch (#51)', async ({ page }) => {
+    await createProjectWithSections(page);
+    const center = page.getByTestId('toolbar-active-tool');
+    await expect(center).toBeVisible();
+    // The filename is no longer in the toolbar center.
+    await expect(page.getByTestId('toolbar-project-name')).toHaveCount(0);
+    await page.keyboard.press('m');
+    await expect(center).toContainText('Merge');
+    await page.keyboard.press('r');
+    await expect(center).toContainText('Measure');
+
+    // The project name and full file path live in the Project Stats panel
+    // (shown when nothing is selected).
+    await expect(page.getByTestId('project-stats-name')).toContainText('Map Tools Test Project');
+    await expect(page.getByTestId('project-stats-path')).toBeVisible();
+  });
+
   test('should switch between tools with keyboard shortcuts @smoke', async ({ page }) => {
     // Create a project to access the SingleSystemView with tools
     await createProjectWithSections(page);

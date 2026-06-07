@@ -438,7 +438,7 @@ test.describe('Zoom Tool', () => {
       await page.waitForTimeout(50);
 
       const selectButton = page.locator('[data-testid="tool-select"]');
-      await expect(selectButton).toHaveClass(/ring-accent/);
+      await expect(selectButton).toHaveClass(/sh-tool--active/);
 
       // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
       await page.keyboard.press('z');
@@ -446,8 +446,8 @@ test.describe('Zoom Tool', () => {
 
       // Verify navigate group is active (zoom is a subtool of navigate)
       const navGroup = page.locator('[data-testid="tool-group-navigate"]');
-      await expect(navGroup).toHaveClass(/ring-accent/);
-      await expect(selectButton).not.toHaveClass(/ring-accent/);
+      await expect(navGroup).toHaveClass(/sh-tool--active/);
+      await expect(selectButton).not.toHaveClass(/sh-tool--active/);
     });
 
     test('switching between tools via keyboard updates cursor', async ({ page }) => {

@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
+import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
 import type { SectionId } from '../../types/project';
@@ -180,7 +181,7 @@ export default function SectionAdjustDialog() {
         )}
 
         <div className="text-sm text-text-secondary mb-4">
-          Adjusting: <span className="text-text-primary font-medium">{section.name ?? `Section ${section.id}`}</span>
+          Adjusting: <EntityBlob entity="section">{section.name ?? `Section ${section.id}`}</EntityBlob>
         </div>
 
         {connectedCount > 1 && (

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import type { StationRef } from '../../types/project';
 import { formatStationId } from '../../utils/formatters';
+import { EntityBlob } from '../common/EntityBlob';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -55,10 +56,15 @@ export default function UnmergeStationsDialog() {
     mergedStations.find((ref) => stationRefKey(ref) === selectedKey) ?? null
   ), [mergedStations, selectedKey]);
 
-  const getStationDisplayLabel = (ref: StationRef): string => {
+  const getStationDisplayLabel = (ref: StationRef): ReactNode => {
     const section = project?.sections.find((item) => item.id === ref.section_id);
     const sectionLabel = section?.name?.trim() || `Section ${ref.section_id}`;
-    return `${formatStationId(ref.section_id, ref.station_index)} (${sectionLabel})`;
+    return (
+      <span className="inline-flex items-center gap-1.5 align-middle">
+        <EntityBlob entity="station">{formatStationId(ref.section_id, ref.station_index)}</EntityBlob>
+        <EntityBlob entity="section">{sectionLabel}</EntityBlob>
+      </span>
+    );
   };
 
   const isDirectMerge = (a: StationRef, b: StationRef): boolean => {

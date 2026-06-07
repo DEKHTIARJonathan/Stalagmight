@@ -119,7 +119,7 @@ export default function CommentOverlay() {
     >
       <textarea
         ref={textareaRef}
-        className="w-full bg-background border border-border rounded px-2 py-1 text-sm resize-none focus:outline-none focus:border-accent"
+        className="w-full bg-background border border-border rounded px-2 py-1 text-sm resize-none focus:outline-none focus-visible:border-accent"
         rows={3}
         value={value}
         onChange={(e) => setValue(e.target.value)}

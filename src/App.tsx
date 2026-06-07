@@ -6,7 +6,7 @@ import { useProjectStore } from './store/projectStore';
 import { useUIStore } from './store/uiStore';
 import { invokeIpc, getErrorMessage } from './utils/ipc';
 import { extractFilename } from './utils/path';
-import { useBeforeUnload, useLoadingProgress, useTheme, useNetworkStatus, useUiScale } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import i18n from './i18n';
 import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
@@ -52,6 +52,9 @@ function App() {
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
+
+  // Apply syntactic-highlighting colors (sets --sh-* vars + data-sh-level)
+  useSyntacticHighlighting();
 
   // Listen for loading progress events from backend
   useLoadingProgress();

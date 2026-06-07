@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -7,17 +7,9 @@ import {
   ArrowLeftIcon,
   BugIcon,
   ChevronDownIcon,
-  HandIcon,
-  SelectToolIcon,
-  ZoomToolIcon,
-  MergeToolIcon,
-  MeasureToolIcon,
-  MoveStationToolIcon,
-  MoveSegmentToolIcon,
-  MoveShotToolIcon,
-  CommentToolIcon,
-  MoveCommentToolIcon,
 } from '../common/icons';
+import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
+import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
@@ -26,9 +18,6 @@ import { setSource } from '../../utils/telemetry';
 import { defaultConfig } from '../../types/config';
 
 interface ToolbarProps {
-  projectName: string;
-  /** When in section-focus mode (#50), the focused section's name. */
-  focusedSectionName: string | null;
   onBack: () => void;
   onSave: () => void;
   onImport: () => void;
@@ -106,24 +95,22 @@ const TOOL_GROUP_LABEL_KEYS: Record<string, string> = {
 };
 
 /**
- * Toolbar layout definition.
- * [Select] | [Navigate group] | [Merge] [Measure] | [Move group]
+ * Toolbar layout definition (#51): navigation tools, a divider, the action
+ * tools, a divider, then the standalone measure tool.
+ * [Select Pan/Zoom] | [Merge Comment Move] | [Measure]
  */
 const TOOLBAR_ITEMS: ToolbarItem[] = [
   { kind: 'standalone', id: 'select', shortcut: 'S' },
-  { kind: 'separator' },
   { kind: 'group', groupId: 'navigate' },
   { kind: 'separator' },
   { kind: 'standalone', id: 'merge', shortcut: 'M' },
-  { kind: 'standalone', id: 'measure', shortcut: 'R' },
   { kind: 'group', groupId: 'comment' },
-  { kind: 'separator' },
   { kind: 'group', groupId: 'move' },
+  { kind: 'separator' },
+  { kind: 'standalone', id: 'measure', shortcut: 'R' },
 ];
 
 export default function Toolbar({
-  projectName,
-  focusedSectionName,
   onBack,
   onSave,
   onImport,
@@ -199,24 +186,29 @@ export default function Toolbar({
         </UndoHistoryDropdown>
       </div>
 
-      {/* Center - project name, or focused section name (#50). The name is a
-          plain heading; exiting focus mode is done via the map's exit-focus
-          button (top-left of the map), not from here. */}
-      {focusedSectionName !== null ? (
-        <h1
-          className="font-medium truncate max-w-[40vw]"
-          data-testid="toolbar-section-focus-name"
+      {/* Center - the active tool's name + duotone icon, tinted with its color
+          (#51). The project name/file path live in the Project Stats panel; the
+          focused section (if any) is shown in the status bar. */}
+      <div
+        className="flex items-center gap-1.5"
+        data-testid="toolbar-active-tool"
+        style={{ '--o': toolAccentVar(activeTool) } as CSSProperties}
+      >
+        <ToolGlyph tool={activeTool} size={18} />
+        <span
+          className="font-medium"
+          /* Mix with the theme text color so the tool-tinted label stays legible
+             on light/cave toolbars (raw --o can be too pale on a light panel). */
+          style={{ color: 'color-mix(in oklab, var(--o) 80%, var(--cc-text-primary))' }}
         >
-          {focusedSectionName}
-        </h1>
-      ) : (
-        <h1 className="font-medium" data-testid="toolbar-project-name">{projectName}</h1>
-      )}
+          {t(TOOL_LABEL_KEYS[activeTool])}
+        </span>
+      </div>
 
       {/* Right section - tools and display menu */}
       <div className="flex items-center gap-2">
         <div
-          className={`flex items-center gap-1 bg-background rounded px-1 py-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+          className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
           data-testid="toolbar-tools-group"
         >
           {TOOLBAR_ITEMS.map((item, index) => {
@@ -337,12 +329,13 @@ function ToolButton({ tool, active, onClick, disabled = false }: ToolButtonProps
     >
       <IconButton
         icon={<ToolIcon tool={tool} />}
-        active={active}
         onClick={handleClick}
         disabled={disabled}
         aria-label={t(TOOL_LABEL_KEYS[tool])}
         size="sm"
         aria-pressed={active}
+        className={`sh-tool ${active ? 'sh-tool--active' : ''}`}
+        style={{ '--o': toolAccentVar(tool) } as CSSProperties}
         data-testid={`tool-${tool}`}
       />
 
@@ -591,7 +584,6 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
           </span>
         )}
         size="sm"
-        active={isGroupActive}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         disabled={disabled}
@@ -599,6 +591,8 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
         aria-pressed={isGroupActive}
         aria-haspopup="true"
         aria-expanded={flyoutOpen}
+        className={`sh-tool ${isGroupActive ? 'sh-tool--active' : ''}`}
+        style={{ '--o': toolAccentVar(displayTool) } as CSSProperties}
         data-testid={`tool-group-${group.id}`}
       />
 
@@ -643,18 +637,9 @@ function ToolGroupButton({ group, activeTool, onActivateTool, disabled = false }
 }
 
 function ToolIcon({ tool }: { tool: ToolType }) {
-  const icons: Record<ToolType, ReactNode> = {
-    select: <SelectToolIcon size={20} />,
-    pan: <HandIcon size={20} />,
-    zoom: <ZoomToolIcon size={20} />,
-    merge: <MergeToolIcon size={20} />,
-    measure: <MeasureToolIcon size={20} />,
-    move_station: <MoveStationToolIcon size={20} />,
-    move_segment: <MoveSegmentToolIcon size={20} />,
-    move_shot: <MoveShotToolIcon size={20} />,
-    comment: <CommentToolIcon size={20} />,
-    move_comment: <MoveCommentToolIcon size={20} />,
-  };
-
-  return <span className="inline-flex items-center justify-center">{icons[tool]}</span>;
+  return (
+    <span className="inline-flex items-center justify-center">
+      <ToolGlyph tool={tool} size={20} />
+    </span>
+  );
 }

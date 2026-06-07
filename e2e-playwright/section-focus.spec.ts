@@ -64,7 +64,7 @@ async function enterFocus(page: Page, sectionId: number): Promise<void> {
   await expect(row).toBeVisible();
   await row.hover();
   await page.getByTestId(`section-focus-${sectionId}`).click();
-  await expect(page.getByTestId('toolbar-section-focus-name')).toBeVisible();
+  await expect(page.getByTestId('status-focused-section')).toBeVisible();
 }
 
 test.describe('Section focus mode', () => {
@@ -80,7 +80,7 @@ test.describe('Section focus mode', () => {
     const sectionId = await getSectionIdByName(page, SECTION_NAME);
 
     // Baseline: project name shown, sections panel open, data table closed.
-    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
 
@@ -88,9 +88,9 @@ test.describe('Section focus mode', () => {
     await enterFocus(page, sectionId);
 
     // Toolbar swaps the project name for the focused section name.
-    const focusName = page.getByTestId('toolbar-section-focus-name');
+    const focusName = page.getByTestId('status-focused-section');
     await expect(focusName).toContainText(SECTION_NAME);
-    await expect(page.getByTestId('toolbar-project-name')).toHaveCount(0);
+    await expect(page.getByTestId('toolbar-active-tool')).toBeVisible();
 
     // Both side panels collapse; the data table opens.
     await expect(page.getByTestId('sections-panel-collapsed-toggle')).toBeVisible();
@@ -105,8 +105,8 @@ test.describe('Section focus mode', () => {
     await fitToView.click();
 
     // Layout restored: project name back, sections panel open, data table closed.
-    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
-    await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
     // Label is gone once out of focus mode.
@@ -122,8 +122,8 @@ test.describe('Section focus mode', () => {
 
     // The section is selected, but focus mode is NOT entered: project name stays,
     // the sections panel remains open, and the data table stays collapsed.
-    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
-    await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
     await expect(page.getByTestId('data-table-collapsed-toggle')).toBeVisible();
     await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
@@ -132,7 +132,7 @@ test.describe('Section focus mode', () => {
   test('the per-row focus button enters focus mode', async ({ page }) => {
     const sectionId = await getSectionIdByName(page, SECTION_NAME);
 
-    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
 
     // The focus button is revealed on row hover (opacity-0 otherwise).
     const sectionRow = page.locator(`[data-testid="section-row-${sectionId}"]`);
@@ -143,10 +143,10 @@ test.describe('Section focus mode', () => {
 
     // A single click on the button enters focus mode, just like double-clicking
     // the row: toolbar shows the section name, side panels collapse, table opens.
-    const focusName = page.getByTestId('toolbar-section-focus-name');
+    const focusName = page.getByTestId('status-focused-section');
     await expect(focusName).toBeVisible();
     await expect(focusName).toContainText(SECTION_NAME);
-    await expect(page.getByTestId('toolbar-project-name')).toHaveCount(0);
+    await expect(page.getByTestId('toolbar-active-tool')).toBeVisible();
     await expect(page.getByTestId('sections-panel-collapsed-toggle')).toBeVisible();
     await expect(page.getByTestId('detail-panel-collapsed-toggle')).toBeVisible();
     await expect(page.getByTestId('data-table-open-collapse-toggle')).toBeVisible();
@@ -186,8 +186,8 @@ test.describe('Section focus mode', () => {
     }, sectionId);
 
     // Focus mode exits: project name returns, side panels restored.
-    await expect(page.getByTestId('toolbar-project-name')).toBeVisible();
-    await expect(page.getByTestId('toolbar-section-focus-name')).toHaveCount(0);
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
+    await expect(page.getByTestId('status-focused-section')).toHaveCount(0);
     await expect(page.getByTestId('sections-panel')).toBeVisible();
   });
 
@@ -196,7 +196,7 @@ test.describe('Section focus mode', () => {
 
     // Enter focus on the first section.
     await enterFocus(page, firstId);
-    const focusName = page.getByTestId('toolbar-section-focus-name');
+    const focusName = page.getByTestId('status-focused-section');
     await expect(focusName).toContainText(SECTION_NAME);
 
     // Select another section while focused (simulating a map click into it). The

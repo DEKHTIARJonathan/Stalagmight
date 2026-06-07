@@ -1,5 +1,6 @@
 use super::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ========================================================================
 // Default Values Tests
@@ -1971,4 +1972,107 @@ fn test_next_section_color_used_colors_not_in_palette_ignored() {
     ];
     let used = vec!["#999999".to_string()]; // not in palette
     assert_eq!(config.next_section_color(&used), "#ff0000");
+}
+
+// ========================================================================
+// Syntactic Highlighting Tests
+// ========================================================================
+
+#[test]
+fn test_syntactic_highlighting_defaults_to_full() {
+    let config = SyntacticHighlightingConfig::default();
+    assert_eq!(config.level, SyntacticHighlightLevel::Full);
+    assert_eq!(config.preset, SyntacticHighlightPreset::Default);
+    assert!(config.overrides.is_empty());
+    // And the default top-level config exposes the same.
+    assert_eq!(
+        Config::default().syntactic_highlighting.level,
+        SyntacticHighlightLevel::Full
+    );
+}
+
+#[test]
+fn test_syntactic_highlighting_missing_section_loads_as_full() {
+    // A config written before this feature existed has no
+    // [syntactic_highlighting] section; it must load with the opt-out default.
+    // Simulate by serializing a default config and stripping the section.
+    let mut value = toml::Value::try_from(Config::default()).expect("config to toml value");
+    value
+        .as_table_mut()
+        .expect("config is a table")
+        .remove("syntactic_highlighting");
+    let without_section = toml::to_string(&value).expect("re-serialize");
+    assert!(!without_section.contains("syntactic_highlighting"));
+
+    let config: Config = toml::from_str(&without_section).expect("legacy config should parse");
+    assert_eq!(
+        config.syntactic_highlighting.level,
+        SyntacticHighlightLevel::Full
+    );
+    assert_eq!(
+        config.syntactic_highlighting.preset,
+        SyntacticHighlightPreset::Default
+    );
+}
+
+#[test]
+fn test_syntactic_highlighting_serde_round_trip() {
+    let mut config = SyntacticHighlightingConfig::default();
+    config.level = SyntacticHighlightLevel::ToolbarOnly;
+    config.preset = SyntacticHighlightPreset::Deuteranopia;
+    let mut roles = HashMap::new();
+    roles.insert("station".to_string(), "#36b96a".to_string());
+    config.overrides.insert("deuteranopia".to_string(), roles);
+
+    let serialized = toml::to_string(&config).expect("serialize");
+    let deserialized: SyntacticHighlightingConfig =
+        toml::from_str(&serialized).expect("deserialize");
+    assert_eq!(deserialized.level, SyntacticHighlightLevel::ToolbarOnly);
+    assert_eq!(deserialized.preset, SyntacticHighlightPreset::Deuteranopia);
+    assert_eq!(
+        deserialized.overrides["deuteranopia"]["station"],
+        "#36b96a"
+    );
+}
+
+#[test]
+fn test_syntactic_highlighting_unknown_enums_normalize() {
+    let toml = r#"
+level = "made_up"
+preset = "also_made_up"
+"#;
+    let mut config: SyntacticHighlightingConfig = toml::from_str(toml).expect("parse");
+    config.normalize();
+    assert_eq!(config.level, SyntacticHighlightLevel::Full);
+    assert_eq!(config.preset, SyntacticHighlightPreset::Default);
+}
+
+#[test]
+fn test_syntactic_highlighting_normalize_drops_bad_hex() {
+    let mut config = SyntacticHighlightingConfig::default();
+    let mut roles = HashMap::new();
+    roles.insert("station".to_string(), "#36b96a".to_string()); // valid
+    roles.insert("shot".to_string(), "0070dd".to_string()); // missing '#'
+    roles.insert("segment".to_string(), "#xyz123".to_string()); // non-hex
+    roles.insert("section".to_string(), "#A335EE".to_string()); // valid uppercase
+    config.overrides.insert("default".to_string(), roles);
+
+    config.normalize();
+
+    let default_roles = &config.overrides["default"];
+    assert!(default_roles.contains_key("station"));
+    assert!(default_roles.contains_key("section"));
+    assert!(!default_roles.contains_key("shot"));
+    assert!(!default_roles.contains_key("segment"));
+}
+
+#[test]
+fn test_syntactic_highlighting_normalize_removes_empty_preset_maps() {
+    let mut config = SyntacticHighlightingConfig::default();
+    let mut roles = HashMap::new();
+    roles.insert("station".to_string(), "notacolor".to_string()); // dropped
+    config.overrides.insert("default".to_string(), roles);
+    config.normalize();
+    // The preset entry becomes empty after dropping the bad color, so it is removed.
+    assert!(config.overrides.is_empty());
 }

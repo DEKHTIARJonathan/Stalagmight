@@ -119,7 +119,7 @@ export function ViewModeToggle({ mode, onModeChange }: ViewModeToggleProps) {
         className="
           bg-panel border border-border rounded p-2
           hover:bg-background transition-colors duration-200
-          focus:outline-none focus:ring-2 focus:ring-accent
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-accent
           group leading-none
         "
         aria-label={tooltipText}

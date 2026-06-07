@@ -60,7 +60,7 @@ export function Toggle({
       className={`
         relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full
         transition-all duration-200
-        focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background
         ${checked ? 'bg-accent' : 'bg-border'}
         ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
       `}

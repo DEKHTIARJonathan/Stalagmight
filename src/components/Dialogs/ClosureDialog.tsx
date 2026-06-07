@@ -4,7 +4,9 @@ import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
+import { EntityBlob } from '../common/EntityBlob';
 import { DialogWrapper } from './DialogWrapper';
+import { formatStationId } from '../../utils/formatters';
 import { getErrorColor } from '../../utils/colors';
 import { formatFixed, formatPercent } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -94,11 +96,17 @@ export default function ClosureDialog() {
         <div className="space-y-2">
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station A:</span>
-            <span>{sectionAName} #{stationA.station_index}</span>
+            <span className="inline-flex items-center gap-1.5">
+              <EntityBlob entity="station">{formatStationId(stationA.section_id, stationA.station_index)}</EntityBlob>
+              <EntityBlob entity="section">{sectionAName}</EntityBlob>
+            </span>
           </div>
           <div className="flex justify-between items-center py-2 border-b border-border">
             <span className="text-text-secondary">Station B:</span>
-            <span>{sectionBName} #{stationB.station_index}</span>
+            <span className="inline-flex items-center gap-1.5">
+              <EntityBlob entity="station">{formatStationId(stationB.section_id, stationB.station_index)}</EntityBlob>
+              <EntityBlob entity="section">{sectionBName}</EntityBlob>
+            </span>
           </div>
         </div>
 

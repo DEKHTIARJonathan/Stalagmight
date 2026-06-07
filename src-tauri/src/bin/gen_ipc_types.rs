@@ -19,7 +19,8 @@ use stalagmight_lib::config::{
     GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig,
     MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig,
     PlacementSuggestionConfig, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    StationConfig, ThemeMode, UnitsConfig, ValidationConfig,
+    StationConfig, SyntacticHighlightingConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
+    ThemeMode, UnitsConfig, ValidationConfig,
 };
 use stalagmight_lib::core::command::{CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning, WarningSeverity};
 use stalagmight_lib::core::loading::{
@@ -234,6 +235,9 @@ fn main() {
     export::<GlobalViewConfig>(&out_dir);
     export::<AppearanceConfig>(&out_dir);
     export::<ImportConfig>(&out_dir);
+    export::<SyntacticHighlightingConfig>(&out_dir);
+    export::<SyntacticHighlightLevel>(&out_dir);
+    export::<SyntacticHighlightPreset>(&out_dir);
     export::<OverlapMode>(&out_dir);
     export::<DecimalPrecision>(&out_dir);
     export::<LengthUnit>(&out_dir);
@@ -377,6 +381,9 @@ fn main() {
         "GlobalViewConfig",
         "AppearanceConfig",
         "ImportConfig",
+        "SyntacticHighlightingConfig",
+        "SyntacticHighlightLevel",
+        "SyntacticHighlightPreset",
         "OverlapMode",
         "DecimalPrecision",
         "LengthUnit",

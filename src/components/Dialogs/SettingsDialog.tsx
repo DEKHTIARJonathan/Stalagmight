@@ -104,7 +104,15 @@ function getCategoryDefaults(category: SettingsCategory, resolvedTheme: Resolved
     case 'cache':
       return { cache: { ...defaultConfig.cache } };
     case 'appearance':
-      return { appearance: { ...defaultConfig.appearance } };
+      // Highlighting controls live in the Appearance tab, so resetting Appearance
+      // also resets syntactic highlighting.
+      return {
+        appearance: { ...defaultConfig.appearance },
+        syntactic_highlighting: {
+          ...defaultConfig.syntactic_highlighting,
+          overrides: {},
+        },
+      };
     case 'advanced':
       return {
         debug: { map: { ...defaultConfig.debug.map }, memory_probe: defaultConfig.debug.memory_probe },
@@ -219,6 +227,10 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
     appearance: { ...base.appearance },
     import: { ...base.import },
     placement_suggestion: { ...(base.placement_suggestion ?? defaultConfig.placement_suggestion) },
+    syntactic_highlighting: {
+      ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting),
+      overrides: { ...(base.syntactic_highlighting ?? defaultConfig.syntactic_highlighting).overrides },
+    },
   };
 
   // Apply updates with deep merge for each key
@@ -302,6 +314,9 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   if (updates.placement_suggestion) {
     result.placement_suggestion = { ...result.placement_suggestion, ...updates.placement_suggestion };
   }
+  if (updates.syntactic_highlighting) {
+    result.syntactic_highlighting = { ...result.syntactic_highlighting, ...updates.syntactic_highlighting };
+  }
 
   return result;
 }
@@ -311,6 +326,7 @@ export default function SettingsDialog() {
   const { closeDialog } = useUIStore();
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const setThemePreview = useUIStore((s) => s.setThemePreview);
+  const setSyntacticHighlightPreview = useUIStore((s) => s.setSyntacticHighlightPreview);
   const { config, updateConfig } = useProjectStore();
 
   // Panel ID base for ARIA associations
@@ -363,6 +379,19 @@ export default function SettingsDialog() {
     }
     return () => setThemePreview(null);
   }, [localConfig?.appearance.theme, localConfig?.appearance.day_color_theme, localConfig?.appearance.night_color_theme, setThemePreview]);
+
+  // Live-preview syntactic-highlighting changes (level / preset / per-color overrides)
+  useEffect(() => {
+    if (localConfig) {
+      setSyntacticHighlightPreview(localConfig.syntactic_highlighting);
+    }
+    return () => setSyntacticHighlightPreview(null);
+  }, [
+    localConfig?.syntactic_highlighting.level,
+    localConfig?.syntactic_highlighting.preset,
+    localConfig?.syntactic_highlighting.overrides,
+    setSyntacticHighlightPreview,
+  ]);
 
   // Compute changed fields from original config
   const changedFields = useMemo(() => {

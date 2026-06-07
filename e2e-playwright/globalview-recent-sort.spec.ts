@@ -45,14 +45,48 @@ test.describe('GlobalView Recent Projects — path, relative time, sort', () => 
     await switchToListTab(page);
   });
 
-  test('shows the elided file path under each card with the full path on hover', async ({ page }) => {
+  test('shows the elided file path under each card, revealed in full on hover (no tooltip)', async ({ page }) => {
     const path = page.getByTestId(ALPHA).getByTestId('system-card-path');
     await expect(path).toBeVisible();
     await expect(path).toHaveAttribute('data-full-path', '/projects/cave-alpha.stalx');
 
     await path.hover();
-    const tooltip = page.locator('[role="tooltip"]', { hasText: '/projects/cave-alpha.stalx' });
-    await expect(tooltip).toBeVisible();
+    // No tooltip anymore — the full path is revealed in place (scrolls if it overflows).
+    await expect(page.locator('[role="tooltip"]', { hasText: '/projects/cave-alpha.stalx' })).toHaveCount(0);
+    await expect(path).toContainText('/projects/cave-alpha.stalx');
+  });
+
+  test('an overflowing path scrolls (marquee) in place on hover, not a tooltip', async ({ page }) => {
+    // Force the path clip box narrow so the full path overflows regardless of length.
+    await page.addStyleTag({ content: '[data-testid="system-card-path"]{max-width:60px !important}' });
+    const path = page.getByTestId(ALPHA).getByTestId('system-card-path');
+    await path.hover();
+    const overlay = path.locator('[data-elided-overlay]');
+    await expect(overlay).toHaveCount(1); // marquee overlay appears
+    // Out of flow, so it can't widen the table column (the reported bug).
+    expect(await overlay.evaluate((el) => getComputedStyle(el).position)).toBe('absolute');
+    expect(await overlay.evaluate((el) => getComputedStyle(el).animationName)).toContain('elided-path-scroll');
+    await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
+  });
+
+  test('table view: sticky header pins flush to the top when scrolling', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 280 }); // short → the list scrolls
+    await page.getByTestId('recent-density-table').click();
+    await page.getByTestId('globalview-list-table').waitFor({ state: 'visible' });
+    const gap = await page.evaluate(() => {
+      const t = document.querySelector('[data-testid="globalview-list-table"]') as HTMLElement;
+      let sc: HTMLElement | null = t.parentElement;
+      while (sc) {
+        const o = getComputedStyle(sc).overflowY;
+        if (o === 'auto' || o === 'scroll') break;
+        sc = sc.parentElement;
+      }
+      if (!sc) return -999;
+      sc.scrollTop = 150;
+      const th = t.querySelector('thead th') as HTMLElement;
+      return Math.round(th.getBoundingClientRect().top - sc.getBoundingClientRect().top);
+    });
+    expect(Math.abs(gap)).toBeLessThanOrEqual(1); // no gap above the pinned header
   });
 
   test('shows relative edited time, with the exact timestamp on hover', async ({ page }) => {

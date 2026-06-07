@@ -7,6 +7,7 @@ import { isFieldChanged } from './types';
 import { defaultConfig } from '../../../types/config';
 import type { ThemeMode, ColorTheme } from '../../../types/config';
 import { ThemePreviewCard, ColorThemeCircle } from './ThemePreviewCard';
+import { SyntacticHighlightingSettings } from './SyntacticHighlightingSettings';
 import { Select } from '../../common/Select';
 import type { SelectOption } from '../../common/Select';
 
@@ -158,6 +159,12 @@ export function AppearanceSettings({
           </div>
         </div>
       </SettingsSection>
+
+      <SyntacticHighlightingSettings
+        config={config}
+        onChange={onChange}
+        changedFields={changedFields}
+      />
     </div>
   );
 }

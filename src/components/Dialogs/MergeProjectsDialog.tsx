@@ -179,7 +179,7 @@ export default function MergeProjectsDialog() {
             type="text"
             value={outputName}
             onChange={(e) => setOutputName(e.target.value)}
-            className="w-full px-3 py-2 bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-accent"
+            className="w-full px-3 py-2 bg-background border border-border rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
             placeholder="Enter project name"
             data-testid="merge-output-name-input"
           />

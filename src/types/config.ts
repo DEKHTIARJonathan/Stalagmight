@@ -35,6 +35,9 @@ export type {
   PanelsConfig,
   CacheConfig,
   GlobalViewConfig,
+  SyntacticHighlightingConfig,
+  SyntacticHighlightLevel,
+  SyntacticHighlightPreset,
 } from './ipc.generated';
 
 export const defaultConfig: Config = {
@@ -219,6 +222,11 @@ export const defaultConfig: Config = {
   },
   import: {
     overlap_mode: 'import_data' as const,
+  },
+  syntactic_highlighting: {
+    level: 'full',
+    preset: 'default',
+    overrides: {},
   },
   placement_suggestion: {
     azimuth_sigma: 18.0,
