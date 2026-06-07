@@ -56,5 +56,12 @@ export function initInputModalityTracking(): void {
   window.addEventListener('pointerdown', onPointer, true);
   window.addEventListener('mousedown', onPointer, true); // fallback if no Pointer Events
   window.addEventListener('touchstart', onPointer, true);
+  // Mouse *movement* also means pointer modality. This matters for UI that grabs
+  // focus on hover (e.g. tool-group flyouts focus a menu item when they open): a
+  // hover doesn't fire pointerdown, so without this the modality could stay
+  // 'keyboard' and the programmatic focus would draw a ring. setModality is a
+  // cheap no-op once already 'pointer', so the high event rate is fine.
+  window.addEventListener('pointermove', onPointer, true);
+  window.addEventListener('mousemove', onPointer, true);
   window.addEventListener('keydown', onKey, true);
 }
