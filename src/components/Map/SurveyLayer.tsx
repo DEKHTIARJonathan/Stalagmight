@@ -1714,14 +1714,6 @@ export default class SurveyLayer {
       }
       this.prevSelectedSectionStationIds = newSelectedStationIds;
     }
-
-    // Re-apply distance-gradient feature-state (#34). MapLibre wipes feature-state
-    // on every setData(); updateVisualState() runs after each rebuild, so this is
-    // what keeps the gradient alive across edits / label-zoom / depth toggles
-    // instead of silently reverting to the section color.
-    if (this.distanceMode) {
-      this.applyDistanceFeatureState();
-    }
   }
 
   /**
@@ -1757,12 +1749,17 @@ export default class SurveyLayer {
       this.map.setPaintProperty(this.stationsLayerId, 'circle-color', color);
     }
     // Depth's per-segment gradient renders above the main shot line; hide it while
-    // distance is active so it can't cover the distance colors.
+    // distance is active so it can't cover the distance colors. When restoring,
+    // match the main shots layer's visibility rather than forcing 'visible' — the
+    // user may have Shots hidden (then depth segments must stay hidden too).
     if (this.map.getLayer(this.shotGradientsLayerId)) {
+      const shotsVisibility =
+        (this.map.getLayoutProperty(this.shotsLayerId, 'visibility') as string | undefined) ??
+        'visible';
       this.map.setLayoutProperty(
         this.shotGradientsLayerId,
         'visibility',
-        this.distanceMode ? 'none' : 'visible',
+        this.distanceMode ? 'none' : shotsVisibility,
       );
     }
   }
@@ -3794,6 +3791,13 @@ export default class SurveyLayer {
     this.prevSelectedSectionStationIds = new Set();
     this.invalidateSectionCaches();
     this.updateVisualState();
+    // setData() wiped feature-state, so re-apply the distance-gradient `dist`
+    // HERE (the rebuild path) — NOT in updateVisualState(), which also runs on
+    // every hover where feature-state is intact and re-applying all ~N features
+    // would tank FPS (60→10 on large surveys). (#34)
+    if (this.distanceMode) {
+      this.applyDistanceFeatureState();
+    }
 
     // Fire one-shot callback (used by drag commit to restore filters in the same
     // synchronous block as setData, ensuring no paint gap between them).
