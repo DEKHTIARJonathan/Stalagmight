@@ -345,31 +345,47 @@ impl AppState {
     /// state reads), and reuses the memoized adjusted-stations cache read-only
     /// when it matches that snapshot (keeps re-root instant in the adjusted view).
     pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
+        use std::sync::atomic::Ordering::SeqCst;
         let config = self.get_config();
         let config_hash = adjusted_config_hash(&config.closure_adjustment);
         // Single reconciled snapshot, serialized with edits (mirrors
-        // get_adjusted_stations) so topology + coords share one version.
-        let project = {
+        // get_adjusted_stations) so topology + coords share one version. Capture
+        // the invalidation generation under the same lock for the cache writeback.
+        let (project, generation) = {
             let _cmd_guard = self.command_lock.lock().ok()?;
-            self.get_project_state()?
+            let generation = self.adjusted_cache_generation.load(SeqCst);
+            (self.get_project_state()?, generation)
         };
         let version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
+
         // Reuse the display view's memoized adjusted coords iff they're for this
-        // exact snapshot; otherwise derive them from the snapshot so coordinates
-        // and topology always agree.
-        let adjusted = self
-            .adjusted_cache
-            .lock()
-            .ok()
-            .and_then(|cache| {
-                cache.as_ref().and_then(|e| {
-                    (e.version == version && e.config_hash == config_hash)
-                        .then(|| e.stations.clone())
-                })
+        // exact snapshot; otherwise solve and populate the SAME cache, so repeated
+        // re-roots (same version + closure config) don't redo the expensive
+        // closure-adjustment solve — even in measured view where the display path
+        // never warmed the cache.
+        let cached = self.adjusted_cache.lock().ok().and_then(|cache| {
+            cache.as_ref().and_then(|e| {
+                (e.version == version && e.config_hash == config_hash).then(|| e.stations.clone())
             })
-            .unwrap_or_else(|| {
-                project.compute_adjusted_station_coordinates(&config.closure_adjustment)
-            });
+        });
+        let adjusted = match cached {
+            Some(stations) => stations,
+            None => {
+                let stations =
+                    project.compute_adjusted_station_coordinates(&config.closure_adjustment);
+                // Only store if nothing invalidated the cache while we solved.
+                if let Ok(mut cache) = self.adjusted_cache.lock() {
+                    if self.adjusted_cache_generation.load(SeqCst) == generation {
+                        *cache = Some(AdjustedStationsCache {
+                            version,
+                            config_hash,
+                            stations: stations.clone(),
+                        });
+                    }
+                }
+                stations
+            }
+        };
         Some(project.distance_field_from(&adjusted, from))
     }
 
