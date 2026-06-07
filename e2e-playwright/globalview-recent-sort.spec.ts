@@ -53,7 +53,7 @@ test.describe('GlobalView Recent Projects — path, relative time, sort', () => 
     await path.hover();
     // No tooltip anymore — the full path is revealed in place (scrolls if it overflows).
     await expect(page.locator('[role="tooltip"]', { hasText: '/projects/cave-alpha.stalx' })).toHaveCount(0);
-    await expect(path).toHaveText('/projects/cave-alpha.stalx');
+    await expect(path).toContainText('/projects/cave-alpha.stalx');
   });
 
   test('an overflowing path scrolls (marquee) in place on hover, not a tooltip', async ({ page }) => {
@@ -61,10 +61,11 @@ test.describe('GlobalView Recent Projects — path, relative time, sort', () => 
     await page.addStyleTag({ content: '[data-testid="system-card-path"]{max-width:60px !important}' });
     const path = page.getByTestId(ALPHA).getByTestId('system-card-path');
     await path.hover();
-    const inner = path.locator('span').first();
-    await expect
-      .poll(async () => inner.evaluate((el) => getComputedStyle(el).animationName))
-      .toContain('elided-path-scroll');
+    const overlay = path.locator('[data-elided-overlay]');
+    await expect(overlay).toHaveCount(1); // marquee overlay appears
+    // Out of flow, so it can't widen the table column (the reported bug).
+    expect(await overlay.evaluate((el) => getComputedStyle(el).position)).toBe('absolute');
+    expect(await overlay.evaluate((el) => getComputedStyle(el).animationName)).toContain('elided-path-scroll');
     await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
   });
 
