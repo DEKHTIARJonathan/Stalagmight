@@ -3643,6 +3643,33 @@ impl Project {
         let (sol_x, sol_y) =
             Self::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj);
 
+        // Optimality guard (tests only): the closure adjustment is the minimizer of
+        // the weighted misclosure, i.e. the solution of the SPD normal equations
+        // `A·x = atb`. Verify that directly on the *real* assembled system by
+        // checking the residual `‖A·x − atb‖∞ ≈ 0` for both axes. This runs for
+        // every test that exercises the solve (analytic, realistic, fuzz), so it
+        // proves the result is the true optimum — not merely that "the loop closed".
+        #[cfg(test)]
+        {
+            let residual_inf = |diag: &[f64], atb: &[f64], sol: &[f64], axis: usize| -> f64 {
+                let mut max = 0.0_f64;
+                for i in 0..n {
+                    let mut ax = diag[i] * sol[i];
+                    for &(j, wx, wy) in &adj[i] {
+                        ax += if axis == 0 { wx } else { wy } * sol[j];
+                    }
+                    max = max.max((ax - atb[i]).abs());
+                }
+                max
+            };
+            let rx = residual_inf(&diag_x, &atb_x, &sol_x, 0);
+            let ry = residual_inf(&diag_y, &atb_y, &sol_y, 1);
+            assert!(
+                rx < 1e-6 && ry < 1e-6,
+                "closure solve is not at the LSQ optimum: ‖A·x−b‖∞ = ({rx:.3e}, {ry:.3e})"
+            );
+        }
+
         // Collect original Z coordinates for each group root (depths are not adjusted)
         let mut group_raw_z: HashMap<StationRef, f64> = HashMap::new();
         for (root, members) in &groups {
