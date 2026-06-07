@@ -96,12 +96,15 @@ export default function SingleSystemView() {
   })));
 
   // #50: name shown in place of the project name while focused on one section.
-  const focusedSectionExists =
-    focusedSectionId !== null && (project?.sections.some((s) => s.id === focusedSectionId) ?? false);
+  // A single lookup drives both existence (the auto-exit effect) and the name.
+  const focusedSection =
+    focusedSectionId !== null
+      ? project?.sections.find((s) => s.id === focusedSectionId) ?? null
+      : null;
+  const focusedSectionExists = focusedSection !== null;
   const focusedSectionName =
     focusedSectionId !== null
-      ? project?.sections.find((s) => s.id === focusedSectionId)?.name
-          ?? t('sections.defaultName', { id: focusedSectionId })
+      ? focusedSection?.name ?? t('sections.defaultName', { id: focusedSectionId })
       : null;
 
   // The section that owns the current selection (section / shot / station) — the
@@ -121,6 +124,9 @@ export default function SingleSystemView() {
   // single-click no longer moving the map. Lives here (not in SectionsPanel,
   // which unmounts on collapse) so the timer survives the panel mount/unmount.
   const prevFocusedRef = useRef<SectionId | null>(null);
+  const focusedSectionIdRef = useRef<SectionId | null>(focusedSectionId);
+  focusedSectionIdRef.current = focusedSectionId;
+  const refitTimerRef = useRef<number | null>(null);
   useEffect(() => {
     const prev = prevFocusedRef.current;
     prevFocusedRef.current = focusedSectionId;
@@ -130,18 +136,32 @@ export default function SingleSystemView() {
         : prev !== null && focusedSectionId === null
           ? 'exit'
           : null; // follow / no transition
+    // A follow (id -> id') deliberately doesn't re-frame the map, and crucially
+    // must NOT cancel a still-pending ENTER re-fit either: the entry timer reads
+    // the latest focused id at fire time, so a quick follow during the settle
+    // window still frames the section the user landed on instead of dropping the
+    // zoom. So leave any pending timer untouched on a follow.
     if (transition === null) return;
-    const enterId = focusedSectionId;
-    const timer = window.setTimeout(() => {
+    if (refitTimerRef.current !== null) window.clearTimeout(refitTimerRef.current);
+    refitTimerRef.current = window.setTimeout(() => {
+      refitTimerRef.current = null;
       setSource('sections-panel');
-      if (transition === 'enter' && enterId !== null) {
-        triggerZoomToSection(enterId);
+      const id = focusedSectionIdRef.current;
+      if (transition === 'enter' && id !== null) {
+        triggerZoomToSection(id);
       } else {
         triggerFitToBounds();
       }
     }, SECTION_FOCUS_REFIT_DELAY_MS);
-    return () => window.clearTimeout(timer);
   }, [focusedSectionId, triggerZoomToSection, triggerFitToBounds]);
+  // The effect above no longer returns a per-change cleanup (so a follow can't
+  // cancel an in-flight entry zoom); clear any pending re-fit on unmount instead.
+  useEffect(
+    () => () => {
+      if (refitTimerRef.current !== null) window.clearTimeout(refitTimerRef.current);
+    },
+    [],
+  );
 
   // #50: while focused, follow the selected section so the toolbar heading tracks
   // the data table (clicking another section on the map updates both).
