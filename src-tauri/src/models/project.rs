@@ -3031,6 +3031,19 @@ impl Project {
             }
         }
 
+        // Precompute every station's raw (measured) coordinates in a single O(n)
+        // pass. The warm-start, group-Z and section-delta phases below each need a
+        // station's measured position; calling `compute_station_raw_coords` per
+        // station re-walks the section from its start (O(index)), which made the
+        // solve O(n^2) on long degree-2 chains (#81). One batch pass + map lookups
+        // keeps it linear. The map is owned (no borrow of `self`), so it stays
+        // valid across the later `iter_mut` update phase.
+        let raw_coords: HashMap<StationRef, Coordinates> = self
+            .compute_station_coordinates()
+            .into_iter()
+            .map(|s| (s.station_ref, s.coordinates))
+            .collect();
+
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         for station in &stations {
             parent.insert(*station, *station);
@@ -3120,8 +3133,9 @@ impl Project {
                 return Err("Multiple zero datums in a single constraint group".to_string());
             }
             if let Some(datum) = datum_members.pop() {
-                let coords = self
-                    .compute_station_raw_coords(datum)
+                let coords = raw_coords
+                    .get(&datum)
+                    .copied()
                     .ok_or_else(|| "Failed to compute zero datum coordinates".to_string())?;
                 fixed_groups.insert(*root);
                 fixed_coords.insert(*root, coords);
@@ -3132,8 +3146,9 @@ impl Project {
             let anchor_root = *station_root
                 .get(&anchor_station)
                 .ok_or_else(|| "Anchor station not found".to_string())?;
-            let coords = self
-                .compute_station_raw_coords(anchor_station)
+            let coords = raw_coords
+                .get(&anchor_station)
+                .copied()
                 .ok_or_else(|| "Failed to compute anchor coordinates".to_string())?;
             fixed_groups.insert(anchor_root);
             fixed_coords.insert(anchor_root, coords);
@@ -3293,7 +3308,7 @@ impl Project {
         for (root, members) in &groups {
             if let Some(&idx) = unknown_index.get(root) {
                 if let Some(member) = members.first() {
-                    if let Some(coords) = self.compute_station_raw_coords(*member) {
+                    if let Some(coords) = raw_coords.get(member).copied() {
                         x0_x[idx] = coords.x;
                         x0_y[idx] = coords.y;
                     }
@@ -3380,7 +3395,7 @@ impl Project {
         for (root, members) in &groups {
             // Use the first member's raw Z as representative for the group
             if let Some(member) = members.first() {
-                if let Some(coords) = self.compute_station_raw_coords(*member) {
+                if let Some(coords) = raw_coords.get(member).copied() {
                     group_raw_z.insert(*root, coords.z);
                 }
             }
@@ -3527,6 +3542,17 @@ impl Project {
             }
         }
 
+        // Recompute coordinates now that the shots above were rewritten. The
+        // section-alignment phase below compares each station's *post-update*
+        // position against its solved target, so it must not reuse `raw_coords`
+        // (the pre-update measured snapshot). One O(n) batch pass replaces the
+        // former per-station `compute_station_raw_coords` walk (O(index) → O(n^2)).
+        let post_update_coords: HashMap<StationRef, Coordinates> = self
+            .compute_station_coordinates()
+            .into_iter()
+            .map(|s| (s.station_ref, s.coordinates))
+            .collect();
+
         // Align each section's absolute position to solved coordinates (rigid XY translation).
         // This prevents merged stations in different sections from drifting apart.
         // Only X and Y are compared/applied; Z (depth) is not adjusted.
@@ -3544,8 +3570,9 @@ impl Project {
                 let target = group_coords
                     .get(&root)
                     .ok_or_else(|| "Missing solved coordinates".to_string())?;
-                let current = self
-                    .compute_station_raw_coords(station)
+                let current = post_update_coords
+                    .get(&station)
+                    .copied()
                     .ok_or_else(|| "Failed to compute station coordinates".to_string())?;
                 let dx = target.x - current.x;
                 let dy = target.y - current.y;
@@ -3579,7 +3606,7 @@ impl Project {
                     let root = *station_root.get(&local).unwrap_or(&local);
                     if let (Some(target), Some(current)) = (
                         group_coords.get(&root),
-                        self.compute_station_raw_coords(local),
+                        post_update_coords.get(&local).copied(),
                     ) {
                         delta_xy = Some((target.x - current.x, target.y - current.y));
                         break;
