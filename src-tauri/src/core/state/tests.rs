@@ -33,6 +33,17 @@ fn assert_coords_close(a: Coordinates, b: Coordinates) {
     assert!((a.z - b.z).abs() < eps, "z mismatch: {} vs {}", a.z, b.z);
 }
 
+/// Absolute (section-offset-applied) coordinates of every station, keyed by ref.
+/// Used to assert that an edit shifts only the affected geometry and leaves the
+/// rest of the map put (#41 regression sentinels).
+fn abs_coord_map(project: &Project) -> HashMap<StationRef, Coordinates> {
+    project
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates))
+        .collect()
+}
+
 fn poison_mutex<T>(mutex: &Mutex<T>) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = mutex.lock().unwrap();
@@ -2534,6 +2545,240 @@ fn test_delete_shot_rewires_merges() {
             || (project_after.key_is_ref(&m.station_a, StationRef::new(sec_c, 0)) && project_after.key_is_ref(&m.station_b, StationRef::new(sec_b, 0)))
     });
     assert!(has_merge_bc, "Expected replacement merge between B:0 and C:0");
+}
+
+// === #41 synthetic repro: deleting a shot must not shift unrelated/upstream geometry ===
+//
+// "On macOS, deleting a shot sometimes causes an erroneous geometry shift — the
+// entire map moves." The investigation pinned this on coordinate-frame
+// re-anchoring (section offsets + `cascade_connection_offsets`), not a viewport
+// recenter. These exercise the real `Command::DeleteShot` path and assert on
+// absolute coordinates so any global shift fails the test deterministically —
+// no UI clicking required.
+
+/// Deleting a shot in one connected component must NEVER move a station in an
+/// unrelated component. The strongest "whole map jumps" sentinel: two sections,
+/// each its own zero datum, sharing no merge/closure.
+#[test]
+fn delete_shot_does_not_shift_independent_component() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // Independent datums → each component has a fixed absolute frame.
+    assert!(state
+        .execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(a, 0),
+            coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        })
+        .success);
+    assert!(state
+        .execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(b, 0),
+            coordinates: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+        })
+        .success);
+
+    let before = abs_coord_map(&state.get_project_state().unwrap());
+
+    let a_shot0 = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .find(|s| s.id == a)
+        .unwrap()
+        .shots[0]
+        .id;
+    assert!(state
+        .execute(Command::DeleteShot {
+            section_id: a,
+            shot_id: a_shot0,
+        })
+        .success);
+
+    let after = abs_coord_map(&state.get_project_state().unwrap());
+
+    // Section B (unrelated component) must be byte-for-byte unmoved.
+    for idx in 0..=2 {
+        let r = StationRef::new(b, idx);
+        assert_coords_close(after[&r], before[&r]);
+    }
+}
+
+/// Deleting the LAST shot of a section removes only its end station; the section
+/// head and a neighbor merged onto that head must not move.
+#[test]
+fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        })
+        .section_id
+        .unwrap();
+    let b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // B hangs off A's HEAD (A:0), which is upstream of the tail shot we delete.
+    assert!(state
+        .execute(Command::SetZeroDatum {
+            station_ref: StationRef::new(a, 0),
+            coordinates: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+        })
+        .success);
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(a, 0),
+            station_b: StationRef::new(b, 0),
+        })
+        .success);
+
+    let before = abs_coord_map(&state.get_project_state().unwrap());
+
+    let a_last = {
+        let p = state.get_project_state().unwrap();
+        let sec = p.sections.iter().find(|s| s.id == a).unwrap();
+        sec.shots[sec.shots.len() - 1].id
+    };
+    assert!(state
+        .execute(Command::DeleteShot {
+            section_id: a,
+            shot_id: a_last,
+        })
+        .success);
+
+    let after = abs_coord_map(&state.get_project_state().unwrap());
+
+    // A's head (A:0) and the merged neighbor B are fully untouched by a tail delete.
+    let a0 = StationRef::new(a, 0);
+    assert_coords_close(after[&a0], before[&a0]);
+    for idx in 0..=2 {
+        let r = StationRef::new(b, idx);
+        assert_coords_close(after[&r], before[&r]);
+    }
+    // A:1 becomes the new end station: its X/Y (the map) must not move, though its
+    // Z legitimately changes as the deleted shot's depth conflict at this interior
+    // station is resolved. The #41 bug is an X/Y shift, so guard X/Y here.
+    let a1 = StationRef::new(a, 1);
+    let eps = 1e-6;
+    assert!((after[&a1].x - before[&a1].x).abs() < eps, "A:1 x shifted (map moved)");
+    assert!((after[&a1].y - before[&a1].y).abs() < eps, "A:1 y shifted (map moved)");
+}
+
+/// Deleting the FIRST shot keeps the remaining stations in place (offset is
+/// adjusted by the removed shot's displacement); a neighbor merged onto the
+/// downstream/tail end must therefore stay put too — i.e. the offset cascade
+/// must not over-propagate into a global shift.
+#[test]
+fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "T".to_string(),
+        location: None,
+    });
+
+    let a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        })
+        .section_id
+        .unwrap();
+    let c = state
+        .execute(Command::CreateSection {
+            name: Some("C".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#0000ff".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(8.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // C hangs off A's TAIL (A:2). Deleting A's first shot must keep A:2 (and thus
+    // C) at the same absolute position.
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(a, 2),
+            station_b: StationRef::new(c, 0),
+        })
+        .success);
+
+    let before = abs_coord_map(&state.get_project_state().unwrap());
+
+    let a_shot0 = state
+        .get_project_state()
+        .unwrap()
+        .sections
+        .iter()
+        .find(|s| s.id == a)
+        .unwrap()
+        .shots[0]
+        .id;
+    assert!(state
+        .execute(Command::DeleteShot {
+            section_id: a,
+            shot_id: a_shot0,
+        })
+        .success);
+
+    let after = abs_coord_map(&state.get_project_state().unwrap());
+
+    // C is downstream of the kept side; its absolute position must not shift.
+    for idx in 0..=1 {
+        let r = StationRef::new(c, idx);
+        assert_coords_close(after[&r], before[&r]);
+    }
 }
 
 #[test]
