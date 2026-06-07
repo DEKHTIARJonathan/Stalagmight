@@ -859,7 +859,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       data-testid="spreadsheet-grid"
     >
       {(onHiddenColumnsChange || onToggleMaximize) && (
-        <div className="flex items-center justify-end gap-1 px-1 py-0.5">
+        <div className="sg-toolbar flex items-center justify-end gap-1 px-1 py-0.5">
           {onHiddenColumnsChange && (
             <div className="relative">
               <button
@@ -871,7 +871,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 Columns
               </button>
               {menuOpen && (
-                <div className="absolute right-0 top-full z-50 mt-0.5 max-h-64 overflow-auto rounded border border-white/10 bg-panel p-1 shadow-lg">
+                <div className="sg-colmenu absolute right-0 top-full z-50 mt-0.5 max-h-64 overflow-auto rounded border p-1 shadow-lg">
                   {columns.map((c) => (
                     <label
                       key={c.key}
@@ -922,7 +922,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           >
             {/* Frozen top-left corner above the row-number gutter. */}
             <div
-              className="sticky left-0 z-30 flex items-center justify-center border-b border-r border-white/10 bg-panel"
+              className="sg-corner sticky left-0 z-30 flex items-center justify-center border-b border-r border-white/10 bg-panel"
               style={{ width: GUTTER_WIDTH, minWidth: GUTTER_WIDTH }}
             />
             {visibleColumns.map((c, i) => (
@@ -1066,7 +1066,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
       {ctxMenu && (
         <div
-          className="sg-context-menu bg-panel text-text-primary"
+          className="sg-context-menu"
           data-testid="grid-context-menu"
           style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}
           onMouseDown={(e) => e.stopPropagation()}

@@ -1,8 +1,46 @@
-/* Google-Sheets-like visuals for SpreadsheetGrid. */
+/* Google-Sheets light theme for SpreadsheetGrid. The descendant selectors below
+   intentionally override the app's dark Tailwind utility classes (bg-panel,
+   text-*, border-white/*) so the grid reads as Google Sheets regardless of host
+   theme. */
 .sg-grid {
   --sg-blue: #1a73e8;
-  --sg-blue-fill: rgba(26, 115, 232, 0.16);
-  --sg-blue-header: rgba(26, 115, 232, 0.28);
+  --sg-blue-fill: rgba(26, 115, 232, 0.1); /* ~#e8f0fe over white */
+  --sg-line: #e1e1e1; /* cell gridlines */
+  --sg-line-strong: #c0c0c0; /* header / gutter lines */
+  --sg-header-bg: #f8f9fa;
+  --sg-header-text: #444746;
+  --sg-header-sel-bg: #d3e3fd;
+  background: #ffffff;
+  color: #1f1f1f;
+  font-family: Arial, Roboto, 'Helvetica Neue', sans-serif;
+}
+
+/* Light gridlines + 13px cells. */
+.sg-grid .sg-cell {
+  border-color: var(--sg-line);
+  font-size: 13px;
+}
+/* Light header bar, headers, gutter, corner. */
+.sg-grid .sg-header-bar,
+.sg-grid .sg-header,
+.sg-grid .sg-gutter,
+.sg-grid .sg-corner {
+  background: var(--sg-header-bg);
+}
+.sg-grid .sg-header,
+.sg-grid .sg-corner {
+  color: var(--sg-header-text);
+  border-color: var(--sg-line-strong);
+  font-weight: 400;
+  font-size: 13px;
+}
+.sg-grid .sg-gutter {
+  color: var(--sg-header-text);
+  border-color: var(--sg-line-strong);
+}
+.sg-grid textarea {
+  background: #ffffff;
+  color: #1f1f1f;
 }
 
 /* Suppress native text selection across the whole grid so click-drag selects
@@ -79,12 +117,13 @@
 .sg-header {
   transition: background-color 90ms ease-out, box-shadow 90ms ease-out;
 }
-.sg-header-selected {
-  background-color: var(--sg-blue-fill);
+.sg-grid .sg-header-selected {
+  background-color: var(--sg-header-sel-bg);
+  color: var(--sg-blue);
   box-shadow: inset 0 -2px 0 0 var(--sg-blue);
 }
-.sg-header:hover {
-  background-color: rgba(255, 255, 255, 0.04);
+.sg-grid .sg-header:hover {
+  background-color: #f1f3f4;
 }
 
 /* Drag-to-resize affordance on a header's right edge. */
@@ -106,7 +145,7 @@
   transition: box-shadow 120ms ease-out;
 }
 .sg-header-bar.sg-scrolled {
-  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.16);
 }
 
 /* Frozen row-number gutter. */
@@ -116,22 +155,24 @@
   user-select: none;
   transition: box-shadow 90ms ease-out;
 }
-.sg-gutter:hover {
-  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.05);
+.sg-grid .sg-gutter:hover {
+  box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.06);
 }
-/* Layered insets keep the gutter opaque (bg-panel) while tinting + marking it. */
-.sg-gutter-selected {
-  box-shadow: inset 0 0 0 999px var(--sg-blue-fill), inset -2px 0 0 0 var(--sg-blue);
-  color: var(--color-text-primary, #fff);
+/* Layered insets keep the gutter opaque while tinting + marking it. */
+.sg-grid .sg-gutter-selected {
+  box-shadow: inset 0 0 0 999px var(--sg-header-sel-bg), inset -2px 0 0 0 var(--sg-blue);
+  color: var(--sg-blue);
 }
 
 /* Right-click context menu. */
 .sg-context-menu {
-  min-width: 140px;
+  min-width: 160px;
   padding: 4px 0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #ffffff;
+  color: #1f1f1f;
+  border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
 .sg-context-menu button {
   display: block;
@@ -147,4 +188,19 @@
 .sg-context-menu button:hover {
   background: var(--sg-blue);
   color: #fff;
+}
+
+/* Column show/hide dropdown (light). */
+.sg-grid .sg-colmenu {
+  background: #ffffff;
+  color: #1f1f1f;
+  border-color: rgba(0, 0, 0, 0.15);
+}
+.sg-grid .sg-colmenu label:hover {
+  background-color: #f1f3f4;
+}
+
+/* Toolbar buttons (Columns / Maximize). */
+.sg-grid .sg-toolbar button:hover {
+  background-color: #f1f3f4;
 }
