@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 
 use crate::cache::TileCache;
-use crate::config::Config;
-use crate::models::{Project, Station, StationAnchor};
+use crate::config::{ClosureAdjustmentConfig, Config};
+use crate::models::{DistanceField, Project, Station, StationAnchor, StationRef};
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
 use crate::TileFetchStats;
@@ -48,6 +48,18 @@ pub(super) struct AdjustedStationsCache {
     pub(super) version: i64,
     pub(super) config_hash: u64,
     pub(super) stations: Vec<Station>,
+}
+
+/// Hash the closure-adjustment config fields that affect the solve, for the
+/// adjusted-stations cache key. Shared by `get_adjusted_stations` and
+/// `distance_field` so both derive the same key.
+fn adjusted_config_hash(ca: &ClosureAdjustmentConfig) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    ca.base_sigma_length_m.to_bits().hash(&mut h);
+    ca.base_sigma_azimuth_deg.to_bits().hash(&mut h);
+    ca.base_sigma_depth_m.to_bits().hash(&mut h);
+    h.finish()
 }
 
 /// Application state managed by Tauri
@@ -264,15 +276,7 @@ impl AppState {
     /// Returns `None` if no project is open.
     pub fn get_adjusted_stations(&self) -> Option<Vec<Station>> {
         let config = self.get_config();
-        let ca = &config.closure_adjustment;
-        let config_hash = {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            ca.base_sigma_length_m.to_bits().hash(&mut h);
-            ca.base_sigma_azimuth_deg.to_bits().hash(&mut h);
-            ca.base_sigma_depth_m.to_bits().hash(&mut h);
-            h.finish()
-        };
+        let config_hash = adjusted_config_hash(&config.closure_adjustment);
 
         // Cheap project-version read under a short lock.
         let version = {
@@ -332,6 +336,41 @@ impl AppState {
             }
         }
         Some(stations)
+    }
+
+    /// Per-station distance field for the distance-gradient overlay (#34),
+    /// computed on the closure-adjusted geometry. Takes ONE reconciled project
+    /// snapshot under `command_lock` (so the graph topology and the adjusted
+    /// coordinates come from the same version — no read-skew between two separate
+    /// state reads), and reuses the memoized adjusted-stations cache read-only
+    /// when it matches that snapshot (keeps re-root instant in the adjusted view).
+    pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
+        let config = self.get_config();
+        let config_hash = adjusted_config_hash(&config.closure_adjustment);
+        // Single reconciled snapshot, serialized with edits (mirrors
+        // get_adjusted_stations) so topology + coords share one version.
+        let project = {
+            let _cmd_guard = self.command_lock.lock().ok()?;
+            self.get_project_state()?
+        };
+        let version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
+        // Reuse the display view's memoized adjusted coords iff they're for this
+        // exact snapshot; otherwise derive them from the snapshot so coordinates
+        // and topology always agree.
+        let adjusted = self
+            .adjusted_cache
+            .lock()
+            .ok()
+            .and_then(|cache| {
+                cache.as_ref().and_then(|e| {
+                    (e.version == version && e.config_hash == config_hash)
+                        .then(|| e.stations.clone())
+                })
+            })
+            .unwrap_or_else(|| {
+                project.compute_adjusted_station_coordinates(&config.closure_adjustment)
+            });
+        Some(project.distance_field_from(&adjusted, from))
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every

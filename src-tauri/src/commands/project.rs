@@ -120,11 +120,9 @@ pub async fn get_station_distances_from(
 ) -> Option<DistanceField> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        let inner = state.inner();
-        // Closure-adjusted station coordinates (memoized; measured fallback).
-        let stations = inner.get_adjusted_stations()?;
-        let project = inner.get_project_state()?;
-        Some(project.distance_field_from(&stations, from.as_ref()))
+        // AppState::distance_field takes one reconciled snapshot so topology and
+        // adjusted coords are consistent (no two-read skew).
+        state.inner().distance_field(from.as_ref())
     })
     .await
     .ok()
