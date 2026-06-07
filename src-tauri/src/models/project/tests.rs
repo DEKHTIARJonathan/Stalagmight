@@ -883,6 +883,155 @@ fn set_zero_datum_allows_disconnected_groups() {
 }
 
 #[test]
+fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
+    // Mirrors the reported topology: a far station (like 37:7) is merge-connected to
+    // the datum (like 0:0) through a CHAIN of merges, not a direct one. The guard
+    // must walk the whole merge component, so a second datum on the far end is
+    // rejected.
+    let mut project = Project::new("Chain".to_string(), None);
+    let mk = |project: &mut Project| {
+        project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id
+    };
+    let (a, b, c, d) = (mk(&mut project), mk(&mut project), mk(&mut project), mk(&mut project));
+
+    // Chain A — B — C — D, each merge joining one section's end to the next's start.
+    for (x, y) in [(a, b), (b, c), (c, d)] {
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(x, 1).into(),
+            station_b: StationRef::new(y, 0).into(),
+            merged_at: Utc::now(),
+        });
+    }
+    project.rebuild_merge_adjacency();
+
+    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+    project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
+
+    // D is three hops from A's datum but in the same merge component → reject.
+    let result = project.set_zero_datum(StationRef::new(d, 1), gps);
+    assert!(
+        result.is_err(),
+        "a second datum on the far end of a merge chain must be rejected"
+    );
+    assert!(result.unwrap_err().contains("already has a zero datum"));
+    assert_eq!(project.zero_datums.len(), 1);
+}
+
+#[test]
+fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
+    // Two independently GPS-anchored surveys (separate merge components) joined only
+    // by a sole-bridge loop closure. Converting that closure into a rigid MERGE would
+    // place two datums in one merge component and tear it on the next cascade — the
+    // reported failure mode — so the conversion must leave it as a (soft) closure.
+    let mut project = Project::new("DoubleAnchorBridge".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(45.0, -90.0, 0.0).unwrap())
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(b, 0), GpsCoordinates::new(45.001, -90.0, 0.0).unwrap())
+        .unwrap();
+
+    // A closure between two anchored-but-disconnected groups is legitimate.
+    project
+        .create_loop_closure(StationRef::new(a, 1), StationRef::new(b, 1), ClosureStrategy::Batch)
+        .unwrap();
+
+    let converted = project.convert_orphan_closures_to_merges();
+    assert_eq!(
+        converted, 0,
+        "must not convert a closure that would double-anchor a merge component"
+    );
+    assert!(project.station_merges.is_empty(), "no merge should have been created");
+    assert_eq!(project.loop_closures.len(), 1, "the bridge closure must be retained");
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "the two datums must stay in separate merge components"
+    );
+
+    // Contrast: with only ONE side anchored, the same sole-bridge closure SHOULD
+    // still convert to a merge (the original, intended behaviour).
+    project.remove_zero_datum(StationRef::new(b, 0));
+    let converted_after = project.convert_orphan_closures_to_merges();
+    assert_eq!(
+        converted_after, 1,
+        "a sole-bridge closure with a single anchor still becomes a merge"
+    );
+    assert_eq!(project.station_merges.len(), 1);
+    assert!(project.loop_closures.is_empty());
+}
+
+#[test]
+fn detects_two_datums_in_one_merge_component() {
+    // The "≤1 datum per merge component" invariant must be DETECTABLE after the
+    // fact, so a file written by an older build (or any unguarded path) is flagged
+    // rather than silently mis-solved. Force the violation by pushing datums
+    // directly, then assert both the detector and the integrity pass catch it.
+    let mut project = Project::new("OverAnchored".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.rebuild_merge_adjacency();
+
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+
+    let over = project.over_anchored_merge_components();
+    assert_eq!(over.len(), 1, "both datums share one merge component");
+    assert_eq!(over[0].len(), 2);
+
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .any(|v| v.category == "multiple_datums_per_merge_component"),
+        "the integrity pass must flag the over-anchored component"
+    );
+
+    // Removing one datum restores the invariant.
+    assert!(project.remove_zero_datum(StationRef::new(b, 0)));
+    assert!(project.over_anchored_merge_components().is_empty());
+}
+
+#[test]
 fn set_zero_datum_error_includes_section_name() {
     // Error message should include section name if available
     let mut project = Project::new("NamedSection".to_string(), None);

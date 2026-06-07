@@ -76,6 +76,48 @@ impl AppState {
             }
         }
 
+        // Project-level: two or more zero datums in one merge-connected component
+        // over-constrain the rigid group, so the offset cascade tears a merge edge
+        // apart. Surface one warning on each datum's adjacent shot so it appears in
+        // the table next to the offending anchor. (Per-shot ProjectWarning shape:
+        // anchor station 0 -> shot 0; station i -> shot i-1.)
+        for component in project.over_anchored_merge_components() {
+            for datum in &component {
+                let Some(section) = project.get_section(datum.section_id) else {
+                    continue;
+                };
+                let shot_index = if datum.station_index == 0 {
+                    0
+                } else {
+                    (datum.station_index - 1) as usize
+                };
+                let Some(shot) = section.shots.get(shot_index) else {
+                    continue;
+                };
+                let others = component
+                    .iter()
+                    .filter(|other| *other != datum)
+                    .map(|other| format!("{}:{}", other.section_id, other.station_index))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let code = "multiple_datums_per_merge_component".to_string();
+                let key = format!("{}:{}:{}", section.id, shot.id, code);
+                let is_resolved = resolved_set.contains(&key);
+                all_warnings.push(ProjectWarning {
+                    section_id: section.id,
+                    shot_id: shot.id,
+                    shot_index,
+                    message: format!(
+                        "Station {}:{} has a zero datum, but its merge group is also anchored at {others}. Two GPS anchors over-constrain one rigid group; remove all but one zero datum.",
+                        datum.section_id, datum.station_index
+                    ),
+                    code,
+                    severity: WarningSeverity::Warning,
+                    is_resolved,
+                });
+            }
+        }
+
         // Sort by resolved (unresolved first), then severity (errors first), then by section and shot
         all_warnings.sort_by(|a, b| {
             let resolved_order = |r: bool| i32::from(r);
