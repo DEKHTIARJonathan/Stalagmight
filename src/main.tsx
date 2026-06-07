@@ -8,12 +8,17 @@ import App from './App';
 import './i18n';
 import './index.css';
 import { installConsoleCapture } from './utils/consoleCapture';
+import { initInputModalityTracking } from './utils/inputModality';
 import { useUIStore } from './store/uiStore';
 import { useProjectStore, type LoadingState } from './store/projectStore';
 import { useGlobalViewStore } from './store/globalViewStore';
 
 // Pipe frontend console.* calls into the Rust ring buffer for the debug dialog
 installConsoleCapture();
+
+// Keyboard-only focus rings: tag <html data-input-modality> from the first
+// interaction (set before render so there's no initial ring flash).
+initInputModalityTracking();
 
 // The frame-gap freeze detector is no longer started automatically — it
 // was producing a stream of `freeze #N` entries in the memory probe for

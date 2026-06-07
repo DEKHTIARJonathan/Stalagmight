@@ -990,6 +990,35 @@ label:has(:focus-visible) {
   border-radius: 4px;
 }
 
+/* Cross-engine keyboard-only focus ring. Some engines (notably the WebKitGTK
+   webview Tauri uses) draw the focus ring on mouse clicks — via :focus and/or
+   matching :focus-visible on click — so gating on :focus-visible alone leaks the
+   ring. An input-modality tracker (utils/inputModality.ts) tags <html> with
+   data-input-modality; on pointer interaction we suppress the focus outline and
+   the Tailwind ring for both :focus and :focus-visible. Selection stays visible
+   via background/border styles, and rings reappear on keyboard navigation. */
+html[data-input-modality='pointer'] :focus,
+html[data-input-modality='pointer'] :focus-visible {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+}
+html[data-input-modality='pointer'] label:focus-within,
+html[data-input-modality='pointer'] label:has(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+/* The element-level button/checkbox/radio :focus rules below add a literal
+   box-shadow *glow* (a soft, semi-transparent ring) — not the Tailwind ring var
+   — so neutralize box-shadow for them on pointer too. */
+html[data-input-modality='pointer'] button:focus,
+html[data-input-modality='pointer'] input[type='checkbox']:focus,
+html[data-input-modality='pointer'] input[type='checkbox']:focus-visible,
+html[data-input-modality='pointer'] input[type='radio']:focus,
+html[data-input-modality='pointer'] input[type='radio']:focus-visible {
+  box-shadow: none !important;
+}
+
 @supports selector(:focus-visible) {
   input:focus:not(:focus-visible):not([type="checkbox"]):not([type="radio"]),
   select:focus:not(:focus-visible),
