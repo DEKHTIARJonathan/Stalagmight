@@ -69,6 +69,26 @@ test.describe('GlobalView Recent Projects — path, relative time, sort', () => 
     await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
   });
 
+  test('table view: sticky header pins flush to the top when scrolling', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 280 }); // short → the list scrolls
+    await page.getByTestId('recent-density-table').click();
+    await page.getByTestId('globalview-list-table').waitFor({ state: 'visible' });
+    const gap = await page.evaluate(() => {
+      const t = document.querySelector('[data-testid="globalview-list-table"]') as HTMLElement;
+      let sc: HTMLElement | null = t.parentElement;
+      while (sc) {
+        const o = getComputedStyle(sc).overflowY;
+        if (o === 'auto' || o === 'scroll') break;
+        sc = sc.parentElement;
+      }
+      if (!sc) return -999;
+      sc.scrollTop = 150;
+      const th = t.querySelector('thead th') as HTMLElement;
+      return Math.round(th.getBoundingClientRect().top - sc.getBoundingClientRect().top);
+    });
+    expect(Math.abs(gap)).toBeLessThanOrEqual(1); // no gap above the pinned header
+  });
+
   test('shows relative edited time, with the exact timestamp on hover', async ({ page }) => {
     const betaModified = page.getByTestId(BETA).getByTestId('system-card-modified');
     await expect(betaModified).toBeVisible();

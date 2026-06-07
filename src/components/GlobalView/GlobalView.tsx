@@ -570,8 +570,11 @@ export default function GlobalView() {
               onZoomHandled={handleZoomHandled}
             />
           ) : (
-            <div className="h-full overflow-auto p-6">
-              <div className="flex items-center justify-between gap-4 mb-4">
+            // Top padding lives on the inner content (not the scroll container) so
+            // the table's sticky header pins flush to the top — container
+            // padding-top would otherwise leave a gap the rows scroll through.
+            <div className="h-full overflow-auto px-6 pb-6">
+              <div className="flex items-center justify-between gap-4 mb-4 pt-6">
                 <h2 className="text-lg font-medium">{t('globalView.recent.title')}</h2>
                 <div className="flex items-center gap-3">
                   {selectedCount >= 2 && (
