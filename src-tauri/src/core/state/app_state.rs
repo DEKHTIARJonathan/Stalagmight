@@ -345,63 +345,15 @@ impl AppState {
     /// state reads), and reuses the memoized adjusted-stations cache read-only
     /// when it matches that snapshot (keeps re-root instant in the adjusted view).
     pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
-        use std::sync::atomic::Ordering::SeqCst;
-        let t0 = std::time::Instant::now();
-        let config = self.get_config();
-        let config_hash = adjusted_config_hash(&config.closure_adjustment);
-        // Single reconciled snapshot, serialized with edits (mirrors
-        // get_adjusted_stations) so topology + coords share one version. Capture
-        // the invalidation generation under the same lock for the cache writeback.
-        let (project, generation) = {
-            let _cmd_guard = self.command_lock.lock().ok()?;
-            let generation = self.adjusted_cache_generation.load(SeqCst);
-            (self.get_project_state()?, generation)
-        };
-        let clone_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
-
-        // Reuse the display view's memoized adjusted coords iff they're for this
-        // exact snapshot; otherwise solve and populate the SAME cache, so repeated
-        // re-roots (same version + closure config) don't redo the expensive
-        // closure-adjustment solve — even in measured view where the display path
-        // never warmed the cache.
-        let cached = self.adjusted_cache.lock().ok().and_then(|cache| {
-            cache.as_ref().and_then(|e| {
-                (e.version == version && e.config_hash == config_hash).then(|| e.stations.clone())
-            })
-        });
-        let (adjusted, hit, solve_ms) = match cached {
-            Some(stations) => (stations, true, 0.0),
-            None => {
-                let ts = std::time::Instant::now();
-                let stations =
-                    project.compute_adjusted_station_coordinates(&config.closure_adjustment);
-                let solve_ms = ts.elapsed().as_secs_f64() * 1000.0;
-                // Only store if nothing invalidated the cache while we solved.
-                if let Ok(mut cache) = self.adjusted_cache.lock() {
-                    if self.adjusted_cache_generation.load(SeqCst) == generation {
-                        *cache = Some(AdjustedStationsCache {
-                            version,
-                            config_hash,
-                            stations: stations.clone(),
-                        });
-                    }
-                }
-                (stations, false, solve_ms)
-            }
-        };
-        let tf = std::time::Instant::now();
-        let field = project.distance_field_from(&adjusted, from);
-        let field_ms = tf.elapsed().as_secs_f64() * 1000.0;
-        crate::models::project::distance_perf_log(&format!(
-            "distance_field clone_ms={clone_ms:.1} adjusted={} solve_ms={solve_ms:.1} \
-             field_ms={field_ms:.1} n_stations={} n_closures={} total_ms={:.1}",
-            if hit { "hit" } else { "miss" },
-            adjusted.len(),
-            project.loop_closures.len(),
-            t0.elapsed().as_secs_f64() * 1000.0,
-        ));
-        Some(field)
+        let project = self.get_project_state()?;
+        // Distance uses MEASURED geometry (surveyed shot lengths via the plain
+        // coordinate walk) — instant. The closure-adjusted solve is intentionally
+        // NOT used: it dominated the latency (~2s release / ~40s debug on a 6k-
+        // station survey; ~O(n^2)) for a sub-meter difference, and reachability is
+        // identical either way (it's topological — shots/merges/closures — not
+        // coordinate-dependent). Closure-solve perf is tracked separately (#81).
+        let stations = project.compute_station_coordinates();
+        Some(project.distance_field_from(&stations, from))
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every

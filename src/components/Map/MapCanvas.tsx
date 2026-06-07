@@ -1548,11 +1548,11 @@ export default function MapCanvas() {
     setDistanceGradientOrigin(null);
   }, [project?.created_at, setDistanceGradientOrigin]);
 
-  // Distance-gradient overlay (#34): fetch the per-station distance field from the
-  // backend when the overlay is on and the origin, project data, OR closure
-  // config changes. Distances are computed on closure-adjusted coordinates, so a
-  // closure-adjustment change must refetch — but display geometryMode does not
-  // (distance always uses the adjusted geometry). `from` null = entrance default.
+  // Distance-gradient overlay (#34): fetch the per-station distance field when the
+  // overlay is on and the origin or project data changes. Distances use MEASURED
+  // geometry (surveyed lengths), so neither closure-adjustment config nor the
+  // display geometryMode affects them — no need to refetch on either. `from` null
+  // = the entrance (zero-datum) default.
   useEffect(() => {
     if (!showDistanceGradient) return undefined;
     let cancelled = false;
@@ -1564,15 +1564,7 @@ export default function MapCanvas() {
       .then((field) => { if (!cancelled) setDistanceField(field); })
       .catch((e) => console.warn('[distance-gradient] field fetch failed', e));
     return () => { cancelled = true; };
-  }, [
-    showDistanceGradient,
-    distanceGradientOrigin,
-    project?.modified_at,
-    config?.closure_adjustment?.base_sigma_length_m,
-    config?.closure_adjustment?.base_sigma_azimuth_deg,
-    config?.closure_adjustment?.base_sigma_depth_m,
-    setDistanceField,
-  ]);
+  }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
