@@ -525,7 +525,8 @@ export default function ContextMenu() {
       case 'Zoom to Section':
         return <ToolGlyph tool="zoom" size={16} />;
       default:
-        // "Mark as Jump/Reference" / "Mark as Permanent"
+        // Fallback for any unmapped label (every current menu label is handled
+        // by an explicit case above).
         return <ArrowUpRightIcon size={16} />;
     }
   };

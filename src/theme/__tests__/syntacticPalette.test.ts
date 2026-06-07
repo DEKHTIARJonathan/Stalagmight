@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   SYNTACTIC_ROLES,
   SYNTACTIC_PRESETS,
@@ -75,5 +77,25 @@ describe('syntacticVarName', () => {
   it('builds the --sh-<role> custom property name', () => {
     expect(syntacticVarName('station')).toBe('--sh-station');
     expect(syntacticVarName('delete')).toBe('--sh-delete');
+  });
+});
+
+describe('index.css --sh-* defaults', () => {
+  // The :root defaults in index.css avoid a flash before useSyntacticHighlighting
+  // paints. They must mirror the default preset (the source of truth) exactly —
+  // this guards against the two copies silently drifting apart.
+  it('mirror the default preset for every role', () => {
+    const cssPath = fileURLToPath(new URL('../../index.css', import.meta.url));
+    const css = readFileSync(cssPath, 'utf8');
+    for (const role of ROLE_IDS) {
+      const varName = syntacticVarName(role);
+      // Capture the whole value up to the semicolon so a malformed or shorthand
+      // value is caught too (exact match against the #rrggbb source of truth).
+      const match = new RegExp(`${varName}:\\s*([^;]+);`).exec(css);
+      expect(match, `${varName} missing from index.css :root`).not.toBeNull();
+      expect(match![1]!.trim().toLowerCase(), varName).toBe(
+        SYNTACTIC_PRESETS.default![role]!.toLowerCase(),
+      );
+    }
   });
 });

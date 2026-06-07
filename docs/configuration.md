@@ -35,7 +35,7 @@ night_color_theme = "dark"          # Color palette for dark/night mode
 #   solarized_light, catppuccin_latte, nord, catppuccin_mocha
 
 [syntactic_highlighting]
-level = "full"                      # "off", "toolbar_only", or "full" (default)
+level = "full"                      # "off", "toolbar_only", "icons", or "full" (default)
 preset = "default"                  # "default", "deuteranopia", "protanopia", "tritanopia"
 # Per-preset, per-role color overrides (sparse; only customized colors are stored).
 # Roles: segment, section, shot, station, comment, delete, move,
