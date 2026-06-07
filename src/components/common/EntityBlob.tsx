@@ -10,7 +10,7 @@
 import type { CSSProperties } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import type { BlobEntity } from '../../theme/syntacticPalette';
-import { syntacticVarName } from '../../theme/syntacticPalette';
+import { syntacticVarName, syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { EntitySymbol } from './toolIcons';
 
 export interface EntityBlobProps {
@@ -29,7 +29,7 @@ export function EntityBlob({ entity, children, title, className = '', testId }: 
   const level = useUIStore((s) => s.syntacticLevel);
 
   // Only the Full level paints pills; otherwise keep the plain text rendering.
-  if (level !== 'full') {
+  if (!syntacticLevelAtLeast(level, 'full')) {
     return <>{children}</>;
   }
 

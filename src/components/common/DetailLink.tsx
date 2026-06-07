@@ -16,6 +16,7 @@
 
 import { useCallback, useRef, type CSSProperties } from 'react';
 import { useUIStore } from '../../store/uiStore';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { EntitySymbol } from './toolIcons';
 
 export type DetailLinkType = 'station' | 'shot' | 'section';
@@ -140,7 +141,7 @@ export function DetailLink({
   // (station ring, shot line, section zigzag), colored by entity. Hidden for
   // missing targets (the warning glyph already conveys state).
   const syntacticLevel = useUIStore((s) => s.syntacticLevel);
-  const showSymbol = syntacticLevel === 'full' && !isMissing;
+  const showSymbol = syntacticLevelAtLeast(syntacticLevel, 'full') && !isMissing;
 
   const handleClick = useCallback(() => {
     if (isMissing) {

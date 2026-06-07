@@ -9,6 +9,7 @@ import { Toggle } from '../common/Toggle';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
@@ -191,7 +192,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   );
   // At the Full level the location subtitle is shown as entity pills (section +
   // shot), matching the rest of the detail panel; otherwise it stays plain text.
-  const showPills = useUIStore((s) => s.syntacticLevel) === 'full';
+  const showPills = syntacticLevelAtLeast(useUIStore((s) => s.syntacticLevel), 'full');
   const [showResolved, setShowResolved] = useState(false);
 
   const unresolvedCount = warnings.filter((w) => !w.isResolved).length;
