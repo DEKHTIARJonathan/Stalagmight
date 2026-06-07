@@ -1309,6 +1309,20 @@ tr[data-selected="true"]:hover {
   to { transform: rotate(360deg); }
 }
 
+/* ElidedPath hover marquee: reveal an abbreviated path in full by scrolling it
+   within its clip box (replaces the path tooltip). The distance is set per
+   element via --elided-scroll-distance; `alternate` ping-pongs, and the holds at
+   0–12% / 88–100% pause at each end so the start and filename stay readable. */
+@keyframes elided-path-scroll {
+  0%, 12% { transform: translateX(0); }
+  88%, 100% { transform: translateX(var(--elided-scroll-distance, 0)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No marquee for reduced-motion users; the full path is still revealed (the
+     leading folders show, clipped) while hovering. */
+  span[style*="elided-path-scroll"] { animation: none !important; }
+}
+
 /* Disable animations/transitions on e-ink displays to prevent ghosting */
 [data-theme="kaleido_eink"] * {
   transition: none !important;

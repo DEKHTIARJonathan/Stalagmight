@@ -1,6 +1,5 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { pathElisionCandidates } from '../../utils/pathElision';
-import { Tooltip } from './Tooltip';
 
 interface ElidedPathProps {
   /** The full file path to display (and reveal in full on hover). */
@@ -21,6 +20,9 @@ function getMeasureContext(): CanvasRenderingContext2D | null {
   return measureCtx;
 }
 
+/** Marquee scroll speed when revealing the full path on hover (px per second). */
+const SCROLL_SPEED_PX_PER_S = 45;
+
 /**
  * Renders a file path on a single line, abbreviated to fit its available width:
  * leading folders collapse to single letters, then the middle is truncated with
@@ -28,18 +30,25 @@ function getMeasureContext(): CanvasRenderingContext2D | null {
  *
  * Fitting is pixel-based — the candidate is chosen by measuring against the
  * element's real width using the element's computed font, re-fitting on resize.
- * The full path is always available via a themed tooltip on hover.
+ *
+ * When the path is abbreviated, hovering reveals the full path by scrolling it
+ * (marquee) within the same clip box — no tooltip — for as long as the pointer
+ * stays over it.
  */
 export function ElidedPath({
   path,
   className = '',
   'data-testid': dataTestId,
 }: ElidedPathProps) {
-  const ref = useRef<HTMLSpanElement>(null);
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const innerRef = useRef<HTMLSpanElement>(null);
   const [display, setDisplay] = useState(path);
+  const [hovering, setHovering] = useState(false);
+  const [scroll, setScroll] = useState<{ distance: number; duration: number } | null>(null);
 
+  // Fit the abbreviated (resting) display to the available width.
   useLayoutEffect(() => {
-    const el = ref.current;
+    const el = containerRef.current;
     if (!el) return;
 
     const fit = () => {
@@ -75,17 +84,46 @@ export function ElidedPath({
     return () => observer.disconnect();
   }, [path]);
 
+  // On hover the inner element shows the full path; measure how far it overflows
+  // the clip box so the marquee scrolls exactly to the end and back.
+  useLayoutEffect(() => {
+    if (!hovering) {
+      setScroll(null);
+      return;
+    }
+    const container = containerRef.current;
+    const inner = innerRef.current;
+    if (!container || !inner) return;
+    const overflow = inner.scrollWidth - container.clientWidth;
+    if (overflow > 1) {
+      setScroll({ distance: overflow, duration: Math.max(2, overflow / SCROLL_SPEED_PX_PER_S) });
+    } else {
+      // Already fits at full length — nothing to scroll.
+      setScroll(null);
+    }
+  }, [hovering, path]);
+
+  const innerStyle: CSSProperties | undefined =
+    hovering && scroll
+      ? ({
+          '--elided-scroll-distance': `${-scroll.distance}px`,
+          animation: `elided-path-scroll ${scroll.duration}s linear infinite alternate`,
+        } as CSSProperties)
+      : undefined;
+
   return (
-    <Tooltip content={path} className="block w-full" tooltipClassName="max-w-none">
-      <span
-        ref={ref}
-        className={`block w-full overflow-hidden whitespace-nowrap ${className}`}
-        data-testid={dataTestId}
-        data-full-path={path}
-      >
-        {display}
+    <span
+      ref={containerRef}
+      className={`block w-full overflow-hidden whitespace-nowrap ${className}`}
+      data-testid={dataTestId}
+      data-full-path={path}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+    >
+      <span ref={innerRef} className="inline-block align-top" style={innerStyle}>
+        {hovering ? path : display}
       </span>
-    </Tooltip>
+    </span>
   );
 }
 

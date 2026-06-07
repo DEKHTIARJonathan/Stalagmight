@@ -45,14 +45,27 @@ test.describe('GlobalView Recent Projects — path, relative time, sort', () => 
     await switchToListTab(page);
   });
 
-  test('shows the elided file path under each card with the full path on hover', async ({ page }) => {
+  test('shows the elided file path under each card, revealed in full on hover (no tooltip)', async ({ page }) => {
     const path = page.getByTestId(ALPHA).getByTestId('system-card-path');
     await expect(path).toBeVisible();
     await expect(path).toHaveAttribute('data-full-path', '/projects/cave-alpha.stalx');
 
     await path.hover();
-    const tooltip = page.locator('[role="tooltip"]', { hasText: '/projects/cave-alpha.stalx' });
-    await expect(tooltip).toBeVisible();
+    // No tooltip anymore — the full path is revealed in place (scrolls if it overflows).
+    await expect(page.locator('[role="tooltip"]', { hasText: '/projects/cave-alpha.stalx' })).toHaveCount(0);
+    await expect(path).toHaveText('/projects/cave-alpha.stalx');
+  });
+
+  test('an overflowing path scrolls (marquee) in place on hover, not a tooltip', async ({ page }) => {
+    // Force the path clip box narrow so the full path overflows regardless of length.
+    await page.addStyleTag({ content: '[data-testid="system-card-path"]{max-width:60px !important}' });
+    const path = page.getByTestId(ALPHA).getByTestId('system-card-path');
+    await path.hover();
+    const inner = path.locator('span').first();
+    await expect
+      .poll(async () => inner.evaluate((el) => getComputedStyle(el).animationName))
+      .toContain('elided-path-scroll');
+    await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
   });
 
   test('shows relative edited time, with the exact timestamp on hover', async ({ page }) => {
