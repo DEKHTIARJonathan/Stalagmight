@@ -153,6 +153,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [scrolled, setScrolled] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  // Header drag: 'select' extends a multi-column selection; 'move' reorders the
+  // already-selected column block (Google-Sheets behaviour).
+  const colDrag = useRef<{ mode: 'select' | 'move'; anchorCol: number; fromC0: number; fromC1: number } | null>(null);
+  const [colMoveDrop, setColMoveDrop] = useState<{ index: number; lineX: number } | null>(null);
+  const [colGhost, setColGhost] = useState<{ x: number; y: number; label: string; count: number } | null>(null);
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -631,19 +636,48 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     setInteracting(true);
   }, []);
 
-  const onHeaderSelectColumn = useCallback(
-    (colIdx: number, shiftKey: boolean) => {
-      const key = colKeys[colIdx];
-      if (key === undefined || rowCount === 0) return;
-      scrollRef.current?.focus();
+  const selectColumnRange = useCallback(
+    (anchorColIdx: number, focusColIdx: number) => {
+      const ak = colKeys[clamp(anchorColIdx, 0, colCount - 1)];
+      const fk = colKeys[clamp(focusColIdx, 0, colCount - 1)];
+      if (ak === undefined || fk === undefined || rowCount === 0) return;
       setCopiedRect(null);
-      setSelection((prev) => ({
-        anchor: shiftKey ? { row: 0, colKey: prev.anchor.colKey } : { row: 0, colKey: key },
-        focus: { row: rowCount - 1, colKey: key },
-        active: shiftKey ? prev.active : { row: 0, colKey: key },
-      }));
+      setSelection({
+        anchor: { row: 0, colKey: ak },
+        focus: { row: rowCount - 1, colKey: fk },
+        active: { row: 0, colKey: ak },
+      });
     },
-    [colKeys, rowCount],
+    [colKeys, colCount, rowCount],
+  );
+
+  const onHeaderMouseDown = useCallback(
+    (colIdx: number, e: ReactMouseEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      scrollRef.current?.focus();
+      const isFullCol = rect.r0 === 0 && rect.r1 === rowCount - 1;
+      const inSel = isFullCol && colIdx >= rect.c0 && colIdx <= rect.c1;
+      if (inSel && onColumnOrderChange && !e.shiftKey) {
+        // The column is already selected → start a MOVE of the selected block.
+        colDrag.current = { mode: 'move', anchorCol: colIdx, fromC0: rect.c0, fromC1: rect.c1 };
+        setInteracting(true);
+      } else {
+        // Otherwise select this column; dragging across headers extends it.
+        const anchorCol = e.shiftKey ? colIndexOf(selection.anchor.colKey) : colIdx;
+        colDrag.current = { mode: 'select', anchorCol, fromC0: 0, fromC1: 0 };
+        setInteracting(true);
+        selectColumnRange(anchorCol, colIdx);
+      }
+    },
+    [rect, rowCount, onColumnOrderChange, colIndexOf, selection.anchor.colKey, selectColumnRange],
+  );
+
+  const onHeaderMouseEnter = useCallback(
+    (colIdx: number) => {
+      if (colDrag.current?.mode === 'select') selectColumnRange(colDrag.current.anchorCol, colIdx);
+    },
+    [selectColumnRange],
   );
 
   const onGutterSelectRow = useCallback(
@@ -724,6 +758,26 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const onMoveRef = useRef<(e: MouseEvent) => void>(() => {});
   const onUpRef = useRef<() => void>(() => {});
   onMoveRef.current = (e) => {
+    if (colDrag.current?.mode === 'move') {
+      const el = scrollRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const xContent = e.clientX - r.left + el.scrollLeft - GUTTER_WIDTH;
+      let idx = 0;
+      for (let i = 0; i < colCount; i++) {
+        if (xContent > (offsets[i] ?? 0) + (widths[i] ?? 0) / 2) idx = i + 1;
+        else break;
+      }
+      setColMoveDrop({ index: idx, lineX: GUTTER_WIDTH + (offsets[idx] ?? 0) });
+      const from = colDrag.current.fromC0;
+      setColGhost({
+        x: e.clientX,
+        y: e.clientY,
+        label: visibleColumns[from]?.header ?? colKeys[from] ?? '',
+        count: colDrag.current.fromC1 - from + 1,
+      });
+      return;
+    }
     if (resizing.current) {
       const { key, startX, startW } = resizing.current;
       setColWidthOverrides((m) => ({ ...m, [key]: Math.max(MIN_COL_WIDTH, startW + (e.clientX - startX)) }));
@@ -741,7 +795,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
   };
   onUpRef.current = () => {
+    if (colDrag.current?.mode === 'move' && colMoveDrop) {
+      reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
+    }
     if (fillDragging.current && fillPreview) commitFill(fillPreview);
+    colDrag.current = null;
     dragging.current = false;
     fillDragging.current = false;
     resizing.current = null;
@@ -751,6 +809,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     setInteracting(false);
     setFillPreview(null);
+    setColMoveDrop(null);
+    setColGhost(null);
   };
   useEffect(() => {
     const mv = (e: MouseEvent) => onMoveRef.current(e);
@@ -807,23 +867,32 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     },
     [hiddenColumns, onHiddenColumnsChange],
   );
-  const dragColKey = useRef<string | null>(null);
-  const onHeaderDrop = useCallback(
-    (targetKey: string) => {
-      const from = dragColKey.current;
-      dragColKey.current = null;
-      if (!from || from === targetKey || !onColumnOrderChange) return;
-      const base = colKeys.slice();
-      const fromIdx = base.indexOf(from);
-      const toIdx = base.indexOf(targetKey);
-      if (fromIdx < 0 || toIdx < 0) return;
-      base.splice(fromIdx, 1);
-      base.splice(toIdx, 0, from);
-      // Preserve hidden columns' relative positions by appending them.
-      const hidden = (hiddenColumns ?? []).filter((k) => !base.includes(k));
-      onColumnOrderChange([...base, ...hidden]);
+  // Move the selected column block [fromC0..fromC1] to insertion index `dropIdx`
+  // (a boundary index among visible columns), preserving hidden columns and
+  // keeping the moved block selected.
+  const reorderColumns = useCallback(
+    (fromC0: number, fromC1: number, dropIdx: number) => {
+      if (!onColumnOrderChange) return;
+      const block = colKeys.slice(fromC0, fromC1 + 1);
+      const rest = colKeys.filter((_, i) => i < fromC0 || i > fromC1);
+      let insertAt = dropIdx;
+      if (dropIdx > fromC1) insertAt = dropIdx - block.length;
+      else if (dropIdx > fromC0) insertAt = fromC0; // inside the block → no-op
+      insertAt = clamp(insertAt, 0, rest.length);
+      const next = [...rest.slice(0, insertAt), ...block, ...rest.slice(insertAt)];
+      const hidden = (hiddenColumns ?? []).filter((k) => !next.includes(k));
+      onColumnOrderChange([...next, ...hidden]);
+      const ak = block[0];
+      const fk = block[block.length - 1];
+      if (ak !== undefined && fk !== undefined && rowCount > 0) {
+        setSelection({
+          anchor: { row: 0, colKey: ak },
+          focus: { row: rowCount - 1, colKey: fk },
+          active: { row: 0, colKey: ak },
+        });
+      }
     },
-    [colKeys, hiddenColumns, onColumnOrderChange],
+    [colKeys, hiddenColumns, onColumnOrderChange, rowCount],
   );
 
   // --- Render ---------------------------------------------------------------
@@ -925,18 +994,22 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               className="sg-corner sticky left-0 z-30 flex items-center justify-center border-b border-r border-white/10 bg-panel"
               style={{ width: GUTTER_WIDTH, minWidth: GUTTER_WIDTH }}
             />
-            {visibleColumns.map((c, i) => (
+            {visibleColumns.map((c, i) => {
+              const fullColSel = rect.r0 === 0 && rect.r1 === rowCount - 1;
+              const colSelected = fullColSel && i >= rect.c0 && i <= rect.c1;
+              return (
               <div
                 key={c.key}
                 className={`sg-header relative flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
                   i >= rect.c0 && i <= rect.c1 ? 'sg-header-selected text-text-primary' : ''
                 }`}
-                style={{ width: widths[i], minWidth: widths[i] }}
-                draggable={!!onColumnOrderChange}
-                onDragStart={() => { dragColKey.current = c.key; }}
-                onDragOver={(e) => { if (dragColKey.current) e.preventDefault(); }}
-                onDrop={() => onHeaderDrop(c.key)}
-                onClick={(e) => onHeaderSelectColumn(i, e.shiftKey)}
+                style={{
+                  width: widths[i],
+                  minWidth: widths[i],
+                  cursor: colSelected && onColumnOrderChange ? 'grab' : 'pointer',
+                }}
+                onMouseDown={(e) => onHeaderMouseDown(i, e)}
+                onMouseEnter={() => onHeaderMouseEnter(i)}
                 data-testid={`grid-header-${c.key}`}
               >
                 <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{c.header}</span>
@@ -950,7 +1023,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   onDragStart={(e) => e.preventDefault()}
                 />
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Rows area */}
@@ -1061,8 +1135,35 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               </div>
             )}
           </div>
+
+          {/* Column-move drop indicator (spans header + body, scrolls with content). */}
+          {colMoveDrop && (
+            <div
+              className="sg-drop-line"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: colMoveDrop.lineX,
+                width: 2,
+                height: HEADER_HEIGHT + totalHeight,
+                zIndex: 40,
+                pointerEvents: 'none',
+              }}
+            />
+          )}
         </div>
       </div>
+
+      {/* Floating "ghost" of the column(s) being moved. */}
+      {colGhost && (
+        <div
+          className="sg-col-ghost"
+          style={{ position: 'fixed', left: colGhost.x + 12, top: colGhost.y + 12, zIndex: 70 }}
+        >
+          {colGhost.label}
+          {colGhost.count > 1 ? ` +${colGhost.count - 1}` : ''}
+        </div>
+      )}
 
       {ctxMenu && (
         <div

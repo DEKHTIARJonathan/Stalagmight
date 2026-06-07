@@ -113,6 +113,24 @@
   box-sizing: border-box;
 }
 
+/* Column-move drop indicator (thick line between columns). */
+.sg-drop-line {
+  background: var(--sg-blue);
+  box-shadow: 0 0 0 1px rgba(26, 115, 232, 0.25);
+}
+
+/* Floating ghost of the column(s) being moved. */
+.sg-col-ghost {
+  pointer-events: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: Arial, Roboto, sans-serif;
+  color: #fff;
+  background: rgba(26, 115, 232, 0.92);
+  border-radius: 3px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
 /* Header cell of a selected column gets a tinted underline (like GS). */
 .sg-header {
   transition: background-color 90ms ease-out, box-shadow 90ms ease-out;
