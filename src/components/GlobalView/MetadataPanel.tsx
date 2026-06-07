@@ -354,7 +354,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                       disabled={nameBusy}
                       aria-label={t('globalView.metadata.rename.inputAria')}
                       data-testid="metadata-name-input"
-                      className="flex-1 min-w-0 bg-background border border-border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                      className="flex-1 min-w-0 bg-background border border-border rounded px-2 py-1 text-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
                     />
                     <button
                       onClick={() => void commitName()}

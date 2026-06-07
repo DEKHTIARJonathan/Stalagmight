@@ -483,7 +483,7 @@ function StationDetail({ station }: { station: Station }) {
     <button
       type="button"
       onClick={handleCenterOnStation}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.station.center', {
         id: formatStationId(sectionId, stationPosition),
       })}
@@ -562,7 +562,7 @@ function StationDetail({ station }: { station: Station }) {
                       onClick={() => {
                         void handleUnmergeFromStation(ref);
                       }}
-                      className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Unmerge Stations"
                       aria-label={`Unmerge station ${formatStationId(ref.section_id, ref.station_index)}`}
                       data-testid={`detail-unmerge-${ref.section_id}-${ref.station_index}`}
@@ -754,7 +754,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     <button
       type="button"
       onClick={handleCenterOnShot}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.shot.center', {
         id: formatShotId(section.id, shotPosition),
       })}
@@ -969,7 +969,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     <button
       type="button"
       onClick={handleCenterOnSection}
-      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset"
+      className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
       aria-label={t('detailPanel.section.center', { id: section.id, name: sectionDisplayName })}
       data-testid="center-section-button"
     >
@@ -1496,7 +1496,7 @@ function ClosuresSection({
                     onClick={() => {
                       void handleRemoveClosure(closureId);
                     }}
-                    className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-1 rounded text-text-secondary hover:text-error hover:bg-error-10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Remove Closure"
                     aria-label={`Remove closure ${closureIdLabel}`}
                     data-testid={`detail-remove-closure-${closureIdLabel}`}

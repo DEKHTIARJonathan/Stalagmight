@@ -981,7 +981,9 @@ body {
   outline-offset: var(--cc-focus-ring-offset, 2px);
 }
 
-label:focus-within {
+/* Keyboard-only: ring the label only when its control is keyboard-focused
+   (:has(:focus-visible)), not on a mouse click (was :focus-within). */
+label:has(:focus-visible) {
   outline: 2px solid var(--cc-focus-ring, #4ecdc4);
   outline-offset: var(--cc-focus-ring-offset, 2px);
   box-shadow: 0 0 0 2px var(--cc-focus-ring-shadow, rgba(78, 205, 196, 0.5));

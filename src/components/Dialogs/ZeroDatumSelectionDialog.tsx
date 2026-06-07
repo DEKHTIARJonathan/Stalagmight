@@ -161,7 +161,7 @@ export default function ZeroDatumSelectionDialog({
               key={index}
               type="button"
               onClick={() => handleSelectSection(index)}
-              className="flex flex-col items-center gap-1 p-2 bg-panel border border-border rounded-lg cursor-pointer transition-colors hover:border-accent focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              className="flex flex-col items-center gap-1 p-2 bg-panel border border-border rounded-lg cursor-pointer transition-colors hover:border-accent focus-visible:border-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
               data-testid={`zero-datum-section-card-${index}`}
             >
               <SectionMiniPreview shots={section.shots} size={110} />

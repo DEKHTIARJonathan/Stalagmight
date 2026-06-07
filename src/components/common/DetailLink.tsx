@@ -191,7 +191,7 @@ export function DetailLink({
   }, [isMissing, onHoverEnd]);
 
   // Build class list conditionally to avoid conflicting Tailwind utilities
-  const focusClasses = 'focus:outline-none focus:ring-2 focus:ring-accent focus:ring-inset';
+  const focusClasses = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset';
   const cursorClass = isMissing ? 'cursor-not-allowed' : 'cursor-pointer';
 
   // In Full highlighting, render the link as an entity pill: the duotone symbol

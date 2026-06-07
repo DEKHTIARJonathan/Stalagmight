@@ -486,7 +486,7 @@ export default function GlobalView() {
                 onChange={handleSearchChange}
                 onKeyDown={handleSearchKeyDown}
                 placeholder={t('globalView.search.placeholder')}
-                className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus:ring-1 focus:ring-accent"
+                className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
                 data-testid="globalview-search-input"
                 aria-label={t('globalView.search.aria')}
               />
