@@ -1166,6 +1166,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return state?.stations ?? [];
           }
 
+          case 'get_station_distances_from': {
+            // Distance-gradient field (#34). No real graph in the mock — synthesize
+            // distances from each station's mock x-coordinate (origin at x=0) so the
+            // overlay + legend have finite values to render. `from` is ignored.
+            const state = mockHandler('get_project_state', args) as
+              | {
+                  stations?: Array<{
+                    station_ref: { section_id: number; station_index: number };
+                    coordinates: { x: number; y: number; z: number };
+                  }>;
+                }
+              | null;
+            const stations = state?.stations ?? [];
+            let max = 0;
+            const distances = stations.map((s) => {
+              const d = Math.abs(s.coordinates.x);
+              if (d > max) max = d;
+              return d;
+            });
+            return {
+              distances,
+              station_refs: stations.map((s) => s.station_ref),
+              max_reachable: max,
+            };
+          }
+
           case 'create_section': {
             sectionCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];

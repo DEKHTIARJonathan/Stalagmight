@@ -375,6 +375,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "display-state.geometryMode:closureAdjusted",
     // Lazy IPC query that returns the closure-adjusted station coordinates.
     "command.get_adjusted_stations",
+    // Per-station along-cave distance query backing the distance-gradient overlay.
+    "command.get_station_distances_from",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -513,7 +515,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 317);
+        assert_eq!(EVENT_NAMES.len(), 318);
     }
 
     #[test]

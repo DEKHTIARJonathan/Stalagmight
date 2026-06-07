@@ -4,7 +4,9 @@ use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
-use crate::models::{FrozenShotRef, Project, ProjectMetadata, ProjectStats, Station};
+use crate::models::{
+    DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats, Station, StationRef,
+};
 
 /// Create a new in-memory project (no database file created).
 ///
@@ -100,6 +102,31 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
         stats,
         frozen_shots,
     })
+}
+
+/// Per-station along-cave distance from a chosen origin station, or from the
+/// zero-datum entrance(s) when `from` is null — backs the distance-gradient
+/// overlay (#34). Distances are computed on the **closure-adjusted** geometry so
+/// they match the corrected map (falls back to measured when there are no
+/// eligible closures). `distances` are index-aligned with `station_refs`; `null`
+/// entries are unreachable, and `max_reachable` scales the legend.
+///
+/// Async + `spawn_blocking` (mirrors `get_adjusted_stations`): the adjusted-coord
+/// solve is memoized in `AppState`, and we keep the heavy work off the UI thread.
+#[tauri::command]
+pub async fn get_station_distances_from(
+    app_handle: tauri::AppHandle,
+    from: Option<StationRef>,
+) -> Option<DistanceField> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        // AppState::distance_field takes one reconciled snapshot so topology and
+        // adjusted coords are consistent (no two-read skew).
+        state.inner().distance_field(from.as_ref())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Get closure-adjusted station coordinates for the current project.

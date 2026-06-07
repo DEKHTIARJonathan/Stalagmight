@@ -240,6 +240,61 @@ describe('Display Toggle State', () => {
       });
     });
   });
+
+  // Depth and distance gradients both paint the shots layer; showing both at once
+  // produced mixed coloring (depth-colored shots, distance-colored stations after
+  // a Shots toggle). They are mutually exclusive — enabling one disables the other
+  // — so the conflicting state is unreachable (#34, Daniel's report).
+  describe('Distance/Depth Gradient Mutual Exclusion (#34)', () => {
+    beforeEach(() => {
+      useUIStore.setState(getCleanTestState());
+      vi.clearAllMocks();
+    });
+
+    it('enabling the distance gradient turns the depth gradient off', () => {
+      useUIStore.setState({ showDepthGradient: true, showDistanceGradient: false });
+      useUIStore.getState().toggleDistanceGradient();
+      const s = useUIStore.getState();
+      expect(s.showDistanceGradient).toBe(true);
+      expect(s.showDepthGradient).toBe(false);
+    });
+
+    it('enabling the depth gradient turns the distance gradient off and clears its origin/field', () => {
+      useUIStore.setState({
+        showDistanceGradient: true,
+        distanceGradientOrigin: { section_id: 1, station_index: 2 },
+        distanceField: {} as never,
+        showDepthGradient: false,
+      });
+      useUIStore.getState().toggleDisplay('showDepthGradient');
+      const s = useUIStore.getState();
+      expect(s.showDepthGradient).toBe(true);
+      expect(s.showDistanceGradient).toBe(false);
+      expect(s.distanceGradientOrigin).toBeNull();
+      expect(s.distanceField).toBeNull();
+    });
+
+    it('never leaves both gradients enabled, from either entry point', () => {
+      useUIStore.setState({ showDepthGradient: true, showDistanceGradient: false });
+      useUIStore.getState().toggleDistanceGradient();
+      let s = useUIStore.getState();
+      expect(s.showDepthGradient && s.showDistanceGradient).toBe(false);
+      useUIStore.getState().toggleDisplay('showDepthGradient');
+      s = useUIStore.getState();
+      expect(s.showDepthGradient && s.showDistanceGradient).toBe(false);
+    });
+
+    it('does not persist depth=off when it is suppressed by enabling the distance overlay', () => {
+      useUIStore.setState({ showDepthGradient: true, showDistanceGradient: false });
+      useUIStore.getState().toggleDistanceGradient();
+      // Distance is runtime-only; the depth gradient's persisted preference must
+      // be left untouched so it returns next session.
+      expect(invoke).not.toHaveBeenCalledWith(
+        'save_display_setting',
+        expect.objectContaining({ key: 'showDepthGradient' })
+      );
+    });
+  });
 });
 
 describe('Effective Value Selectors', () => {

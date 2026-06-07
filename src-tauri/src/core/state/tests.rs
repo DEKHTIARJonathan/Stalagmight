@@ -1394,6 +1394,48 @@ fn get_adjusted_stations_caches_and_invalidates() {
 }
 
 #[test]
+fn distance_field_none_without_project() {
+    let state = AppState::new().unwrap();
+    assert!(state.distance_field(None).is_none());
+}
+
+#[test]
+fn distance_field_from_origin_over_appstate() {
+    // End-to-end through the atomic accessor (#34): one reconciled snapshot →
+    // adjusted coords → distance_field_from, all at a single consistent version.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Dist".to_string(),
+        location: None,
+    });
+    state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#111111".to_string(),
+        direction: Some(SurveyDirection::In),
+        shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+    });
+    let section_id = state.get_project_state().unwrap().sections[0].id;
+    let origin = StationRef::new(section_id, 0);
+
+    let field = state.distance_field(Some(&origin)).expect("distance field");
+    assert_eq!(field.distances.len(), 3, "two shots → three stations");
+    assert_eq!(field.station_refs.len(), 3);
+    let oi = field
+        .station_refs
+        .iter()
+        .position(|r| *r == origin)
+        .expect("origin present");
+    assert_eq!(field.distances[oi], Some(0.0), "origin distance is zero");
+    assert!(
+        field.distances.iter().all(Option::is_some),
+        "single connected section: every station reachable"
+    );
+    assert!(field.max_reachable > 0.0);
+}
+
+#[test]
 fn repair_invalidates_adjusted_cache() {
     use std::sync::atomic::Ordering::SeqCst;
     let state = AppState::new().unwrap();

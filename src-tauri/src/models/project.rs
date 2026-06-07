@@ -248,6 +248,19 @@ pub struct ProjectMetadata {
     pub collab_enabled: bool,
 }
 
+/// Per-station along-cave distance field from a chosen origin (or the zero-datum
+/// entrance default). `distances[i]` corresponds to `station_refs[i]`; `None`
+/// marks an unreachable station (JSON can't carry infinity). `max_reachable` is
+/// the largest finite distance (0.0 if nothing is reachable), for auto-scaling
+/// the gradient legend. Backs the distance-gradient overlay (#34); reuses the
+/// shared reachability graph (jumps in, references out — see `build_survey_graph`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct DistanceField {
+    pub distances: Vec<Option<f64>>,
+    pub station_refs: Vec<StationRef>,
+    pub max_reachable: f64,
+}
+
 /// Overall project statistics
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectStats {
@@ -5864,29 +5877,50 @@ impl Project {
         }
     }
 
-    /// Per-station along-cave distance to the nearest zero datum: the
-    /// shortest path through the survey graph summing each shot's measured
-    /// length. Edges are *all* shots (reference and non-reference, since
-    /// refs are real measured legs) plus zero-cost edges for
-    /// `station_merges` and aligned `loop_closures` (those collapse two
-    /// stations into the same physical point). Unreachable stations get
-    /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
-    pub fn compute_penetration_distances(&self, stations: &[Station]) -> Vec<f64> {
-        let n = stations.len();
-        let mut dist = vec![f64::INFINITY; n];
-        if self.zero_datums.is_empty() {
-            return dist;
-        }
-        // Map StationRef -> index in `stations` so the adjacency loop can
-        // resolve shot endpoints without a linear search per shot.
-        let mut station_index: HashMap<StationRef, usize> = HashMap::with_capacity(n);
+    /// Build a `StationRef -> index` map for `stations` (index = position in the
+    /// slice) so graph builders can resolve shot/merge/closure endpoints to
+    /// nodes without a linear search.
+    fn station_index_map(stations: &[Station]) -> HashMap<StationRef, usize> {
+        let mut m: HashMap<StationRef, usize> = HashMap::with_capacity(stations.len());
         for (i, s) in stations.iter().enumerate() {
-            station_index.insert(s.station_ref, i);
+            m.insert(s.station_ref, i);
         }
+        m
+    }
 
-        // Build adjacency: shots (weighted by length) + merges + aligned
-        // closures (weight 0).
+    /// Build the survey distance graph as an adjacency list over the `n` stations
+    /// (nodes indexed by position; `station_index` maps refs to those indices).
+    /// Edges are **every real topological connection**:
+    /// - every shot — permanent AND jump/reference — weighted by its measured
+    ///   `length` (reference shots are real measured legs / jumps a diver swims);
+    /// - `station_merges` (zero cost — the same physical point);
+    /// - every `loop_closures` entry (zero cost — a closed loop means the two
+    ///   stations are the same physical point), **regardless of `is_aligned`**;
+    ///   alignment is only a geometry-reconciliation strategy (`Move` vs `Batch`),
+    ///   so the topological connection exists either way.
+    ///
+    /// We deliberately include everything. Distances are shortest-path (Dijkstra
+    /// always takes the minimum), so an extra real edge can only ever yield a
+    /// shorter, more correct route — never inflate one. Excluding real
+    /// connections is what hides reachable areas or routes "the long way".
+    ///
+    /// NOTE (#77): the one residual risk is a *non-physical* reference tie (a pure
+    /// survey backsight, not swimmable) creating a false shortcut that understates
+    /// distance. Telling those apart from real jumps needs a first-class model;
+    /// until then we favor completeness — real data showed over-exclusion (a
+    /// dropped jump shortcut, excluded non-aligned closures) was the actual bug.
+    fn build_survey_graph(
+        &self,
+        n: usize,
+        station_index: &HashMap<StationRef, usize>,
+        coords: Option<&[Coordinates]>,
+    ) -> Vec<Vec<(usize, f64)>> {
         let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+
+        // Shots (permanent and jump/reference). Edge weight = straight-line
+        // distance between the endpoints' `coords` when supplied (the
+        // closure-adjusted geometry, for the distance gradient), else the
+        // measured shot length (penetration / topological queries).
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {
                 let from = StationRef::new(section.id, i as u32);
@@ -5894,12 +5928,20 @@ impl Project {
                 if let (Some(&fi), Some(&ti)) =
                     (station_index.get(&from), station_index.get(&to))
                 {
-                    let w = shot.length.max(0.0);
+                    let w = match coords {
+                        Some(c) => {
+                            let (a, b) = (&c[fi], &c[ti]);
+                            let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
+                            (dx * dx + dy * dy + dz * dz).sqrt()
+                        }
+                        None => shot.length.max(0.0),
+                    };
                     adj[fi].push((ti, w));
                     adj[ti].push((fi, w));
                 }
             }
         }
+        // Station merges: zero-cost (same physical point).
         for merge in &self.station_merges {
             if let (Some(a_sr), Some(b_sr)) = (
                 self.resolve_key(&merge.station_a),
@@ -5913,10 +5955,9 @@ impl Project {
                 }
             }
         }
+        // Loop closures: zero-cost, INCLUDING non-aligned ones — a closed loop is
+        // a real physical connection no matter the reconciliation strategy.
         for closure in &self.loop_closures {
-            if !closure.is_aligned {
-                continue;
-            }
             if let (Some(a_sr), Some(b_sr)) = (
                 self.resolve_key(&closure.station_a),
                 self.resolve_key(&closure.station_b),
@@ -5930,7 +5971,17 @@ impl Project {
             }
         }
 
-        // Multi-source Dijkstra from all zero-datum stations.
+        adj
+    }
+
+    /// Multi-source Dijkstra over `adj` from the given `roots` (node indices,
+    /// each seeded at distance 0). Returns the shortest-path distance to every
+    /// node; unreachable nodes — and every node when `roots` is empty — stay
+    /// `f64::INFINITY`.
+    fn dijkstra(adj: &[Vec<(usize, f64)>], roots: &[usize]) -> Vec<f64> {
+        let n = adj.len();
+        let mut dist = vec![f64::INFINITY; n];
+
         #[derive(Copy, Clone, PartialEq)]
         struct Node(f64, usize);
         impl Eq for Node {}
@@ -5947,14 +5998,14 @@ impl Project {
                     .then(self.1.cmp(&other.1))
             }
         }
+
         let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
-        for zd in &self.zero_datums {
-            if let Some(&i) = self
-                .resolve_key(&zd.station_ref)
-                .and_then(|sr| station_index.get(&sr))
-            {
-                dist[i] = 0.0;
-                heap.push(std::cmp::Reverse(Node(0.0, i)));
+        for &r in roots {
+            // Bounds-guard only; a duplicate root just gets re-popped once and
+            // filtered by the `d > dist[u]` check below — no need to dedup here.
+            if r < n {
+                dist[r] = 0.0;
+                heap.push(std::cmp::Reverse(Node(0.0, r)));
             }
         }
         while let Some(std::cmp::Reverse(Node(d, u))) = heap.pop() {
@@ -5972,6 +6023,58 @@ impl Project {
         dist
     }
 
+    /// Resolve the project's zero-datum stations to their indices in `stations`.
+    fn zero_datum_roots(&self, station_index: &HashMap<StationRef, usize>) -> Vec<usize> {
+        self.zero_datums
+            .iter()
+            .filter_map(|zd| {
+                self.resolve_key(&zd.station_ref)
+                    .and_then(|sr| station_index.get(&sr).copied())
+            })
+            .collect()
+    }
+
+    /// Per-station along-cave distance from the given `roots` (indices into
+    /// `stations`), summing each shot's measured `length` along the shortest
+    /// path. Merges and all loop closures are zero-cost (a closed loop ties two
+    /// stations to the same physical point). Unreachable stations — and every
+    /// station when `roots`/`stations` is empty — get `f64::INFINITY`.
+    ///
+    /// This is the reusable core shared by penetration distance (roots = zero
+    /// datums), the distance-gradient overlay (roots = a chosen station), and a
+    /// future gas-planning mode. All graph/geometry work stays here in the
+    /// domain layer; callers (IPC, UI) only consume the resulting distances.
+    pub fn compute_distances_from(&self, stations: &[Station], roots: &[usize]) -> Vec<f64> {
+        let n = stations.len();
+        if n == 0 || roots.is_empty() {
+            return vec![f64::INFINITY; n];
+        }
+        let station_index = Self::station_index_map(stations);
+        let adj = self.build_survey_graph(n, &station_index, None);
+        Self::dijkstra(&adj, roots)
+    }
+
+    /// Per-station along-cave distance to the nearest zero datum: the
+    /// shortest path through the survey graph summing each shot's measured
+    /// length. Edges are *all* shots (reference and non-reference, since
+    /// refs are real measured legs) plus zero-cost edges for
+    /// `station_merges` and all `loop_closures` (a closed loop ties two
+    /// stations to the same physical point). Unreachable stations get
+    /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
+    ///
+    /// Equivalent to [`compute_distances_from`] seeded with the zero-datum
+    /// station indices — the default origin for the distance-gradient overlay.
+    pub fn compute_penetration_distances(&self, stations: &[Station]) -> Vec<f64> {
+        let n = stations.len();
+        if n == 0 || self.zero_datums.is_empty() {
+            return vec![f64::INFINITY; n];
+        }
+        let station_index = Self::station_index_map(stations);
+        let roots = self.zero_datum_roots(&station_index);
+        let adj = self.build_survey_graph(n, &station_index, None);
+        Self::dijkstra(&adj, &roots)
+    }
+
     /// Maximum along-cave penetration distance — the longest shortest-path
     /// distance from any zero datum to any station through the survey
     /// graph. Zero if there are no zero datums or nothing is reachable.
@@ -5980,6 +6083,59 @@ impl Project {
             .into_iter()
             .filter(|d| d.is_finite())
             .fold(0.0_f64, f64::max)
+    }
+
+    /// Per-station distance field from a chosen origin `from` station, or from the
+    /// zero datum(s) when `from` is `None` (the gradient's entrance default).
+    ///
+    /// Edge weights come from each station's **coordinates** in `stations` — the
+    /// caller passes MEASURED coordinates (surveyed lengths), so distances reflect
+    /// the physical guideline length (#34). Merges/closures stay zero-cost.
+    /// Unreachable stations come back as `None`; the returned `station_refs` echo
+    /// the input, so the field is self-describing.
+    pub fn distance_field_from(
+        &self,
+        stations: &[Station],
+        from: Option<&StationRef>,
+    ) -> DistanceField {
+        let n = stations.len();
+        let station_index = Self::station_index_map(stations);
+        let coords: Vec<Coordinates> = stations.iter().map(|s| s.coordinates).collect();
+        let roots: Vec<usize> = match from {
+            Some(r) => {
+                let key: StationKey = (*r).into();
+                self.resolve_key(&key)
+                    .and_then(|sr| station_index.get(&sr).copied())
+                    .into_iter()
+                    .collect()
+            }
+            None => self.zero_datum_roots(&station_index),
+        };
+        let raw = if n == 0 || roots.is_empty() {
+            vec![f64::INFINITY; n]
+        } else {
+            let adj = self.build_survey_graph(n, &station_index, Some(&coords));
+            Self::dijkstra(&adj, &roots)
+        };
+        let mut max_reachable = 0.0_f64;
+        let distances: Vec<Option<f64>> = raw
+            .iter()
+            .map(|&d| {
+                if d.is_finite() {
+                    if d > max_reachable {
+                        max_reachable = d;
+                    }
+                    Some(d)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        DistanceField {
+            distances,
+            station_refs: stations.iter().map(|s| s.station_ref).collect(),
+            max_reachable,
+        }
     }
 
     /// Get metadata for this project

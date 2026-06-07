@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
-import type { SectionId, ShotId, StationRef } from '../../types/project';
+import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
 import type { BatchCommand } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
@@ -15,7 +15,8 @@ import {
   getEffectiveShowStationComments,
   getEffectiveShowShotComments,
 } from '../../store/displaySelectors';
-import { getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage, invokeIpc } from '../../utils/ipc';
+import { buildDistanceFeatureState } from '../../utils/distanceGradient';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
@@ -24,6 +25,7 @@ import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
+import { DistanceLegend } from './DistanceLegend';
 import { MapDevStats } from './MapDevStats';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
@@ -177,6 +179,7 @@ export default function MapCanvas() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
+  const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
   const [measureResult, setMeasureResult] = useState<{ distance: number; depthDiff: number } | null>(null);
@@ -354,6 +357,11 @@ export default function MapCanvas() {
     showShots,
     showReferenceShots,
     showDepthGradient,
+    showDistanceGradient,
+    distanceGradientOrigin,
+    distanceField,
+    setDistanceField,
+    setDistanceGradientOrigin,
     showDevStats,
     selection,
     mergeStationA,
@@ -1532,6 +1540,79 @@ export default function MapCanvas() {
       );
     }
   }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
+
+  // On a project switch (created_at is stable across edits, changes on switch),
+  // reset the distance origin to the entrance default and drop the stale field —
+  // otherwise the previous project's distances paint the new project gray. (#34)
+  useEffect(() => {
+    setDistanceGradientOrigin(null);
+  }, [project?.created_at, setDistanceGradientOrigin]);
+
+  // Distance-gradient overlay (#34): fetch the per-station distance field when the
+  // overlay is on and the origin or project data changes. Distances use MEASURED
+  // geometry (surveyed lengths), so neither closure-adjustment config nor the
+  // display geometryMode affects them — no need to refetch on either. `from` null
+  // = the entrance (zero-datum) default.
+  useEffect(() => {
+    if (!showDistanceGradient) return undefined;
+    let cancelled = false;
+    invokeIpc<DistanceField>(
+      'get_station_distances_from',
+      { from: distanceGradientOrigin ?? null },
+      { purpose: 'distance gradient field', fields: { origin: distanceGradientOrigin ?? 'entrance' } }
+    )
+      .then((field) => { if (!cancelled) setDistanceField(field); })
+      .catch((e) => console.warn('[distance-gradient] field fetch failed', e));
+    return () => { cancelled = true; };
+  }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
+
+  // Apply the fetched field to the layer (feature-state + paint swap). Separate
+  // from the rebuild path so re-rooting never triggers a feature rebuild.
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    if (showDistanceGradient && distanceField && project) {
+      const state = buildDistanceFeatureState(project.sections, distanceField);
+      surveyLayerRef.current.setDistanceGradient(true, state);
+    } else {
+      surveyLayerRef.current.setDistanceGradient(false, null);
+    }
+  }, [showDistanceGradient, distanceField, project, mapLoaded, surveyLayerRef]);
+
+  // Distance-gradient origin marker (#34): a ring on the chosen origin station.
+  // A MapLibre Marker so it auto-tracks the camera and shows even when the
+  // stations layer is hidden (common with the gradient on). Only for a *picked*
+  // origin — the entrance default is the zero datum(s), already starred.
+  useEffect(() => {
+    originMarkerRef.current?.remove();
+    originMarkerRef.current = null;
+    if (!map.current || !mapLoaded || !showDistanceGradient || !distanceGradientOrigin) {
+      return undefined;
+    }
+    const originStation = activeStations.find(
+      (s) =>
+        s.station_ref.section_id === distanceGradientOrigin.section_id &&
+        s.station_ref.station_index === distanceGradientOrigin.station_index
+    );
+    if (!originStation) return undefined;
+    const lngLat = metersToMapCoords(
+      originStation.coordinates.x,
+      originStation.coordinates.y,
+      gpsOrigin
+    ) as [number, number];
+    const el = document.createElement('div');
+    el.setAttribute('data-testid', 'distance-origin-marker');
+    el.style.cssText =
+      'width:18px;height:18px;border-radius:50%;border:3px solid #7d3c98;' +
+      'box-shadow:0 0 0 2px #ffffff,0 0 4px rgba(0,0,0,0.6);' +
+      'background:rgba(255,255,255,0.15);pointer-events:none;';
+    originMarkerRef.current = new maplibregl.Marker({ element: el })
+      .setLngLat(lngLat)
+      .addTo(map.current);
+    return () => {
+      originMarkerRef.current?.remove();
+      originMarkerRef.current = null;
+    };
+  }, [showDistanceGradient, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
@@ -2960,13 +3041,39 @@ export default function MapCanvas() {
       {/* Grid overlay using MapLibre layer */}
       {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
 
-      {/* Depth legend when depth gradient is enabled */}
-      {showDepthGradient && (
+      {/* Depth legend when depth gradient is enabled (suppressed while the
+          distance overlay is active — distance wins visually, one legend). */}
+      {showDepthGradient && !showDistanceGradient && (
         <DepthLegend
           minDepth={depthRange.min}
           maxDepth={depthRange.max}
           visible={showDepthGradient}
         />
+      )}
+
+      {/* Distance legend (#34): color key + "which overlay" cue. */}
+      {showDistanceGradient && distanceField && (
+        <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
+      )}
+      {/* While the field is being (re)computed — first toggle / re-root — show a
+          lightweight cue so a slow closure solve doesn't look frozen. */}
+      {showDistanceGradient && !distanceField && (
+        <div
+          data-testid="distance-legend-loading"
+          style={{
+            position: 'absolute',
+            bottom: 50,
+            left: 10,
+            background: 'var(--cc-text-halo-alt)',
+            color: 'var(--cc-depth-text)',
+            borderRadius: 4,
+            padding: 8,
+            zIndex: 1,
+            fontSize: 11,
+          }}
+        >
+          {t('map.distanceLegend.computing')}
+        </div>
       )}
 
       {/* Developer stats overlay */}

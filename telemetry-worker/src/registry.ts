@@ -373,4 +373,6 @@ export const EVENT_NAMES: readonly string[] = [
   'display-state.geometryMode:closureAdjusted',
   // Lazy IPC query that returns the closure-adjusted station coordinates.
   'command.get_adjusted_stations',
+  // Per-station along-cave distance query backing the distance-gradient overlay.
+  'command.get_station_distances_from',
 ];
