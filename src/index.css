@@ -1481,6 +1481,11 @@ button.sh-tool {
      spread does not). */
   background: color-mix(in oklab, var(--o) 12%, var(--cc-panel));
   border: 2px solid transparent;
+  /* Only animate the background wash. The active-ring border must snap in/out —
+     animating border-color via the inherited `transition-colors` reads as a hard
+     border "blink" when the active tool changes (clicking a tool or a flyout
+     entry). box-shadow/outline are excluded too (focus ring snaps). */
+  transition-property: background-color;
 }
 button.sh-tool:hover:not(:disabled) {
   background: color-mix(in oklab, var(--o) 22%, var(--cc-panel));
