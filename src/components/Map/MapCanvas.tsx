@@ -25,6 +25,7 @@ import SurveyLayer from './SurveyLayer';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
 import { DepthLegend } from './DepthLegend';
+import { DistanceLegend } from './DistanceLegend';
 import { MapDevStats } from './MapDevStats';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
@@ -2994,13 +2995,19 @@ export default function MapCanvas() {
       {/* Grid overlay using MapLibre layer */}
       {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
 
-      {/* Depth legend when depth gradient is enabled */}
-      {showDepthGradient && (
+      {/* Depth legend when depth gradient is enabled (suppressed while the
+          distance overlay is active — distance wins visually, one legend). */}
+      {showDepthGradient && !showDistanceGradient && (
         <DepthLegend
           minDepth={depthRange.min}
           maxDepth={depthRange.max}
           visible={showDepthGradient}
         />
+      )}
+
+      {/* Distance legend (#34): color key + "which overlay" cue. */}
+      {showDistanceGradient && distanceField && (
+        <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
       )}
 
       {/* Developer stats overlay */}

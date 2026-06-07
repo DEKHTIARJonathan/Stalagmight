@@ -1571,6 +1571,12 @@
       "aria": "Depth scale from {{min}} (shallow) to {{max}} (deep)",
       "flat": "Flat"
     },
+    "distanceLegend": {
+      "title": "Distance",
+      "aria": "Distance scale from {{min}} (near) to {{max}} (far)",
+      "fromEntrance": "from entrance",
+      "fromStation": "from {{id}}"
+    },
     "placement": {
       "title": "Placement",
       "instructions": "Click to place section. Esc for more placement options and metadata changes.",
