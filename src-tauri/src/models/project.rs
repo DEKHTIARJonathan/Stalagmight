@@ -248,6 +248,21 @@ pub struct ProjectMetadata {
     pub collab_enabled: bool,
 }
 
+/// TEMPORARY (#34 profiling): when env `STAL_DISTANCE_PERF` is set, append `msg`
+/// to `$TMPDIR/stal-distance-perf.log`. No-op otherwise (zero overhead/clutter).
+/// Lets us attribute the distance-fetch latency without manual UI capture. Remove
+/// (or downgrade to `tracing::debug!`) once we've identified the bottleneck.
+pub(crate) fn distance_perf_log(msg: &str) {
+    if std::env::var_os("STAL_DISTANCE_PERF").is_none() {
+        return;
+    }
+    use std::io::Write as _;
+    let path = std::env::temp_dir().join("stal-distance-perf.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{msg}");
+    }
+}
+
 /// Per-station along-cave distance field from a chosen origin (or the zero-datum
 /// entrance default). `distances[i]` corresponds to `station_refs[i]`; `None`
 /// marks an unreachable station (JSON can't carry infinity). `max_reachable` is
@@ -6076,8 +6091,18 @@ impl Project {
         let raw = if n == 0 || roots.is_empty() {
             vec![f64::INFINITY; n]
         } else {
+            let tg = std::time::Instant::now();
             let adj = self.build_survey_graph(n, &station_index, Some(&coords));
-            Self::dijkstra(&adj, &roots)
+            let graph_ms = tg.elapsed().as_secs_f64() * 1000.0;
+            let edges: usize = adj.iter().map(Vec::len).sum();
+            let td = std::time::Instant::now();
+            let d = Self::dijkstra(&adj, &roots);
+            let dijkstra_ms = td.elapsed().as_secs_f64() * 1000.0;
+            distance_perf_log(&format!(
+                "  distance_field_from n={n} edges={edges} roots={} graph_ms={graph_ms:.1} dijkstra_ms={dijkstra_ms:.1}",
+                roots.len()
+            ));
+            d
         };
         let mut max_reachable = 0.0_f64;
         let distances: Vec<Option<f64>> = raw

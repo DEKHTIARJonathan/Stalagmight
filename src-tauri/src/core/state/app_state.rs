@@ -346,6 +346,7 @@ impl AppState {
     /// when it matches that snapshot (keeps re-root instant in the adjusted view).
     pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
         use std::sync::atomic::Ordering::SeqCst;
+        let t0 = std::time::Instant::now();
         let config = self.get_config();
         let config_hash = adjusted_config_hash(&config.closure_adjustment);
         // Single reconciled snapshot, serialized with edits (mirrors
@@ -356,6 +357,7 @@ impl AppState {
             let generation = self.adjusted_cache_generation.load(SeqCst);
             (self.get_project_state()?, generation)
         };
+        let clone_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let version = project.modified_at.timestamp_nanos_opt().unwrap_or(0);
 
         // Reuse the display view's memoized adjusted coords iff they're for this
@@ -368,11 +370,13 @@ impl AppState {
                 (e.version == version && e.config_hash == config_hash).then(|| e.stations.clone())
             })
         });
-        let adjusted = match cached {
-            Some(stations) => stations,
+        let (adjusted, hit, solve_ms) = match cached {
+            Some(stations) => (stations, true, 0.0),
             None => {
+                let ts = std::time::Instant::now();
                 let stations =
                     project.compute_adjusted_station_coordinates(&config.closure_adjustment);
+                let solve_ms = ts.elapsed().as_secs_f64() * 1000.0;
                 // Only store if nothing invalidated the cache while we solved.
                 if let Ok(mut cache) = self.adjusted_cache.lock() {
                     if self.adjusted_cache_generation.load(SeqCst) == generation {
@@ -383,10 +387,21 @@ impl AppState {
                         });
                     }
                 }
-                stations
+                (stations, false, solve_ms)
             }
         };
-        Some(project.distance_field_from(&adjusted, from))
+        let tf = std::time::Instant::now();
+        let field = project.distance_field_from(&adjusted, from);
+        let field_ms = tf.elapsed().as_secs_f64() * 1000.0;
+        crate::models::project::distance_perf_log(&format!(
+            "distance_field clone_ms={clone_ms:.1} adjusted={} solve_ms={solve_ms:.1} \
+             field_ms={field_ms:.1} n_stations={} n_closures={} total_ms={:.1}",
+            if hit { "hit" } else { "miss" },
+            adjusted.len(),
+            project.loop_closures.len(),
+            t0.elapsed().as_secs_f64() * 1000.0,
+        ));
+        Some(field)
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every
