@@ -147,6 +147,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     return { anchor: c, focus: c, active: c };
   });
   const [editing, setEditing] = useState<EditState | null>(null);
+  // Additional committed ranges for non-contiguous (Ctrl+click) selection. The
+  // live range is `selection`; these are the previously-added rectangles.
+  const [extraRanges, setExtraRanges] = useState<Rect[]>([]);
   const [copiedRect, setCopiedRect] = useState<Rect | null>(null);
   const [fillPreview, setFillPreview] = useState<Rect | null>(null);
   const [interacting, setInteracting] = useState(false);
@@ -227,6 +230,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (key === undefined) return;
       const r = clamp(row, 0, Math.max(0, rowCount - 1));
       const cell = { row: r, colKey: key };
+      setExtraRanges([]); // keyboard movement collapses a non-contiguous selection
       setSelection((prev) => ({
         anchor: extend ? prev.anchor : cell,
         focus: cell,
@@ -435,16 +439,22 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   const doClear = useCallback(() => {
     const edits: CellEdit[] = [];
-    for (let r = rect.r0; r <= rect.r1; r++) {
-      for (let c = rect.c0; c <= rect.c1; c++) {
-        const col = colAt(c);
-        if (!col || !cellEditable(r, col)) continue;
-        if (col.kind === 'number') continue; // never write 0 into a required number
-        edits.push({ row: r, colKey: col.key, value: col.kind === 'number-nullable' ? null : '' });
+    const seen = new Set<string>();
+    for (const rg of [rect, ...extraRanges]) {
+      for (let r = rg.r0; r <= rg.r1; r++) {
+        for (let c = rg.c0; c <= rg.c1; c++) {
+          const col = colAt(c);
+          if (!col || !cellEditable(r, col)) continue;
+          if (col.kind === 'number') continue; // never write 0 into a required number
+          const id = `${r}:${col.key}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          edits.push({ row: r, colKey: col.key, value: col.kind === 'number-nullable' ? null : '' });
+        }
       }
     }
     applyEdits(edits);
-  }, [rect, colAt, cellEditable, applyEdits]);
+  }, [rect, extraRanges, colAt, cellEditable, applyEdits]);
 
   // --- Keyboard -------------------------------------------------------------
   const onKeyDown = useCallback(
@@ -588,21 +598,26 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (key === undefined) return;
       e.preventDefault(); // suppress native text selection; the grid owns selection
       scrollRef.current?.focus(); // receive keyboard after a click
+      const cell = { row: rowIdx, colKey: key };
+      const ctrl = e.ctrlKey || e.metaKey;
       dragging.current = true;
       setInteracting(true);
       setCopiedRect(null);
-      setSelection((prev) =>
-        e.shiftKey
-          ? { anchor: prev.anchor, focus: { row: rowIdx, colKey: key }, active: prev.active }
-          : {
-              anchor: { row: rowIdx, colKey: key },
-              focus: { row: rowIdx, colKey: key },
-              active: { row: rowIdx, colKey: key },
-            },
-      );
+      if (ctrl && !e.shiftKey) {
+        // Non-contiguous: bank the current range and start a new one here.
+        setExtraRanges((prev) => [...prev, rect]);
+        setSelection({ anchor: cell, focus: cell, active: cell });
+      } else {
+        if (!e.shiftKey) setExtraRanges([]); // a fresh selection drops extra ranges
+        setSelection((prev) =>
+          e.shiftKey
+            ? { anchor: prev.anchor, focus: cell, active: prev.active }
+            : { anchor: cell, focus: cell, active: cell },
+        );
+      }
       onActiveCellChange?.(rowIdx, key);
     },
-    [colKeys, onActiveCellChange],
+    [colKeys, rect, onActiveCellChange],
   );
 
   const onFillHandleDown = useCallback(
@@ -651,6 +666,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const fk = colKeys[clamp(focusColIdx, 0, colCount - 1)];
       if (ak === undefined || fk === undefined || rowCount === 0) return;
       setCopiedRect(null);
+      setExtraRanges([]);
       setSelection({
         anchor: { row: 0, colKey: ak },
         focus: { row: rowCount - 1, colKey: fk },
@@ -697,6 +713,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const a = clamp(anchorRow, 0, rowCount - 1);
       const f = clamp(focusRow, 0, rowCount - 1);
       setCopiedRect(null);
+      setExtraRanges([]);
       setSelection({
         anchor: { row: a, colKey: firstKey },
         focus: { row: f, colKey: lastKey },
@@ -1141,7 +1158,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     {rowIdx + 1}
                   </div>
                   {visibleColumns.map((col, c) => {
-                    const inSel = isInRect(rect, rowIdx, c);
+                    const inSel =
+                      isInRect(rect, rowIdx, c) || extraRanges.some((er) => isInRect(er, rowIdx, c));
                     const isActive = rowIdx === selection.active.row && c === activeColIdx;
                     const isEditingCell = editing?.row === rowIdx && editing.colKey === col.key;
                     return (
@@ -1204,6 +1222,15 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             {fillPreview && (
               <div className="sg-fill-preview" style={{ ...rectOverlay(fillPreview), zIndex: 4 }} />
             )}
+
+            {/* Border for each non-contiguous (Ctrl+click) extra range. */}
+            {extraRanges.map((er, i) => (
+              <div
+                key={`xr-${i}`}
+                style={{ ...rectOverlay(er), border: '2px solid var(--sg-blue)', boxSizing: 'border-box', zIndex: 3 }}
+                data-testid={`grid-extra-range-${i}`}
+              />
+            ))}
 
             {/* Selection rectangle overlay (survives row virtualization). */}
             {rowCount > 0 && colCount > 0 && (
