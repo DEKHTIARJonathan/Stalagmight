@@ -28,12 +28,18 @@
   coordinate-invariant. (`fd046db7`)
 - [x] Telemetry event (append-only) — `command.get_station_distances_from`
   added (Rust + worker), len 317→318. (`9c4b7eb6`)
-- [ ] **Phase 2 — Render (Approach A)**: SurveyLayer `setFeatureState` +
-  paint-swap interpolate (gold→purple, grey=unreachable), **re-applied in
-  `updateVisualState()` so it survives setData rebuilds** (the #1 risk);
-  `useDistanceGradient` fetch effect; click-to-pick; depth mutual-exclusion.
-- [ ] **Phase 3 — Legend + origin marker + e2e** (mirror `depth-gradient.spec.ts`).
-- [ ] Verification (cargo ✅; tsc/vitest/test:ui after Phase 2/3).
+- [x] **Phase 2 — Render (Approach A)** — SurveyLayer `setFeatureState` +
+  paint-swap interpolate (gold→purple, grey=unreachable), re-applied in
+  `updateVisualState()` so it survives setData rebuilds; fetch + apply effects;
+  shared `encodeFeatureId`. (`f91cd126`)
+- [x] **Routing fixes from QA** — include jumps + ALL closures (`88ccbaff`);
+  compute on closure-adjusted coordinates, async+memoized command (`19ae60cd`);
+  re-root via shot click → lower endpoint (`a4d6ed99`).
+- [x] **Phase 3** — station-details root line (`20f631b2`); legend + overlay cue,
+  depth legend suppressed while active (`cddf1383`); origin marker (`b9c6c9d3`);
+  e2e spec + mock, 2 passing (`7259673b`).
+- [x] **Verification** — cargo (1513+80, +telemetry), vitest (incl. distance
+  helpers), tsc, e2e all green.
 
 > **Approved approach + full validation plan:** see
 > `~/.claude/plans/imperative-chasing-snowflake.md` (Approach A; feature-state
