@@ -5963,8 +5963,9 @@ impl Project {
 
         let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
         for &r in roots {
-            // Guard the index and skip duplicate roots already seeded.
-            if r < n && dist[r] != 0.0 {
+            // Bounds-guard only; a duplicate root just gets re-popped once and
+            // filtered by the `d > dist[u]` check below — no need to dedup here.
+            if r < n {
                 dist[r] = 0.0;
                 heap.push(std::cmp::Reverse(Node(0.0, r)));
             }
@@ -5997,8 +5998,9 @@ impl Project {
 
     /// Per-station along-cave distance from the given `roots` (indices into
     /// `stations`), summing each shot's measured `length` along the shortest
-    /// path. Merges and aligned closures are zero-cost. Unreachable stations —
-    /// and every station when `roots`/`stations` is empty — get `f64::INFINITY`.
+    /// path. Merges and all loop closures are zero-cost (a closed loop ties two
+    /// stations to the same physical point). Unreachable stations — and every
+    /// station when `roots`/`stations` is empty — get `f64::INFINITY`.
     ///
     /// This is the reusable core shared by penetration distance (roots = zero
     /// datums), the distance-gradient overlay (roots = a chosen station), and a
@@ -6018,8 +6020,8 @@ impl Project {
     /// shortest path through the survey graph summing each shot's measured
     /// length. Edges are *all* shots (reference and non-reference, since
     /// refs are real measured legs) plus zero-cost edges for
-    /// `station_merges` and aligned `loop_closures` (those collapse two
-    /// stations into the same physical point). Unreachable stations get
+    /// `station_merges` and all `loop_closures` (a closed loop ties two
+    /// stations to the same physical point). Unreachable stations get
     /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
     ///
     /// Equivalent to [`compute_distances_from`] seeded with the zero-datum
