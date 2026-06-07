@@ -3158,6 +3158,8 @@ impl Project {
         atb_x: &[f64],
         atb_y: &[f64],
         adj: &[Vec<(usize, f64, f64)>],
+        x0_x: &[f64],
+        x0_y: &[f64],
     ) -> (Vec<f64>, Vec<f64>) {
         // Pivots below this are left in the core for PCG rather than divided by.
         const PIVOT_EPS: f64 = 1e-30;
@@ -3263,8 +3265,10 @@ impl Project {
                     }
                 }
             }
-            let csx = Self::pcg_axis(k, &cdx, &crx, &cadj, 0);
-            let csy = Self::pcg_axis(k, &cdy, &cry, &cadj, 1);
+            let cx0: Vec<f64> = core.iter().map(|&g| x0_x[g]).collect();
+            let cy0: Vec<f64> = core.iter().map(|&g| x0_y[g]).collect();
+            let csx = Self::pcg_axis(k, &cdx, &crx, &cadj, 0, &cx0);
+            let csy = Self::pcg_axis(k, &cdy, &cry, &cadj, 1, &cy0);
             for (li, &g) in core.iter().enumerate() {
                 sol_x[g] = csx[li];
                 sol_y[g] = csy[li];
@@ -3286,15 +3290,23 @@ impl Project {
         (sol_x, sol_y)
     }
 
-    /// Jacobi-preconditioned Conjugate Gradient for one axis of an SPD system
+    /// Jacobi-preconditioned Conjugate Gradient for one axis of an SPD/PSD system
     /// stored as diagonal + symmetric off-diagonal adjacency `(j, off_x, off_y)`
     /// (`axis` selects the weight). Used only for the small reduced core.
+    ///
+    /// Starts from the warm-start guess `x0` (the measured positions). This is not
+    /// just for convergence speed: a node that is unconstrained on this axis (e.g.
+    /// reachable only through a zero-length cardinal shot, so its weight is 0) has
+    /// an empty row, leaving that coordinate in the system's null space. CG never
+    /// moves a null-space direction, so it stays at `x0` — preserving the measured
+    /// position instead of snapping it to world 0.
     fn pcg_axis(
         n: usize,
         diag: &[f64],
         rhs: &[f64],
         adj: &[Vec<(usize, f64, f64)>],
         axis: usize,
+        x0: &[f64],
     ) -> Vec<f64> {
         let off = |e: (usize, f64, f64)| if axis == 0 { e.1 } else { e.2 };
         let spmv = |x: &[f64]| -> Vec<f64> {
@@ -3314,7 +3326,7 @@ impl Project {
             .map(|&d| if d.abs() > 1e-30 { 1.0 / d } else { 1.0 })
             .collect();
 
-        let mut x = vec![0.0; n];
+        let mut x = x0.to_vec();
         let ax0 = spmv(&x);
         let mut r: Vec<f64> = rhs.iter().zip(ax0.iter()).map(|(&b, &a)| b - a).collect();
         let mut z: Vec<f64> = r.iter().zip(inv_diag.iter()).map(|(&ri, &mi)| ri * mi).collect();
@@ -3633,6 +3645,21 @@ impl Project {
             }
         }
 
+        // Warm-start guess: each unknown group's measured position. This seeds the
+        // core PCG so a coordinate that is unconstrained on an axis (e.g. only a
+        // zero-length cardinal shot touches it → zero weight → null-space row)
+        // stays at its measured value instead of snapping to world 0.
+        let mut x0_x = vec![0.0; n];
+        let mut x0_y = vec![0.0; n];
+        for (root, members) in &groups {
+            if let Some(&idx) = unknown_index.get(root) {
+                if let Some(coords) = members.first().and_then(|m| raw_coords.get(m).copied()) {
+                    x0_x[idx] = coords.x;
+                    x0_y[idx] = coords.y;
+                }
+            }
+        }
+
         // Solve both axes (sharing sparsity, differing in per-axis weights) with
         // exact degree-≤2 graph reduction: peel spurs and series-reduce long
         // passages in O(n), then Jacobi-PCG on the small remaining 2-core (≈ the
@@ -3640,8 +3667,9 @@ impl Project {
         // former full-system PCG, which took O(loop-diameter) iterations — i.e.
         // O(n) iterations on a single long loop, making the solve O(n²) (#81).
         // See `solve_reduced_laplacian`.
-        let (sol_x, sol_y) =
-            Self::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj);
+        let (sol_x, sol_y) = Self::solve_reduced_laplacian(
+            n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y,
+        );
 
         // Optimality guard (tests only): the closure adjustment is the minimizer of
         // the weighted misclosure, i.e. the solution of the SPD normal equations
