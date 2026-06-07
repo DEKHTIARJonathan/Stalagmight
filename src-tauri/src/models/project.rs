@@ -2193,20 +2193,85 @@ impl Project {
         }
     }
 
-    /// Check if a section is connected to a zero datum (directly or through merges only).
+    /// Every zero-datum station whose section lies in the same merge-connected
+    /// component as `section_id` (resolved to current StationRefs).
+    ///
+    /// This is the single source of truth for "what anchors this rigid group?" —
+    /// `section_has_zero_datum`, `find_connected_zero_datum`, the merge guard, and
+    /// the over-anchoring detector all derive from it, so they cannot drift apart.
     ///
     /// Counts only datums that still RESOLVE: a corrupt project can be opened with a
     /// dangling zero datum (anchor shot deleted) so the user can repair it, and a
     /// dangling datum is not a real anchor. Counting it would let a merge pick the
     /// phantom-anchored section as the fixed group and shift the world coordinate
-    /// system around a station that doesn't exist. (Mirrors find_connected_zero_datum
-    /// and the other zero-datum sites, which all filter via resolve_key.)
-    fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
+    /// system around a station that doesn't exist.
+    pub(crate) fn component_datum_refs(&self, section_id: SectionId) -> Vec<StationRef> {
         let merged = self.get_merged_section_ids(section_id);
         self.zero_datums
             .iter()
             .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .any(|sr| merged.contains(&sr.section_id))
+            .filter(|sr| merged.contains(&sr.section_id))
+            .collect()
+    }
+
+    /// Check if a section is connected to a zero datum (directly or through merges only).
+    fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
+        !self.component_datum_refs(section_id).is_empty()
+    }
+
+    /// Group resolved zero datums by their merge-connected component, returning
+    /// only the components that hold MORE THAN ONE datum. An empty result means
+    /// the "≤1 zero datum per merge component" invariant holds.
+    ///
+    /// Two GPS anchors in one rigid merge group over-constrain it: the offset
+    /// cascade ([`Self::cascade_connection_offsets`]) marks every datum section
+    /// authoritative, so the two wavefronts meet on a merge edge that cannot
+    /// satisfy both anchors and that merge visibly tears apart. This is how the
+    /// invariant violation surfaces to the user.
+    pub fn over_anchored_merge_components(&self) -> Vec<Vec<StationRef>> {
+        let resolved: Vec<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .collect();
+        let mut groups: Vec<(HashSet<SectionId>, Vec<StationRef>)> = Vec::new();
+        for sr in resolved {
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|(sections, _)| sections.contains(&sr.section_id))
+            {
+                group.1.push(sr);
+            } else {
+                groups.push((self.get_merged_section_ids(sr.section_id), vec![sr]));
+            }
+        }
+        groups
+            .into_iter()
+            .map(|(_, refs)| refs)
+            .filter(|refs| refs.len() > 1)
+            .collect()
+    }
+
+    /// Would adding a merge between sections `a` and `b` place two zero datums in
+    /// one merge component? True only when `a` and `b` are in DIFFERENT merge
+    /// components and EACH component is already anchored — i.e. the merge would
+    /// fuse two independently-anchored rigid groups. Used to keep
+    /// [`Self::convert_orphan_closures_to_merges`] from silently creating the
+    /// over-constraint (a closure between two anchored groups is legitimate; a
+    /// rigid merge between them is not).
+    pub(crate) fn merge_would_double_anchor(&self, a: SectionId, b: SectionId) -> bool {
+        let component_a = self.get_merged_section_ids(a);
+        if component_a.contains(&b) {
+            // Already the same merge component — a redundant merge adds no anchor.
+            return false;
+        }
+        let anchored = |component: &HashSet<SectionId>| {
+            self.zero_datums
+                .iter()
+                .filter_map(|zd| self.resolve_key(&zd.station_ref))
+                .any(|sr| component.contains(&sr.section_id))
+        };
+        anchored(&component_a) && anchored(&self.get_merged_section_ids(b))
     }
 
     /// Get all stations colocated with the given station (via merges and aligned closures).
@@ -4854,41 +4919,14 @@ impl Project {
         }
     }
 
-    /// Get all station refs connected to this station via shots and merges (transitive).
-    /// All stations in a section are connected via shots, and merges connect stations across sections.
-    /// Uses merge-only connectivity (rigid groups) for datum validation.
-    fn get_connected_stations(&self, station_ref: StationRef) -> HashSet<StationRef> {
-        // Reuse get_merged_section_ids for merge-only section-level traversal
-        let connected_sections = self.get_merged_section_ids(station_ref.section_id);
-
-        // Enumerate all stations in connected sections
-        let mut connected = HashSet::new();
-        for section_id in connected_sections {
-            if let Some(section) = self.get_section(section_id) {
-                // A section with N shots has N+1 stations (indices 0 to N)
-                for i in 0..=section.shots.len() {
-                    connected.insert(StationRef {
-                        section_id,
-                        station_index: i as u32,
-                    });
-                }
-            }
-        }
-
-        connected
-    }
-
-    /// Check if any connected station already has a zero datum (returns the conflicting ref)
+    /// The zero datum (other than `station_ref` itself) that already anchors the
+    /// merge-connected rigid group `station_ref` belongs to, if any. Used to reject
+    /// setting a second datum on an already-anchored group. Merge-only connectivity
+    /// via the shared [`Self::component_datum_refs`] source of truth.
     fn find_connected_zero_datum(&self, station_ref: StationRef) -> Option<StationRef> {
-        let connected = self.get_connected_stations(station_ref);
-        for zd in &self.zero_datums {
-            if let Some(sr) = self.resolve_key(&zd.station_ref) {
-                if connected.contains(&sr) && sr != station_ref {
-                    return Some(sr);
-                }
-            }
-        }
-        None
+        self.component_datum_refs(station_ref.section_id)
+            .into_iter()
+            .find(|&sr| sr != station_ref)
     }
 
     /// Format a station reference for user display.
@@ -6762,6 +6800,29 @@ impl Project {
             }
         }
 
+        // Two or more zero datums in one merge-connected component over-constrain
+        // the rigid group (two GPS anchors), so the offset cascade tears a merge
+        // edge apart. The interactive guards (set_zero_datum / merge_stations)
+        // prevent this on clean state, but a file written by an older build or a
+        // closure-to-merge conversion can still arrive in this state — surface it
+        // instead of silently mis-solving the geometry. Warning, not Critical: the
+        // project still opens and the user resolves it by removing a datum.
+        for component in self.over_anchored_merge_components() {
+            let datums = component
+                .iter()
+                .map(|sr| format!("{}:{}", sr.section_id, sr.station_index))
+                .collect::<Vec<_>>()
+                .join(", ");
+            violations.push(IntegrityViolation {
+                severity: ViolationSeverity::Warning,
+                category: "multiple_datums_per_merge_component".to_string(),
+                message: format!(
+                    "Merge-connected group has {} zero datums ({datums}); remove all but one to keep the group's geometry consistent",
+                    component.len()
+                ),
+            });
+        }
+
         violations
     }
 
@@ -7178,6 +7239,17 @@ impl Project {
                 continue;
             };
             if !self.are_stations_connected_excluding_shot(a, b, None, false) {
+                // A sole-bridge closure between two independently zero-datum-anchored
+                // groups is intentionally KEPT as a closure (converting it to a rigid
+                // merge would double-anchor one merge component and tear it — see
+                // `convert_orphan_closures_to_merges`). Don't flag it as an
+                // orphan-that-should-be-a-merge: that warning would be misleading and
+                // Repair could never clear it, since the converter correctly refuses
+                // to merge it. The same `merge_would_double_anchor` predicate keeps the
+                // checker and the converter in agreement.
+                if self.merge_would_double_anchor(a.section_id, b.section_id) {
+                    continue;
+                }
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_closure".to_string(),
@@ -7262,8 +7334,16 @@ impl Project {
     /// section so its only attachment is a closure.)
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
         let mut converted = 0;
+        // Sole-bridge closures left UNCONVERTED because turning them into a rigid
+        // merge would fuse two independently zero-datum-anchored groups. Tracked by
+        // id so the orphan scan below does not reconsider them on every iteration
+        // (which would loop forever, since they are never removed).
+        let mut left_as_closure: HashSet<u64> = HashSet::new();
         loop {
             let orphan = self.loop_closures.iter().position(|c| {
+                if left_as_closure.contains(&c.id) {
+                    return false;
+                }
                 if c.station_a.section_id == c.station_b.section_id {
                     return false;
                 }
@@ -7275,6 +7355,30 @@ impl Project {
                 !self.are_stations_connected_excluding_shot(a, b, None, false)
             });
             let Some(idx) = orphan else { break };
+
+            // Converting a sole-bridge closure into a merge makes it a RIGID edge.
+            // If both endpoints' groups are already zero-datum-anchored, that edge
+            // would place two GPS anchors in one merge component, and the next
+            // offset cascade would tear the merge apart (the reported failure
+            // mode). Keep it a (soft) closure instead — a closure between two
+            // anchored groups is legitimate — and let the over-anchoring detector
+            // surface it for the user to resolve.
+            {
+                let closure = &self.loop_closures[idx];
+                if self.merge_would_double_anchor(
+                    closure.station_a.section_id,
+                    closure.station_b.section_id,
+                ) {
+                    tracing::warn!(
+                        closure_id = closure.id,
+                        purpose = "avoid double-anchoring a merge component",
+                        "Left a sole-bridge loop closure unconverted: both endpoints are zero-datum-anchored"
+                    );
+                    left_as_closure.insert(closure.id);
+                    continue;
+                }
+            }
+
             let closure = self.loop_closures.remove(idx);
             let already = match (
                 self.resolve_key(&closure.station_a),

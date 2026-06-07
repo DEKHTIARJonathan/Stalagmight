@@ -608,16 +608,20 @@ fn repair_open_project_integrity_is_undoable_and_redoable() {
 }
 
 #[test]
-fn redo_batch_preserves_orphan_closure_to_merge_conversion() {
+fn redo_batch_preserves_double_anchored_bridge_closure() {
     // A single user Batch can strand a sole-bridge closure: two otherwise
-    // unconnected sections joined only by a freshly-created closure. The
+    // unconnected sections joined only by a freshly-created closure. Normally the
     // post-command epilogue converts that closure into a merge (#8 — closures are
-    // only for true loops). Previously execute_batch captured its redo snapshot
-    // BEFORE that conversion ran (the conversion happened only in execute()'s outer
-    // epilogue, after the snapshot), so undo→redo restored the UN-converted closure
-    // — redo only reconciles geometry, it does not re-run the conversion — silently
-    // losing the merge. The conversion now runs inside execute_batch before the
-    // snapshot, so redo preserves it.
+    // only for true loops), and execute_batch captures its redo snapshot AFTER that
+    // conversion so undo→redo preserves it.
+    //
+    // BUT here both sections are zero-datum-anchored (the only way to create a
+    // closure between two disconnected sections). Converting the bridge to a rigid
+    // merge would put two GPS anchors in one merge component and tear it — the
+    // reported bug — so the conversion guard now LEAVES it as a closure. This test
+    // pins that corrected behaviour AND that the batch snapshot still captures the
+    // post-epilogue state across undo/redo: the closure (not a merge) is preserved,
+    // and the two datums stay in separate merge components.
     let state = AppState::new().unwrap();
 
     let mut project = Project::new("Batch".to_string(), None);
@@ -663,29 +667,34 @@ fn redo_batch_preserves_orphan_closure_to_merge_conversion() {
     let after_execute = state.get_project_state().unwrap();
     assert_eq!(
         after_execute.loop_closures.len(),
-        0,
-        "the sole-bridge closure must be converted to a merge"
+        1,
+        "a sole-bridge closure between two anchored groups must be LEFT as a closure, not merged"
     );
-    assert_eq!(after_execute.station_merges.len(), 1, "exactly one merge after conversion");
+    assert_eq!(
+        after_execute.station_merges.len(),
+        0,
+        "no merge: converting it would double-anchor one merge component"
+    );
 
-    // Undo returns to the pre-batch topology (no merge, no closure).
+    // Undo returns to the pre-batch topology (no datums, no closure, no merge).
     assert!(state.undo().success);
     let after_undo = state.get_project_state().unwrap();
     assert_eq!(after_undo.loop_closures.len(), 0);
     assert_eq!(after_undo.station_merges.len(), 0);
 
-    // Redo must restore the CONVERTED topology (the merge), not the raw closure.
+    // Redo must restore the post-epilogue topology: the closure is preserved and it
+    // is still NOT a merge.
     assert!(state.redo().success);
     let after_redo = state.get_project_state().unwrap();
     assert_eq!(
         after_redo.loop_closures.len(),
-        0,
-        "redo must not resurrect the un-converted closure"
+        1,
+        "redo must preserve the unconverted bridge closure"
     );
     assert_eq!(
         after_redo.station_merges.len(),
-        1,
-        "redo must preserve the closure→merge conversion"
+        0,
+        "redo must not create the over-constraining merge"
     );
 }
 
