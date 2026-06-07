@@ -7239,6 +7239,17 @@ impl Project {
                 continue;
             };
             if !self.are_stations_connected_excluding_shot(a, b, None, false) {
+                // A sole-bridge closure between two independently zero-datum-anchored
+                // groups is intentionally KEPT as a closure (converting it to a rigid
+                // merge would double-anchor one merge component and tear it — see
+                // `convert_orphan_closures_to_merges`). Don't flag it as an
+                // orphan-that-should-be-a-merge: that warning would be misleading and
+                // Repair could never clear it, since the converter correctly refuses
+                // to merge it. The same `merge_would_double_anchor` predicate keeps the
+                // checker and the converter in agreement.
+                if self.merge_would_double_anchor(a.section_id, b.section_id) {
+                    continue;
+                }
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_closure".to_string(),

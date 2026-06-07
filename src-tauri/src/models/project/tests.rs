@@ -966,6 +966,16 @@ fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
         project.over_anchored_merge_components().is_empty(),
         "the two datums must stay in separate merge components"
     );
+    // The retained bridge must NOT be flagged as an orphan-that-should-be-a-merge:
+    // the checker and the converter agree via merge_would_double_anchor, so Repair
+    // can't get stuck re-flagging a closure it will never convert.
+    assert!(
+        project
+            .check_orphan_closures()
+            .iter()
+            .all(|v| v.category != "orphan_closure"),
+        "a deliberately-retained double-anchored bridge closure must not be flagged as an orphan"
+    );
 
     // Contrast: with only ONE side anchored, the same sole-bridge closure SHOULD
     // still convert to a merge (the original, intended behaviour).
