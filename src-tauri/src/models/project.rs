@@ -3016,6 +3016,124 @@ impl Project {
         Ok(())
     }
 
+    /// Coordinate-only, component-scoped batch of raw (measured) station
+    /// coordinates — the same values [`Self::compute_station_raw_coords`] returns,
+    /// computed for every station in `component` in one linear pass.
+    ///
+    /// The closure solve runs this once per connected component, so it deliberately
+    /// avoids whole-project [`Self::compute_station_coordinates`], which would be
+    /// (a) `O(component_count × total_stations)` across the per-component loop and
+    /// (b) `O(closures × stations)` from rebuilding the `merged_with`/`closures_with`
+    /// metadata the solver never reads. Merges and aligned closures only connect
+    /// stations within one connected component (see
+    /// [`Self::get_connected_section_ids`]), so scoping the colocated depth grouping
+    /// to `component` is exact.
+    fn compute_component_raw_coords(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> HashMap<StationRef, Coordinates> {
+        let station_list: Vec<StationRef> = self
+            .sections
+            .iter()
+            .filter(|s| component.contains(&s.id))
+            .flat_map(|s| (0..=s.shots.len()).map(move |idx| StationRef::new(s.id, idx as u32)))
+            .collect();
+
+        // Colocated depth groups (merges + aligned closures), restricted to the
+        // component. Simple union-find with path compression.
+        fn find(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+            let mut cur = x;
+            while let Some(&p) = parent.get(&cur) {
+                if p == cur {
+                    break;
+                }
+                cur = p;
+            }
+            let mut node = x;
+            while let Some(&p) = parent.get(&node) {
+                if p == cur {
+                    break;
+                }
+                parent.insert(node, cur);
+                node = p;
+            }
+            cur
+        }
+        let mut parent: HashMap<StationRef, StationRef> =
+            station_list.iter().map(|&sr| (sr, sr)).collect();
+        let mut unite = |parent: &mut HashMap<StationRef, StationRef>, a, b| {
+            let (ra, rb) = (find(parent, a), find(parent, b));
+            if ra != rb {
+                parent.insert(ra, rb);
+            }
+        };
+        for merge in &self.station_merges {
+            if component.contains(&merge.station_a.section_id)
+                && component.contains(&merge.station_b.section_id)
+            {
+                if let (Some(a), Some(b)) =
+                    (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
+                {
+                    unite(&mut parent, a, b);
+                }
+            }
+        }
+        for closure in &self.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
+            if component.contains(&closure.station_a.section_id)
+                && component.contains(&closure.station_b.section_id)
+            {
+                if let (Some(a), Some(b)) =
+                    (self.resolve_key(&closure.station_a), self.resolve_key(&closure.station_b))
+                {
+                    unite(&mut parent, a, b);
+                }
+            }
+        }
+        let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for &sr in &station_list {
+            let root = find(&mut parent, sr);
+            groups.entry(root).or_default().push(sr);
+        }
+        let mut depth: HashMap<StationRef, f64> = HashMap::with_capacity(station_list.len());
+        for members in groups.values() {
+            let d = self.compute_station_depth(members);
+            for &sr in members {
+                depth.insert(sr, d);
+            }
+        }
+
+        // Per-section XY walk + individual station offsets.
+        let mut out: HashMap<StationRef, Coordinates> =
+            HashMap::with_capacity(station_list.len());
+        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
+            let (offset_x, offset_y) =
+                self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
+            let mut cur = (offset_x, offset_y);
+            for idx in 0..=section.shots.len() {
+                if idx > 0 {
+                    let shot = &section.shots[idx - 1];
+                    let az = shot.average_azimuth().to_radians();
+                    let h = shot.horizontal_length();
+                    cur.0 += h * az.sin();
+                    cur.1 += h * az.cos();
+                }
+                let sr = StationRef::new(section.id, idx as u32);
+                let z = depth.get(&sr).copied().unwrap_or(0.0);
+                let mut coords = Coordinates::new(cur.0, cur.1, z);
+                if let Some((ox, oy, oz)) = self.station_offset_for_ref(sr) {
+                    coords.x += ox;
+                    coords.y += oy;
+                    coords.z += oz;
+                }
+                out.insert(sr, coords);
+            }
+        }
+        out
+    }
+
     fn adjust_least_squares(
         &mut self,
         component: &HashSet<SectionId>,
@@ -3031,18 +3149,14 @@ impl Project {
             }
         }
 
-        // Precompute every station's raw (measured) coordinates in a single O(n)
-        // pass. The warm-start, group-Z and section-delta phases below each need a
-        // station's measured position; calling `compute_station_raw_coords` per
-        // station re-walks the section from its start (O(index)), which made the
-        // solve O(n^2) on long degree-2 chains (#81). One batch pass + map lookups
-        // keeps it linear. The map is owned (no borrow of `self`), so it stays
-        // valid across the later `iter_mut` update phase.
-        let raw_coords: HashMap<StationRef, Coordinates> = self
-            .compute_station_coordinates()
-            .into_iter()
-            .map(|s| (s.station_ref, s.coordinates))
-            .collect();
+        // Precompute every component station's raw (measured) coordinates in one
+        // linear, component-scoped pass. The warm-start, group-Z and section-delta
+        // phases below each need a station's measured position; calling
+        // `compute_station_raw_coords` per station re-walks the section from its
+        // start (O(index)), which made the solve O(n^2) on long degree-2 chains
+        // (#81). The map is owned (no borrow of `self`), so it stays valid across
+        // the later `iter_mut` update phase.
+        let raw_coords = self.compute_component_raw_coords(component);
 
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         for station in &stations {
@@ -3545,13 +3659,8 @@ impl Project {
         // Recompute coordinates now that the shots above were rewritten. The
         // section-alignment phase below compares each station's *post-update*
         // position against its solved target, so it must not reuse `raw_coords`
-        // (the pre-update measured snapshot). One O(n) batch pass replaces the
-        // former per-station `compute_station_raw_coords` walk (O(index) → O(n^2)).
-        let post_update_coords: HashMap<StationRef, Coordinates> = self
-            .compute_station_coordinates()
-            .into_iter()
-            .map(|s| (s.station_ref, s.coordinates))
-            .collect();
+        // (the pre-update measured snapshot). Same component-scoped O(n) batch.
+        let post_update_coords = self.compute_component_raw_coords(component);
 
         // Align each section's absolute position to solved coordinates (rigid XY translation).
         // This prevents merged stations in different sections from drifting apart.
