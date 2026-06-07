@@ -4,6 +4,7 @@ import { invokeIpc } from '../../utils/ipc';
 import type { ProjectMetadata } from '../../types/project';
 import { ResizablePanel } from '../common/Panel';
 import { ElidedPath } from '../common/ElidedPath';
+import { MarqueeText } from '../common/MarqueeText';
 import { Button } from '../common/Button';
 import { Toggle } from '../common/Toggle';
 import { PencilIcon, CheckIcon, CloseIcon } from '../common/icons';
@@ -308,9 +309,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 <dt className="text-xs text-text-secondary font-medium mb-1">{t('globalView.metadata.selectedSystems')}</dt>
                 <dd className="text-sm text-text-primary space-y-1">
                   {projects.map((p) => (
-                    <div key={p.file_path} className="truncate" title={p.name}>
-                      {p.name}
-                    </div>
+                    <MarqueeText key={p.file_path} text={p.name} />
                   ))}
                 </dd>
               </div>
@@ -380,7 +379,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                   </div>
                 ) : (
                   <dd className="text-sm text-text-primary flex items-center gap-1" data-testid="metadata-name">
-                    <span className="truncate" title={singleProject.name}>{singleProject.name}</span>
+                    <MarqueeText text={singleProject.name} className="min-w-0 flex-1" />
                     <button
                       onClick={startEditName}
                       aria-label={t('globalView.metadata.rename.editAria', { name: singleProject.name })}

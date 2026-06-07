@@ -47,6 +47,21 @@ test.describe('GlobalView Metadata Panel', () => {
       await expect(page.locator('[data-testid="metadata-gps"]')).toBeVisible();
     });
 
+    test('long project name scrolls on hover instead of a tooltip', async ({ page }) => {
+      await page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]').click();
+      await expect(page.locator('[data-testid="metadata-name"]')).toBeVisible();
+      // Force the name field narrow so the name overflows its space.
+      await page.addStyleTag({ content: '[data-testid="metadata-name"] [data-full-text]{max-width:50px !important}' });
+      const marquee = page.locator('[data-testid="metadata-name"] [data-full-text]');
+      await marquee.hover();
+      const overlay = marquee.locator('[data-elided-overlay]');
+      await expect(overlay).toHaveCount(1);
+      // Out of flow (won't disturb the row), animating, and no tooltip.
+      expect(await overlay.evaluate((el) => getComputedStyle(el).position)).toBe('absolute');
+      expect(await overlay.evaluate((el) => getComputedStyle(el).animationName)).toContain('elided-path-scroll');
+      await expect(page.locator('[role="tooltip"]')).toHaveCount(0);
+    });
+
     test('should show selected state on card', async ({ page }) => {
       const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();

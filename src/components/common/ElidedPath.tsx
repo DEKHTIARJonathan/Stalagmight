@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { pathElisionCandidates } from '../../utils/pathElision';
+import { useHoverMarquee, getTextMeasureContext } from './useHoverMarquee';
 
 interface ElidedPathProps {
   /** The full file path to display (and reveal in full on hover). */
@@ -9,19 +10,6 @@ interface ElidedPathProps {
   /** Test ID applied to the rendered text element. */
   'data-testid'?: string;
 }
-
-/** Cached canvas 2d context for text measurement (created lazily, reused). */
-let measureCtx: CanvasRenderingContext2D | null = null;
-function getMeasureContext(): CanvasRenderingContext2D | null {
-  if (measureCtx) return measureCtx;
-  if (typeof document === 'undefined') return null;
-  const canvas = document.createElement('canvas');
-  measureCtx = canvas.getContext('2d');
-  return measureCtx;
-}
-
-/** Marquee scroll speed when revealing the full path on hover (px per second). */
-const SCROLL_SPEED_PX_PER_S = 45;
 
 /**
  * Renders a file path on a single line, abbreviated to fit its available width:
@@ -34,8 +22,7 @@ const SCROLL_SPEED_PX_PER_S = 45;
  * When the path is abbreviated, hovering reveals the full path by scrolling it
  * (marquee) within the same clip box — no tooltip — for as long as the pointer
  * stays over it. The scrolling copy is absolutely positioned, so it never widens
- * its container (e.g. it won't stretch a table column); an invisible in-flow copy
- * keeps the element at its resting size.
+ * its container (e.g. it won't stretch a table column).
  */
 export function ElidedPath({
   path,
@@ -44,8 +31,7 @@ export function ElidedPath({
 }: ElidedPathProps) {
   const containerRef = useRef<HTMLSpanElement>(null);
   const [display, setDisplay] = useState(path);
-  const [hovering, setHovering] = useState(false);
-  const [scroll, setScroll] = useState<{ distance: number; duration: number } | null>(null);
+  const { scrolling, overlayStyle, onMouseEnter, onMouseLeave } = useHoverMarquee(path, containerRef);
 
   // Fit the abbreviated (resting) display to the available width.
   useLayoutEffect(() => {
@@ -61,7 +47,7 @@ export function ElidedPath({
         return;
       }
 
-      const ctx = getMeasureContext();
+      const ctx = getTextMeasureContext();
       if (!ctx) {
         setDisplay(candidates[0] ?? path);
         return;
@@ -85,38 +71,6 @@ export function ElidedPath({
     return () => observer.disconnect();
   }, [path]);
 
-  // On hover, measure how far the full path overflows the clip box (via canvas,
-  // so the marquee overlay can stay out of flow and never resize the container).
-  useLayoutEffect(() => {
-    if (!hovering) {
-      setScroll(null);
-      return;
-    }
-    const el = containerRef.current;
-    const ctx = getMeasureContext();
-    if (!el || !ctx) return;
-    const available = el.clientWidth;
-    if (available <= 0) {
-      setScroll(null);
-      return;
-    }
-    ctx.font = window.getComputedStyle(el).font;
-    const overflow = ctx.measureText(path).width - available;
-    setScroll(
-      overflow > 1
-        ? { distance: overflow, duration: Math.max(2, overflow / SCROLL_SPEED_PX_PER_S) }
-        : null,
-    );
-  }, [hovering, path]);
-
-  const scrolling = hovering && scroll != null;
-  const overlayStyle: CSSProperties | undefined = scroll
-    ? ({
-        '--elided-scroll-distance': `${-scroll.distance}px`,
-        animation: `elided-path-scroll ${scroll.duration}s linear infinite alternate`,
-      } as CSSProperties)
-    : undefined;
-
   return (
     <span
       ref={containerRef}
@@ -124,8 +78,8 @@ export function ElidedPath({
       data-testid={dataTestId}
       data-full-path={path}
       aria-label={path}
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       {/* In-flow copy: sizes the element and provides height. Hidden (size kept)
           while the marquee overlay scrolls, so the container never grows. */}
