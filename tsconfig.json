@@ -10,6 +10,8 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "types": ["vite/client"],
+    "incremental": true,
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.tsbuildinfo",
 
     "strict": true,
     "strictNullChecks": true,

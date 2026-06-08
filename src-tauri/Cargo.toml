@@ -12,7 +12,9 @@ telemetry = []
 
 [lib]
 name = "stalagmight_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+# staticlib dropped — only needed for iOS, which isn't configured (no
+# src-tauri/gen/apple). cdylib stays for Android (src-tauri/gen/android).
+crate-type = ["lib", "cdylib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -57,8 +59,12 @@ igrf = "0.2"
 proj4rs = "0.1"
 time = "0.3"
 
+[profile.dev]
+# Backtraces still show file:line; skipping full debug info halves the link step.
+debug = "line-tables-only"
+
 [profile.release]
-lto = true
+lto = "thin"
 opt-level = "s"
 strip = true
 
