@@ -4365,6 +4365,69 @@ fn compute_adjusted_is_deterministic_and_keeps_measured_stable() {
     }
 }
 
+/// Profiling harness for the closure-adjusted solve (#81). Ignored by default.
+/// Run with:
+///   cargo test --manifest-path src-tauri/Cargo.toml --release \
+///     profile_closure_solve_large -- --ignored --nocapture
+///
+/// Builds a single-closure survey of ~6k stations shaped as one big loop made of
+/// two long degree-2 chains joined at both ends. That is the worst case for the
+/// per-station coordinate walk in `adjust_least_squares` (each chain interior is
+/// degree 2, so the old per-station `compute_station_raw_coords` calls were
+/// O(index) → O(n^2) overall). Prints the wall-clock cost of one cold
+/// `compute_adjusted_station_coordinates`.
+#[test]
+#[ignore]
+fn profile_closure_solve_large() {
+    const N: usize = 3000; // shots per chain → ~2N+2 stations
+
+    let mut project = Project::new("ProfileLoop".to_string(), None);
+
+    // Path A: N eastward shots of length 5.0.
+    let a = project
+        .add_section(SectionData {
+            shots: (0..N).map(|_| shot(90.0, 90.0, 5.0, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+    // Path B: N eastward shots, slightly longer so the far ends disagree
+    // (a real misclosure for the solve to distribute).
+    let b = project
+        .add_section(SectionData {
+            shots: (0..N).map(|_| shot(90.0, 90.0, 5.001, 0.0, 0.0)).collect(),
+            ..Default::default()
+        })
+        .id;
+
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    // Join the two chains at the origin and close the far ends → one big loop.
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(a, N as u32),
+            StationRef::new(b, N as u32),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+
+    let n_stations = project.compute_station_coordinates().len();
+
+    let t = std::time::Instant::now();
+    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+    let elapsed = t.elapsed();
+
+    eprintln!(
+        "profile_closure_solve_large: {} stations, 1 closure → compute_adjusted = {} ms ({} adjusted)",
+        n_stations,
+        elapsed.as_millis(),
+        adjusted.len(),
+    );
+}
+
 #[test]
 fn compute_adjusted_equals_measured_without_closures() {
     let mut project = Project::new("NoClosures".to_string(), None);
