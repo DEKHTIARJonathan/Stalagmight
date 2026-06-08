@@ -251,7 +251,10 @@
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
 .sg-context-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
   width: 100%;
   padding: 5px 14px;
   text-align: left;
@@ -264,6 +267,18 @@
 .sg-context-menu button:hover {
   background: var(--sg-blue);
   color: #fff;
+}
+.sg-context-menu .sg-shortcut {
+  font-size: 11px;
+  opacity: 0.55;
+}
+.sg-context-menu button:hover .sg-shortcut {
+  opacity: 0.85;
+}
+.sg-context-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: rgba(0, 0, 0, 0.12);
 }
 
 /* Column show/hide dropdown (light). */
@@ -279,4 +294,24 @@
 /* Toolbar buttons (Columns / Maximize). */
 .sg-grid .sg-toolbar button:hover {
   background-color: #f1f3f4;
+}
+
+/* Name box: active-cell reference / selection size (top-left, like GS). */
+.sg-grid .sg-namebox {
+  min-width: 96px;
+  padding-left: 4px;
+  font-size: 12px;
+  color: var(--sg-header-text);
+  white-space: nowrap;
+}
+
+/* Stronger tint on the ACTIVE cell's header / row-number than the rest of a
+   range selection (Google-Sheets cross-highlight emphasis). */
+.sg-grid .sg-header-active {
+  background-color: #c2dbfc;
+}
+.sg-grid .sg-gutter-active {
+  box-shadow: inset 0 0 0 999px #c2dbfc, inset -2px 0 0 0 var(--sg-blue);
+  color: var(--sg-blue);
+  font-weight: 600;
 }

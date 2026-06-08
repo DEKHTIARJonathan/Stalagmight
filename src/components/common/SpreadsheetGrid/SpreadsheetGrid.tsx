@@ -68,6 +68,16 @@ export interface SpreadsheetGridProps<Row> {
    *  insertion boundary in the ORIGINAL indexing). Omit to disable row moving
    *  (the gutter then only selects). The host owns row order, so it must apply. */
   onMoveRows?: (fromStart: number, fromEnd: number, toIndex: number) => void;
+  /** Insert `count` blank rows before `beforeIndex` (host owns the row set).
+   *  Enables "Insert N rows above/below" in the context menu. */
+  onInsertRows?: (beforeIndex: number, count: number) => void;
+  /** Delete the contiguous data rows [fromRow..toRow] (host owns the row set).
+   *  Enables "Delete N rows" in the context menu. */
+  onDeleteRows?: (fromRow: number, toRow: number) => void;
+  /** Called after a paste that couldn't be applied in full: `written` cells were
+   *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
+   *  on read-only/unparseable cells. Let the host surface a notice. */
+  onPasteReport?: (info: { written: number; clipped: number; skipped: number }) => void;
 
   maximized?: boolean;
   onToggleMaximize?: () => void;
@@ -100,6 +110,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onColumnOrderChange,
     onHiddenColumnsChange,
     onMoveRows,
+    onInsertRows,
+    onDeleteRows,
+    onPasteReport,
     maximized = false,
     onToggleMaximize,
     className = '',
@@ -450,7 +463,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     if (!text) return;
     const clip = parseTSV(text);
-    const { targets } = placePaste(clip, rect, rowCount, colCount);
+    const { targets, clipped } = placePaste(clip, rect, rowCount, colCount);
     const edits: CellEdit[] = [];
     for (const t of targets) {
       const col = colAt(t.colIdx);
@@ -460,7 +473,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     applyEdits(edits);
     setCopiedRect(null);
-  }, [rect, rowCount, colCount, colAt, cellEditable, parseForColumn, applyEdits]);
+    // Surface what the paste couldn't fully apply (out-of-bounds vs read-only/
+    // unparseable), so the host can show a notice rather than silently dropping.
+    if (clipped > 0 || edits.length < targets.length) {
+      onPasteReport?.({ written: edits.length, clipped, skipped: targets.length - edits.length });
+    }
+  }, [rect, rowCount, colCount, colAt, cellEditable, parseForColumn, applyEdits, onPasteReport]);
 
   // Copy-fill the selection block across `preview`'s extension (tiled).
   const commitFill = useCallback(
@@ -1258,6 +1276,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // --- Render ---------------------------------------------------------------
   const virtualRows = virtualizer.getVirtualItems();
   const totalHeight = virtualizer.getTotalSize();
+  // Name box: active-cell reference, or selection size while a range is selected.
+  const nameBox = multiCell
+    ? `${rect.r1 - rect.r0 + 1}R × ${rect.c1 - rect.c0 + 1}C`
+    : `${columns.find((c) => c.key === selection.active.colKey)?.header ?? selection.active.colKey} ${selection.active.row + 1}`;
 
   const overlayStyle: CSSProperties = {
     position: 'absolute',
@@ -1287,8 +1309,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''} ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
       data-testid="spreadsheet-grid"
     >
-      {(onHiddenColumnsChange || onToggleMaximize) && (
-        <div className="sg-toolbar flex items-center justify-end gap-1 px-1 py-0.5">
+      <div className="sg-toolbar flex items-center justify-between gap-2 px-2 py-0.5">
+        <span className="sg-namebox" data-testid="grid-namebox">{nameBox}</span>
+        <div className="flex items-center gap-1">
           {onHiddenColumnsChange && (
             <div className="relative">
               <button
@@ -1330,7 +1353,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             </button>
           )}
         </div>
-      )}
+      </div>
 
       <div
         ref={scrollRef}
@@ -1368,7 +1391,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 aria-colindex={i + 1}
                 className={`sg-header relative flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
                   i >= rect.c0 && i <= rect.c1 ? 'sg-header-selected text-text-primary' : ''
-                }`}
+                } ${i === activeColIdx ? 'sg-header-active' : ''}`}
                 style={{
                   width: widths[i],
                   minWidth: widths[i],
@@ -1414,7 +1437,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     role="rowheader"
                     className={`sg-gutter sticky left-0 z-20 flex items-center justify-center border-b border-r border-white/10 bg-panel text-text-secondary ${
                       rowIdx >= rect.r0 && rowIdx <= rect.r1 ? 'sg-gutter-selected' : ''
-                    }`}
+                    } ${rowIdx === selection.active.row ? 'sg-gutter-active' : ''}`}
                     style={{
                       width: GUTTER_WIDTH,
                       minWidth: GUTTER_WIDTH,
@@ -1638,11 +1661,28 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>Copy</button>
-          <button type="button" onClick={() => { void doCopy(); doClear(); setCtxMenu(null); }}>Cut</button>
-          <button type="button" onClick={() => { void doPaste(); setCtxMenu(null); }}>Paste</button>
-          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>Clear</button>
-          <button type="button" onClick={() => { doFill(true); setCtxMenu(null); }}>Fill down</button>
+          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>Copy<span className="sg-shortcut">Ctrl+C</span></button>
+          <button type="button" onClick={() => { void doCopy(); doClear(); setCtxMenu(null); }}>Cut<span className="sg-shortcut">Ctrl+X</span></button>
+          <button type="button" onClick={() => { void doPaste(); setCtxMenu(null); }}>Paste<span className="sg-shortcut">Ctrl+V</span></button>
+          {(onInsertRows || onDeleteRows) && <div className="sg-context-sep" />}
+          {onInsertRows && (
+            <button type="button" onClick={() => { onInsertRows(rect.r0, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
+              {`Insert ${rect.r1 - rect.r0 + 1} row${rect.r1 > rect.r0 ? 's' : ''} above`}
+            </button>
+          )}
+          {onInsertRows && (
+            <button type="button" onClick={() => { onInsertRows(rect.r1 + 1, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
+              {`Insert ${rect.r1 - rect.r0 + 1} row${rect.r1 > rect.r0 ? 's' : ''} below`}
+            </button>
+          )}
+          {onDeleteRows && (
+            <button type="button" onClick={() => { onDeleteRows(rect.r0, rect.r1); setCtxMenu(null); }}>
+              {`Delete ${rect.r1 - rect.r0 + 1} row${rect.r1 > rect.r0 ? 's' : ''}`}
+            </button>
+          )}
+          <div className="sg-context-sep" />
+          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>Clear<span className="sg-shortcut">Del</span></button>
+          <button type="button" onClick={() => { doFill(true); setCtxMenu(null); }}>Fill down<span className="sg-shortcut">Ctrl+D</span></button>
         </div>
       )}
     </div>
