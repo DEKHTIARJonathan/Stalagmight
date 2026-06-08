@@ -14,6 +14,12 @@ pnpm gen:ipc-types
 
 This runs `src-tauri/src/bin/gen_ipc_types.rs` and produces:
 
+> The bin is gated behind the `ipc-typegen` cargo feature
+> (`required-features` in `src-tauri/Cargo.toml`) so plain `cargo build` /
+> `cargo build --release` skip it — it's dev-only tooling and was paying its
+> own full LTO pass in release builds. `pnpm gen:ipc-types` enables the
+> feature automatically; it is the only supported way to run the generator.
+
 - `src/types/ipc.generated.ts` (re-exports for all generated IPC types)
 - `src/types/ipc/*.ts` (one file per exported Rust type)
 
