@@ -116,6 +116,25 @@ export function SpreadsheetGridDemo() {
       return next;
     });
 
+  const insertRows = (beforeIndex: number, count: number) =>
+    setRows((rs) => {
+      const maxId = rs.reduce((m, r) => Math.max(m, r.id), 0);
+      const blanks: DemoShot[] = Array.from({ length: count }, (_, k) => ({
+        id: maxId + 1 + k,
+        station: '',
+        azimuth: 0,
+        length: 0,
+        depthIn: 0,
+        depthOut: 0,
+        comment: null,
+        frozen: false,
+      }));
+      return [...rs.slice(0, beforeIndex), ...blanks, ...rs.slice(beforeIndex)];
+    });
+
+  const deleteRows = (fromRow: number, toRow: number) =>
+    setRows((rs) => [...rs.slice(0, fromRow), ...rs.slice(toRow + 1)]);
+
   const moveRows = (fromStart: number, fromEnd: number, toIndex: number) =>
     setRows((rs) => {
       const block = rs.slice(fromStart, fromEnd + 1);
@@ -153,6 +172,8 @@ export function SpreadsheetGridDemo() {
           onEdit={applyOne}
           onBatchEdit={applyBatch}
           onMoveRows={moveRows}
+          onInsertRows={insertRows}
+          onDeleteRows={deleteRows}
         />
       </div>
     </div>
