@@ -3333,8 +3333,16 @@ impl Project {
         let mut p = z.clone();
         let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
 
-        let rhs_norm_sq: f64 = rhs.iter().map(|&v| v * v).sum();
-        if rhs_norm_sq < tol * tol {
+        // Converge relative to the *initial residual* ‖b − A·x0‖, not ‖b‖. With a
+        // warm start that is the correct reference: return x0 only when it already
+        // satisfies the system (residual ~0 — which includes pure null-space
+        // directions), and otherwise let CG converge the range component while
+        // leaving null-space directions at x0. Keying the early exit off ‖b‖ alone
+        // would wrongly return a non-optimal x0 when Schur elimination cancels the
+        // core RHS for a balanced loop even though the matrix rows are non-zero
+        // (Codex #86).
+        let r0_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
+        if r0_norm_sq < tol * tol {
             return x;
         }
 
@@ -3350,7 +3358,7 @@ impl Project {
                 r[i] -= alpha * ap[i];
             }
             let r_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
-            if r_norm_sq < tol * tol * rhs_norm_sq {
+            if r_norm_sq < tol * tol * r0_norm_sq {
                 break;
             }
             for i in 0..n {

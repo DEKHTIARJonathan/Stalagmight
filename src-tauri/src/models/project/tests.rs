@@ -4526,6 +4526,35 @@ fn solve_reduced_laplacian_preserves_unconstrained_axis_warm_start() {
     assert!((sol_x[0] - 5.0).abs() < 1e-9, "node 0 X should be 5, got {}", sol_x[0]);
 }
 
+/// Regression for the early-exit fix (Codex #86 follow-up): when the reduced core
+/// has a zero RHS but non-zero, full-rank matrix rows, the unique minimizer is 0 —
+/// the warm start must NOT be returned just because `‖b‖ = 0`. Uses a K4 core (all
+/// degree 3, so it survives degree-≤2 reduction and exercises the core PCG).
+#[test]
+fn solve_reduced_laplacian_zero_rhs_constrained_core_solves_not_warm_start() {
+    let n = 4;
+    // K4 + grounding: diagonal 4, every off-diagonal -1 → SPD, full rank.
+    let diag = vec![4.0; 4];
+    let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                adj[i].push((j, -1.0, -1.0));
+            }
+        }
+    }
+    let atb = vec![0.0; 4]; // zero RHS → unique solution is 0
+    let x0_x = vec![10.0, -5.0, 3.0, 7.0];
+    let x0_y = vec![-2.0, 8.0, -6.0, 1.0];
+
+    let (sol_x, sol_y) =
+        Project::solve_reduced_laplacian(n, &diag, &diag, &atb, &atb, &adj, &x0_x, &x0_y);
+
+    for (i, v) in sol_x.iter().chain(sol_y.iter()).enumerate() {
+        assert!(v.abs() < 1e-6, "zero-RHS constrained core must solve to 0, got {v} at {i}");
+    }
+}
+
 /// Analytic golden: a loop with a hand-computable least-squares optimum.
 ///
 /// Two due-east paths run from a shared, datum-anchored origin to a closure:
