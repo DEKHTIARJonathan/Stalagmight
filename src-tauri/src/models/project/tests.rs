@@ -4555,6 +4555,46 @@ fn solve_reduced_laplacian_zero_rhs_constrained_core_solves_not_warm_start() {
     }
 }
 
+/// Codex #86 (3rd, null-space-through-peeled-nodes): a component that *floats* on
+/// an axis (positive internal coupling but no grounding → 1-D translation null
+/// space) must keep its measured positions, not jump, when its nodes are peeled by
+/// degree-≤2 reduction before the core PCG sees them.
+///
+/// Mechanism: the surviving core node keeps its own measured value (warm start),
+/// and back-substitution reproduces the measured *relative* offsets — so the whole
+/// component lands exactly on its measured coordinates, matching the old
+/// full-system CG. (In real surveys this case can't even arise: every
+/// positive-length shot has positive weight on both axes, so floating components
+/// require zero-length shots.)
+#[test]
+fn solve_reduced_laplacian_preserves_floating_component_nullspace() {
+    let n = 3;
+    // X: pure path Laplacian 0-1-2 (singular → floats). Y: grounded (nonsingular).
+    let diag_x = vec![1.0, 2.0, 1.0];
+    let diag_y = vec![2.0, 3.0, 2.0];
+    let adj = vec![
+        vec![(1usize, -1.0, -1.0)],
+        vec![(0usize, -1.0, -1.0), (2usize, -1.0, -1.0)],
+        vec![(1usize, -1.0, -1.0)],
+    ];
+    // X rhs consistent with measured x=(0,3,5): A_x·(0,3,5) = (-3,1,2).
+    let atb_x = vec![-3.0, 1.0, 2.0];
+    let atb_y = vec![0.0, 0.0, 0.0];
+    let x0_x = vec![0.0, 3.0, 5.0];
+    let x0_y = vec![0.0, 0.0, 0.0];
+
+    let (sx, _sy) =
+        Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
+
+    for (i, want) in [0.0_f64, 3.0, 5.0].iter().enumerate() {
+        assert!(
+            (sx[i] - want).abs() < 1e-6,
+            "floating component node {i} jumped: got {}, want {want}",
+            sx[i]
+        );
+    }
+}
+
 /// Analytic golden: a loop with a hand-computable least-squares optimum.
 ///
 /// Two due-east paths run from a shared, datum-anchored origin to a closure:
