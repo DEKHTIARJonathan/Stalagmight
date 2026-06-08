@@ -7,7 +7,6 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type ReactNode,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import './SpreadsheetGrid.css';
@@ -25,6 +24,7 @@ import {
   clamp,
   columnOffsets,
   cycleActiveInRect,
+  extendSeries,
   fillTargets,
   isInRect,
   placePaste,
@@ -193,6 +193,45 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   // --- Helpers --------------------------------------------------------------
   const colAt = useCallback((idx: number) => visibleColumns[idx], [visibleColumns]);
+
+  // Google-Sheets-style selection summary (Count + Sum/Avg/Min/Max of numerics),
+  // computed across all ranges (deduped). Shown when >1 cell is selected.
+  const selectionStats = useMemo(() => {
+    const cellsSelected = [rect, ...extraRanges].reduce(
+      (s, rg) => s + (rg.r1 - rg.r0 + 1) * (rg.c1 - rg.c0 + 1),
+      0,
+    );
+    if (cellsSelected <= 1) return null;
+    const seen = new Set<string>();
+    const nums: number[] = [];
+    let count = 0;
+    for (const rg of [rect, ...extraRanges]) {
+      for (let r = rg.r0; r <= rg.r1; r++) {
+        const data = rows[r];
+        if (data === undefined) continue;
+        for (let c = rg.c0; c <= rg.c1; c++) {
+          const col = visibleColumns[c];
+          if (!col) continue;
+          const id = `${r}:${col.key}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const v = col.getValue(data);
+          if (v !== null && v !== undefined && v !== '') count += 1;
+          const n = typeof v === 'number' ? v : parseLocaleNumber(String(v ?? ''), locale);
+          if (n !== undefined && Number.isFinite(n)) nums.push(n);
+        }
+      }
+    }
+    let sum = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const n of nums) {
+      sum += n;
+      if (n < min) min = n;
+      if (n > max) max = n;
+    }
+    return { count, numeric: nums.length, sum, avg: nums.length ? sum / nums.length : 0, min, max };
+  }, [rect, extraRanges, rows, visibleColumns, locale]);
 
   const cellEditable = useCallback(
     (rowIdx: number, col: GridColumn<Row> | undefined): boolean => {
@@ -426,20 +465,45 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // Copy-fill the selection block across `preview`'s extension (tiled).
   const commitFill = useCallback(
     (preview: Rect) => {
-      const srcH = rect.r1 - rect.r0 + 1;
-      const srcW = rect.c1 - rect.c0 + 1;
+      const parseNum = (s: string) => parseLocaleNumber(s, locale);
       const edits: CellEdit[] = [];
-      for (let r = preview.r0; r <= preview.r1; r++) {
-        for (let c = preview.c0; c <= preview.c1; c++) {
-          if (isInRect(rect, r, c)) continue; // keep the source intact
+      const vertical = preview.r1 > rect.r1 || preview.r0 < rect.r0;
+      if (vertical) {
+        const below = preview.r1 > rect.r1;
+        // Extension rows in fill order (away from the source).
+        const extRows: number[] = below
+          ? Array.from({ length: preview.r1 - rect.r1 }, (_, i) => rect.r1 + 1 + i)
+          : Array.from({ length: rect.r0 - preview.r0 }, (_, i) => rect.r0 - 1 - i);
+        for (let c = rect.c0; c <= rect.c1; c++) {
           const col = colAt(c);
-          if (!col || !cellEditable(r, col)) continue;
-          const srcR = rect.r0 + ((((r - rect.r0) % srcH) + srcH) % srcH);
-          const srcC = rect.c0 + ((((c - rect.c0) % srcW) + srcW) % srcW);
-          const srcCol = colAt(srcC);
-          if (!srcCol) continue;
-          const value = parseForColumn(col, displayAt(srcR, srcCol), r);
-          if (value !== undefined) edits.push({ row: r, colKey: col.key, value });
+          if (!col) continue;
+          const seed: string[] = [];
+          for (let r = rect.r0; r <= rect.r1; r++) seed.push(displayAt(r, col));
+          const vals = extendSeries(below ? seed : [...seed].reverse(), extRows.length, parseNum);
+          extRows.forEach((r, i) => {
+            if (!cellEditable(r, col)) return;
+            const value = parseForColumn(col, vals[i] ?? '', r);
+            if (value !== undefined) edits.push({ row: r, colKey: col.key, value });
+          });
+        }
+      } else {
+        const right = preview.c1 > rect.c1;
+        const extCols: number[] = right
+          ? Array.from({ length: preview.c1 - rect.c1 }, (_, i) => rect.c1 + 1 + i)
+          : Array.from({ length: rect.c0 - preview.c0 }, (_, i) => rect.c0 - 1 - i);
+        for (let r = rect.r0; r <= rect.r1; r++) {
+          const seed: string[] = [];
+          for (let c = rect.c0; c <= rect.c1; c++) {
+            const sc = colAt(c);
+            seed.push(sc ? displayAt(r, sc) : '');
+          }
+          const vals = extendSeries(right ? seed : [...seed].reverse(), extCols.length, parseNum);
+          extCols.forEach((c, i) => {
+            const col = colAt(c);
+            if (!col || !cellEditable(r, col)) return;
+            const value = parseForColumn(col, vals[i] ?? '', r);
+            if (value !== undefined) edits.push({ row: r, colKey: col.key, value });
+          });
         }
       }
       applyEdits(edits);
@@ -453,7 +517,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         });
       }
     },
-    [rect, colAt, cellEditable, parseForColumn, displayAt, applyEdits, colKeys],
+    [rect, colAt, cellEditable, parseForColumn, displayAt, applyEdits, colKeys, locale],
   );
 
   const doFill = useCallback(
@@ -557,13 +621,27 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (ctrl && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); doFill(false); return; }
       if (ctrl && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault();
-        const firstKey = colKeys[0];
-        const lastKey = colKeys[colCount - 1];
-        if (firstKey !== undefined && lastKey !== undefined) {
+        // Two-stage (Google Sheets): first Ctrl+A selects the contiguous data
+        // region around the active cell, the second expands to the whole grid.
+        const ai = colIndexOf(selection.active.colKey);
+        const region = {
+          r0: dataEdgeTarget(selection.active.row, ai, -1, 0).row,
+          r1: dataEdgeTarget(selection.active.row, ai, 1, 0).row,
+          c0: dataEdgeTarget(selection.active.row, ai, 0, -1).colIdx,
+          c1: dataEdgeTarget(selection.active.row, ai, 0, 1).colIdx,
+        };
+        const all = { r0: 0, r1: rowCount - 1, c0: 0, c1: colCount - 1 };
+        const isAll = rect.r0 === 0 && rect.r1 === rowCount - 1 && rect.c0 === 0 && rect.c1 === colCount - 1;
+        const isRegion = rect.r0 === region.r0 && rect.r1 === region.r1 && rect.c0 === region.c0 && rect.c1 === region.c1;
+        const target = isAll || isRegion ? all : region;
+        const ak = colKeys[target.c0];
+        const fk = colKeys[target.c1];
+        if (ak !== undefined && fk !== undefined) {
+          setExtraRanges([]);
           setSelection((prev) => ({
-            anchor: { row: 0, colKey: firstKey },
-            focus: { row: rowCount - 1, colKey: lastKey },
-            active: prev.active, // keep the active cell (it's within all)
+            anchor: { row: target.r0, colKey: ak },
+            focus: { row: target.r1, colKey: fk },
+            active: prev.active,
           }));
         }
         return;
@@ -1356,6 +1434,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                       isInRect(rect, rowIdx, c) || extraRanges.some((er) => isInRect(er, rowIdx, c));
                     const isActive = rowIdx === selection.active.row && c === activeColIdx;
                     const isEditingCell = editing?.row === rowIdx && editing.colKey === col.key;
+                    const cellText = col.render
+                      ? null
+                      : col.format
+                        ? col.format(col.getValue(row), row)
+                        : String(col.getValue(row) ?? '');
                     return (
                       <div
                         key={col.key}
@@ -1383,8 +1466,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         onDoubleClick={(e) => { e.stopPropagation(); beginEdit(rowIdx, c, null); }}
                       >
                         {/* Content always renders; the editor (below) overlays the
-                            active cell when editing so it fills the whole cell. */}
-                        {!isEditingCell && renderCell(col, row, rowIdx)}
+                            active cell when editing so it fills the whole cell.
+                            Plain text truncates with an ellipsis + tooltip. */}
+                        {!isEditingCell &&
+                          (col.render ? (
+                            col.render(row, rowIdx)
+                          ) : (
+                            <span className="sg-cell-text" title={cellText || undefined}>
+                              {cellText}
+                            </span>
+                          ))}
                       </div>
                     );
                   })}
@@ -1514,6 +1605,21 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         </div>
       </div>
 
+      {/* Selection summary (Google-Sheets-style), shown when >1 cell is selected. */}
+      {selectionStats && (
+        <div className="sg-statusbar" data-testid="grid-statusbar">
+          {selectionStats.numeric > 0 && (
+            <>
+              <span>Sum: {fmtStat(selectionStats.sum, locale)}</span>
+              <span>Avg: {fmtStat(selectionStats.avg, locale)}</span>
+              <span>Min: {fmtStat(selectionStats.min, locale)}</span>
+              <span>Max: {fmtStat(selectionStats.max, locale)}</span>
+            </>
+          )}
+          <span>Count: {selectionStats.count}</span>
+        </div>
+      )}
+
       {/* Floating "ghost" of the column(s) being moved. */}
       {colGhost && (
         <div
@@ -1547,8 +1653,6 @@ function isColWritable<Row>(c: GridColumn<Row>): boolean {
   return !!(c.editable || c.isEditable);
 }
 
-function renderCell<Row>(col: GridColumn<Row>, row: Row, rowIdx: number): ReactNode {
-  if (col.render) return col.render(row, rowIdx);
-  const value = col.getValue(row);
-  return col.format ? col.format(value, row) : String(value ?? '');
+function fmtStat(n: number, locale: string): string {
+  return n.toLocaleString(locale, { maximumFractionDigits: 3 });
 }

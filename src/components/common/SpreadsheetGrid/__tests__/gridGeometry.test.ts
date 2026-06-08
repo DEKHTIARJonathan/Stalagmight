@@ -10,8 +10,15 @@ import {
   placePaste,
   fillTargets,
   cycleActiveInRect,
+  extendSeries,
   type Rect,
 } from '../gridGeometry';
+
+const num = (s: string): number | undefined => {
+  if (s.trim() === '') return undefined;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : undefined;
+};
 
 const cols = ['id', 'a', 'b', 'c'];
 const colIndexOf = (k: string) => cols.indexOf(k);
@@ -163,5 +170,28 @@ describe('cycleActiveInRect (Tab/Enter within a selection)', () => {
     expect(cycleActiveInRect(rect, 1, 1, false, false)).toEqual({ row: 2, colIdx: 1 });
     expect(cycleActiveInRect(rect, 2, 1, false, false)).toEqual({ row: 1, colIdx: 2 });
     expect(cycleActiveInRect(rect, 2, 2, false, false)).toEqual({ row: 1, colIdx: 1 });
+  });
+});
+
+describe('extendSeries (fill series)', () => {
+  it('single seed copies (numeric and text)', () => {
+    expect(extendSeries(['5'], 3, num)).toEqual(['5', '5', '5']);
+    expect(extendSeries(['A1'], 2, num)).toEqual(['A1', 'A1']);
+    expect(extendSeries(['hi'], 2, num)).toEqual(['hi', 'hi']);
+  });
+  it('extrapolates a numeric linear series', () => {
+    expect(extendSeries(['1', '2'], 3, num)).toEqual(['3', '4', '5']);
+    expect(extendSeries(['10', '20'], 2, num)).toEqual(['30', '40']);
+    expect(extendSeries(['5', '4'], 2, num)).toEqual(['3', '2']); // descending
+  });
+  it('handles fractional deltas without float noise', () => {
+    expect(extendSeries(['0.1', '0.2'], 2, num)).toEqual(['0.3', '0.4']);
+  });
+  it('increments trailing-integer text with a shared prefix', () => {
+    expect(extendSeries(['A1', 'A2'], 2, num)).toEqual(['A3', 'A4']);
+    expect(extendSeries(['S08', 'S09'], 2, num)).toEqual(['S10', 'S11']); // zero-padded width kept
+  });
+  it('tiles when no numeric/text pattern is detected', () => {
+    expect(extendSeries(['x', 'y'], 3, num)).toEqual(['x', 'y', 'x']);
   });
 });

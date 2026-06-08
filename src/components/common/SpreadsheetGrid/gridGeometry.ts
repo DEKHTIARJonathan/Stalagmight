@@ -121,6 +121,66 @@ export function cycleActiveInRect(
     : { row: rect.r0 + (pos % h), colIdx: rect.c0 + Math.floor(pos / h) };
 }
 
+/**
+ * Continue a fill series from `seed` values, producing `count` new string values.
+ * Google-Sheets semantics: a single seed COPIES; two or more seeds establish a
+ * pattern that is extrapolated:
+ *  - all-numeric → linear (constant delta of the last two), e.g. 1,2 → 3,4,5
+ *  - trailing-integer text with a shared prefix → increment, e.g. A1,A2 → A3,A4
+ *  - otherwise → tile/repeat the seed.
+ * `parseNum` is the (locale-aware) numeric parser. Caller feeds the result back
+ * through the column's own coercion.
+ */
+export function extendSeries(
+  seed: string[],
+  count: number,
+  parseNum: (s: string) => number | undefined,
+): string[] {
+  if (count <= 0) return [];
+  if (seed.length === 0) return new Array(count).fill('');
+  const round = (n: number) => Math.round(n * 1e6) / 1e6;
+  const out: string[] = [];
+
+  // 1) Numeric linear (single seed → delta 0 → copy).
+  const nums = seed.map(parseNum);
+  if (nums.every((x) => x !== undefined)) {
+    const a = nums as number[];
+    const delta = a.length >= 2 ? a[a.length - 1]! - a[a.length - 2]! : 0;
+    let last = a[a.length - 1]!;
+    for (let i = 0; i < count; i++) {
+      last = round(last + delta);
+      out.push(String(last));
+    }
+    return out;
+  }
+
+  // 2) Trailing-integer text with a shared prefix (needs ≥2 seeds).
+  const re = /^(.*?)(-?\d+)$/;
+  const parts = seed.map((s) => {
+    const m = re.exec(s);
+    return m ? { prefix: m[1] ?? '', n: parseInt(m[2]!, 10), width: m[2]!.replace('-', '').length } : null;
+  });
+  if (parts.length >= 2 && parts.every((p) => p !== null)) {
+    const ps = parts as { prefix: string; n: number; width: number }[];
+    if (ps.every((p) => p.prefix === ps[0]!.prefix)) {
+      const delta = ps[ps.length - 1]!.n - ps[ps.length - 2]!.n;
+      const prefix = ps[0]!.prefix;
+      const width = ps[ps.length - 1]!.width;
+      let last = ps[ps.length - 1]!.n;
+      for (let i = 0; i < count; i++) {
+        last += delta;
+        const sign = last < 0 ? '-' : '';
+        out.push(prefix + sign + String(Math.abs(last)).padStart(width, '0'));
+      }
+      return out;
+    }
+  }
+
+  // 3) Copy / tile.
+  for (let i = 0; i < count; i++) out.push(seed[i % seed.length]!);
+  return out;
+}
+
 export interface PasteTarget {
   row: number;
   colIdx: number;
