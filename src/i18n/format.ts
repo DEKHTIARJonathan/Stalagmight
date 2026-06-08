@@ -47,6 +47,14 @@ function getNumberLocale(explicitLocale?: string): string {
   return getCurrentLocale();
 }
 
+/** The effective BCP-47 locale used for number formatting — always a valid Intl
+ *  tag (never the sentinel 'locale'/'system'). Pass this to consumers (e.g. the
+ *  data-table grid) that must PARSE numbers with the same separators they're
+ *  displayed in. */
+export function getNumberFormatLocale(): string {
+  return getNumberLocale();
+}
+
 /** Resolve the effective locale for date formatting. */
 function getDateLocale(explicitLocale?: string): string {
   if (explicitLocale) return getCurrentLocale(explicitLocale);
