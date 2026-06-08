@@ -12,7 +12,7 @@ It is year 2026.
 | Dev server | `./scripts/dev.sh` |
 | Type check | `pnpm tsc --noEmit` |
 | Playwright tests | `pnpm test:ui` |
-| Rust tests | `cargo test --manifest-path src-tauri/Cargo.toml` |
+| Rust tests | `TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry` |
 | Production build | `pnpm tauri build` |
 
 ## Critical Rules
@@ -39,8 +39,19 @@ All must pass before pushing:
 ```bash
 pnpm tsc --noEmit
 pnpm test:ui
-cargo test --manifest-path src-tauri/Cargo.toml
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 ```
+
+CI runs the Rust tests with `--features telemetry`, which gates the
+registry-coverage tests (`registry_covers_all_*`). A plain `cargo test` filters
+those out, so it can pass locally while CI fails; `build.rs` also requires
+`TELEMETRY_ENDPOINT` to be set under that feature.
+
+### Don't Run `cargo fmt`
+
+Much of the Rust is hand-formatted (notably `src-tauri/src/models/project.rs`)
+and is **not** rustfmt-clean. `cargo fmt` is not a CI gate; running it reformats
+large unrelated swaths. Match the surrounding style instead.
 
 ### Playwright Tests Require a Headless Environment
 
