@@ -8233,7 +8233,11 @@ fn solve_weighted_mean_star(legs: &[(f64, f64, f64)]) -> Coordinates {
 /// `P = Σ w·Δ / Σ w`.
 fn weighted_mean_star_expected(legs: &[(f64, f64, f64)], config: &ClosureAdjustmentConfig) -> (f64, f64) {
     let (mut num_x, mut den_x, mut num_y, mut den_y) = (0.0, 0.0, 0.0, 0.0);
-    for &(az_deg, len, quality) in legs {
+    for &(az_deg, len, raw_quality) in legs {
+        // Clamp quality exactly as production's adjust_least_squares does, so the
+        // weight model also matches for quality <= 0 / non-finite (otherwise
+        // s_len = 0 → σ = 0 → w = ∞ → NaN and the assertion false-fails).
+        let quality = if raw_quality.is_finite() && raw_quality > 0.0 { raw_quality } else { 1.0 };
         let az = az_deg.to_radians();
         let s_len = config.base_sigma_length_m * quality;
         let s_az = config.base_sigma_azimuth_deg.to_radians() * quality;
@@ -8241,7 +8245,10 @@ fn weighted_mean_star_expected(legs: &[(f64, f64, f64)], config: &ClosureAdjustm
         let sigma_dy = ((az.cos() * s_len).powi(2) + (len * az.sin() * s_az).powi(2)).sqrt();
         let w_x = 1.0 / (sigma_dx * sigma_dx);
         let w_y = 1.0 / (sigma_dy * sigma_dy);
-        // Flat shot: horizontal length == slope length, so Δ = len·(sin, cos).
+        // Star legs are flat (depth_in == depth_out), so horizontal_length() ==
+        // shot.length and Δ = len·(sin, cos). Production uses horizontal_length for Δ
+        // but SLOPE length for the σ azimuth term; they coincide only under this
+        // flat-leg assumption — split them if a sloped leg is ever added here.
         let dx = len * az.sin();
         let dy = len * az.cos();
         num_x += w_x * dx;
@@ -8404,9 +8411,20 @@ fn rigorous_polar_reference(
         }
         pos.insert(*root, if k > 0.0 { (sx / k, sy / k) } else { (0.0, 0.0) });
     }
-    // Fixed group = the datum's group, pinned at its measured position.
+    // Fixed group = the datum's group, pinned at its measured position. This oracle
+    // anchors exactly ONE datum, so it only handles single-datum, single-component
+    // networks; a multi-datum / datum-less / multi-component input would leave a
+    // gauge-free translation null space. Reject those up front instead of silently
+    // returning un-adjusted coordinates as the "rigorous" reference.
+    assert_eq!(
+        project.zero_datums.len(),
+        1,
+        "rigorous_polar_reference supports single-datum networks only (got {})",
+        project.zero_datums.len()
+    );
     let datum = project.zero_datums.first().and_then(|z| project.resolve_key(&z.station_ref));
     let fixed_root = datum.map(|d| find(&mut parent, d));
+    assert!(fixed_root.is_some(), "rigorous_polar_reference: datum did not resolve to a group");
     if let (Some(fr), Some(d)) = (fixed_root, datum) {
         if let Some(c) = project.compute_station_raw_coords(d) {
             pos.insert(fr, (c.x, c.y));
@@ -8462,6 +8480,7 @@ fn rigorous_polar_reference(
         x
     };
 
+    let mut converged = nvar == 0;
     if nvar > 0 {
         for _iter in 0..200 {
             let mut nmat = vec![vec![0.0; nvar]; nvar];
@@ -8496,7 +8515,9 @@ fn rigorous_polar_reference(
                 accumulate(&dist_row, o.w_dist, r_dist, &mut nmat, &mut gvec);
                 accumulate(&az_row, o.w_az, r_az, &mut nmat, &mut gvec);
             }
-            let Some(delta) = dense_solve_gauss(nmat, gvec) else { break };
+            let Some(delta) = dense_solve_gauss(nmat, gvec) else {
+                panic!("rigorous_polar_reference: singular normal matrix (degenerate or unanchored geometry)")
+            };
             let mut maxd = 0.0_f64;
             for (root, &u) in &uidx {
                 if let Some(p) = pos.get_mut(root) {
@@ -8506,10 +8527,17 @@ fn rigorous_polar_reference(
                 maxd = maxd.max(delta[2 * u].abs()).max(delta[2 * u + 1].abs());
             }
             if maxd < 1e-11 {
+                converged = true;
                 break;
             }
         }
     }
+    // The reference is only meaningful at the true optimum; never hand back a
+    // stalled iterate as the "rigorous" answer.
+    assert!(
+        converged,
+        "rigorous_polar_reference: Gauss-Newton did not converge within 200 iterations"
+    );
 
     let mut out = HashMap::new();
     for (root, members) in &group_members {
@@ -9052,8 +9080,9 @@ fn generate_gama_golden_fixtures() {
         for axis in 0..2 {
             let dcoord = if axis == 0 { datum_raw.x } else { datum_raw.y };
             let gkf = emit_leveling_gkf(&project, &config, axis, &gidx, &rcm, &rank, dg, dcoord);
-            let infile = format!("/tmp/gama_{name}_{axis}.gkf");
-            let outfile = format!("/tmp/gama_{name}_{axis}.out.xml");
+            let tmp = std::env::temp_dir();
+            let infile = tmp.join(format!("gama_{name}_{axis}.gkf"));
+            let outfile = tmp.join(format!("gama_{name}_{axis}.out.xml"));
             std::fs::write(&infile, &gkf).unwrap();
             // --cov-band 0 skips the O(n²) a-posteriori covariance matrix (we only
             // need adjusted coordinates); without it gama is unusably slow at 10⁴ pts.
@@ -9084,6 +9113,13 @@ fn generate_gama_golden_fixtures() {
             }
         }
         println!("[gama-golden] {name}: groups={} worst={net_worst:.3e} m", members.len());
+        // Refuse to freeze a fixture production doesn't already reproduce: a large
+        // gap here is an emitter/model bug (wrong Δ/σ/sign), not a production
+        // regression — writing it would bake a wrong gold standard.
+        assert!(
+            net_worst < 1e-5,
+            "regeneration aborted: production diverged from freshly-emitted gama on {name} by {net_worst:.3e} m"
+        );
         worst = worst.max(net_worst);
         rows.sort_by_key(|r| (r.s, r.i));
         all.insert(name, rows);
@@ -9106,9 +9142,30 @@ fn production_matches_gama_golden() {
     let config = ClosureAdjustmentConfig::default();
     let nets: HashMap<String, Project> = gama_golden_networks().into_iter().collect();
 
+    // Coverage guard: the frozen fixture and the live roster must name the SAME
+    // networks, so adding one without rerunning the generator fails loudly instead
+    // of being silently untested. (frozen is a BTreeMap, so its keys are sorted.)
+    assert!(!frozen.is_empty(), "gama_golden.json is empty; regenerate");
+    let mut roster_names: Vec<&String> = nets.keys().collect();
+    roster_names.sort();
+    let frozen_names: Vec<&String> = frozen.keys().collect();
+    assert_eq!(
+        frozen_names, roster_names,
+        "roster and frozen fixture networks differ; rerun generate_gama_golden_fixtures"
+    );
+
     for (name, rows) in &frozen {
         let project = nets.get(name).unwrap_or_else(|| panic!("network {name} not in roster"));
         let prod = project.compute_adjusted_station_coordinates(&config);
+        // Every production station must be frozen, so added/renumbered stations are
+        // not silently left unchecked.
+        assert_eq!(
+            rows.len(),
+            prod.len(),
+            "{name}: frozen station count {} != production {}; regenerate",
+            rows.len(),
+            prod.len()
+        );
         for r in rows {
             let p = station_coords(&prod, StationRef::new(r.s, r.i));
             // Worst observed gap across the roster is ~2e-10 m; 1e-6 leaves a wide
