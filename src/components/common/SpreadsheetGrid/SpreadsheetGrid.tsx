@@ -78,6 +78,12 @@ export interface SpreadsheetGridProps<Row> {
    *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
    *  on read-only/unparseable cells. Let the host surface a notice. */
   onPasteReport?: (info: { written: number; clipped: number; skipped: number }) => void;
+  /** Fired with the row index under the pointer (null on leave) — for host-level
+   *  hover effects (e.g. highlighting the corresponding map feature). */
+  onRowHover?: (rowIndex: number | null) => void;
+  /** When set, scroll this data-row index into view (e.g. an external selection
+   *  from the map). Re-scrolls whenever the value changes. */
+  scrollToRow?: number | null;
 
   maximized?: boolean;
   onToggleMaximize?: () => void;
@@ -113,6 +119,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     onInsertRows,
     onDeleteRows,
     onPasteReport,
+    onRowHover,
+    scrollToRow,
     maximized = false,
     onToggleMaximize,
     className = '',
@@ -799,8 +807,15 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [rect],
   );
 
+  const onRowHoverRef = useRef(onRowHover);
+  onRowHoverRef.current = onRowHover;
+  const hoverRowRef = useRef<number | null>(null);
   const onCellMouseEnter = useCallback(
     (rowIdx: number, colIdx: number) => {
+      if (hoverRowRef.current !== rowIdx) {
+        hoverRowRef.current = rowIdx;
+        onRowHoverRef.current?.(rowIdx);
+      }
       if (fillDragging.current) {
         // Extend the fill preview from the selection toward the entered cell,
         // along the dominant axis (Google-Sheets behaviour).
@@ -1303,6 +1318,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [colKeys, hiddenColumns, onColumnOrderChange, rowCount],
   );
 
+  // Scroll an externally-requested row into view (e.g. a map selection).
+  useEffect(() => {
+    if (scrollToRow != null && scrollToRow >= 0 && scrollToRow < rowCount) {
+      virtualizer.scrollToIndex(scrollToRow, { align: 'auto' });
+    }
+  }, [scrollToRow, rowCount, virtualizer]);
+
   // --- Render ---------------------------------------------------------------
   const virtualRows = virtualizer.getVirtualItems();
   const totalHeight = virtualizer.getTotalSize();
@@ -1392,6 +1414,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         tabIndex={0}
         onKeyDown={onKeyDown}
         onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
+        onMouseLeave={() => {
+          if (hoverRowRef.current !== null) {
+            hoverRowRef.current = null;
+            onRowHoverRef.current?.(null);
+          }
+        }}
         role="grid"
         aria-multiselectable
         aria-rowcount={rowCount + 1}
