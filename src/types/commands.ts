@@ -1,6 +1,6 @@
 // Command and IPC payload types generated from Rust.
 
-import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy } from './project';
+import type { ShotData, StationRef, Coordinates, GpsCoordinates, ClosureStrategy, ShotUpdates, SectionId, ShotId } from './project';
 
 export type {
   CommandResult,
@@ -81,4 +81,8 @@ export type BatchCommand =
   | { type: 'move_section'; section_id: number; offset: Coordinates }
   | { type: 'move_segment'; section_id: number; offset: Coordinates }
   | { type: 'move_station'; station_ref: StationRef; offset: Coordinates }
-  | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: GpsCoordinates };
+  | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: GpsCoordinates }
+  // Per-shot field edit — lets the data-table grid commit a multi-cell edit
+  // (paste/fill) as one undo unit. Nested payload uses snake_case (it bypasses
+  // Tauri's top-level camelCase conversion). ShotUpdates fields are all optional.
+  | { type: 'update_shot'; section_id: SectionId; shot_id: ShotId; updates: ShotUpdates };

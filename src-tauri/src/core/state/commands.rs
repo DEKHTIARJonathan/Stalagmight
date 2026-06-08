@@ -2295,7 +2295,16 @@ impl AppState {
         })
     }
 
-    /// Check if a command is allowed in a batch (whitelist for IPC safety)
+    /// Check if a command is allowed in a batch (whitelist for IPC safety).
+    ///
+    /// `UpdateShot` is permitted so the data-table grid can commit a multi-cell
+    /// edit (paste/fill) as a single undo unit: it is GEOMETRY_ONLY (keeps refs +
+    /// connectivity intact), self-validates length/finiteness/frozen-geometry, and
+    /// the batch epilogue's `reconcile_geometry()` correctly bakes in the moved
+    /// stations. `SetStationComment` is deliberately NOT allowed: it is INERT
+    /// metadata (see `command_integrity_profiles_are_stable`), so batching it would
+    /// run the reconcile epilogue and could silently heal a drifted project; comment
+    /// edits stay one-command-per-undo.
     fn is_batch_allowed(cmd: &Command) -> bool {
         matches!(
             cmd,
@@ -2306,6 +2315,7 @@ impl AppState {
                 | Command::MoveSegment { .. }
                 | Command::MoveStation { .. }
                 | Command::SetZeroDatum { .. }
+                | Command::UpdateShot { .. }
         )
     }
 
@@ -3113,5 +3123,22 @@ mod integrity_capability_tests {
             }),
             (true, false, false)
         );
+    }
+
+    /// The data-table grid commits multi-cell edits (paste/fill) as one batch →
+    /// one undo. `UpdateShot` must be batch-allowed (GEOMETRY_ONLY, reconciled by
+    /// the batch epilogue); `SetStationComment` must NOT be (INERT metadata —
+    /// batching it would run the reconcile epilogue and could heal drift silently).
+    #[test]
+    fn update_shot_is_batch_allowed_but_station_comment_is_not() {
+        assert!(AppState::is_batch_allowed(&Command::UpdateShot {
+            section_id: 1,
+            shot_id: 0,
+            updates: ShotUpdates::default(),
+        }));
+        assert!(!AppState::is_batch_allowed(&Command::SetStationComment {
+            station_ref: StationRef::new(1, 0),
+            comment: None,
+        }));
     }
 }
