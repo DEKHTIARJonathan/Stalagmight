@@ -9,12 +9,22 @@ default-run = "stalagmight"
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
 telemetry = []
+# Dev-only: gates the gen_ipc_types bin so release builds (and their LTO pass)
+# skip it. Enabled by `pnpm gen:ipc-types`.
+ipc-typegen = []
 
 [lib]
 name = "stalagmight_lib"
 # staticlib dropped — only needed for iOS, which isn't configured (no
 # src-tauri/gen/apple). cdylib stays for Android (src-tauri/gen/android).
 crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "gen_ipc_types"
+path = "src/bin/gen_ipc_types.rs"
+# Keeps the dev-only typegen tool out of `cargo build --release`, where it
+# paid its own full LTO pass (~45s) on every release build.
+required-features = ["ipc-typegen"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
