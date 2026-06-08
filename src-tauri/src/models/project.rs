@@ -3161,8 +3161,15 @@ impl Project {
         x0_x: &[f64],
         x0_y: &[f64],
     ) -> (Vec<f64>, Vec<f64>) {
-        // Pivots below this are left in the core for PCG rather than divided by.
-        const PIVOT_EPS: f64 = 1e-30;
+        // A node is only eliminated when its current pivot is *safely positive*
+        // relative to the node's original diagonal. A pivot that is non-positive or
+        // has collapsed to roundoff (a tiny fraction of its starting scale) means
+        // the node sits in the system's null space — a floating axis. Such a pivot
+        // is mathematically 0 but, with varied edge weights, lands at ~±1e-12 from
+        // cancellation, so an absolute 1e-30 floor would wrongly eliminate it and
+        // divide by ~0, shifting the whole component off its warm-started (measured)
+        // translation. These stay in the core for the warm-started PCG instead.
+        const PIVOT_REL: f64 = 1e-9;
 
         // Mutable working copies of the system (diagonals, rhs, adjacency).
         let mut dx = diag_x.to_vec();
@@ -3197,8 +3204,10 @@ impl Project {
                 continue;
             }
             let (pdx, pdy) = (dx[u], dy[u]);
-            if pdx.abs() < PIVOT_EPS || pdy.abs() < PIVOT_EPS {
-                continue; // ill-conditioned pivot → leave for the core solve
+            // Scale-relative, sign-aware floor: skip when either axis pivot is
+            // non-positive or tiny vs. its original diagonal (null-space / floating).
+            if pdx <= PIVOT_REL * diag_x[u] || pdy <= PIVOT_REL * diag_y[u] {
+                continue; // null-space / ill-conditioned pivot → leave for the core solve
             }
             let nbrs: Vec<(usize, f64, f64)> =
                 nbr[u].iter().map(|(&v, &(ox, oy))| (v, ox, oy)).collect();

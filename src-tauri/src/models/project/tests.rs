@@ -4595,6 +4595,42 @@ fn solve_reduced_laplacian_preserves_floating_component_nullspace() {
     }
 }
 
+/// Regression for the scale-relative pivot floor (#89 / Codex). A *loop* that
+/// floats on X with **varied** edge weights drives the last null-space pivot to
+/// roundoff (~1e-12), not exactly 0 — so the old absolute 1e-30 floor eliminated
+/// it and divided by ~0, shifting the component. The pivot must be judged relative
+/// to its original diagonal so the node stays in the warm-started core and the
+/// measured translation is preserved.
+#[test]
+fn solve_reduced_laplacian_floating_loop_varied_weights_no_shift() {
+    // Triangle 0-1-2, pure (singular) Laplacian on X → floats; grounded on Y.
+    // Varied off-diagonals so the final Schur pivot lands on roundoff, not 0.
+    let n = 3;
+    let diag_x = vec![3.3, 2.7, 4.0]; // = incident |off| sums (row-sum 0 ⇒ singular)
+    let diag_y = vec![4.3, 3.7, 5.0]; // +1 grounding ⇒ nonsingular
+    let adj = vec![
+        vec![(1usize, -1.0, -1.0), (2usize, -2.3, -2.3)],
+        vec![(0usize, -1.0, -1.0), (2usize, -1.7, -1.7)],
+        vec![(0usize, -2.3, -2.3), (1usize, -1.7, -1.7)],
+    ];
+    // X rhs consistent with measured x=(0,2,5): atb_x = A_x·(0,2,5).
+    let atb_x = vec![-13.5, -3.1, 16.6];
+    let atb_y = vec![0.0, 0.0, 0.0];
+    let x0_x = vec![0.0, 2.0, 5.0];
+    let x0_y = vec![0.0, 0.0, 0.0];
+
+    let (sx, _sy) =
+        Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
+
+    for (i, want) in [0.0_f64, 2.0, 5.0].iter().enumerate() {
+        assert!(
+            (sx[i] - want).abs() < 1e-6,
+            "floating loop node {i} shifted: got {}, want {want}",
+            sx[i]
+        );
+    }
+}
+
 /// Analytic golden: a loop with a hand-computable least-squares optimum.
 ///
 /// Two due-east paths run from a shared, datum-anchored origin to a closure:
