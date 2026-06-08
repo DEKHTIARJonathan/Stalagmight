@@ -163,6 +163,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [scrolled, setScrolled] = useState(false);
+  const [grabbing, setGrabbing] = useState(false); // closed-hand cursor during a move drag
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // Header drag: 'select' extends a multi-column selection; 'move' reorders the
   // already-selected column block (Google-Sheets behaviour).
@@ -728,6 +729,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         // The column is already selected → start a MOVE of the selected block.
         colDrag.current = { mode: 'move', anchorCol: colIdx, fromC0: rect.c0, fromC1: rect.c1 };
         setInteracting(true);
+        setGrabbing(true);
       } else {
         // Otherwise select this column; dragging across headers extends it.
         const anchorCol = e.shiftKey ? colIndexOf(selection.anchor.colKey) : colIdx;
@@ -774,6 +776,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (inSel && onMoveRows && !e.shiftKey) {
         rowDrag.current = { mode: 'move', anchorRow: rowIdx, fromR0: rect.r0, fromR1: rect.r1 };
         setInteracting(true);
+        setGrabbing(true);
       } else {
         const anchorRow = e.shiftKey ? selection.anchor.row : rowIdx;
         rowDrag.current = { mode: 'select', anchorRow, fromR0: 0, fromR1: 0 };
@@ -950,6 +953,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const c = cellAtClient(e.clientX, e.clientY);
       cellMove.current = { grabRow: c.row, grabCol: c.col, src: rect };
       setInteracting(true);
+      setGrabbing(true);
     },
     [cellAtClient, rect],
   );
@@ -1068,6 +1072,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       autoScrollRAF.current = 0;
     }
     setInteracting(false);
+    setGrabbing(false);
     setFillPreview(null);
     setColMoveDrop(null);
     setColGhost(null);
@@ -1201,7 +1206,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   return (
     <div
-      className={`sg-grid relative flex flex-col ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
+      className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''} ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
       data-testid="spreadsheet-grid"
     >
       {(onHiddenColumnsChange || onToggleMaximize) && (

@@ -127,11 +127,19 @@
   overflow: hidden;
 }
 
-/* Grabbable edges of the selection for cut-and-drop move. */
+/* Grabbable edges of the selection for cut-and-drop move (open-hand cursor). */
 .sg-move-edge {
   position: absolute;
   pointer-events: auto;
-  cursor: move;
+  cursor: grab;
+}
+.sg-move-edge:active {
+  cursor: grabbing;
+}
+/* While a move drag is in progress, force the closed-hand cursor everywhere. */
+.sg-grid.sg-grabbing,
+.sg-grid.sg-grabbing * {
+  cursor: grabbing !important;
 }
 /* Destination outline while moving cells. */
 .sg-move-target {
