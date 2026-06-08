@@ -1,20 +1,23 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Section, type Shot, type ShotUpdates, type Station } from '../../types/project';
+import { type Section, type Shot, type Station } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
+import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import { Select, type SelectOption } from '../common/Select';
 import { EntityBlob } from '../common/EntityBlob';
-import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon, LinkIcon, LockIcon } from '../common/icons';
+import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
-import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 import { formatShotId } from '../../utils/formatters';
-import { formatFixed, formatNumber } from '../../i18n/format';
+import { formatFixed, formatNumber, getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
+import { buildShotColumns } from './dataTableShotColumns';
+import { buildShotUpdates, buildShotUpdateBatch } from './dataTableEdits';
+import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
   sections: Section[];
@@ -35,7 +38,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, warnings, isShotFrozen, stations, updateStationComment } = useProjectStore();
+  const { updateShot, warnings, isShotFrozen, stations, updateStationComment, executeBatch } = useProjectStore();
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); `stations` stays measured for counts/editing.
   const activeStations = useActiveStations();
@@ -45,14 +48,12 @@ export default function DataTable({ sections }: DataTableProps) {
     selection,
     setSelection,
     setHoveredShot,
-    hoveredShot,
     triggerPanToShot,
     dataTableOpen,
     toggleDataTable,
     dataTableHeight,
     announceSelection,
     setHoveredSectionId,
-    openDialog,
     triggerCenterOnStation,
     setHoveredStation,
     hoveredStation,
@@ -67,7 +68,6 @@ export default function DataTable({ sections }: DataTableProps) {
     dataTableHeight: s.dataTableHeight,
     announceSelection: s.announceSelection,
     setHoveredSectionId: s.setHoveredSectionId,
-    openDialog: s.openDialog,
     triggerCenterOnStation: s.triggerCenterOnStation,
     setHoveredStation: s.setHoveredStation,
     hoveredStation: s.hoveredStation,
@@ -257,118 +257,8 @@ export default function DataTable({ sections }: DataTableProps) {
     prevAnnouncedSelectionRef.current = { sectionId: selection.sectionId, shotId: selection.shotId };
   }, [selection, sections, announceSelection, t]);
 
-  const GEOMETRY_COLUMNS = ['length', '_azimuth_avg', 'depth_in', 'depth_out'];
-
-  const handleCellEdit = async (
-    shot: Shot,
-    key: string,
-    value: unknown,
-    index: number
-  ) => {
-    if (!selectedSection || geometryReadOnly) return;
-
-    // When entering cell edit mode, set selection to this shot
-    internalSelectionRef.current = true;
-    setSource('data-table');
-    setSelection({
-      type: 'shot',
-      sectionId: selectedSection.id,
-      shotId: shot.id,
-    });
-
-    // Block geometry edits on frozen shots
-    if (GEOMETRY_COLUMNS.includes(key) && isShotFrozen(selectedSection.id, index)) {
-      return;
-    }
-
-    // Handle virtual azimuth column with delta-offset behavior
-    if (key === '_azimuth_avg') {
-      // Guard against invalid input - must be a finite number
-      const newValue = typeof value === 'number' ? value : parseFloat(String(value));
-      if (!Number.isFinite(newValue)) {
-        // Invalid input - ignore the edit
-        return;
-      }
-      const currentMean = circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
-      const delta = newValue - currentMean;
-      const newIn = normalizeAngle(shot.azimuth_in + delta);
-      const newOut = normalizeAngle(shot.azimuth_out + delta);
-      await updateShot(selectedSection.id, shot.id, {
-        azimuth_in: newIn,
-        azimuth_out: newOut,
-      });
-      return;
-    }
-
-    await updateShot(selectedSection.id, shot.id, { [key]: value } as ShotUpdates);
-  };
-
-  // Row click selects the shot
-  const handleRowClick = useCallback(
-    (shot: Shot, _index: number) => {
-      if (selectedSection) {
-        internalSelectionRef.current = true;
-        setSource('data-table');
-        setSelection({
-          type: 'shot',
-          sectionId: selectedSection.id,
-          shotId: shot.id,
-        });
-      }
-    },
-    [selectedSection, setSelection]
-  );
-
-  // Row double-click pans map to shot midpoint
-  const handleRowDoubleClick = useCallback(
-    (shot: Shot, _index: number) => {
-      if (selectedSection) {
-        setSource('data-table');
-        triggerPanToShot(selectedSection.id, shot.id);
-      }
-    },
-    [selectedSection, triggerPanToShot]
-  );
-
-  // Row hover highlights shot on map
-  const handleRowHover = useCallback(
-    (shot: Shot | null, _index: number | null) => {
-      if (shot && selectedSection) {
-        setHoveredShot({ sectionId: selectedSection.id, shotId: shot.id });
-      } else {
-        setHoveredShot(null);
-      }
-    },
-    [selectedSection, setHoveredShot]
-  );
-
-  // Row right-click opens context menu
-  const handleRowContextMenu = useCallback(
-    (shot: Shot, index: number, event: React.MouseEvent) => {
-      event.preventDefault();
-      if (!selectedSection) return;
-
-      setSource('data-table');
-
-      const totalShots = selectedSection.shots.length;
-      const isFirst = index === 0;
-      const isLast = index === totalShots - 1;
-
-      openDialog('context-menu', {
-        target: {
-          type: 'datatable-shot',
-          sectionId: selectedSection.id,
-          shotId: shot.id,
-          isFirst,
-          isLast,
-          totalShots,
-          sectionName: selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id }),
-        },
-        position: { x: event.clientX, y: event.clientY },
-      });
-    },
-    [selectedSection, openDialog, t]
-  );
+  // Shot cell-editing, selection, pan, hover and context-menu are now handled by
+  // SpreadsheetGrid via the onShot* handlers defined below.
 
   // Section dropdown manual change - select the new section
   // Note: Select component with controlled value doesn't call onChange when value changes
@@ -417,34 +307,6 @@ export default function DataTable({ sections }: DataTableProps) {
       }
     };
   }, []);
-
-  // Derive the highlighted shot ID for the table
-  // - For shot selection: use the shot ID directly
-  // - For station selection: compute the corresponding shot ID
-  // - For section selection or no selection: no highlight
-  const highlightedShotId = useMemo((): number | null => {
-    if (!selection || selection.sectionId !== selectedSectionId) {
-      // For station selection, check stationRef.section_id instead
-      if (selection?.type === 'station' && selection.stationRef?.section_id === selectedSectionId) {
-        const { station_index } = selection.stationRef;
-        const section = sections.find((s) => s.id === selectedSectionId);
-        if (section) {
-          const shotIndex = station_index >= 1 ? station_index - 1 : 0;
-          if (shotIndex >= 0 && shotIndex < section.shots.length) {
-            return section.shots[shotIndex]?.id ?? null;
-          }
-        }
-      }
-      return null;
-    }
-
-    if (selection.type === 'shot' && selection.shotId !== undefined) {
-      return selection.shotId;
-    }
-
-    // Section selection - no row highlight
-    return null;
-  }, [selection, selectedSectionId, sections]);
 
   // --- Station view data ---
 
@@ -589,186 +451,113 @@ export default function DataTable({ sections }: DataTableProps) {
     setTableView(value as 'shots' | 'stations');
   }, []);
 
-  const columns = [
-    {
-      key: '_warnings',
-      header: t('dataTable.columns.warningsShort'),
-      width: '30px',
-      align: 'center' as const,
-      render: (shot: Shot, index: number) => {
-        if (selectedSectionId === null) return null;
-        const frozen = isShotFrozen(selectedSectionId, index);
-        const shotWarnings = getShotWarnings(selectedSectionId, shot.id).filter((w) => !w.isResolved);
-        if (shotWarnings.length === 0 && !frozen) return null;
-        const hasError = shotWarnings.some((w) => w.severity === 'error');
-        const tooltipText = [
-          ...(frozen ? [t('dataTable.frozen')] : []),
-          ...shotWarnings.map((w) => w.message),
-        ].join('\n');
-        return (
-          <span
-            data-testid={frozen ? `frozen-${selectedSectionId}-${shot.id}` : `warning-${selectedSectionId}-${shot.id}`}
-            className={hasError ? 'text-error' : frozen && shotWarnings.length === 0 ? 'text-text-secondary' : 'text-warning'}
-            title={tooltipText}
-          >
-            {frozen && shotWarnings.length === 0
-              ? <LockIcon size={13} />
-              : hasError ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}
-          </span>
-        );
-      },
-    },
-    {
-      key: 'id',
-      header: t('dataTable.columns.idShort'),
-      width: '60px',
-      render: (_shot: Shot, index: number) =>
-        selectedSectionId !== null
-          ? <EntityBlob entity="shot" className="relative -top-0.5">{formatShotId(selectedSectionId, index + 1)}</EntityBlob>
-          : '',
-    },
-    {
-      key: 'length',
-      header: t('dataTable.columns.length', { unit: t('common.units.meters') }),
-      width: '100px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.01',
-    },
-    {
-      key: '_azimuth_avg',
-      header: t('dataTable.columns.azimuthShort'),
-      width: '70px',
-      align: 'right' as const,
-      getValue: (shot: Shot) =>
-        circularMeanDegrees(shot.azimuth_in, shot.azimuth_out),
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.azimuth)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'depth_in',
-      header: t('dataTable.columns.depthIn'),
-      width: '80px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.depth)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'depth_out',
-      header: t('dataTable.columns.depthOut'),
-      width: '95px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.depth)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'left',
-      header: t('dataTable.columns.leftShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'right',
-      header: t('dataTable.columns.rightShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'up',
-      header: t('dataTable.columns.upShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'down',
-      header: t('dataTable.columns.downShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'is_reference',
-      header: t('dataTable.columns.referenceShort'),
-      width: '40px',
-      align: 'center' as const,
-      render: (shot: Shot) => (
-        <span
-          className={`px-2 py-1 flex items-center justify-center ${geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (geometryReadOnly) return;
-            if (selectedSectionId !== null) {
-              updateShot(selectedSectionId, shot.id, { is_reference: !shot.is_reference });
-            }
-          }}
-          title={shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
-        >
-          {shot.is_reference ? <DotIcon size={20} /> : <span className="opacity-0 hover:opacity-30"><DotIcon size={20} /></span>}
-        </span>
-      ),
-    },
-    { key: 'comment', header: t('dataTable.columns.comment'), inputMode: 'textarea' as const },
-  ];
 
-  const editableColumns = [
-    'length',
-    '_azimuth_avg',
-    'depth_in',
-    'depth_out',
-    'left',
-    'right',
-    'up',
-    'down',
-    'comment',
-  ];
+  // --- Shots view (SpreadsheetGrid) ----------------------------------------
+  // The effective number locale (never the 'locale'/'system' sentinel) so the
+  // grid parses numbers with the same separators it displays them in.
+  const numberLocale = getNumberFormatLocale();
 
-  const isRowEditable = useCallback(
-    (shot: Shot, _index: number) => {
-      if (selectedSectionId === null) return true;
-      const index = selectedSection?.shots.indexOf(shot) ?? -1;
-      return index < 0 || !isShotFrozen(selectedSectionId, index);
+  const selectShotRow = useCallback(
+    (shot: Shot) => {
+      if (!selectedSection) return;
+      internalSelectionRef.current = true;
+      setSource('data-table');
+      setSelection({ type: 'shot', sectionId: selectedSection.id, shotId: shot.id });
     },
-    [selectedSectionId, selectedSection, isShotFrozen]
+    [selectedSection, setSelection]
   );
+
+  // Single edit → one update_shot (one undo). Values are already coerced by the
+  // column; the virtual azimuth-average expands to in/out via buildShotUpdates.
+  const onShotEdit = useCallback(
+    (rowIndex: number, colKey: string, value: unknown) => {
+      if (!selectedSection || geometryReadOnly) return;
+      const shot = selectedSection.shots[rowIndex];
+      if (!shot) return;
+      selectShotRow(shot);
+      const updates = buildShotUpdates(shot, [{ colKey, value }]);
+      if (Object.keys(updates).length > 0) void updateShot(selectedSection.id, shot.id, updates);
+    },
+    [selectedSection, geometryReadOnly, selectShotRow, updateShot]
+  );
+
+  // Multi-cell paste/fill → one execute_batch (one undo).
+  const onShotBatchEdit = useCallback(
+    (edits: CellEdit[]) => {
+      if (!selectedSection || geometryReadOnly) return;
+      setSource('data-table');
+      const commands = buildShotUpdateBatch(edits, selectedSection.shots, selectedSection.id);
+      if (commands.length > 0) void executeBatch(commands);
+    },
+    [selectedSection, geometryReadOnly, executeBatch]
+  );
+
+  const onShotActiveCellChange = useCallback(
+    (rowIndex: number) => {
+      const shot = selectedSection?.shots[rowIndex];
+      if (shot) selectShotRow(shot);
+    },
+    [selectedSection, selectShotRow]
+  );
+
+  const onShotRowHover = useCallback(
+    (rowIndex: number | null) => {
+      if (rowIndex === null || !selectedSection) {
+        setHoveredShot(null);
+        return;
+      }
+      const shot = selectedSection.shots[rowIndex];
+      setHoveredShot(shot ? { sectionId: selectedSection.id, shotId: shot.id } : null);
+    },
+    [selectedSection, setHoveredShot]
+  );
+
+  const handleToggleReference = useCallback(
+    (shot: Shot) => {
+      if (selectedSection && !geometryReadOnly) {
+        void updateShot(selectedSection.id, shot.id, { is_reference: !shot.is_reference });
+      }
+    },
+    [selectedSection, geometryReadOnly, updateShot]
+  );
+
+  const handlePanToShot = useCallback(
+    (shot: Shot) => {
+      if (selectedSection) {
+        setSource('data-table');
+        triggerPanToShot(selectedSection.id, shot.id);
+      }
+    },
+    [selectedSection, triggerPanToShot]
+  );
+
+  const shotColumns = useMemo(
+    () =>
+      buildShotColumns({
+        t,
+        precision,
+        sectionId: selectedSectionId,
+        geometryReadOnly,
+        isShotFrozen,
+        getShotWarnings,
+        onToggleReference: handleToggleReference,
+        onPanToShot: handlePanToShot,
+      }),
+    // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
+    // warnings change so frozen/warning icons stay current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, handleToggleReference, handlePanToShot]
+  );
+
+  const shotScrollToRow = useMemo(() => {
+    if (scrollToKey === null || !selectedSection) return null;
+    const idx = selectedSection.shots.findIndex((s) => s.id === scrollToKey);
+    return idx >= 0 ? idx : null;
+  }, [scrollToKey, selectedSection]);
+
+  // Grid height inside the panel body (panel header ≈ 49, grid toolbar ≈ 30,
+  // status bar ≈ 24 sit outside the scroll area).
+  const gridHeight = Math.max(120, dataTableHeight - 110);
 
   return (
     <div
@@ -837,39 +626,17 @@ export default function DataTable({ sections }: DataTableProps) {
         <div className="flex-1 overflow-auto">
           {selectedSection ? (
             tableView === 'shots' ? (
-              <EditableTable<Shot>
-                columns={columns}
-                data={selectedSection.shots}
-                keyField="id"
-                onCellEdit={handleCellEdit}
-                editableColumns={geometryReadOnly ? [] : editableColumns}
-                isRowEditable={isRowEditable}
-                selectedKey={highlightedShotId}
-                hoveredKey={
-                  hoveredShot?.sectionId === selectedSectionId
-                    ? hoveredShot.shotId
-                    : null
-                }
-                scrollToKey={scrollToKey}
-                onRowClick={handleRowClick}
-                onRowDoubleClick={handleRowDoubleClick}
-                onRowContextMenu={handleRowContextMenu}
-                onRowHover={handleRowHover}
-                emptyMessage={t('dataTable.empty')}
-                rowClassName={(shot: Shot, isSelected, isHovered) => {
-                  const index = selectedSection?.shots.indexOf(shot) ?? -1;
-                  const frozen = selectedSectionId !== null && index >= 0 && isShotFrozen(selectedSectionId, index);
-                  const classes: string[] = [];
-                  if (isSelected) {
-                    classes.push('bg-accent-20');
-                  } else if (isHovered) {
-                    classes.push('bg-accent-10');
-                  } else if (frozen) {
-                    classes.push('bg-warning-5');
-                  }
-                  classes.push('cursor-pointer');
-                  return classes.join(' ');
-                }}
+              <SpreadsheetGrid<Shot>
+                columns={shotColumns}
+                rows={selectedSection.shots}
+                rowKey={(s) => s.id}
+                locale={numberLocale}
+                height={gridHeight}
+                onEdit={onShotEdit}
+                onBatchEdit={onShotBatchEdit}
+                onActiveCellChange={onShotActiveCellChange}
+                onRowHover={onShotRowHover}
+                scrollToRow={shotScrollToRow}
               />
             ) : (
               <EditableTable<StationRow>

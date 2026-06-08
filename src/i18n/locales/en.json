@@ -1218,6 +1218,11 @@
     "empty": "No shots in this section.",
     "stationsEmpty": "No stations in this section.",
     "frozen": "Geometry locked — part of adjusted network",
+    "validation": {
+      "nonPositiveLength": "Length must be greater than 0",
+      "azimuthRange": "Azimuth must be between 0 and 360",
+      "negativeLrud": "Passage dimension cannot be negative"
+    },
     "selectSection": "Select a section to view shots.",
     "shotCount": "{{countFormatted}} shots",
     "stationCount": "{{countFormatted}} stations",
