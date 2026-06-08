@@ -113,6 +113,20 @@
   box-sizing: border-box;
 }
 
+/* Cell editor — fills the active cell, sits above the selection overlay. */
+.sg-grid .sg-editor {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 5px 7px; /* horizontal ~matches the cell's px-2; vertical centers a line */
+  border: 2px solid var(--sg-blue);
+  background: #ffffff;
+  color: #1f1f1f;
+  font: 13px/1.35 Arial, Roboto, sans-serif;
+  resize: none;
+  outline: none;
+  overflow: hidden;
+}
+
 /* Grabbable edges of the selection for cut-and-drop move. */
 .sg-move-edge {
   position: absolute;

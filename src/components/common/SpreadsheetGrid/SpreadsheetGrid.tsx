@@ -291,6 +291,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const col = colAt(colIdx);
       if (!col || !cellEditable(rowIdx, col)) return;
       const draft = seed ?? displayAt(rowIdx, col);
+      const cell = { row: rowIdx, colKey: col.key };
+      // The edited cell becomes the sole active selection, so the editor and the
+      // selection overlay always coincide (e.g. on double-click).
+      setExtraRanges([]);
+      setSelection({ anchor: cell, focus: cell, active: cell });
       setCopiedRect(null);
       setEditing({ row: rowIdx, colKey: col.key, draft });
     },
@@ -1372,25 +1377,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         onContextMenu={(e) => onCellContextMenu(rowIdx, c, e)}
                         onDoubleClick={(e) => { e.stopPropagation(); beginEdit(rowIdx, c, null); }}
                       >
-                        {isEditingCell ? (
-                          <textarea
-                            ref={editorRef}
-                            aria-label={`Edit ${col.header} row ${rowIdx + 1}`}
-                            className="h-full w-full resize-none bg-panel text-xs outline-none"
-                            value={editing.draft}
-                            rows={1}
-                            onChange={(ev) => setEditing({ ...editing, draft: ev.target.value })}
-                            onBlur={() => commitEdit(null, false)}
-                            onKeyDown={(ev) => {
-                              // Let caret keys work inside the editor; commit/cancel bubble.
-                              if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) {
-                                ev.stopPropagation();
-                              }
-                            }}
-                          />
-                        ) : (
-                          renderCell(col, row, rowIdx)
-                        )}
+                        {/* Content always renders; the editor (below) overlays the
+                            active cell when editing so it fills the whole cell. */}
+                        {!isEditingCell && renderCell(col, row, rowIdx)}
                       </div>
                     );
                   })}
@@ -1456,6 +1445,33 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   />
                 )}
               </div>
+            )}
+
+            {/* Cell editor — overlays the active cell so it fills the whole cell
+                and sits above the selection overlay. */}
+            {editing && colIndexOf(editing.colKey) >= 0 && (
+              <textarea
+                ref={editorRef}
+                data-testid="grid-cell-editor"
+                aria-label={`Edit ${columns.find((c) => c.key === editing.colKey)?.header ?? editing.colKey} row ${editing.row + 1}`}
+                className="sg-editor"
+                style={{
+                  ...rectOverlay({
+                    r0: editing.row,
+                    r1: editing.row,
+                    c0: colIndexOf(editing.colKey),
+                    c1: colIndexOf(editing.colKey),
+                  }),
+                  pointerEvents: 'auto',
+                  zIndex: 20,
+                }}
+                value={editing.draft}
+                onChange={(ev) => setEditing({ ...editing, draft: ev.target.value })}
+                onBlur={() => commitEdit(null, false)}
+                onKeyDown={(ev) => {
+                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) ev.stopPropagation();
+                }}
+              />
             )}
           </div>
 
