@@ -47,6 +47,11 @@ export interface GridColumn<Row> {
    *  into a non-nullable numeric — never silently write 0). Defaults to a
    *  locale-aware parser based on {@link kind}. */
   parse?: (raw: string, row: Row) => unknown;
+  /** Validate a parsed value before it is committed. Return an error message to
+   *  REJECT it, or `null` to accept. Interactive edits flash the cell red and
+   *  keep the editor open so the value can be fixed; bulk paste/fill/move skip a
+   *  rejected cell. Clears are never validated. */
+  validate?: (value: unknown, row: Row) => string | null;
 }
 
 /** A cell identified by data-row index + column key (never DOM/position). */

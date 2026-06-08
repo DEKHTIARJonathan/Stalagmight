@@ -53,7 +53,12 @@ export function SpreadsheetGridDemo() {
   const [maximized, setMaximized] = useState(false);
 
   const num =
-    (key: keyof DemoShot, header: string, nullable = false): GridColumn<DemoShot> => ({
+    (
+      key: keyof DemoShot,
+      header: string,
+      nullable = false,
+      validate?: (value: unknown) => string | null,
+    ): GridColumn<DemoShot> => ({
       key: key as string,
       header,
       width: 96,
@@ -63,6 +68,7 @@ export function SpreadsheetGridDemo() {
       kind: nullable ? 'number-nullable' : 'number',
       getValue: (r) => r[key],
       format: (v) => (v == null ? '' : String(v)),
+      ...(validate ? { validate: (v: unknown) => validate(v) } : {}),
     });
 
   const columns: GridColumn<DemoShot>[] = [
@@ -79,8 +85,12 @@ export function SpreadsheetGridDemo() {
       ),
     },
     { key: 'station', header: 'Station', width: 90, getValue: (r) => r.station },
-    num('azimuth', 'Azimuth'),
-    num('length', 'Length'),
+    num('azimuth', 'Azimuth', false, (v) =>
+      typeof v === 'number' && (v < 0 || v > 360) ? 'Azimuth must be 0–360' : null,
+    ),
+    num('length', 'Length', false, (v) =>
+      typeof v === 'number' && v < 0 ? 'Length must be ≥ 0' : null,
+    ),
     num('depthIn', 'Depth in'),
     num('depthOut', 'Depth out'),
     {

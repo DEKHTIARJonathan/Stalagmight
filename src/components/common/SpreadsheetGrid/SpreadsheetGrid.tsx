@@ -177,6 +177,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const [scrolled, setScrolled] = useState(false);
   const [grabbing, setGrabbing] = useState(false); // closed-hand cursor during a move drag
+  const [invalidCell, setInvalidCell] = useState<CellCoord | null>(null); // rejected-edit flash
+  const invalidTimer = useRef<number | undefined>(undefined);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // Header drag: 'select' extends a multi-column selection; 'move' reorders the
   // already-selected column block (Google-Sheets behaviour).
@@ -281,6 +283,27 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [rows, locale],
   );
 
+  // Parse + validate for bulk paths (paste/fill/move): a rejected value is
+  // skipped (undefined), never written. Clears bypass this (always allowed).
+  const coerce = useCallback(
+    (col: GridColumn<Row>, raw: string, rowIdx: number): unknown => {
+      const value = parseForColumn(col, raw, rowIdx);
+      if (value === undefined) return undefined;
+      const row = rows[rowIdx];
+      if (row !== undefined && col.validate && col.validate(value, row)) return undefined;
+      return value;
+    },
+    [parseForColumn, rows],
+  );
+
+  // Brief red flash on a cell whose interactive edit was rejected by validate.
+  const flashInvalid = useCallback((cell: CellCoord) => {
+    setInvalidCell(cell);
+    if (invalidTimer.current) window.clearTimeout(invalidTimer.current);
+    invalidTimer.current = window.setTimeout(() => setInvalidCell(null), 900);
+  }, []);
+  useEffect(() => () => { if (invalidTimer.current) window.clearTimeout(invalidTimer.current); }, []);
+
   // --- Focus movement -------------------------------------------------------
   const moveFocusTo = useCallback(
     (row: number, colIdx: number, extend: boolean) => {
@@ -363,20 +386,27 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (advance: 'down' | 'up' | null, refocus = true) => {
       const cur = editing;
       if (!cur) return;
-      setEditing(null);
       const colIdx = colIndexOf(cur.colKey);
       const col = colAt(colIdx);
-      if (col) {
-        const value = parseForColumn(col, cur.draft, cur.row);
-        if (value !== undefined) onEdit(cur.row, cur.colKey, value);
+      const value = col ? parseForColumn(col, cur.draft, cur.row) : undefined;
+      // Reject an invalid value: flash red, and on a keyboard commit keep the
+      // editor open so it can be fixed (blur just discards the invalid draft).
+      const row = rows[cur.row];
+      if (col && value !== undefined && row !== undefined && col.validate && col.validate(value, row)) {
+        flashInvalid({ row: cur.row, colKey: cur.colKey });
+        if (refocus) return;
+        setEditing(null);
+        return;
       }
+      setEditing(null);
+      if (col && value !== undefined) onEdit(cur.row, cur.colKey, value);
       if (advance) {
         const t = arrowTarget(cur.row, colIdx, advance === 'down' ? 1 : -1, 0, rowCount, colCount);
         moveFocusTo(t.row, t.colIdx, false);
       }
       if (refocus) scrollRef.current?.focus();
     },
-    [editing, colIndexOf, colAt, parseForColumn, onEdit, rowCount, colCount, moveFocusTo],
+    [editing, colIndexOf, colAt, parseForColumn, rows, flashInvalid, onEdit, rowCount, colCount, moveFocusTo],
   );
 
   const cancelEdit = useCallback(() => {
@@ -468,7 +498,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     for (const t of targets) {
       const col = colAt(t.colIdx);
       if (!col || !cellEditable(t.row, col)) continue;
-      const value = parseForColumn(col, t.raw, t.row);
+      const value = coerce(col, t.raw, t.row);
       if (value !== undefined) edits.push({ row: t.row, colKey: col.key, value });
     }
     applyEdits(edits);
@@ -478,7 +508,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     if (clipped > 0 || edits.length < targets.length) {
       onPasteReport?.({ written: edits.length, clipped, skipped: targets.length - edits.length });
     }
-  }, [rect, rowCount, colCount, colAt, cellEditable, parseForColumn, applyEdits, onPasteReport]);
+  }, [rect, rowCount, colCount, colAt, cellEditable, coerce, applyEdits, onPasteReport]);
 
   // Copy-fill the selection block across `preview`'s extension (tiled).
   const commitFill = useCallback(
@@ -500,7 +530,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           const vals = extendSeries(below ? seed : [...seed].reverse(), extRows.length, parseNum);
           extRows.forEach((r, i) => {
             if (!cellEditable(r, col)) return;
-            const value = parseForColumn(col, vals[i] ?? '', r);
+            const value = coerce(col, vals[i] ?? '', r);
             if (value !== undefined) edits.push({ row: r, colKey: col.key, value });
           });
         }
@@ -519,7 +549,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           extCols.forEach((c, i) => {
             const col = colAt(c);
             if (!col || !cellEditable(r, col)) return;
-            const value = parseForColumn(col, vals[i] ?? '', r);
+            const value = coerce(col, vals[i] ?? '', r);
             if (value !== undefined) edits.push({ row: r, colKey: col.key, value });
           });
         }
@@ -535,7 +565,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         });
       }
     },
-    [rect, colAt, cellEditable, parseForColumn, displayAt, applyEdits, colKeys, locale],
+    [rect, colAt, cellEditable, coerce, displayAt, applyEdits, colKeys, locale],
   );
 
   const doFill = useCallback(
@@ -546,12 +576,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         const srcCol = colAt(f.srcColIdx);
         if (!col || !srcCol || !cellEditable(f.row, col)) continue;
         const raw = displayAt(f.srcRow, srcCol);
-        const value = parseForColumn(col, raw, f.row);
+        const value = coerce(col, raw, f.row);
         if (value !== undefined) edits.push({ row: f.row, colKey: col.key, value });
       }
       applyEdits(edits);
     },
-    [rect, colAt, cellEditable, displayAt, parseForColumn, applyEdits],
+    [rect, colAt, cellEditable, displayAt, coerce, applyEdits],
   );
 
   const doClear = useCallback(() => {
@@ -1007,7 +1037,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           const col = colAt(dst.c0 + dc);
           const drow = dst.r0 + dr;
           if (!col || !cellEditable(drow, col)) continue;
-          const value = parseForColumn(col, vals[dr]?.[dc] ?? '', drow);
+          const value = coerce(col, vals[dr]?.[dc] ?? '', drow);
           if (value !== undefined) {
             edits.push({ row: drow, colKey: col.key, value });
             seen.add(`${drow}:${col.key}`);
@@ -1039,7 +1069,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         });
       }
     },
-    [colAt, displayAt, cellEditable, parseForColumn, applyEdits, colKeys],
+    [colAt, displayAt, cellEditable, coerce, parseForColumn, applyEdits, colKeys],
   );
 
   const onMoveBorderDown = useCallback(
@@ -1589,6 +1619,23 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 onBlur={() => commitEdit(null, false)}
                 onKeyDown={(ev) => {
                   if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) ev.stopPropagation();
+                }}
+              />
+            )}
+
+            {/* Rejected-edit flash (validate returned an error). Above the editor. */}
+            {invalidCell && colIndexOf(invalidCell.colKey) >= 0 && (
+              <div
+                className="sg-invalid-flash"
+                data-testid="grid-invalid-flash"
+                style={{
+                  ...rectOverlay({
+                    r0: invalidCell.row,
+                    r1: invalidCell.row,
+                    c0: colIndexOf(invalidCell.colKey),
+                    c1: colIndexOf(invalidCell.colKey),
+                  }),
+                  zIndex: 25,
                 }}
               />
             )}

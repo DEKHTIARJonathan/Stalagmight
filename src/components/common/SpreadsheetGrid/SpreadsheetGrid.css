@@ -164,6 +164,18 @@
 .sg-grid.sg-grabbing * {
   cursor: grabbing !important;
 }
+/* Rejected-edit flash: a red ring that pulses briefly over the cell/editor. */
+@keyframes sg-invalid-pulse {
+  0% { background: rgba(217, 48, 37, 0.22); }
+  100% { background: rgba(217, 48, 37, 0); }
+}
+.sg-invalid-flash {
+  border: 2px solid #d93025;
+  box-sizing: border-box;
+  pointer-events: none;
+  animation: sg-invalid-pulse 0.9s ease-out;
+}
+
 /* Destination outline while moving cells. */
 .sg-move-target {
   border: 2px solid var(--sg-blue);
