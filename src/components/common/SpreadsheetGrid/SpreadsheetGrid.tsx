@@ -14,6 +14,7 @@ import './SpreadsheetGrid.css';
 import {
   type GridColumn,
   type GridSelection,
+  type CellCoord,
   type CellEdit,
   DEFAULT_COL_WIDTH,
   ROW_HEIGHT,
@@ -154,6 +155,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const [fillPreview, setFillPreview] = useState<Rect | null>(null);
   const [interacting, setInteracting] = useState(false);
   const dragging = useRef(false);
+  const pendingDrag = useRef<{ x: number; y: number } | null>(null);
   const fillDragging = useRef(false);
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
   const dragMouseY = useRef(0);
@@ -295,35 +297,34 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [colAt, cellEditable, displayAt],
   );
 
+  // Commit the editor's draft. Side effects run OUTSIDE setEditing (a state
+  // updater must be pure — StrictMode double-invokes it in dev). `refocus`
+  // returns keyboard focus to the grid so the type→Enter→Arrow loop keeps
+  // working; the blur path passes false so a deliberate click-away isn't trapped.
   const commitEdit = useCallback(
-    (advance: 'down' | 'right' | 'up' | 'left' | null) => {
-      setEditing((cur) => {
-        if (!cur) return null;
-        const colIdx = colIndexOf(cur.colKey);
-        const col = colAt(colIdx);
-        if (col) {
-          const value = parseForColumn(col, cur.draft, cur.row);
-          if (value !== undefined) onEdit(cur.row, cur.colKey, value);
-        }
-        if (advance) {
-          const d =
-            advance === 'down'
-              ? [1, 0]
-              : advance === 'up'
-                ? [-1, 0]
-                : advance === 'right'
-                  ? [0, 1]
-                  : [-1 < 0 ? 0 : 0, -1];
-          const t = arrowTarget(cur.row, colIdx, d[0] ?? 0, d[1] ?? 0, rowCount, colCount);
-          moveFocusTo(t.row, t.colIdx, false);
-        }
-        return null;
-      });
+    (advance: 'down' | 'up' | null, refocus = true) => {
+      const cur = editing;
+      if (!cur) return;
+      setEditing(null);
+      const colIdx = colIndexOf(cur.colKey);
+      const col = colAt(colIdx);
+      if (col) {
+        const value = parseForColumn(col, cur.draft, cur.row);
+        if (value !== undefined) onEdit(cur.row, cur.colKey, value);
+      }
+      if (advance) {
+        const t = arrowTarget(cur.row, colIdx, advance === 'down' ? 1 : -1, 0, rowCount, colCount);
+        moveFocusTo(t.row, t.colIdx, false);
+      }
+      if (refocus) scrollRef.current?.focus();
     },
-    [colIndexOf, colAt, parseForColumn, onEdit, rowCount, colCount, moveFocusTo],
+    [editing, colIndexOf, colAt, parseForColumn, onEdit, rowCount, colCount, moveFocusTo],
   );
 
-  const cancelEdit = useCallback(() => setEditing(null), []);
+  const cancelEdit = useCallback(() => {
+    setEditing(null);
+    scrollRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (editing && editorRef.current) {
@@ -332,6 +333,31 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       el.setSelectionRange(el.value.length, el.value.length);
     }
   }, [editing]);
+
+  // Reconcile the selection when the controlled rows/columns change (host hides a
+  // column, deletes/filters rows, etc.): clamp rows into range, re-map a dropped
+  // column key to a surviving column, and drop transient extra ranges. Keyed on a
+  // structural signature so it only runs on real structural changes (not on every
+  // render when the host passes a fresh columns array, and not on per-cell edits
+  // which keep row count + keys stable). Identity-preserving when already valid.
+  const structuralKey = `${rowCount}:${colCount}:${colKeys.join('')}`;
+  useEffect(() => {
+    setSelection((prev) => {
+      const fix = (c: CellCoord): CellCoord => {
+        const row = clamp(c.row, 0, Math.max(0, rowCount - 1));
+        const colKey = colKeys.includes(c.colKey) ? c.colKey : (colKeys[0] ?? c.colKey);
+        return row === c.row && colKey === c.colKey ? c : { row, colKey };
+      };
+      const anchor = fix(prev.anchor);
+      const focus = fix(prev.focus);
+      const active = fix(prev.active);
+      return anchor === prev.anchor && focus === prev.focus && active === prev.active
+        ? prev
+        : { anchor, focus, active };
+    });
+    setExtraRanges((prev) => (prev.length ? [] : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- structuralKey gates re-runs
+  }, [structuralKey]);
 
   // --- Clipboard ------------------------------------------------------------
   const buildRangeMatrix = useCallback((): string[][] => {
@@ -448,16 +474,19 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         for (let c = rg.c0; c <= rg.c1; c++) {
           const col = colAt(c);
           if (!col || !cellEditable(r, col)) continue;
-          if (col.kind === 'number') continue; // never write 0 into a required number
           const id = `${r}:${col.key}`;
           if (seen.has(id)) continue;
+          // Route through the column's coercion: number → undefined (skip, never
+          // write 0), number-nullable → null, text/custom-parse → its empty value.
+          const value = parseForColumn(col, '', r);
+          if (value === undefined) continue;
           seen.add(id);
-          edits.push({ row: r, colKey: col.key, value: col.kind === 'number-nullable' ? null : '' });
+          edits.push({ row: r, colKey: col.key, value });
         }
       }
     }
     applyEdits(edits);
-  }, [rect, extraRanges, colAt, cellEditable, applyEdits]);
+  }, [rect, extraRanges, colAt, cellEditable, parseForColumn, applyEdits]);
 
   // --- Keyboard -------------------------------------------------------------
   const onKeyDown = useCallback(
@@ -539,6 +568,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const oC = e.shiftKey ? fColIdx : colIdx;
       // Move the active cell WITHIN a multi-cell selection (Tab/Enter cycling).
       const cycle = (horizontal: boolean) => {
+        setExtraRanges([]); // cycling traverses the live rect only
         const n = cycleActiveInRect(rect, row, colIdx, horizontal, e.shiftKey);
         const key = colKeys[n.colIdx];
         if (key === undefined) return;
@@ -597,13 +627,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // --- Mouse selection + fill-handle drag ----------------------------------
   const onCellMouseDown = useCallback(
     (rowIdx: number, colIdx: number, e: ReactMouseEvent) => {
+      if (e.button !== 0) return; // right-click is owned by onCellContextMenu
       const key = colKeys[colIdx];
       if (key === undefined) return;
       e.preventDefault(); // suppress native text selection; the grid owns selection
       scrollRef.current?.focus(); // receive keyboard after a click
       const cell = { row: rowIdx, colKey: key };
       const ctrl = e.ctrlKey || e.metaKey;
-      dragging.current = true;
+      // Arm drag-select only after the pointer moves past a threshold, so a plain
+      // click with a few px of drift doesn't "brush" into a 2-cell selection.
+      pendingDrag.current = { x: e.clientX, y: e.clientY };
       setInteracting(true);
       setCopiedRect(null);
       if (ctrl && !e.shiftKey) {
@@ -845,6 +878,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (src.r0 === dst.r0 && src.c0 === dst.c0) return;
       const h = src.r1 - src.r0;
       const w = src.c1 - src.c0;
+      // Abort the whole move if ANY destination cell is non-writable — otherwise
+      // the source-clear below would blank source data with nowhere to land it.
+      for (let dr = 0; dr <= h; dr++) {
+        for (let dc = 0; dc <= w; dc++) {
+          const dCol = colAt(dst.c0 + dc);
+          if (!dCol || !cellEditable(dst.r0 + dr, dCol)) return;
+        }
+      }
       // Snapshot source display values first (src/dst may overlap).
       const vals: string[][] = [];
       for (let dr = 0; dr <= h; dr++) {
@@ -875,9 +916,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         for (let c = src.c0; c <= src.c1; c++) {
           if (inDst(r, c)) continue;
           const col = colAt(c);
-          if (!col || !cellEditable(r, col) || col.kind === 'number') continue;
+          if (!col || !cellEditable(r, col)) continue;
           if (seen.has(`${r}:${col.key}`)) continue;
-          edits.push({ row: r, colKey: col.key, value: col.kind === 'number-nullable' ? null : '' });
+          const cleared = parseForColumn(col, '', r);
+          if (cleared === undefined) continue;
+          edits.push({ row: r, colKey: col.key, value: cleared });
         }
       }
       applyEdits(edits);
@@ -924,7 +967,21 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   const onMoveRef = useRef<(e: MouseEvent) => void>(() => {});
   const onUpRef = useRef<() => void>(() => {});
+  const cancelDragRef = useRef<() => void>(() => {});
   onMoveRef.current = (e) => {
+    // A mouseup we missed (released outside the window) leaves a flag latched; a
+    // later buttonless move must abort the drag rather than keep extending.
+    const anyDrag =
+      dragging.current ||
+      fillDragging.current ||
+      resizing.current !== null ||
+      cellMove.current !== null ||
+      colDrag.current !== null ||
+      rowDrag.current !== null;
+    if (e.buttons === 0 && anyDrag) {
+      cancelDragRef.current();
+      return;
+    }
     if (cellMove.current) {
       const c = cellAtClient(e.clientX, e.clientY);
       const src = cellMove.current.src;
@@ -975,6 +1032,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       setColWidthOverrides((m) => ({ ...m, [key]: Math.max(MIN_COL_WIDTH, startW + (e.clientX - startX)) }));
       return;
     }
+    if (pendingDrag.current && !dragging.current) {
+      // Promote a pending cell press to a drag-select only past the threshold.
+      const p = pendingDrag.current;
+      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) <= 4) return;
+      dragging.current = true;
+    }
     if (dragging.current || fillDragging.current) {
       dragMouseY.current = e.clientY;
       const el = scrollRef.current;
@@ -986,21 +1049,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
     }
   };
-  onUpRef.current = () => {
-    if (colDrag.current?.mode === 'move' && colMoveDrop) {
-      reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
-    }
-    if (rowDrag.current?.mode === 'move' && rowMoveDrop) {
-      reorderRows(rowDrag.current.fromR0, rowDrag.current.fromR1, rowMoveDrop.index);
-    }
-    if (cellMove.current && cellMoveDrop) moveCells(cellMove.current.src, cellMoveDrop);
-    if (fillDragging.current && fillPreview) commitFill(fillPreview);
+  // Reset all drag flags + transient drag state WITHOUT committing anything.
+  const resetDrag = () => {
     colDrag.current = null;
     rowDrag.current = null;
     cellMove.current = null;
-    setRowMoveDrop(null);
-    setCellMoveDrop(null);
     dragging.current = false;
+    pendingDrag.current = null;
     fillDragging.current = false;
     resizing.current = null;
     if (autoScrollRAF.current) {
@@ -1011,15 +1066,32 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     setFillPreview(null);
     setColMoveDrop(null);
     setColGhost(null);
+    setRowMoveDrop(null);
+    setCellMoveDrop(null);
+  };
+  cancelDragRef.current = resetDrag;
+  onUpRef.current = () => {
+    if (colDrag.current?.mode === 'move' && colMoveDrop) {
+      reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
+    }
+    if (rowDrag.current?.mode === 'move' && rowMoveDrop) {
+      reorderRows(rowDrag.current.fromR0, rowDrag.current.fromR1, rowMoveDrop.index);
+    }
+    if (cellMove.current && cellMoveDrop) moveCells(cellMove.current.src, cellMoveDrop);
+    if (fillDragging.current && fillPreview) commitFill(fillPreview);
+    resetDrag();
   };
   useEffect(() => {
     const mv = (e: MouseEvent) => onMoveRef.current(e);
     const up = () => onUpRef.current();
+    const cancel = () => cancelDragRef.current(); // window blur: abort, don't commit
     window.addEventListener('mousemove', mv);
     window.addEventListener('mouseup', up);
+    window.addEventListener('blur', cancel);
     return () => {
       window.removeEventListener('mousemove', mv);
       window.removeEventListener('mouseup', up);
+      window.removeEventListener('blur', cancel);
     };
   }, []);
 
@@ -1180,12 +1252,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         onKeyDown={onKeyDown}
         onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
         role="grid"
-        aria-rowcount={rowCount}
+        aria-multiselectable
+        aria-rowcount={rowCount + 1}
         aria-colcount={colCount}
+        aria-activedescendant={`sg-cell-${selection.active.row}-${selection.active.colKey}`}
       >
         <div style={{ width: totalWidth, position: 'relative' }}>
           {/* Sticky header */}
           <div
+            role="row"
+            aria-rowindex={1}
             className={`sg-header-bar sticky top-0 z-10 flex bg-panel ${scrolled ? 'sg-scrolled' : ''}`}
             style={{ height: HEADER_HEIGHT }}
           >
@@ -1200,6 +1276,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               return (
               <div
                 key={c.key}
+                role="columnheader"
+                aria-colindex={i + 1}
                 className={`sg-header relative flex items-center border-b border-r border-white/10 px-2 text-xs font-medium text-text-secondary ${
                   i >= rect.c0 && i <= rect.c1 ? 'sg-header-selected text-text-primary' : ''
                 }`}
@@ -1228,7 +1306,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           </div>
 
           {/* Rows area */}
-          <div style={{ height: totalHeight, position: 'relative' }}>
+          <div role="rowgroup" style={{ height: totalHeight, position: 'relative' }}>
             {virtualRows.map((vr) => {
               const rowIdx = vr.index;
               const row = rows[rowIdx];
@@ -1236,6 +1314,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               return (
                 <div
                   key={rowKey(row, rowIdx)}
+                  role="row"
+                  aria-rowindex={rowIdx + 2}
                   className="absolute left-0 flex"
                   style={{ top: vr.start - HEADER_HEIGHT, height: ROW_HEIGHT, width: totalWidth }}
                   data-testid={`grid-row-${rowIdx}`}
@@ -1243,6 +1323,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   {/* Frozen row-number gutter; click to select, drag a selected
                       row to move it (mirrors column move). */}
                   <div
+                    role="rowheader"
                     className={`sg-gutter sticky left-0 z-20 flex items-center justify-center border-b border-r border-white/10 bg-panel text-text-secondary ${
                       rowIdx >= rect.r0 && rowIdx <= rect.r1 ? 'sg-gutter-selected' : ''
                     }`}
@@ -1268,6 +1349,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     return (
                       <div
                         key={col.key}
+                        id={`sg-cell-${rowIdx}-${col.key}`}
+                        role="gridcell"
+                        aria-colindex={c + 1}
+                        aria-selected={inSel}
                         className={`sg-cell flex items-center overflow-hidden border-b border-r border-white/5 px-2 text-xs ${
                           col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''
                         }`}
@@ -1290,11 +1375,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         {isEditingCell ? (
                           <textarea
                             ref={editorRef}
+                            aria-label={`Edit ${col.header} row ${rowIdx + 1}`}
                             className="h-full w-full resize-none bg-panel text-xs outline-none"
                             value={editing.draft}
                             rows={1}
                             onChange={(ev) => setEditing({ ...editing, draft: ev.target.value })}
-                            onBlur={() => commitEdit(null)}
+                            onBlur={() => commitEdit(null, false)}
                             onKeyDown={(ev) => {
                               // Let caret keys work inside the editor; commit/cancel bubble.
                               if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) {
