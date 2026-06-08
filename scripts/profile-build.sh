@@ -81,17 +81,29 @@ echo
 # Helpers
 ###############################################################################
 
+# Tracks whether any profiled step exited non-zero, so the script can finish
+# all steps (we still want later timings even if an early build fails) yet
+# return a failing status to the caller/CI.
+FAILED=0
+
 # Run a command, prefix output with [label], print wall-clock time.
 # Usage: run_timed "label" cmd args...
 run_timed() {
   local label="$1"; shift
   echo "=== $label ==="
   echo "+ $*"
-  local start end elapsed
+  local start end elapsed status
   start=$(date +%s)
-  "$@" 2>&1 | tail -30 || {
-    echo "(command exited non-zero — see full log above)"
-  }
+  # An `if` condition is exempt from `set -e`, so a failed step is recorded
+  # rather than aborting the run. pipefail makes the status reflect "$@",
+  # not the trailing `tail`.
+  if "$@" 2>&1 | tail -30; then
+    status=0
+  else
+    status=$?
+    echo "(command exited non-zero [$status] — see full log above)"
+    FAILED=1
+  fi
   end=$(date +%s)
   elapsed=$((end - start))
   printf '[wall-clock: %dm %02ds]\n\n' $((elapsed / 60)) $((elapsed % 60))
@@ -167,3 +179,8 @@ du -sh "$TARGET_DIR" 2>/dev/null || echo "(empty)"
 echo
 echo "Finished: $(date)"
 echo "Full log: $LOG"
+
+if [[ "$FAILED" -ne 0 ]]; then
+  echo "One or more profiled steps exited non-zero — see the log above." >&2
+  exit 1
+fi
