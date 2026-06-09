@@ -3444,7 +3444,7 @@ export default function DmpNewImportDialog({
     <DialogWrapper
       title={t('dialogs.dmpNewImport.title')}
       onClose={handleCancel}
-      fixedSize={{ width: 'min(1000px, 95vw)', height: 'min(700px, 90vh)' }}
+      size="fullscreen"
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       hidden={autoStartManualPlacementPending}
@@ -3469,13 +3469,13 @@ export default function DmpNewImportDialog({
             {/* Left column: SectionPreview */}
             <div
               className="shrink-0 flex flex-col items-center p-4 border-r border-border"
-              style={{ width: 380 }}
+              style={{ width: 480 }}
               data-testid="segment-preview-panel"
             >
               <SectionPreview
                 section={importPreviewSection}
                 color={importColor}
-                size={340}
+                size={440}
                 mergePreview={mergePreviewConfig}
                 dmpMergePreview={dmpMergePreviewConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
@@ -3638,6 +3638,9 @@ export default function DmpNewImportDialog({
               )}
 
               {/* Section Settings */}
+              {/* #61 embedding slot: section-name + SectionMetadataForm + ShotTableEditor.
+                  Consumed as-is here; Daniel's reusable focus-mode section-edit surface
+                  (fields-right / table-bottom) drops in here later. Do not refactor. */}
               {editState && (
                 <>
                   <div className="border-t border-border" />
@@ -3683,7 +3686,7 @@ export default function DmpNewImportDialog({
                       onInsertBefore={handleInsertBefore}
                       onInsertAfter={handleInsertAfter}
                       frozenShotIndices={frozenShotIndices}
-                      maxHeight="12rem"
+                      maxHeight="24rem"
                     />
                   </div>
                 </>
@@ -3695,13 +3698,13 @@ export default function DmpNewImportDialog({
             {/* Left column: Segment Preview */}
             <div
               className="shrink-0 flex flex-col items-center p-4 border-r border-border"
-              style={{ width: 380 }}
+              style={{ width: 480 }}
               data-testid="segment-preview-panel"
             >
               <SectionPreview
                 segmentSections={segmentPreviewSections}
                 contextSections={fromExistingContextSections}
-                size={340}
+                size={440}
                 onStationClick={handleSegmentStationClick}
                 selectedStationIndex={previewAnchor?.stationIndex ?? null}
                 selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
@@ -3959,6 +3962,7 @@ export default function DmpNewImportDialog({
               </div>
 
               {/* Section settings (same editing surface as section connection / zero datum flows) */}
+              {/* #61 embedding slot: section-edit surface goes here later. Do not refactor. */}
               {editState && (
                 <>
                   <div className="space-y-2" data-testid="wizard-manual-section-settings">
@@ -4006,7 +4010,7 @@ export default function DmpNewImportDialog({
                       onInsertBefore={handleInsertBefore}
                       onInsertAfter={handleInsertAfter}
                       frozenShotIndices={frozenShotIndices}
-                      maxHeight="12rem"
+                      maxHeight="24rem"
                     />
                   </div>
                 </>
