@@ -251,6 +251,10 @@ impl Default for PanelsConfig {
             sections_panel_width: 250,
             detail_panel_width: 300,
             data_table_height: 200,
+            data_table_shot_column_order: Vec::new(),
+            data_table_shot_hidden_columns: vec!["section_id".to_string(), "shot_id".to_string()],
+            data_table_azimuth_mode: "avg".to_string(),
+            data_table_inclination_mode: "off".to_string(),
         }
     }
 }

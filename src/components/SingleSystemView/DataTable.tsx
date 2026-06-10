@@ -14,6 +14,7 @@ import { formatShotId } from '../../utils/formatters';
 import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
+import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
@@ -477,7 +478,11 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Single edit → one update_shot (one undo). Values are already coerced by the
   // column; the virtual azimuth-average expands to in/out via buildShotUpdates.
-  // Column visibility (session-local). Azimuth/inclination are tri-state —
+  // Column order: drag a selected column header to move it. Empty =
+  // declaration order. Persisted with the rest of the view state below.
+  const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
+
+  // Column visibility. Azimuth/inclination are tri-state —
   // the average column, the in/out leg pair, or neither; the raw ID columns
   // start hidden; L/R/U/D toggle as one LRUD group.
   const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
@@ -528,6 +533,53 @@ export default function DataTable({ sections }: DataTableProps) {
     });
   }, []);
 
+
+  // Persist the view state (order, visibility, angle modes) in the app config.
+  // Init once when the config arrives; later changes save debounced. The
+  // snapshot guard keeps the init itself (and no-op renders) from re-saving.
+  const panelsConfig = useProjectStore((s) => s.config?.panels);
+  const lastSavedViewRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastSavedViewRef.current !== null || !panelsConfig) return;
+    const isMode = (m: string): m is 'avg' | 'inout' | 'off' =>
+      m === 'avg' || m === 'inout' || m === 'off';
+    const azimuth = isMode(panelsConfig.data_table_azimuth_mode)
+      ? panelsConfig.data_table_azimuth_mode
+      : 'avg';
+    const inclination = isMode(panelsConfig.data_table_inclination_mode)
+      ? panelsConfig.data_table_inclination_mode
+      : 'off';
+    setAzimuthMode(azimuth);
+    setInclinationMode(inclination);
+    setHiddenShotCols(new Set(panelsConfig.data_table_shot_hidden_columns));
+    setShotColumnOrder(panelsConfig.data_table_shot_column_order);
+    lastSavedViewRef.current = JSON.stringify([
+      panelsConfig.data_table_shot_column_order,
+      panelsConfig.data_table_shot_hidden_columns,
+      azimuth,
+      inclination,
+    ]);
+  }, [panelsConfig]);
+  useEffect(() => {
+    if (lastSavedViewRef.current === null) return undefined;
+    const hidden = [...hiddenShotCols].sort();
+    const snapshot = JSON.stringify([shotColumnOrder, hidden, azimuthMode, inclinationMode]);
+    if (snapshot === lastSavedViewRef.current) return undefined;
+    const timer = setTimeout(() => {
+      lastSavedViewRef.current = snapshot;
+      void invokeIpc(
+        'update_data_table_view',
+        {
+          columnOrder: shotColumnOrder,
+          hiddenColumns: hidden,
+          azimuthMode,
+          inclinationMode,
+        },
+        { purpose: 'persist data-table view state' }
+      ).catch((e) => console.error('Failed to save data-table view state:', e));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode]);
 
   useEffect(() => {
     if (!colMenuOpen) return undefined;
@@ -847,9 +899,6 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSectionId, handlePanToShot]
   );
 
-  // Column order is view state (drag a selected column header to move it);
-  // session-local for now, not persisted in config. Empty = declaration order.
-  const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
 
 
   // The grid must fit the panel body EXACTLY: taller and the wrapper clips it

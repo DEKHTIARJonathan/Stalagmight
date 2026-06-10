@@ -1209,6 +1209,7 @@ pub fn run() {
             commands::config::update_config,
             commands::config::reload_config,
             commands::config::update_panel_sizes,
+            commands::config::update_data_table_view,
             // Display settings (per-project)
             commands::config::load_display_settings,
             commands::config::save_display_setting,
