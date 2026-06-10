@@ -1878,6 +1878,13 @@ impl AppState {
     pub(super) fn remove_zero_datum(&self, station_ref: StationRef) -> CommandResult {
         self.with_project_mut(|project| {
             if project.remove_zero_datum(station_ref) {
+                // Removing the over-constraining datum can leave the merge group
+                // pinned to a now-absent second anchor with a residual tear. The
+                // standard geometry epilogue (realign_merges) is tolerance-gated at
+                // 5 cm, so a sub-tolerance tear would persist until a reload. Force a
+                // zero-trust re-solve here so removing the offending datum heals the
+                // group in-session, exactly as a reload would.
+                project.resolve_offsets();
                 tracing::debug!(
                     ?station_ref,
                     purpose = "remove GPS anchor",

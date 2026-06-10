@@ -27,4 +27,5 @@ export type {
   ProjectMetadata,
   ProjectState,
   FrozenShotRef,
+  DistanceField,
 } from './ipc.generated';

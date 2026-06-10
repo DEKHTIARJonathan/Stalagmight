@@ -248,6 +248,19 @@ pub struct ProjectMetadata {
     pub collab_enabled: bool,
 }
 
+/// Per-station along-cave distance field from a chosen origin (or the zero-datum
+/// entrance default). `distances[i]` corresponds to `station_refs[i]`; `None`
+/// marks an unreachable station (JSON can't carry infinity). `max_reachable` is
+/// the largest finite distance (0.0 if nothing is reachable), for auto-scaling
+/// the gradient legend. Backs the distance-gradient overlay (#34); reuses the
+/// shared reachability graph (jumps in, references out — see `build_survey_graph`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct DistanceField {
+    pub distances: Vec<Option<f64>>,
+    pub station_refs: Vec<StationRef>,
+    pub max_reachable: f64,
+}
+
 /// Overall project statistics
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectStats {
@@ -2193,20 +2206,85 @@ impl Project {
         }
     }
 
-    /// Check if a section is connected to a zero datum (directly or through merges only).
+    /// Every zero-datum station whose section lies in the same merge-connected
+    /// component as `section_id` (resolved to current StationRefs).
+    ///
+    /// This is the single source of truth for "what anchors this rigid group?" —
+    /// `section_has_zero_datum`, `find_connected_zero_datum`, the merge guard, and
+    /// the over-anchoring detector all derive from it, so they cannot drift apart.
     ///
     /// Counts only datums that still RESOLVE: a corrupt project can be opened with a
     /// dangling zero datum (anchor shot deleted) so the user can repair it, and a
     /// dangling datum is not a real anchor. Counting it would let a merge pick the
     /// phantom-anchored section as the fixed group and shift the world coordinate
-    /// system around a station that doesn't exist. (Mirrors find_connected_zero_datum
-    /// and the other zero-datum sites, which all filter via resolve_key.)
-    fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
+    /// system around a station that doesn't exist.
+    pub(crate) fn component_datum_refs(&self, section_id: SectionId) -> Vec<StationRef> {
         let merged = self.get_merged_section_ids(section_id);
         self.zero_datums
             .iter()
             .filter_map(|zd| self.resolve_key(&zd.station_ref))
-            .any(|sr| merged.contains(&sr.section_id))
+            .filter(|sr| merged.contains(&sr.section_id))
+            .collect()
+    }
+
+    /// Check if a section is connected to a zero datum (directly or through merges only).
+    fn section_has_zero_datum(&self, section_id: SectionId) -> bool {
+        !self.component_datum_refs(section_id).is_empty()
+    }
+
+    /// Group resolved zero datums by their merge-connected component, returning
+    /// only the components that hold MORE THAN ONE datum. An empty result means
+    /// the "≤1 zero datum per merge component" invariant holds.
+    ///
+    /// Two GPS anchors in one rigid merge group over-constrain it: the offset
+    /// cascade ([`Self::cascade_connection_offsets`]) marks every datum section
+    /// authoritative, so the two wavefronts meet on a merge edge that cannot
+    /// satisfy both anchors and that merge visibly tears apart. This is how the
+    /// invariant violation surfaces to the user.
+    pub fn over_anchored_merge_components(&self) -> Vec<Vec<StationRef>> {
+        let resolved: Vec<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .collect();
+        let mut groups: Vec<(HashSet<SectionId>, Vec<StationRef>)> = Vec::new();
+        for sr in resolved {
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|(sections, _)| sections.contains(&sr.section_id))
+            {
+                group.1.push(sr);
+            } else {
+                groups.push((self.get_merged_section_ids(sr.section_id), vec![sr]));
+            }
+        }
+        groups
+            .into_iter()
+            .map(|(_, refs)| refs)
+            .filter(|refs| refs.len() > 1)
+            .collect()
+    }
+
+    /// Would adding a merge between sections `a` and `b` place two zero datums in
+    /// one merge component? True only when `a` and `b` are in DIFFERENT merge
+    /// components and EACH component is already anchored — i.e. the merge would
+    /// fuse two independently-anchored rigid groups. Used to keep
+    /// [`Self::convert_orphan_closures_to_merges`] from silently creating the
+    /// over-constraint (a closure between two anchored groups is legitimate; a
+    /// rigid merge between them is not).
+    pub(crate) fn merge_would_double_anchor(&self, a: SectionId, b: SectionId) -> bool {
+        let component_a = self.get_merged_section_ids(a);
+        if component_a.contains(&b) {
+            // Already the same merge component — a redundant merge adds no anchor.
+            return false;
+        }
+        let anchored = |component: &HashSet<SectionId>| {
+            self.zero_datums
+                .iter()
+                .filter_map(|zd| self.resolve_key(&zd.station_ref))
+                .any(|sr| component.contains(&sr.section_id))
+        };
+        anchored(&component_a) && anchored(&self.get_merged_section_ids(b))
     }
 
     /// Get all stations colocated with the given station (via merges and aligned closures).
@@ -2938,6 +3016,373 @@ impl Project {
         Ok(())
     }
 
+    /// Coordinate-only, component-scoped batch of raw (measured) station
+    /// coordinates — the same values [`Self::compute_station_raw_coords`] returns,
+    /// computed for every station in `component` in one linear pass.
+    ///
+    /// The closure solve runs this once per connected component, so it deliberately
+    /// avoids whole-project [`Self::compute_station_coordinates`], which would be
+    /// (a) `O(component_count × total_stations)` across the per-component loop and
+    /// (b) `O(closures × stations)` from rebuilding the `merged_with`/`closures_with`
+    /// metadata the solver never reads. Merges and aligned closures only connect
+    /// stations within one connected component (see
+    /// [`Self::get_connected_section_ids`]), so scoping the colocated depth grouping
+    /// to `component` is exact.
+    fn compute_component_raw_coords(
+        &self,
+        component: &HashSet<SectionId>,
+    ) -> HashMap<StationRef, Coordinates> {
+        let station_list: Vec<StationRef> = self
+            .sections
+            .iter()
+            .filter(|s| component.contains(&s.id))
+            .flat_map(|s| (0..=s.shots.len()).map(move |idx| StationRef::new(s.id, idx as u32)))
+            .collect();
+
+        // Colocated depth groups (merges + aligned closures), restricted to the
+        // component. Simple union-find with path compression.
+        fn find(parent: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+            let mut cur = x;
+            while let Some(&p) = parent.get(&cur) {
+                if p == cur {
+                    break;
+                }
+                cur = p;
+            }
+            let mut node = x;
+            while let Some(&p) = parent.get(&node) {
+                if p == cur {
+                    break;
+                }
+                parent.insert(node, cur);
+                node = p;
+            }
+            cur
+        }
+        let mut parent: HashMap<StationRef, StationRef> =
+            station_list.iter().map(|&sr| (sr, sr)).collect();
+        let mut unite = |parent: &mut HashMap<StationRef, StationRef>, a, b| {
+            let (ra, rb) = (find(parent, a), find(parent, b));
+            if ra != rb {
+                parent.insert(ra, rb);
+            }
+        };
+        for merge in &self.station_merges {
+            if component.contains(&merge.station_a.section_id)
+                && component.contains(&merge.station_b.section_id)
+            {
+                if let (Some(a), Some(b)) =
+                    (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
+                {
+                    unite(&mut parent, a, b);
+                }
+            }
+        }
+        for closure in &self.loop_closures {
+            if !closure.is_aligned {
+                continue;
+            }
+            if component.contains(&closure.station_a.section_id)
+                && component.contains(&closure.station_b.section_id)
+            {
+                if let (Some(a), Some(b)) =
+                    (self.resolve_key(&closure.station_a), self.resolve_key(&closure.station_b))
+                {
+                    unite(&mut parent, a, b);
+                }
+            }
+        }
+        let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for &sr in &station_list {
+            let root = find(&mut parent, sr);
+            groups.entry(root).or_default().push(sr);
+        }
+        let mut depth: HashMap<StationRef, f64> = HashMap::with_capacity(station_list.len());
+        for members in groups.values() {
+            let d = self.compute_station_depth(members);
+            for &sr in members {
+                depth.insert(sr, d);
+            }
+        }
+
+        // Per-section XY walk + individual station offsets.
+        let mut out: HashMap<StationRef, Coordinates> =
+            HashMap::with_capacity(station_list.len());
+        for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
+            let (offset_x, offset_y) =
+                self.section_offsets.get(&section.id).copied().unwrap_or((0.0, 0.0));
+            let mut cur = (offset_x, offset_y);
+            for idx in 0..=section.shots.len() {
+                if idx > 0 {
+                    let shot = &section.shots[idx - 1];
+                    let az = shot.average_azimuth().to_radians();
+                    let h = shot.horizontal_length();
+                    cur.0 += h * az.sin();
+                    cur.1 += h * az.cos();
+                }
+                let sr = StationRef::new(section.id, idx as u32);
+                let z = depth.get(&sr).copied().unwrap_or(0.0);
+                let mut coords = Coordinates::new(cur.0, cur.1, z);
+                if let Some((ox, oy, oz)) = self.station_offset_for_ref(sr) {
+                    coords.x += ox;
+                    coords.y += oy;
+                    coords.z += oz;
+                }
+                out.insert(sr, coords);
+            }
+        }
+        out
+    }
+
+    /// Solve the two SPD weighted-Laplacian systems `A·x = atb_x` and
+    /// `A·y = atb_y` the closure adjustment assembles. Both systems share the
+    /// same sparsity (`adj`) but use different per-axis weights.
+    ///
+    /// A cave survey graph is almost a tree: long degree-2 passages and degree-1
+    /// spurs with only a handful of independent loops (≈ one per eligible
+    /// closure). We exploit that with **exact** Gaussian elimination of every
+    /// node whose current off-diagonal degree is ≤ 2 — degree-1 is leaf
+    /// back-substitution, degree-2 is series reduction (fill between the two
+    /// neighbours). Both axes are carried in lockstep since the structure is
+    /// shared; SPD guarantees positive pivots throughout. Peeling collapses the
+    /// tree and chains in O(n); what survives is the 2-core (≈ the cycle space),
+    /// solved with Jacobi-PCG (tiny, so effectively exact and instant). Peeled
+    /// nodes are then recovered by back-substitution in reverse order.
+    ///
+    /// `adj[i]` holds symmetric off-diagonal entries `(j, off_x, off_y)` (the
+    /// negative edge weights). Returns `(sol_x, sol_y)`, each length `n`.
+    fn solve_reduced_laplacian(
+        n: usize,
+        diag_x: &[f64],
+        diag_y: &[f64],
+        atb_x: &[f64],
+        atb_y: &[f64],
+        adj: &[Vec<(usize, f64, f64)>],
+        x0_x: &[f64],
+        x0_y: &[f64],
+    ) -> (Vec<f64>, Vec<f64>) {
+        // A node is only eliminated when its current pivot is *safely positive*
+        // relative to the node's original diagonal. A pivot that is non-positive or
+        // has collapsed to roundoff (a tiny fraction of its starting scale) means
+        // the node sits in the system's null space — a floating axis. Such a pivot
+        // is mathematically 0 but, with varied edge weights, lands at ~±1e-12 from
+        // cancellation, so an absolute 1e-30 floor would wrongly eliminate it and
+        // divide by ~0, shifting the whole component off its warm-started (measured)
+        // translation. These stay in the core for the warm-started PCG instead.
+        const PIVOT_REL: f64 = 1e-9;
+
+        // Mutable working copies of the system (diagonals, rhs, adjacency).
+        let mut dx = diag_x.to_vec();
+        let mut dy = diag_y.to_vec();
+        let mut cx = atb_x.to_vec();
+        let mut cy = atb_y.to_vec();
+        let mut nbr: Vec<HashMap<usize, (f64, f64)>> = vec![HashMap::new(); n];
+        for (i, row) in adj.iter().enumerate() {
+            for &(j, ox, oy) in row {
+                let e = nbr[i].entry(j).or_insert((0.0, 0.0));
+                e.0 += ox;
+                e.1 += oy;
+            }
+        }
+
+        // Back-substitution record captured at the moment a node is eliminated.
+        struct Elim {
+            u: usize,
+            nbrs: Vec<(usize, f64, f64)>,
+            dxu: f64,
+            dyu: f64,
+            cxu: f64,
+            cyu: f64,
+        }
+        let mut eliminated = vec![false; n];
+        let mut order: Vec<Elim> = Vec::new();
+
+        let mut queue: VecDeque<usize> = (0..n).filter(|&i| nbr[i].len() <= 2).collect();
+        while let Some(u) = queue.pop_front() {
+            // Stale entry: already gone, or degree grew above 2 since enqueued.
+            if eliminated[u] || nbr[u].len() > 2 {
+                continue;
+            }
+            let (pdx, pdy) = (dx[u], dy[u]);
+            // Scale-relative, sign-aware floor: skip when either axis pivot is
+            // non-positive or tiny vs. its original diagonal (null-space / floating).
+            if pdx <= PIVOT_REL * diag_x[u] || pdy <= PIVOT_REL * diag_y[u] {
+                continue; // null-space / ill-conditioned pivot → leave for the core solve
+            }
+            let nbrs: Vec<(usize, f64, f64)> =
+                nbr[u].iter().map(|(&v, &(ox, oy))| (v, ox, oy)).collect();
+            let (pcx, pcy) = (cx[u], cy[u]);
+            eliminated[u] = true;
+            order.push(Elim { u, nbrs: nbrs.clone(), dxu: pdx, dyu: pdy, cxu: pcx, cyu: pcy });
+
+            // Detach u from its neighbours.
+            for &(v, _, _) in &nbrs {
+                nbr[v].remove(&u);
+            }
+            // Schur complement onto each neighbour: diagonal + rhs.
+            for &(v, ox, oy) in &nbrs {
+                cx[v] -= ox * pcx / pdx;
+                cy[v] -= oy * pcy / pdy;
+                dx[v] -= ox * ox / pdx;
+                dy[v] -= oy * oy / pdy;
+            }
+            // Schur complement fill between neighbour pairs (series reduction).
+            for a in 0..nbrs.len() {
+                for b in (a + 1)..nbrs.len() {
+                    let (i, oxa, oya) = nbrs[a];
+                    let (j, oxb, oyb) = nbrs[b];
+                    let fx = -(oxa * oxb) / pdx;
+                    let fy = -(oya * oyb) / pdy;
+                    let e = nbr[i].entry(j).or_insert((0.0, 0.0));
+                    e.0 += fx;
+                    e.1 += fy;
+                    let e = nbr[j].entry(i).or_insert((0.0, 0.0));
+                    e.0 += fx;
+                    e.1 += fy;
+                }
+            }
+            // Neighbours may now be peelable.
+            for &(v, _, _) in &nbrs {
+                if !eliminated[v] && nbr[v].len() <= 2 {
+                    queue.push_back(v);
+                }
+            }
+        }
+
+        let mut sol_x = vec![0.0; n];
+        let mut sol_y = vec![0.0; n];
+
+        // Solve the irreducible 2-core (degree ≥ 3 / ill-conditioned nodes) with
+        // Jacobi-PCG. For a cave this is at most a few nodes per loop.
+        let core: Vec<usize> = (0..n).filter(|&i| !eliminated[i]).collect();
+        if !core.is_empty() {
+            let k = core.len();
+            let mut local: HashMap<usize, usize> = HashMap::with_capacity(k);
+            for (li, &g) in core.iter().enumerate() {
+                local.insert(g, li);
+            }
+            let cdx: Vec<f64> = core.iter().map(|&g| dx[g]).collect();
+            let cdy: Vec<f64> = core.iter().map(|&g| dy[g]).collect();
+            let crx: Vec<f64> = core.iter().map(|&g| cx[g]).collect();
+            let cry: Vec<f64> = core.iter().map(|&g| cy[g]).collect();
+            let mut cadj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); k];
+            for (li, &g) in core.iter().enumerate() {
+                for (&v, &(ox, oy)) in &nbr[g] {
+                    // Every surviving neighbour is itself a core node.
+                    if let Some(&lv) = local.get(&v) {
+                        cadj[li].push((lv, ox, oy));
+                    }
+                }
+            }
+            let cx0: Vec<f64> = core.iter().map(|&g| x0_x[g]).collect();
+            let cy0: Vec<f64> = core.iter().map(|&g| x0_y[g]).collect();
+            let csx = Self::pcg_axis(k, &cdx, &crx, &cadj, 0, &cx0);
+            let csy = Self::pcg_axis(k, &cdy, &cry, &cadj, 1, &cy0);
+            for (li, &g) in core.iter().enumerate() {
+                sol_x[g] = csx[li];
+                sol_y[g] = csy[li];
+            }
+        }
+
+        // Back-substitute eliminated nodes in reverse elimination order.
+        for rec in order.iter().rev() {
+            let mut sx = rec.cxu;
+            let mut sy = rec.cyu;
+            for &(v, ox, oy) in &rec.nbrs {
+                sx -= ox * sol_x[v];
+                sy -= oy * sol_y[v];
+            }
+            sol_x[rec.u] = sx / rec.dxu;
+            sol_y[rec.u] = sy / rec.dyu;
+        }
+
+        (sol_x, sol_y)
+    }
+
+    /// Jacobi-preconditioned Conjugate Gradient for one axis of an SPD/PSD system
+    /// stored as diagonal + symmetric off-diagonal adjacency `(j, off_x, off_y)`
+    /// (`axis` selects the weight). Used only for the small reduced core.
+    ///
+    /// Starts from the warm-start guess `x0` (the measured positions). This is not
+    /// just for convergence speed: a node that is unconstrained on this axis (e.g.
+    /// reachable only through a zero-length cardinal shot, so its weight is 0) has
+    /// an empty row, leaving that coordinate in the system's null space. CG never
+    /// moves a null-space direction, so it stays at `x0` — preserving the measured
+    /// position instead of snapping it to world 0.
+    fn pcg_axis(
+        n: usize,
+        diag: &[f64],
+        rhs: &[f64],
+        adj: &[Vec<(usize, f64, f64)>],
+        axis: usize,
+        x0: &[f64],
+    ) -> Vec<f64> {
+        let off = |e: (usize, f64, f64)| if axis == 0 { e.1 } else { e.2 };
+        let spmv = |x: &[f64]| -> Vec<f64> {
+            let mut y = vec![0.0; n];
+            for i in 0..n {
+                y[i] += diag[i] * x[i];
+                for &edge in &adj[i] {
+                    y[i] += off(edge) * x[edge.0];
+                }
+            }
+            y
+        };
+        let max_iter = n.min(10_000);
+        let tol = 1e-12;
+        let inv_diag: Vec<f64> = diag
+            .iter()
+            .map(|&d| if d.abs() > 1e-30 { 1.0 / d } else { 1.0 })
+            .collect();
+
+        let mut x = x0.to_vec();
+        let ax0 = spmv(&x);
+        let mut r: Vec<f64> = rhs.iter().zip(ax0.iter()).map(|(&b, &a)| b - a).collect();
+        let mut z: Vec<f64> = r.iter().zip(inv_diag.iter()).map(|(&ri, &mi)| ri * mi).collect();
+        let mut p = z.clone();
+        let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
+
+        // Converge relative to the *initial residual* ‖b − A·x0‖, not ‖b‖. With a
+        // warm start that is the correct reference: return x0 only when it already
+        // satisfies the system (residual ~0 — which includes pure null-space
+        // directions), and otherwise let CG converge the range component while
+        // leaving null-space directions at x0. Keying the early exit off ‖b‖ alone
+        // would wrongly return a non-optimal x0 when Schur elimination cancels the
+        // core RHS for a balanced loop even though the matrix rows are non-zero
+        // (Codex #86).
+        let r0_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
+        if r0_norm_sq < tol * tol {
+            return x;
+        }
+
+        for _iter in 0..max_iter {
+            let ap = spmv(&p);
+            let pap: f64 = p.iter().zip(ap.iter()).map(|(&pi, &api)| pi * api).sum();
+            if pap.abs() < 1e-30 {
+                break;
+            }
+            let alpha = rz / pap;
+            for i in 0..n {
+                x[i] += alpha * p[i];
+                r[i] -= alpha * ap[i];
+            }
+            let r_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
+            if r_norm_sq < tol * tol * r0_norm_sq {
+                break;
+            }
+            for i in 0..n {
+                z[i] = r[i] * inv_diag[i];
+            }
+            let rz_new: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
+            let beta = rz_new / rz;
+            for i in 0..n {
+                p[i] = z[i] + beta * p[i];
+            }
+            rz = rz_new;
+        }
+        x
+    }
+
     fn adjust_least_squares(
         &mut self,
         component: &HashSet<SectionId>,
@@ -2952,6 +3397,15 @@ impl Project {
                 stations.push(StationRef::new(section.id, idx as u32));
             }
         }
+
+        // Precompute every component station's raw (measured) coordinates in one
+        // linear, component-scoped pass. The warm-start, group-Z and section-delta
+        // phases below each need a station's measured position; calling
+        // `compute_station_raw_coords` per station re-walks the section from its
+        // start (O(index)), which made the solve O(n^2) on long degree-2 chains
+        // (#81). The map is owned (no borrow of `self`), so it stays valid across
+        // the later `iter_mut` update phase.
+        let raw_coords = self.compute_component_raw_coords(component);
 
         let mut parent: HashMap<StationRef, StationRef> = HashMap::new();
         for station in &stations {
@@ -3042,8 +3496,9 @@ impl Project {
                 return Err("Multiple zero datums in a single constraint group".to_string());
             }
             if let Some(datum) = datum_members.pop() {
-                let coords = self
-                    .compute_station_raw_coords(datum)
+                let coords = raw_coords
+                    .get(&datum)
+                    .copied()
                     .ok_or_else(|| "Failed to compute zero datum coordinates".to_string())?;
                 fixed_groups.insert(*root);
                 fixed_coords.insert(*root, coords);
@@ -3054,8 +3509,9 @@ impl Project {
             let anchor_root = *station_root
                 .get(&anchor_station)
                 .ok_or_else(|| "Anchor station not found".to_string())?;
-            let coords = self
-                .compute_station_raw_coords(anchor_station)
+            let coords = raw_coords
+                .get(&anchor_station)
+                .copied()
                 .ok_or_else(|| "Failed to compute anchor coordinates".to_string())?;
             fixed_groups.insert(anchor_root);
             fixed_coords.insert(anchor_root, coords);
@@ -3075,10 +3531,10 @@ impl Project {
         }
 
         // Sparse assembly for the symmetric positive-definite normal matrix A^T A.
-        // The matrix is a weighted graph Laplacian — extremely sparse (≤3 non-zeros
-        // per row).  We store diagonal entries and off-diagonal adjacency, then solve
-        // via Jacobi-preconditioned Conjugate Gradient which is O(nnz * iterations)
-        // instead of O(n³) for dense LU.
+        // The matrix is a weighted graph Laplacian (grounded at the fixed
+        // datum/anchor) — extremely sparse (≤3 non-zeros per row). We store
+        // diagonal entries and off-diagonal adjacency, then solve via degree-≤2
+        // graph reduction plus PCG on the tiny core (see `solve_reduced_laplacian`).
         let mut atb_x = vec![0.0; n];
         let mut atb_y = vec![0.0; n];
         let mut diag_x = vec![0.0; n];
@@ -3206,103 +3662,65 @@ impl Project {
             }
         }
 
-        // Compute initial guess from current group positions (warm start).
-        // Starting from the current positions rather than zeros dramatically
-        // improves convergence — the initial residual is only the closure
-        // correction instead of the full absolute coordinates.
+        // Warm-start guess: each unknown group's measured position. This seeds the
+        // core PCG so a coordinate that is unconstrained on an axis (e.g. only a
+        // zero-length cardinal shot touches it → zero weight → null-space row)
+        // stays at its measured value instead of snapping to world 0.
         let mut x0_x = vec![0.0; n];
         let mut x0_y = vec![0.0; n];
         for (root, members) in &groups {
             if let Some(&idx) = unknown_index.get(root) {
-                if let Some(member) = members.first() {
-                    if let Some(coords) = self.compute_station_raw_coords(*member) {
-                        x0_x[idx] = coords.x;
-                        x0_y[idx] = coords.y;
-                    }
+                if let Some(coords) = members.first().and_then(|m| raw_coords.get(m).copied()) {
+                    x0_x[idx] = coords.x;
+                    x0_y[idx] = coords.y;
                 }
             }
         }
 
-        // Sparse matrix-vector product: y = A*x, where A is the graph Laplacian
-        // stored as diagonal + adjacency list.  axis=0 for X, axis=1 for Y.
-        let spmv = |x: &[f64], diag: &[f64], axis: usize| -> Vec<f64> {
-            let mut y = vec![0.0; n];
-            for i in 0..n {
-                y[i] += diag[i] * x[i];
-                for &(j, wx, wy) in &adj[i] {
-                    let w = if axis == 0 { wx } else { wy };
-                    y[i] += w * x[j];
-                }
-            }
-            y
-        };
+        // Solve both axes (sharing sparsity, differing in per-axis weights) with
+        // exact degree-≤2 graph reduction: peel spurs and series-reduce long
+        // passages in O(n), then Jacobi-PCG on the small remaining 2-core (≈ the
+        // cycle space, ~#closures nodes), then back-substitute. This replaces the
+        // former full-system PCG, which took O(loop-diameter) iterations — i.e.
+        // O(n) iterations on a single long loop, making the solve O(n²) (#81).
+        // See `solve_reduced_laplacian`.
+        let (sol_x, sol_y) = Self::solve_reduced_laplacian(
+            n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y,
+        );
 
-        // Jacobi-preconditioned Conjugate Gradient solver.
-        // Converges in O(diameter) iterations for graph Laplacians.
-        // Accepts an initial guess x0 for warm-starting.
-        let pcg_solve = |diag: &[f64], rhs: &[f64], axis: usize, x0: &[f64]| -> Result<Vec<f64>, String> {
-            let max_iter = n.min(10_000);
-            let tol = 1e-12;
-
-            // Jacobi preconditioner: M = diag(A)
-            let inv_diag: Vec<f64> = diag.iter().map(|&d| {
-                if d.abs() > 1e-30 { 1.0 / d } else { 1.0 }
-            }).collect();
-
-            let mut x = x0.to_vec();
-            // r = b - A*x0  (residual from initial guess)
-            let ax0 = spmv(&x, diag, axis);
-            let mut r: Vec<f64> = rhs.iter().zip(ax0.iter()).map(|(&bi, &ai)| bi - ai).collect();
-            let mut z: Vec<f64> = r.iter().zip(inv_diag.iter()).map(|(&ri, &mi)| ri * mi).collect();
-            let mut p = z.clone();
-            let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
-
-            let rhs_norm_sq: f64 = rhs.iter().map(|&v| v * v).sum();
-            if rhs_norm_sq < tol * tol {
-                return Ok(x);
-            }
-
-            for _iter in 0..max_iter {
-                let ap = spmv(&p, diag, axis);
-                let pap: f64 = p.iter().zip(ap.iter()).map(|(&pi, &api)| pi * api).sum();
-                if pap.abs() < 1e-30 {
-                    break;
-                }
-                let alpha = rz / pap;
-
+        // Optimality guard (tests only): the closure adjustment is the minimizer of
+        // the weighted misclosure, i.e. the solution of the SPD normal equations
+        // `A·x = atb`. Verify that directly on the *real* assembled system by
+        // checking the residual `‖A·x − atb‖∞ ≈ 0` for both axes. This runs for
+        // every test that exercises the solve (analytic, realistic, fuzz), so it
+        // proves the result is the true optimum — not merely that "the loop closed".
+        #[cfg(test)]
+        {
+            let residual_inf = |diag: &[f64], atb: &[f64], sol: &[f64], axis: usize| -> f64 {
+                let mut max = 0.0_f64;
                 for i in 0..n {
-                    x[i] += alpha * p[i];
-                    r[i] -= alpha * ap[i];
+                    let mut ax = diag[i] * sol[i];
+                    for &(j, wx, wy) in &adj[i] {
+                        ax += if axis == 0 { wx } else { wy } * sol[j];
+                    }
+                    max = max.max((ax - atb[i]).abs());
                 }
-
-                let r_norm_sq: f64 = r.iter().map(|&v| v * v).sum();
-                if r_norm_sq < tol * tol * rhs_norm_sq {
-                    break;
-                }
-
-                for i in 0..n {
-                    z[i] = r[i] * inv_diag[i];
-                }
-                let rz_new: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
-                let beta = rz_new / rz;
-                for i in 0..n {
-                    p[i] = z[i] + beta * p[i];
-                }
-                rz = rz_new;
-            }
-
-            Ok(x)
-        };
-
-        let sol_x = pcg_solve(&diag_x, &atb_x, 0, &x0_x)?;
-        let sol_y = pcg_solve(&diag_y, &atb_y, 1, &x0_y)?;
+                max
+            };
+            let rx = residual_inf(&diag_x, &atb_x, &sol_x, 0);
+            let ry = residual_inf(&diag_y, &atb_y, &sol_y, 1);
+            assert!(
+                rx < 1e-6 && ry < 1e-6,
+                "closure solve is not at the LSQ optimum: ‖A·x−b‖∞ = ({rx:.3e}, {ry:.3e})"
+            );
+        }
 
         // Collect original Z coordinates for each group root (depths are not adjusted)
         let mut group_raw_z: HashMap<StationRef, f64> = HashMap::new();
         for (root, members) in &groups {
             // Use the first member's raw Z as representative for the group
             if let Some(member) = members.first() {
-                if let Some(coords) = self.compute_station_raw_coords(*member) {
+                if let Some(coords) = raw_coords.get(member).copied() {
                     group_raw_z.insert(*root, coords.z);
                 }
             }
@@ -3449,6 +3867,12 @@ impl Project {
             }
         }
 
+        // Recompute coordinates now that the shots above were rewritten. The
+        // section-alignment phase below compares each station's *post-update*
+        // position against its solved target, so it must not reuse `raw_coords`
+        // (the pre-update measured snapshot). Same component-scoped O(n) batch.
+        let post_update_coords = self.compute_component_raw_coords(component);
+
         // Align each section's absolute position to solved coordinates (rigid XY translation).
         // This prevents merged stations in different sections from drifting apart.
         // Only X and Y are compared/applied; Z (depth) is not adjusted.
@@ -3466,8 +3890,9 @@ impl Project {
                 let target = group_coords
                     .get(&root)
                     .ok_or_else(|| "Missing solved coordinates".to_string())?;
-                let current = self
-                    .compute_station_raw_coords(station)
+                let current = post_update_coords
+                    .get(&station)
+                    .copied()
                     .ok_or_else(|| "Failed to compute station coordinates".to_string())?;
                 let dx = target.x - current.x;
                 let dy = target.y - current.y;
@@ -3501,7 +3926,7 @@ impl Project {
                     let root = *station_root.get(&local).unwrap_or(&local);
                     if let (Some(target), Some(current)) = (
                         group_coords.get(&root),
-                        self.compute_station_raw_coords(local),
+                        post_update_coords.get(&local).copied(),
                     ) {
                         delta_xy = Some((target.x - current.x, target.y - current.y));
                         break;
@@ -4854,41 +5279,14 @@ impl Project {
         }
     }
 
-    /// Get all station refs connected to this station via shots and merges (transitive).
-    /// All stations in a section are connected via shots, and merges connect stations across sections.
-    /// Uses merge-only connectivity (rigid groups) for datum validation.
-    fn get_connected_stations(&self, station_ref: StationRef) -> HashSet<StationRef> {
-        // Reuse get_merged_section_ids for merge-only section-level traversal
-        let connected_sections = self.get_merged_section_ids(station_ref.section_id);
-
-        // Enumerate all stations in connected sections
-        let mut connected = HashSet::new();
-        for section_id in connected_sections {
-            if let Some(section) = self.get_section(section_id) {
-                // A section with N shots has N+1 stations (indices 0 to N)
-                for i in 0..=section.shots.len() {
-                    connected.insert(StationRef {
-                        section_id,
-                        station_index: i as u32,
-                    });
-                }
-            }
-        }
-
-        connected
-    }
-
-    /// Check if any connected station already has a zero datum (returns the conflicting ref)
+    /// The zero datum (other than `station_ref` itself) that already anchors the
+    /// merge-connected rigid group `station_ref` belongs to, if any. Used to reject
+    /// setting a second datum on an already-anchored group. Merge-only connectivity
+    /// via the shared [`Self::component_datum_refs`] source of truth.
     fn find_connected_zero_datum(&self, station_ref: StationRef) -> Option<StationRef> {
-        let connected = self.get_connected_stations(station_ref);
-        for zd in &self.zero_datums {
-            if let Some(sr) = self.resolve_key(&zd.station_ref) {
-                if connected.contains(&sr) && sr != station_ref {
-                    return Some(sr);
-                }
-            }
-        }
-        None
+        self.component_datum_refs(station_ref.section_id)
+            .into_iter()
+            .find(|&sr| sr != station_ref)
     }
 
     /// Format a station reference for user display.
@@ -5826,29 +6224,50 @@ impl Project {
         }
     }
 
-    /// Per-station along-cave distance to the nearest zero datum: the
-    /// shortest path through the survey graph summing each shot's measured
-    /// length. Edges are *all* shots (reference and non-reference, since
-    /// refs are real measured legs) plus zero-cost edges for
-    /// `station_merges` and aligned `loop_closures` (those collapse two
-    /// stations into the same physical point). Unreachable stations get
-    /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
-    pub fn compute_penetration_distances(&self, stations: &[Station]) -> Vec<f64> {
-        let n = stations.len();
-        let mut dist = vec![f64::INFINITY; n];
-        if self.zero_datums.is_empty() {
-            return dist;
-        }
-        // Map StationRef -> index in `stations` so the adjacency loop can
-        // resolve shot endpoints without a linear search per shot.
-        let mut station_index: HashMap<StationRef, usize> = HashMap::with_capacity(n);
+    /// Build a `StationRef -> index` map for `stations` (index = position in the
+    /// slice) so graph builders can resolve shot/merge/closure endpoints to
+    /// nodes without a linear search.
+    fn station_index_map(stations: &[Station]) -> HashMap<StationRef, usize> {
+        let mut m: HashMap<StationRef, usize> = HashMap::with_capacity(stations.len());
         for (i, s) in stations.iter().enumerate() {
-            station_index.insert(s.station_ref, i);
+            m.insert(s.station_ref, i);
         }
+        m
+    }
 
-        // Build adjacency: shots (weighted by length) + merges + aligned
-        // closures (weight 0).
+    /// Build the survey distance graph as an adjacency list over the `n` stations
+    /// (nodes indexed by position; `station_index` maps refs to those indices).
+    /// Edges are **every real topological connection**:
+    /// - every shot — permanent AND jump/reference — weighted by its measured
+    ///   `length` (reference shots are real measured legs / jumps a diver swims);
+    /// - `station_merges` (zero cost — the same physical point);
+    /// - every `loop_closures` entry (zero cost — a closed loop means the two
+    ///   stations are the same physical point), **regardless of `is_aligned`**;
+    ///   alignment is only a geometry-reconciliation strategy (`Move` vs `Batch`),
+    ///   so the topological connection exists either way.
+    ///
+    /// We deliberately include everything. Distances are shortest-path (Dijkstra
+    /// always takes the minimum), so an extra real edge can only ever yield a
+    /// shorter, more correct route — never inflate one. Excluding real
+    /// connections is what hides reachable areas or routes "the long way".
+    ///
+    /// NOTE (#77): the one residual risk is a *non-physical* reference tie (a pure
+    /// survey backsight, not swimmable) creating a false shortcut that understates
+    /// distance. Telling those apart from real jumps needs a first-class model;
+    /// until then we favor completeness — real data showed over-exclusion (a
+    /// dropped jump shortcut, excluded non-aligned closures) was the actual bug.
+    fn build_survey_graph(
+        &self,
+        n: usize,
+        station_index: &HashMap<StationRef, usize>,
+        coords: Option<&[Coordinates]>,
+    ) -> Vec<Vec<(usize, f64)>> {
         let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+
+        // Shots (permanent and jump/reference). Edge weight = straight-line
+        // distance between the endpoints' `coords` when supplied (the
+        // closure-adjusted geometry, for the distance gradient), else the
+        // measured shot length (penetration / topological queries).
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {
                 let from = StationRef::new(section.id, i as u32);
@@ -5856,12 +6275,20 @@ impl Project {
                 if let (Some(&fi), Some(&ti)) =
                     (station_index.get(&from), station_index.get(&to))
                 {
-                    let w = shot.length.max(0.0);
+                    let w = match coords {
+                        Some(c) => {
+                            let (a, b) = (&c[fi], &c[ti]);
+                            let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
+                            (dx * dx + dy * dy + dz * dz).sqrt()
+                        }
+                        None => shot.length.max(0.0),
+                    };
                     adj[fi].push((ti, w));
                     adj[ti].push((fi, w));
                 }
             }
         }
+        // Station merges: zero-cost (same physical point).
         for merge in &self.station_merges {
             if let (Some(a_sr), Some(b_sr)) = (
                 self.resolve_key(&merge.station_a),
@@ -5875,10 +6302,9 @@ impl Project {
                 }
             }
         }
+        // Loop closures: zero-cost, INCLUDING non-aligned ones — a closed loop is
+        // a real physical connection no matter the reconciliation strategy.
         for closure in &self.loop_closures {
-            if !closure.is_aligned {
-                continue;
-            }
             if let (Some(a_sr), Some(b_sr)) = (
                 self.resolve_key(&closure.station_a),
                 self.resolve_key(&closure.station_b),
@@ -5892,7 +6318,17 @@ impl Project {
             }
         }
 
-        // Multi-source Dijkstra from all zero-datum stations.
+        adj
+    }
+
+    /// Multi-source Dijkstra over `adj` from the given `roots` (node indices,
+    /// each seeded at distance 0). Returns the shortest-path distance to every
+    /// node; unreachable nodes — and every node when `roots` is empty — stay
+    /// `f64::INFINITY`.
+    fn dijkstra(adj: &[Vec<(usize, f64)>], roots: &[usize]) -> Vec<f64> {
+        let n = adj.len();
+        let mut dist = vec![f64::INFINITY; n];
+
         #[derive(Copy, Clone, PartialEq)]
         struct Node(f64, usize);
         impl Eq for Node {}
@@ -5909,14 +6345,14 @@ impl Project {
                     .then(self.1.cmp(&other.1))
             }
         }
+
         let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
-        for zd in &self.zero_datums {
-            if let Some(&i) = self
-                .resolve_key(&zd.station_ref)
-                .and_then(|sr| station_index.get(&sr))
-            {
-                dist[i] = 0.0;
-                heap.push(std::cmp::Reverse(Node(0.0, i)));
+        for &r in roots {
+            // Bounds-guard only; a duplicate root just gets re-popped once and
+            // filtered by the `d > dist[u]` check below — no need to dedup here.
+            if r < n {
+                dist[r] = 0.0;
+                heap.push(std::cmp::Reverse(Node(0.0, r)));
             }
         }
         while let Some(std::cmp::Reverse(Node(d, u))) = heap.pop() {
@@ -5934,6 +6370,58 @@ impl Project {
         dist
     }
 
+    /// Resolve the project's zero-datum stations to their indices in `stations`.
+    fn zero_datum_roots(&self, station_index: &HashMap<StationRef, usize>) -> Vec<usize> {
+        self.zero_datums
+            .iter()
+            .filter_map(|zd| {
+                self.resolve_key(&zd.station_ref)
+                    .and_then(|sr| station_index.get(&sr).copied())
+            })
+            .collect()
+    }
+
+    /// Per-station along-cave distance from the given `roots` (indices into
+    /// `stations`), summing each shot's measured `length` along the shortest
+    /// path. Merges and all loop closures are zero-cost (a closed loop ties two
+    /// stations to the same physical point). Unreachable stations — and every
+    /// station when `roots`/`stations` is empty — get `f64::INFINITY`.
+    ///
+    /// This is the reusable core shared by penetration distance (roots = zero
+    /// datums), the distance-gradient overlay (roots = a chosen station), and a
+    /// future gas-planning mode. All graph/geometry work stays here in the
+    /// domain layer; callers (IPC, UI) only consume the resulting distances.
+    pub fn compute_distances_from(&self, stations: &[Station], roots: &[usize]) -> Vec<f64> {
+        let n = stations.len();
+        if n == 0 || roots.is_empty() {
+            return vec![f64::INFINITY; n];
+        }
+        let station_index = Self::station_index_map(stations);
+        let adj = self.build_survey_graph(n, &station_index, None);
+        Self::dijkstra(&adj, roots)
+    }
+
+    /// Per-station along-cave distance to the nearest zero datum: the
+    /// shortest path through the survey graph summing each shot's measured
+    /// length. Edges are *all* shots (reference and non-reference, since
+    /// refs are real measured legs) plus zero-cost edges for
+    /// `station_merges` and all `loop_closures` (a closed loop ties two
+    /// stations to the same physical point). Unreachable stations get
+    /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
+    ///
+    /// Equivalent to [`compute_distances_from`] seeded with the zero-datum
+    /// station indices — the default origin for the distance-gradient overlay.
+    pub fn compute_penetration_distances(&self, stations: &[Station]) -> Vec<f64> {
+        let n = stations.len();
+        if n == 0 || self.zero_datums.is_empty() {
+            return vec![f64::INFINITY; n];
+        }
+        let station_index = Self::station_index_map(stations);
+        let roots = self.zero_datum_roots(&station_index);
+        let adj = self.build_survey_graph(n, &station_index, None);
+        Self::dijkstra(&adj, &roots)
+    }
+
     /// Maximum along-cave penetration distance — the longest shortest-path
     /// distance from any zero datum to any station through the survey
     /// graph. Zero if there are no zero datums or nothing is reachable.
@@ -5942,6 +6430,59 @@ impl Project {
             .into_iter()
             .filter(|d| d.is_finite())
             .fold(0.0_f64, f64::max)
+    }
+
+    /// Per-station distance field from a chosen origin `from` station, or from the
+    /// zero datum(s) when `from` is `None` (the gradient's entrance default).
+    ///
+    /// Edge weights come from each station's **coordinates** in `stations` — the
+    /// caller passes MEASURED coordinates (surveyed lengths), so distances reflect
+    /// the physical guideline length (#34). Merges/closures stay zero-cost.
+    /// Unreachable stations come back as `None`; the returned `station_refs` echo
+    /// the input, so the field is self-describing.
+    pub fn distance_field_from(
+        &self,
+        stations: &[Station],
+        from: Option<&StationRef>,
+    ) -> DistanceField {
+        let n = stations.len();
+        let station_index = Self::station_index_map(stations);
+        let coords: Vec<Coordinates> = stations.iter().map(|s| s.coordinates).collect();
+        let roots: Vec<usize> = match from {
+            Some(r) => {
+                let key: StationKey = (*r).into();
+                self.resolve_key(&key)
+                    .and_then(|sr| station_index.get(&sr).copied())
+                    .into_iter()
+                    .collect()
+            }
+            None => self.zero_datum_roots(&station_index),
+        };
+        let raw = if n == 0 || roots.is_empty() {
+            vec![f64::INFINITY; n]
+        } else {
+            let adj = self.build_survey_graph(n, &station_index, Some(&coords));
+            Self::dijkstra(&adj, &roots)
+        };
+        let mut max_reachable = 0.0_f64;
+        let distances: Vec<Option<f64>> = raw
+            .iter()
+            .map(|&d| {
+                if d.is_finite() {
+                    if d > max_reachable {
+                        max_reachable = d;
+                    }
+                    Some(d)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        DistanceField {
+            distances,
+            station_refs: stations.iter().map(|s| s.station_ref).collect(),
+            max_reachable,
+        }
     }
 
     /// Get metadata for this project
@@ -6762,6 +7303,29 @@ impl Project {
             }
         }
 
+        // Two or more zero datums in one merge-connected component over-constrain
+        // the rigid group (two GPS anchors), so the offset cascade tears a merge
+        // edge apart. The interactive guards (set_zero_datum / merge_stations)
+        // prevent this on clean state, but a file written by an older build or a
+        // closure-to-merge conversion can still arrive in this state — surface it
+        // instead of silently mis-solving the geometry. Warning, not Critical: the
+        // project still opens and the user resolves it by removing a datum.
+        for component in self.over_anchored_merge_components() {
+            let datums = component
+                .iter()
+                .map(|sr| format!("{}:{}", sr.section_id, sr.station_index))
+                .collect::<Vec<_>>()
+                .join(", ");
+            violations.push(IntegrityViolation {
+                severity: ViolationSeverity::Warning,
+                category: "multiple_datums_per_merge_component".to_string(),
+                message: format!(
+                    "Merge-connected group has {} zero datums ({datums}); remove all but one to keep the group's geometry consistent",
+                    component.len()
+                ),
+            });
+        }
+
         violations
     }
 
@@ -7178,6 +7742,17 @@ impl Project {
                 continue;
             };
             if !self.are_stations_connected_excluding_shot(a, b, None, false) {
+                // A sole-bridge closure between two independently zero-datum-anchored
+                // groups is intentionally KEPT as a closure (converting it to a rigid
+                // merge would double-anchor one merge component and tear it — see
+                // `convert_orphan_closures_to_merges`). Don't flag it as an
+                // orphan-that-should-be-a-merge: that warning would be misleading and
+                // Repair could never clear it, since the converter correctly refuses
+                // to merge it. The same `merge_would_double_anchor` predicate keeps the
+                // checker and the converter in agreement.
+                if self.merge_would_double_anchor(a.section_id, b.section_id) {
+                    continue;
+                }
                 violations.push(IntegrityViolation {
                     severity: ViolationSeverity::Warning,
                     category: "orphan_closure".to_string(),
@@ -7262,8 +7837,16 @@ impl Project {
     /// section so its only attachment is a closure.)
     pub fn convert_orphan_closures_to_merges(&mut self) -> usize {
         let mut converted = 0;
+        // Sole-bridge closures left UNCONVERTED because turning them into a rigid
+        // merge would fuse two independently zero-datum-anchored groups. Tracked by
+        // id so the orphan scan below does not reconsider them on every iteration
+        // (which would loop forever, since they are never removed).
+        let mut left_as_closure: HashSet<u64> = HashSet::new();
         loop {
             let orphan = self.loop_closures.iter().position(|c| {
+                if left_as_closure.contains(&c.id) {
+                    return false;
+                }
                 if c.station_a.section_id == c.station_b.section_id {
                     return false;
                 }
@@ -7275,6 +7858,30 @@ impl Project {
                 !self.are_stations_connected_excluding_shot(a, b, None, false)
             });
             let Some(idx) = orphan else { break };
+
+            // Converting a sole-bridge closure into a merge makes it a RIGID edge.
+            // If both endpoints' groups are already zero-datum-anchored, that edge
+            // would place two GPS anchors in one merge component, and the next
+            // offset cascade would tear the merge apart (the reported failure
+            // mode). Keep it a (soft) closure instead — a closure between two
+            // anchored groups is legitimate — and let the over-anchoring detector
+            // surface it for the user to resolve.
+            {
+                let closure = &self.loop_closures[idx];
+                if self.merge_would_double_anchor(
+                    closure.station_a.section_id,
+                    closure.station_b.section_id,
+                ) {
+                    tracing::warn!(
+                        closure_id = closure.id,
+                        purpose = "avoid double-anchoring a merge component",
+                        "Left a sole-bridge loop closure unconverted: both endpoints are zero-datum-anchored"
+                    );
+                    left_as_closure.insert(closure.id);
+                    continue;
+                }
+            }
+
             let closure = self.loop_closures.remove(idx);
             let already = match (
                 self.resolve_key(&closure.station_a),

@@ -883,6 +883,165 @@ fn set_zero_datum_allows_disconnected_groups() {
 }
 
 #[test]
+fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
+    // Mirrors the reported topology: a far station (like 37:7) is merge-connected to
+    // the datum (like 0:0) through a CHAIN of merges, not a direct one. The guard
+    // must walk the whole merge component, so a second datum on the far end is
+    // rejected.
+    let mut project = Project::new("Chain".to_string(), None);
+    let mk = |project: &mut Project| {
+        project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id
+    };
+    let (a, b, c, d) = (mk(&mut project), mk(&mut project), mk(&mut project), mk(&mut project));
+
+    // Chain A — B — C — D, each merge joining one section's end to the next's start.
+    for (x, y) in [(a, b), (b, c), (c, d)] {
+        project.station_merges.push(StationMerge {
+            station_a: StationRef::new(x, 1).into(),
+            station_b: StationRef::new(y, 0).into(),
+            merged_at: Utc::now(),
+        });
+    }
+    project.rebuild_merge_adjacency();
+
+    let gps = GpsCoordinates::new(45.0, -90.0, 0.0).unwrap();
+    project.set_zero_datum(StationRef::new(a, 0), gps).unwrap();
+
+    // D is three hops from A's datum but in the same merge component → reject.
+    let result = project.set_zero_datum(StationRef::new(d, 1), gps);
+    assert!(
+        result.is_err(),
+        "a second datum on the far end of a merge chain must be rejected"
+    );
+    assert!(result.unwrap_err().contains("already has a zero datum"));
+    assert_eq!(project.zero_datums.len(), 1);
+}
+
+#[test]
+fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
+    // Two independently GPS-anchored surveys (separate merge components) joined only
+    // by a sole-bridge loop closure. Converting that closure into a rigid MERGE would
+    // place two datums in one merge component and tear it on the next cascade — the
+    // reported failure mode — so the conversion must leave it as a (soft) closure.
+    let mut project = Project::new("DoubleAnchorBridge".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(45.0, -90.0, 0.0).unwrap())
+        .unwrap();
+    project
+        .set_zero_datum(StationRef::new(b, 0), GpsCoordinates::new(45.001, -90.0, 0.0).unwrap())
+        .unwrap();
+
+    // A closure between two anchored-but-disconnected groups is legitimate.
+    project
+        .create_loop_closure(StationRef::new(a, 1), StationRef::new(b, 1), ClosureStrategy::Batch)
+        .unwrap();
+
+    let converted = project.convert_orphan_closures_to_merges();
+    assert_eq!(
+        converted, 0,
+        "must not convert a closure that would double-anchor a merge component"
+    );
+    assert!(project.station_merges.is_empty(), "no merge should have been created");
+    assert_eq!(project.loop_closures.len(), 1, "the bridge closure must be retained");
+    assert!(
+        project.over_anchored_merge_components().is_empty(),
+        "the two datums must stay in separate merge components"
+    );
+    // The retained bridge must NOT be flagged as an orphan-that-should-be-a-merge:
+    // the checker and the converter agree via merge_would_double_anchor, so Repair
+    // can't get stuck re-flagging a closure it will never convert.
+    assert!(
+        project
+            .check_orphan_closures()
+            .iter()
+            .all(|v| v.category != "orphan_closure"),
+        "a deliberately-retained double-anchored bridge closure must not be flagged as an orphan"
+    );
+
+    // Contrast: with only ONE side anchored, the same sole-bridge closure SHOULD
+    // still convert to a merge (the original, intended behaviour).
+    project.remove_zero_datum(StationRef::new(b, 0));
+    let converted_after = project.convert_orphan_closures_to_merges();
+    assert_eq!(
+        converted_after, 1,
+        "a sole-bridge closure with a single anchor still becomes a merge"
+    );
+    assert_eq!(project.station_merges.len(), 1);
+    assert!(project.loop_closures.is_empty());
+}
+
+#[test]
+fn detects_two_datums_in_one_merge_component() {
+    // The "≤1 datum per merge component" invariant must be DETECTABLE after the
+    // fact, so a file written by an older build (or any unguarded path) is flagged
+    // rather than silently mis-solved. Force the violation by pushing datums
+    // directly, then assert both the detector and the integrity pass catch it.
+    let mut project = Project::new("OverAnchored".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.rebuild_merge_adjacency();
+
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+
+    let over = project.over_anchored_merge_components();
+    assert_eq!(over.len(), 1, "both datums share one merge component");
+    assert_eq!(over[0].len(), 2);
+
+    assert!(
+        project
+            .check_structural_integrity()
+            .iter()
+            .any(|v| v.category == "multiple_datums_per_merge_component"),
+        "the integrity pass must flag the over-anchored component"
+    );
+
+    // Removing one datum restores the invariant.
+    assert!(project.remove_zero_datum(StationRef::new(b, 0)));
+    assert!(project.over_anchored_merge_components().is_empty());
+}
+
+#[test]
 fn set_zero_datum_error_includes_section_name() {
     // Error message should include section name if available
     let mut project = Project::new("NamedSection".to_string(), None);
@@ -3083,6 +3242,273 @@ fn calculate_penetration_no_datums_returns_zero() {
     );
 }
 
+#[test]
+fn compute_distances_from_chosen_station() {
+    // Generalized API rooted at an arbitrary (non-datum) station: the gradient's
+    // click-to-pick case. Chain of 3 stations at y = 0, 10, 15.
+    let mut project = Project::new("DistFromStation".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+
+    let stations = project.compute_station_coordinates();
+    let idx = |i: u32| {
+        stations
+            .iter()
+            .position(|s| s.station_ref == StationRef::new(section_id, i))
+            .unwrap()
+    };
+
+    // Root at the middle station (index 1) — no zero datum needed: distances are
+    // 10 (to station 0), 0 (self), 5 (to station 2).
+    let dist = project.compute_distances_from(&stations, &[idx(1)]);
+    assert!((dist[idx(0)] - 10.0).abs() < 1e-6, "got {}", dist[idx(0)]);
+    assert!((dist[idx(1)] - 0.0).abs() < 1e-6, "got {}", dist[idx(1)]);
+    assert!((dist[idx(2)] - 5.0).abs() < 1e-6, "got {}", dist[idx(2)]);
+}
+
+#[test]
+fn compute_distances_from_empty_roots_all_infinity() {
+    let mut project = Project::new("DistNoRoots".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+        ..Default::default()
+    });
+    let stations = project.compute_station_coordinates();
+    let dist = project.compute_distances_from(&stations, &[]);
+    assert_eq!(dist.len(), stations.len());
+    assert!(dist.iter().all(|d| d.is_infinite()));
+}
+
+#[test]
+fn compute_distances_from_zero_datum_roots_matches_penetration() {
+    // The generalized API, seeded with the zero-datum indices, must reproduce
+    // compute_penetration_distances exactly (penetration is the default origin).
+    let mut project = Project::new("DistMatchesPen".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(section_id, 0).into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+
+    let stations = project.compute_station_coordinates();
+    let datum_idx = stations
+        .iter()
+        .position(|s| s.station_ref == StationRef::new(section_id, 0))
+        .unwrap();
+
+    let pen = project.compute_penetration_distances(&stations);
+    let from = project.compute_distances_from(&stations, &[datum_idx]);
+    assert_eq!(pen.len(), from.len());
+    for (a, b) in pen.iter().zip(from.iter()) {
+        assert!(
+            (a - b).abs() < 1e-6 || (a.is_infinite() && b.is_infinite()),
+            "penetration={a} distances_from={b}"
+        );
+    }
+}
+
+#[test]
+fn reachability_keeps_jump_reference_shots() {
+    // A jump/reference shot is a real measured leg: an is_reference shot that is
+    // the only link to a tail station keeps it reachable (it's included in the
+    // graph like any other shot).
+    let mut project = Project::new("JumpKept".to_string(), None);
+    let section_id = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0), // permanent A0->A1
+                shot(0.0, 0.0, 5.0, 0.0, 0.0),  // marked reference A1->A2
+            ],
+            ..Default::default()
+        })
+        .id;
+    project
+        .sections
+        .iter_mut()
+        .find(|s| s.id == section_id)
+        .unwrap()
+        .shots[1]
+        .is_reference = true;
+
+    let stations = project.compute_station_coordinates();
+    let idx = |i: u32| {
+        stations
+            .iter()
+            .position(|s| s.station_ref == StationRef::new(section_id, i))
+            .unwrap()
+    };
+    // Root at A0: A2 is reachable only across the reference shot → kept as a jump.
+    let dist = project.compute_distances_from(&stations, &[idx(0)]);
+    assert!(
+        (dist[idx(2)] - 15.0).abs() < 1e-6,
+        "jump must keep A2 reachable at 15.0, got {}",
+        dist[idx(2)]
+    );
+}
+
+#[test]
+fn reachability_uses_reference_shot_shortcut() {
+    // A reference shot is a real connection: B's reference shot links B0-B1 (len
+    // 5). Even though B0/B1 are ALSO connected the long way through section A
+    // (A0-A1-A2 = 20), shortest-path takes the direct reference (5) — references
+    // are included, not dropped, so a real jump shortcut is honored. (#34)
+    let mut project = Project::new("RefShortcut".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0), // A0->A1
+                shot(0.0, 0.0, 10.0, 0.0, 0.0), // A1->A2
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], // B0->B1
+            ..Default::default()
+        })
+        .id;
+    project
+        .sections
+        .iter_mut()
+        .find(|s| s.id == b)
+        .unwrap()
+        .shots[0]
+        .is_reference = true;
+
+    // Tie B's endpoints onto A's chain so B0-B1 has an alternate route: B0<->A0
+    // via a merge, B1<->A2 via an aligned loop closure (merging an already-
+    // connected pair is rejected — cycles must be closures).
+    project
+        .merge_stations(StationRef::new(b, 0), StationRef::new(a, 0))
+        .unwrap();
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(a, 2).into(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: true,
+    });
+
+    let stations = project.compute_station_coordinates();
+    let pos = |sec, i| {
+        stations
+            .iter()
+            .position(|s| s.station_ref == StationRef::new(sec, i))
+            .unwrap()
+    };
+    let dist = project.compute_distances_from(&stations, &[pos(b, 0)]);
+    assert!(
+        (dist[pos(b, 1)] - 5.0).abs() < 1e-6,
+        "reference shortcut must be used (B1 direct = 5, not 20 via A), got {}",
+        dist[pos(b, 1)]
+    );
+}
+
+#[test]
+fn reachability_includes_non_aligned_closures() {
+    // A non-aligned (e.g. Batch) loop closure is still a real physical connection.
+    // Section B is reachable from A's zero datum ONLY across a non-aligned closure
+    // — it must NOT show as unreachable. (#34: areas connected via closure)
+    let mut project = Project::new("NonAlignedClosure".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], // A0->A1
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)], // B0->B1, disconnected from A
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+    // A1 <-> B0 via a NON-aligned closure (is_aligned = false).
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+
+    let stations = project.compute_station_coordinates();
+    let field = project.distance_field_from(&stations, None); // from the zero datum
+    let pos = |sec, i| {
+        stations
+            .iter()
+            .position(|s| s.station_ref == StationRef::new(sec, i))
+            .unwrap()
+    };
+    // A0=0, A1=10, B0=10 (closure, 0-cost), B1=17 — all finite (reachable).
+    assert_eq!(field.distances[pos(b, 0)], Some(10.0), "B0 reachable via closure");
+    assert_eq!(field.distances[pos(b, 1)], Some(17.0), "B1 reachable via closure");
+}
+
+#[test]
+fn distance_field_uses_coordinate_distances() {
+    // #2 (#34): edge weights come from the station coordinates passed in, so the
+    // gradient's distances reflect the (closure-adjusted) geometry on the map,
+    // not the raw measured shot length.
+    let mut project = Project::new("DistCoords".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+    });
+
+    let mut stations = project.compute_station_coordinates();
+    let i1 = stations
+        .iter()
+        .position(|s| s.station_ref == StationRef::new(a, 1))
+        .unwrap();
+    // Baseline: a1 sits 10 m out (matches the measured shot length).
+    assert_eq!(
+        project.distance_field_from(&stations, None).distances[i1],
+        Some(10.0)
+    );
+    // Move a1 to 25 m out → the distance follows the coordinate, not the length.
+    stations[i1].coordinates = Coordinates::new(0.0, 25.0, 0.0);
+    assert_eq!(
+        project.distance_field_from(&stations, None).distances[i1],
+        Some(25.0)
+    );
+}
+
 // === Loop Closure Algorithm Tests ===
 
 // Group A: create_loop_closure validation (new tests only; see existing tests above for basic/duplicate/deferred)
@@ -3936,6 +4362,509 @@ fn compute_adjusted_is_deterministic_and_keeps_measured_stable() {
     for (s1, s2) in measured_before.iter().zip(measured_after.iter()) {
         assert!((s1.coordinates.x - s2.coordinates.x).abs() < 1e-9);
         assert!((s1.coordinates.y - s2.coordinates.y).abs() < 1e-9);
+    }
+}
+
+/// Exactness guard for the degree-≤2 graph-reduction solver (#81): on a range of
+/// random SPD weighted-Laplacian systems (chains, single cycles, and densely
+/// connected cores), `solve_reduced_laplacian` must match a reference dense
+/// Gaussian elimination on both axes.
+#[test]
+fn solve_reduced_laplacian_matches_dense() {
+    // Deterministic xorshift RNG → reproducible [0,1) draws (no rand dep).
+    fn next(state: &mut u64) -> f64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        ((x >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+
+    // Dense SPD solve via Gaussian elimination with partial pivoting.
+    fn dense_solve(mat: &[Vec<f64>], rhs: &[f64]) -> Vec<f64> {
+        let n = rhs.len();
+        let mut a: Vec<Vec<f64>> = mat.to_vec();
+        let mut b = rhs.to_vec();
+        for col in 0..n {
+            let mut piv = col;
+            for r in (col + 1)..n {
+                if a[r][col].abs() > a[piv][col].abs() {
+                    piv = r;
+                }
+            }
+            a.swap(col, piv);
+            b.swap(col, piv);
+            let d = a[col][col];
+            for r in (col + 1)..n {
+                let f = a[r][col] / d;
+                for c in col..n {
+                    a[r][c] -= f * a[col][c];
+                }
+                b[r] -= f * b[col];
+            }
+        }
+        let mut x = vec![0.0; n];
+        for col in (0..n).rev() {
+            let mut s = b[col];
+            for c in (col + 1)..n {
+                s -= a[col][c] * x[c];
+            }
+            x[col] = s / a[col][col];
+        }
+        x
+    }
+
+    // (n, extra_random_edges) — 0 extra = pure chain (fully peels, empty core);
+    // a few = small cycle core; many = a denser core that exercises the PCG path.
+    let configs = [(2, 0), (6, 0), (8, 2), (20, 5), (40, 30), (60, 80)];
+    let mut seed = 0x9E3779B97F4A7C15u64;
+
+    for (n, extra) in configs {
+        let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
+        let mut diag_x = vec![0.0; n];
+        let mut diag_y = vec![0.0; n];
+
+        let mut add_edge = |a: usize, b: usize, seed: &mut u64,
+                            adj: &mut Vec<Vec<(usize, f64, f64)>>,
+                            dx: &mut Vec<f64>, dy: &mut Vec<f64>| {
+            let wx = 0.5 + next(seed);
+            let wy = 0.5 + next(seed);
+            adj[a].push((b, -wx, -wy));
+            adj[b].push((a, -wx, -wy));
+            dx[a] += wx;
+            dx[b] += wx;
+            dy[a] += wy;
+            dy[b] += wy;
+        };
+
+        // Spanning chain keeps the graph connected.
+        for i in 0..n.saturating_sub(1) {
+            add_edge(i, i + 1, &mut seed, &mut adj, &mut diag_x, &mut diag_y);
+        }
+        // Extra edges introduce loops (a non-trivial 2-core).
+        for _ in 0..extra {
+            let a = (next(&mut seed) * n as f64) as usize % n;
+            let b = (next(&mut seed) * n as f64) as usize % n;
+            if a != b {
+                add_edge(a, b, &mut seed, &mut adj, &mut diag_x, &mut diag_y);
+            }
+        }
+        // Grounding term on every diagonal → strictly SPD (mimics fixed-node edges).
+        for i in 0..n {
+            diag_x[i] += 0.25 + next(&mut seed);
+            diag_y[i] += 0.25 + next(&mut seed);
+        }
+        let atb_x: Vec<f64> = (0..n).map(|_| next(&mut seed) * 4.0 - 2.0).collect();
+        let atb_y: Vec<f64> = (0..n).map(|_| next(&mut seed) * 4.0 - 2.0).collect();
+
+        // Dense reference matrices built from the SAME adj/diag (duplicate edges
+        // summed identically to the solver).
+        let mut ax = vec![vec![0.0; n]; n];
+        let mut ay = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            ax[i][i] = diag_x[i];
+            ay[i][i] = diag_y[i];
+            for &(j, ox, oy) in &adj[i] {
+                ax[i][j] += ox;
+                ay[i][j] += oy;
+            }
+        }
+        let ref_x = dense_solve(&ax, &atb_x);
+        let ref_y = dense_solve(&ay, &atb_y);
+
+        // Strictly SPD (grounded) → unique solution, so a zero warm start matches
+        // the dense reference exactly.
+        let x0 = vec![0.0; n];
+        let (sol_x, sol_y) = Project::solve_reduced_laplacian(
+            n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0, &x0,
+        );
+
+        for i in 0..n {
+            assert!(
+                (sol_x[i] - ref_x[i]).abs() < 1e-6,
+                "n={n} extra={extra} x[{i}]: reduced={} dense={}",
+                sol_x[i],
+                ref_x[i]
+            );
+            assert!(
+                (sol_y[i] - ref_y[i]).abs() < 1e-6,
+                "n={n} extra={extra} y[{i}]: reduced={} dense={}",
+                sol_y[i],
+                ref_y[i]
+            );
+        }
+    }
+}
+
+/// Regression for the warm-start fix (Codex #86): a node that is unconstrained on
+/// one axis (zero pivot, zero-weight edge → null-space row) must keep its measured
+/// position on that axis rather than snapping to world 0.
+#[test]
+fn solve_reduced_laplacian_preserves_unconstrained_axis_warm_start() {
+    // Two nodes. Node 0 is grounded on both axes. Node 1 couples to node 0 on Y
+    // only (the X off-diagonal weight is 0), and has zero X diagonal + zero X rhs
+    // — i.e. nothing constrains its X. Its warm-start X (42) must survive.
+    let n = 2;
+    let diag_x = vec![1.0, 0.0];
+    let diag_y = vec![2.0, 1.0];
+    let atb_x = vec![5.0, 0.0];
+    let atb_y = vec![0.0, 0.0];
+    let adj = vec![vec![(1usize, 0.0, -1.0)], vec![(0usize, 0.0, -1.0)]];
+    let x0_x = vec![0.0, 42.0];
+    let x0_y = vec![0.0, 0.0];
+
+    let (sol_x, _sol_y) =
+        Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
+
+    assert!(
+        (sol_x[1] - 42.0).abs() < 1e-9,
+        "unconstrained-X node should retain its warm-start X (42), got {}",
+        sol_x[1]
+    );
+    // The constrained node still solves normally.
+    assert!((sol_x[0] - 5.0).abs() < 1e-9, "node 0 X should be 5, got {}", sol_x[0]);
+}
+
+/// Regression for the early-exit fix (Codex #86 follow-up): when the reduced core
+/// has a zero RHS but non-zero, full-rank matrix rows, the unique minimizer is 0 —
+/// the warm start must NOT be returned just because `‖b‖ = 0`. Uses a K4 core (all
+/// degree 3, so it survives degree-≤2 reduction and exercises the core PCG).
+#[test]
+fn solve_reduced_laplacian_zero_rhs_constrained_core_solves_not_warm_start() {
+    let n = 4;
+    // K4 + grounding: diagonal 4, every off-diagonal -1 → SPD, full rank.
+    let diag = vec![4.0; 4];
+    let mut adj: Vec<Vec<(usize, f64, f64)>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                adj[i].push((j, -1.0, -1.0));
+            }
+        }
+    }
+    let atb = vec![0.0; 4]; // zero RHS → unique solution is 0
+    let x0_x = vec![10.0, -5.0, 3.0, 7.0];
+    let x0_y = vec![-2.0, 8.0, -6.0, 1.0];
+
+    let (sol_x, sol_y) =
+        Project::solve_reduced_laplacian(n, &diag, &diag, &atb, &atb, &adj, &x0_x, &x0_y);
+
+    for (i, v) in sol_x.iter().chain(sol_y.iter()).enumerate() {
+        assert!(v.abs() < 1e-6, "zero-RHS constrained core must solve to 0, got {v} at {i}");
+    }
+}
+
+/// Codex #86 (3rd, null-space-through-peeled-nodes): a component that *floats* on
+/// an axis (positive internal coupling but no grounding → 1-D translation null
+/// space) must keep its measured positions, not jump, when its nodes are peeled by
+/// degree-≤2 reduction before the core PCG sees them.
+///
+/// Mechanism: the surviving core node keeps its own measured value (warm start),
+/// and back-substitution reproduces the measured *relative* offsets — so the whole
+/// component lands exactly on its measured coordinates, matching the old
+/// full-system CG. (In real surveys this case can't even arise: every
+/// positive-length shot has positive weight on both axes, so floating components
+/// require zero-length shots.)
+#[test]
+fn solve_reduced_laplacian_preserves_floating_component_nullspace() {
+    let n = 3;
+    // X: pure path Laplacian 0-1-2 (singular → floats). Y: grounded (nonsingular).
+    let diag_x = vec![1.0, 2.0, 1.0];
+    let diag_y = vec![2.0, 3.0, 2.0];
+    let adj = vec![
+        vec![(1usize, -1.0, -1.0)],
+        vec![(0usize, -1.0, -1.0), (2usize, -1.0, -1.0)],
+        vec![(1usize, -1.0, -1.0)],
+    ];
+    // X rhs consistent with measured x=(0,3,5): A_x·(0,3,5) = (-3,1,2).
+    let atb_x = vec![-3.0, 1.0, 2.0];
+    let atb_y = vec![0.0, 0.0, 0.0];
+    let x0_x = vec![0.0, 3.0, 5.0];
+    let x0_y = vec![0.0, 0.0, 0.0];
+
+    let (sx, _sy) =
+        Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
+
+    for (i, want) in [0.0_f64, 3.0, 5.0].iter().enumerate() {
+        assert!(
+            (sx[i] - want).abs() < 1e-6,
+            "floating component node {i} jumped: got {}, want {want}",
+            sx[i]
+        );
+    }
+}
+
+/// Regression for the scale-relative pivot floor (#89 / Codex). A *loop* that
+/// floats on X with **varied** edge weights drives the last null-space pivot to
+/// roundoff (~1e-12), not exactly 0 — so the old absolute 1e-30 floor eliminated
+/// it and divided by ~0, shifting the component. The pivot must be judged relative
+/// to its original diagonal so the node stays in the warm-started core and the
+/// measured translation is preserved.
+#[test]
+fn solve_reduced_laplacian_floating_loop_varied_weights_no_shift() {
+    // Triangle 0-1-2, pure (singular) Laplacian on X → floats; grounded on Y.
+    // Varied off-diagonals so the final Schur pivot lands on roundoff, not 0.
+    let n = 3;
+    let diag_x = vec![3.3, 2.7, 4.0]; // = incident |off| sums (row-sum 0 ⇒ singular)
+    let diag_y = vec![4.3, 3.7, 5.0]; // +1 grounding ⇒ nonsingular
+    let adj = vec![
+        vec![(1usize, -1.0, -1.0), (2usize, -2.3, -2.3)],
+        vec![(0usize, -1.0, -1.0), (2usize, -1.7, -1.7)],
+        vec![(0usize, -2.3, -2.3), (1usize, -1.7, -1.7)],
+    ];
+    // X rhs consistent with measured x=(0,2,5): atb_x = A_x·(0,2,5).
+    let atb_x = vec![-13.5, -3.1, 16.6];
+    let atb_y = vec![0.0, 0.0, 0.0];
+    let x0_x = vec![0.0, 2.0, 5.0];
+    let x0_y = vec![0.0, 0.0, 0.0];
+
+    let (sx, _sy) =
+        Project::solve_reduced_laplacian(n, &diag_x, &diag_y, &atb_x, &atb_y, &adj, &x0_x, &x0_y);
+
+    for (i, want) in [0.0_f64, 2.0, 5.0].iter().enumerate() {
+        assert!(
+            (sx[i] - want).abs() < 1e-6,
+            "floating loop node {i} shifted: got {}, want {want}",
+            sx[i]
+        );
+    }
+}
+
+/// Analytic golden: a loop with a hand-computable least-squares optimum.
+///
+/// Two due-east paths run from a shared, datum-anchored origin to a closure:
+///   A: 0 →(5)→ A1 →(5)→ A2     (measured A2 at x = 10.0)
+///   B: 0 →(5.1)→ B1 →(5.1)→ B2 (measured B2 at x = 10.2)
+/// with `merge A0↔B0` and `closure A2↔B2`. Because every shot is due east, the X
+/// normal equations have equal weights, so the weighted-LSQ optimum is exact and
+/// independent of the sigma values: each interior station splits its path evenly
+/// and the merged endpoint is the average of the two measured ends. Y stays 0.
+/// This is an oracle independent of the solver implementation.
+#[test]
+fn adjust_line_loop_matches_hand_computed_optimum() {
+    let mut project = Project::new("LineLoop".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0), shot(90.0, 90.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 5.1, 0.0, 0.0), shot(90.0, 90.0, 5.1, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(StationRef::new(a, 2), StationRef::new(b, 2), ClosureStrategy::Batch)
+        .unwrap();
+
+    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+    let at = |sr| station_coords(&adjusted, sr);
+    let approx = |c: Coordinates, x: f64, y: f64| (c.x - x).abs() < 1e-6 && (c.y - y).abs() < 1e-6;
+
+    // Hand-computed optimum.
+    assert!(approx(at(StationRef::new(a, 0)), 0.0, 0.0), "A0 = {:?}", at(StationRef::new(a, 0)));
+    assert!(approx(at(StationRef::new(a, 1)), 5.05, 0.0), "A1 = {:?}", at(StationRef::new(a, 1)));
+    assert!(approx(at(StationRef::new(a, 2)), 10.10, 0.0), "A2 = {:?}", at(StationRef::new(a, 2)));
+    assert!(approx(at(StationRef::new(b, 1)), 5.05, 0.0), "B1 = {:?}", at(StationRef::new(b, 1)));
+    assert!(approx(at(StationRef::new(b, 2)), 10.10, 0.0), "B2 = {:?}", at(StationRef::new(b, 2)));
+}
+
+/// Property/fuzz sweep over random connected geometries with closures. For each
+/// random project the closure-adjusted view must:
+///   - be finite (no NaN/Inf),
+///   - keep the zero datum fixed,
+///   - be deterministic (two solves agree),
+///   - never mutate the measured geometry, and
+///   - unify each eligible closure's endpoints (the adjusted gap is ~0).
+/// Optimality of every one of these random solves is asserted *inside*
+/// `adjust_least_squares` (the `#[cfg(test)]` `‖A·x−b‖∞` residual guard), so this
+/// sweep doubles as a broad optimality check across diverse topologies.
+#[test]
+fn adjust_random_geometries_are_optimal_and_well_formed() {
+    fn next(state: &mut u64) -> f64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        ((x >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+
+    let mut seed = 0xD1CE_5EED_1234_9F17u64;
+    let config = ClosureAdjustmentConfig::default();
+    let mut exercised_closures = 0;
+
+    for _trial in 0..60 {
+        let mut project = Project::new("Fuzz".to_string(), None);
+        let n_sections = 2 + (next(&mut seed) * 4.0) as usize; // 2..=5
+        let mut sids = Vec::new();
+        for _ in 0..n_sections {
+            let n_shots = 1 + (next(&mut seed) * 6.0) as usize; // 1..=6
+            let shots: Vec<ShotData> = (0..n_shots)
+                .map(|_| {
+                    let az = next(&mut seed) * 360.0;
+                    let len = 1.0 + next(&mut seed) * 9.0;
+                    shot(az, az, len, 0.0, 0.0)
+                })
+                .collect();
+            sids.push(project.add_section(SectionData { shots, ..Default::default() }).id);
+        }
+
+        // Datum anchors the first section.
+        project
+            .set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+            .unwrap();
+
+        // Connect every later section to an earlier one with a merge → a connected
+        // tree (no loops yet).
+        let station_count = |p: &Project, sid| {
+            p.sections.iter().find(|s| s.id == sid).map(|s| s.shots.len()).unwrap_or(0)
+        };
+        for s in 1..n_sections {
+            let earlier = sids[(next(&mut seed) * s as f64) as usize];
+            let tgt_idx = (next(&mut seed) * (station_count(&project, earlier) + 1) as f64) as u32;
+            let _ = project.merge_stations(
+                StationRef::new(sids[s], 0),
+                StationRef::new(earlier, tgt_idx),
+            );
+        }
+
+        // Add 1..=2 closures between stations in different sections → loops.
+        let mut closures: Vec<(StationRef, StationRef)> = Vec::new();
+        let n_closures = 1 + (next(&mut seed) * 2.0) as usize;
+        for _ in 0..n_closures {
+            let si = (next(&mut seed) * n_sections as f64) as usize;
+            let mut sj = (next(&mut seed) * n_sections as f64) as usize;
+            if sj == si {
+                sj = (sj + 1) % n_sections;
+            }
+            let pi = StationRef::new(
+                sids[si],
+                (next(&mut seed) * (station_count(&project, sids[si]) + 1) as f64) as u32,
+            );
+            let pj = StationRef::new(
+                sids[sj],
+                (next(&mut seed) * (station_count(&project, sids[sj]) + 1) as f64) as u32,
+            );
+            if project.create_loop_closure(pi, pj, ClosureStrategy::Batch).is_ok() {
+                closures.push((pi, pj));
+            }
+        }
+
+        let measured_before = project.compute_station_coordinates();
+        let adjusted = project.compute_adjusted_station_coordinates(&config);
+        let adjusted2 = project.compute_adjusted_station_coordinates(&config);
+        let measured_after = project.compute_station_coordinates();
+
+        // Finite.
+        for s in &adjusted {
+            assert!(
+                s.coordinates.x.is_finite()
+                    && s.coordinates.y.is_finite()
+                    && s.coordinates.z.is_finite(),
+                "non-finite adjusted coord at {:?}: {:?}",
+                s.station_ref,
+                s.coordinates
+            );
+        }
+        // Datum fixed.
+        let d0 = station_coords(&adjusted, StationRef::new(sids[0], 0));
+        assert!(d0.x.abs() < 1e-6 && d0.y.abs() < 1e-6, "datum moved to {d0:?}");
+        // Deterministic.
+        assert_eq!(adjusted.len(), adjusted2.len());
+        for (s1, s2) in adjusted.iter().zip(&adjusted2) {
+            assert!((s1.coordinates.x - s2.coordinates.x).abs() < 1e-9);
+            assert!((s1.coordinates.y - s2.coordinates.y).abs() < 1e-9);
+        }
+        // Measured geometry untouched by deriving the adjusted view.
+        assert_eq!(measured_before.len(), measured_after.len());
+        for (s1, s2) in measured_before.iter().zip(&measured_after) {
+            assert!((s1.coordinates.x - s2.coordinates.x).abs() < 1e-9);
+            assert!((s1.coordinates.y - s2.coordinates.y).abs() < 1e-9);
+        }
+        // Count solves actually exercised. We deliberately do NOT assert that each
+        // closure's endpoints coincide: with multiple closures the least-squares
+        // solution is a *compromise*, so an individual loop needn't close to zero —
+        // that is correct LSQ behavior, not a bug. Optimality (that the result is
+        // the true minimizer of the whole system) is asserted by the `‖A·x−b‖∞`
+        // guard inside `adjust_least_squares`, which fired for each solve above.
+        exercised_closures += closures.len();
+    }
+
+    // Guard against the sweep silently degenerating into all-fast-path trials.
+    assert!(exercised_closures > 0, "fuzz sweep never exercised a closure solve");
+}
+
+/// Profiling harness for the closure-adjusted solve (#81). Ignored by default.
+/// Run with:
+///   cargo test --manifest-path src-tauri/Cargo.toml --release \
+///     profile_closure_solve_large -- --ignored --nocapture
+///
+/// Builds single-closure surveys shaped as one big loop made of two long
+/// degree-2 chains joined at both ends — the worst case for the closure solve
+/// (a single high-diameter loop). Sweeping the size demonstrates the scaling:
+/// with the degree-≤2 graph reduction the loop peels to a ~1-node core, so the
+/// whole `compute_adjusted_station_coordinates` is O(n) (it was O(n²) before #81
+/// — both the per-station coordinate walk and the O(diameter) PCG iterations).
+#[test]
+#[ignore]
+fn profile_closure_solve_large() {
+    for n_shots in [1500usize, 3000, 6000, 12000] {
+        let mut project = Project::new("ProfileLoop".to_string(), None);
+
+        // Path A: eastward shots of length 5.0.
+        let a = project
+            .add_section(SectionData {
+                shots: (0..n_shots).map(|_| shot(90.0, 90.0, 5.0, 0.0, 0.0)).collect(),
+                ..Default::default()
+            })
+            .id;
+        // Path B: same count, slightly longer so the far ends disagree (a real
+        // misclosure for the solve to distribute).
+        let b = project
+            .add_section(SectionData {
+                shots: (0..n_shots).map(|_| shot(90.0, 90.0, 5.001, 0.0, 0.0)).collect(),
+                ..Default::default()
+            })
+            .id;
+
+        project
+            .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+            .unwrap();
+        // Join the two chains at the origin and close the far ends → one big loop.
+        project
+            .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+            .unwrap();
+        project
+            .create_loop_closure(
+                StationRef::new(a, n_shots as u32),
+                StationRef::new(b, n_shots as u32),
+                ClosureStrategy::Batch,
+            )
+            .unwrap();
+
+        let n_stations = project.compute_station_coordinates().len();
+
+        let t = std::time::Instant::now();
+        let adjusted =
+            project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+        let elapsed = t.elapsed();
+
+        eprintln!(
+            "profile_closure_solve_large: {} stations, 1 closure → compute_adjusted = {} ms ({} adjusted)",
+            n_stations,
+            elapsed.as_millis(),
+            adjusted.len(),
+        );
     }
 }
 
@@ -7172,4 +8101,1083 @@ fn has_unresolvable_cross_references_detects_dangling_offset() {
         project.has_unresolvable_cross_references(),
         "a dangling (Warning-level) offset must still block the save"
     );
+}
+
+// ── Closed-form golden fixtures for the closure adjustment ───────────────────
+//
+// KNOWN-ANSWER regression guards for the weighted least-squares closure solve
+// (`compute_adjusted_station_coordinates`). Each fixture pins the EXACT adjusted
+// coordinates a correct adjustment must produce, derived in closed form from the
+// normal equations — NOT by running the solver.
+//
+// These COMPLEMENT the in-repo suite that proves the solver finds the true
+// minimiser of the *production-assembled* system (the `‖A·x−b‖∞` optimality
+// guard inside `adjust_least_squares`, the dense reduced-Laplacian check, and
+// `adjust_random_geometries_are_optimal_and_well_formed`). What those cannot
+// catch is a wrong WEIGHT MODEL: they all inherit production's σ→weight assembly,
+// so a bug there is self-consistent and passes every one of them. The
+// weighted-mean star below re-derives the weights independently from the
+// documented propagation and checks the resulting coordinates, closing that gap
+// for arbitrary star geometries.
+//
+// Model (see docs/closures.md): a 2-D, horizontal-only, per-axis DECOUPLED
+// weighted least squares. Each shot contributes independent X/Y observations of
+// the measured Δ, weight w = 1/σ² with σ propagated from the base sigmas and
+// scaled by section quality:
+//     σ_len' = σ_len·quality,   σ_az' = σ_az·quality
+//     σ_dx = √((sin·σ_len')² + (len·cos·σ_az')²)
+//     σ_dy = √((cos·σ_len')² + (len·sin·σ_az')²)
+// For a shot from a FIXED group to an unknown group the normal equation reduces
+// to the classic Gauss weighted mean: the unknown lands at the weight-weighted
+// average of each neighbour's predicted position (fixed_pos + measured Δ).
+//
+// Default config → σ_len = 0.05 m, σ_az = 1.0°, section quality = 1.0.
+
+/// Assert an adjusted station coordinate matches a closed-form `(x, y)` within
+/// `tol` metres (Z is not adjusted, so only the horizontal plane is checked).
+fn golden_assert_xy(got: Coordinates, want: (f64, f64), tol: f64, label: &str) {
+    assert!(
+        (got.x - want.0).abs() < tol && (got.y - want.1).abs() < tol,
+        "{label}: adjusted ({:.6}, {:.6}) != closed-form ({:.6}, {:.6}) (tol {tol:e})",
+        got.x,
+        got.y,
+        want.0,
+        want.1,
+    );
+}
+
+#[test]
+fn golden_symmetric_v_resolves_to_axis_of_symmetry() {
+    // Two single-shot legs from a shared, datum-anchored origin, joined by a
+    // closure:
+    //     leg A: azimuth 80°,  10 m → predicts (10·sin80°,  10·cos80°)
+    //     leg B: azimuth 100°, 10 m → predicts (10·sin80°, -10·cos80°)
+    // The legs are mirror images across the East axis, so |sin| and |cos| — and
+    // hence the X/Y weights — are identical. The ~3.47 m vertical (North)
+    // disagreement must average to the axis of symmetry: Y = 0, with X left at the
+    // common predicted value (both legs agree on X, so it is not corrected).
+    // Config-INDEPENDENT: the equal weights cancel, so the answer does not depend
+    // on σ_len / σ_az at all.
+    let mut project = Project::new("GoldenSymV".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(StationRef::new(a, 1), StationRef::new(b, 1), ClosureStrategy::Batch)
+        .unwrap();
+
+    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+
+    let expected_x = 10.0 * 80.0_f64.to_radians().sin();
+    golden_assert_xy(station_coords(&adjusted, StationRef::new(a, 1)), (expected_x, 0.0), 1e-6, "A endpoint");
+    golden_assert_xy(station_coords(&adjusted, StationRef::new(b, 1)), (expected_x, 0.0), 1e-6, "B endpoint");
+    // The closure must actually fuse the two endpoints.
+    let adj_a = station_coords(&adjusted, StationRef::new(a, 1));
+    let adj_b = station_coords(&adjusted, StationRef::new(b, 1));
+    assert!((adj_a.x - adj_b.x).abs() < 1e-6 && (adj_a.y - adj_b.y).abs() < 1e-6, "closure endpoints coincide");
+    // The datum stays pinned at the origin.
+    golden_assert_xy(station_coords(&adjusted, StationRef::new(a, 0)), (0.0, 0.0), 1e-9, "datum");
+}
+
+/// Build a "star": one single-shot leg per `legs` entry `(azimuth°, length,
+/// quality)`, all radiating from a shared datum-anchored origin to one common
+/// closure-fused endpoint P. Returns P's adjusted coordinates from the production
+/// solve.
+fn solve_weighted_mean_star(legs: &[(f64, f64, f64)]) -> Coordinates {
+    let mut project = Project::new("WeightedStar".to_string(), None);
+    let sids: Vec<SectionId> = legs
+        .iter()
+        .map(|&(az, len, quality)| {
+            project
+                .add_section(SectionData {
+                    shots: vec![shot(az, az, len, 0.0, 0.0)],
+                    quality,
+                    ..Default::default()
+                })
+                .id
+        })
+        .collect();
+    project
+        .set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    for &sid in &sids[1..] {
+        project
+            .merge_stations(StationRef::new(sids[0], 0), StationRef::new(sid, 0))
+            .unwrap();
+    }
+    for &sid in &sids[1..] {
+        project
+            .create_loop_closure(
+                StationRef::new(sids[0], 1),
+                StationRef::new(sid, 1),
+                ClosureStrategy::Batch,
+            )
+            .unwrap();
+    }
+    let adjusted = project.compute_adjusted_station_coordinates(&ClosureAdjustmentConfig::default());
+    station_coords(&adjusted, StationRef::new(sids[0], 1))
+}
+
+/// Independently re-derive the closed-form weighted-mean optimum for a star from
+/// the documented σ→weight propagation (NOT the production assembly). With the
+/// origin fixed at (0,0) the decoupled normal equations give, per axis,
+/// `P = Σ w·Δ / Σ w`.
+fn weighted_mean_star_expected(legs: &[(f64, f64, f64)], config: &ClosureAdjustmentConfig) -> (f64, f64) {
+    let (mut num_x, mut den_x, mut num_y, mut den_y) = (0.0, 0.0, 0.0, 0.0);
+    for &(az_deg, len, raw_quality) in legs {
+        // Clamp quality exactly as production's adjust_least_squares does, so the
+        // weight model also matches for quality <= 0 / non-finite (otherwise
+        // s_len = 0 → σ = 0 → w = ∞ → NaN and the assertion false-fails).
+        let quality = if raw_quality.is_finite() && raw_quality > 0.0 { raw_quality } else { 1.0 };
+        let az = az_deg.to_radians();
+        let s_len = config.base_sigma_length_m * quality;
+        let s_az = config.base_sigma_azimuth_deg.to_radians() * quality;
+        let sigma_dx = ((az.sin() * s_len).powi(2) + (len * az.cos() * s_az).powi(2)).sqrt();
+        let sigma_dy = ((az.cos() * s_len).powi(2) + (len * az.sin() * s_az).powi(2)).sqrt();
+        let w_x = 1.0 / (sigma_dx * sigma_dx);
+        let w_y = 1.0 / (sigma_dy * sigma_dy);
+        // Star legs are flat (depth_in == depth_out), so horizontal_length() ==
+        // shot.length and Δ = len·(sin, cos). Production uses horizontal_length for Δ
+        // but SLOPE length for the σ azimuth term; they coincide only under this
+        // flat-leg assumption — split them if a sloped leg is ever added here.
+        let dx = len * az.sin();
+        let dy = len * az.cos();
+        num_x += w_x * dx;
+        den_x += w_x;
+        num_y += w_y * dy;
+        den_y += w_y;
+    }
+    (num_x / den_x, num_y / den_y)
+}
+
+#[test]
+fn golden_weight_model_star_matches_sigma_propagation() {
+    // The closure-fused endpoint of a star is the Gauss weighted mean of each
+    // leg's independent position fix, with weights from the σ→weight propagation.
+    // Matching the production solve across diverse leg geometries — varied
+    // azimuths, lengths, and section qualities — pins the weight MODEL
+    // independently of production's normal-equation assembly. This is the one
+    // thing #86's optimality/dense checks structurally cannot verify: they reuse
+    // the same assembly, so a wrong weight formula is self-consistent there.
+    let config = ClosureAdjustmentConfig::default();
+    let cases: &[&[(f64, f64, f64)]] = &[
+        &[(90.0, 10.0, 1.0), (0.0, 10.0, 1.0)],                   // east + north, isotropic quality
+        &[(90.0, 10.0, 1.0), (0.0, 10.0, 3.0)],                   // north leg down-weighted by quality
+        &[(90.0, 10.0, 1.0), (180.0, 6.0, 1.0)],                  // opposed legs, unequal length
+        &[(90.0, 10.0, 1.0), (0.0, 8.0, 1.0), (45.0, 12.0, 2.0)], // three legs, mixed dir/len/quality
+        &[(30.0, 7.0, 1.0), (200.0, 9.0, 1.5), (300.0, 5.0, 0.5)],// arbitrary 3-leg star
+    ];
+    for legs in cases {
+        let got = solve_weighted_mean_star(legs);
+        let (ex, ey) = weighted_mean_star_expected(legs, &config);
+        assert!(
+            (got.x - ex).abs() < 1e-6 && (got.y - ey).abs() < 1e-6,
+            "legs {legs:?}: adjusted ({:.6}, {:.6}) != weighted mean ({ex:.6}, {ey:.6})",
+            got.x,
+            got.y,
+        );
+    }
+}
+
+// ── Independent rigorous reference (the in-process Gama equivalent) ───────────
+//
+// gama-local is not available in CI, so this in-process reference plays its role:
+// a from-scratch weighted least-squares adjustment that makes NONE of production's
+// modelling shortcuts. Production minimises, per shot,
+//     w_dx·(Δx_meas − Δx)² + w_dy·(Δy_meas − Δy)²
+// i.e. CARTESIAN coordinate-difference observations with DIAGONAL weights, X and Y
+// DECOUPLED, linearised ONCE at the measured geometry. This reference instead
+// minimises the RAW POLAR residuals
+//     w_dist·(dist_meas − |Pj−Pi|)² + w_az·(az_meas − az(Pj−Pi))²
+// with the X/Y-COUPLED Jacobian, ITERATED to convergence (Gauss–Newton). It keeps
+// the dx–dy covariance production drops and re-linearises every step, so agreement
+// is independent evidence that production's model is a sound approximation of
+// rigorous LSQ — the role the external Gama oracle would play.
+//
+// The two are NOT bit-identical: the gap is the first-order error of production's
+// approximation and grows with the angular misclosure of the network. The cases
+// in `model_sound_matches_rigorous_polar_reference` stay in the small-misclosure
+// regime real surveys operate in.
+
+/// Solve a small dense `a·x = b` by Gaussian elimination with partial pivoting.
+fn dense_solve_gauss(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
+    let n = b.len();
+    for col in 0..n {
+        let mut piv = col;
+        for r in (col + 1)..n {
+            if a[r][col].abs() > a[piv][col].abs() {
+                piv = r;
+            }
+        }
+        if a[piv][col].abs() < 1e-15 {
+            return None;
+        }
+        a.swap(col, piv);
+        b.swap(col, piv);
+        for r in 0..n {
+            if r == col {
+                continue;
+            }
+            let f = a[r][col] / a[col][col];
+            for c in col..n {
+                a[r][c] -= f * a[col][c];
+            }
+            b[r] -= f * b[col];
+        }
+    }
+    Some((0..n).map(|i| b[i] / a[i][i]).collect())
+}
+
+/// Rigorous coupled-polar Gauss–Newton adjustment of a single-component,
+/// single-datum network. Returns each station's adjusted (x, y).
+fn rigorous_polar_reference(
+    project: &Project,
+    config: &ClosureAdjustmentConfig,
+) -> HashMap<StationRef, (f64, f64)> {
+    use std::f64::consts::PI;
+
+    fn find(p: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+        let mut r = x;
+        while p[&r] != r {
+            r = p[&r];
+        }
+        let mut c = x;
+        while p[&c] != r {
+            let nx = p[&c];
+            p.insert(c, r);
+            c = nx;
+        }
+        r
+    }
+    fn accumulate(rows: &[(usize, f64)], w: f64, r: f64, nmat: &mut [Vec<f64>], gvec: &mut [f64]) {
+        for &(ia, ca) in rows {
+            gvec[ia] += w * ca * r;
+            for &(ib, cb) in rows {
+                nmat[ia][ib] += w * ca * cb;
+            }
+        }
+    }
+
+    let mut stations: Vec<StationRef> = Vec::new();
+    for s in &project.sections {
+        for idx in 0..=s.shots.len() {
+            stations.push(StationRef::new(s.id, idx as u32));
+        }
+    }
+    let mut parent: HashMap<StationRef, StationRef> = stations.iter().map(|&s| (s, s)).collect();
+    let fuse = |parent: &mut HashMap<StationRef, StationRef>, a: StationRef, b: StationRef| {
+        if parent.contains_key(&a) && parent.contains_key(&b) {
+            let (ra, rb) = (find(parent, a), find(parent, b));
+            if ra != rb {
+                parent.insert(ra, rb);
+            }
+        }
+    };
+    for m in &project.station_merges {
+        if let (Some(a), Some(b)) = (project.resolve_key(&m.station_a), project.resolve_key(&m.station_b)) {
+            fuse(&mut parent, a, b);
+        }
+    }
+    for lc in &project.loop_closures {
+        if let (Some(a), Some(b)) = (project.resolve_key(&lc.station_a), project.resolve_key(&lc.station_b)) {
+            fuse(&mut parent, a, b);
+        }
+    }
+
+    let mut group_members: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+    for &s in &stations {
+        let r = find(&mut parent, s);
+        group_members.entry(r).or_default().push(s);
+    }
+    // Initial position per group: mean of members' measured coords.
+    let mut pos: HashMap<StationRef, (f64, f64)> = HashMap::new();
+    for (root, members) in &group_members {
+        let (mut sx, mut sy, mut k) = (0.0, 0.0, 0.0);
+        for &m in members {
+            if let Some(c) = project.compute_station_raw_coords(m) {
+                sx += c.x;
+                sy += c.y;
+                k += 1.0;
+            }
+        }
+        pos.insert(*root, if k > 0.0 { (sx / k, sy / k) } else { (0.0, 0.0) });
+    }
+    // Fixed group = the datum's group, pinned at its measured position. This oracle
+    // anchors exactly ONE datum, so it only handles single-datum, single-component
+    // networks; a multi-datum / datum-less / multi-component input would leave a
+    // gauge-free translation null space. Reject those up front instead of silently
+    // returning un-adjusted coordinates as the "rigorous" reference.
+    assert_eq!(
+        project.zero_datums.len(),
+        1,
+        "rigorous_polar_reference supports single-datum networks only (got {})",
+        project.zero_datums.len()
+    );
+    let datum = project.zero_datums.first().and_then(|z| project.resolve_key(&z.station_ref));
+    let fixed_root = datum.map(|d| find(&mut parent, d));
+    assert!(fixed_root.is_some(), "rigorous_polar_reference: datum did not resolve to a group");
+    if let (Some(fr), Some(d)) = (fixed_root, datum) {
+        if let Some(c) = project.compute_station_raw_coords(d) {
+            pos.insert(fr, (c.x, c.y));
+        }
+    }
+
+    let mut uidx: HashMap<StationRef, usize> = HashMap::new();
+    for root in group_members.keys() {
+        if Some(*root) != fixed_root {
+            let n = uidx.len();
+            uidx.insert(*root, n);
+        }
+    }
+    let nvar = uidx.len() * 2;
+
+    struct Obs {
+        gi: StationRef,
+        gj: StationRef,
+        dist: f64,
+        az: f64,
+        w_dist: f64,
+        w_az: f64,
+    }
+    let mut obs: Vec<Obs> = Vec::new();
+    for s in &project.sections {
+        let q = if s.quality.is_finite() && s.quality > 0.0 { s.quality } else { 1.0 };
+        let s_len = config.base_sigma_length_m * q;
+        let s_az = config.base_sigma_azimuth_deg.to_radians() * q;
+        for (idx, shot) in s.shots.iter().enumerate() {
+            let gi = find(&mut parent, StationRef::new(s.id, idx as u32));
+            let gj = find(&mut parent, StationRef::new(s.id, (idx + 1) as u32));
+            if gi == gj {
+                continue;
+            }
+            obs.push(Obs {
+                gi,
+                gj,
+                dist: shot.horizontal_length(),
+                az: shot.average_azimuth().to_radians(),
+                w_dist: 1.0 / (s_len * s_len),
+                w_az: 1.0 / (s_az * s_az),
+            });
+        }
+    }
+
+    let wrap = |a: f64| -> f64 {
+        let mut x = a % (2.0 * PI);
+        if x > PI {
+            x -= 2.0 * PI;
+        } else if x < -PI {
+            x += 2.0 * PI;
+        }
+        x
+    };
+
+    let mut converged = nvar == 0;
+    if nvar > 0 {
+        for _iter in 0..200 {
+            let mut nmat = vec![vec![0.0; nvar]; nvar];
+            let mut gvec = vec![0.0; nvar];
+            for o in &obs {
+                let pi = pos[&o.gi];
+                let pj = pos[&o.gj];
+                let dx = pj.0 - pi.0;
+                let dy = pj.1 - pi.1;
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < 1e-9 {
+                    continue;
+                }
+                let r_dist = o.dist - d;
+                let r_az = wrap(o.az - dx.atan2(dy));
+                let ui = uidx.get(&o.gi).copied();
+                let uj = uidx.get(&o.gj).copied();
+                let mut dist_row: Vec<(usize, f64)> = Vec::new();
+                let mut az_row: Vec<(usize, f64)> = Vec::new();
+                if let Some(uj) = uj {
+                    dist_row.push((2 * uj, dx / d));
+                    dist_row.push((2 * uj + 1, dy / d));
+                    az_row.push((2 * uj, dy / (d * d)));
+                    az_row.push((2 * uj + 1, -dx / (d * d)));
+                }
+                if let Some(ui) = ui {
+                    dist_row.push((2 * ui, -dx / d));
+                    dist_row.push((2 * ui + 1, -dy / d));
+                    az_row.push((2 * ui, -dy / (d * d)));
+                    az_row.push((2 * ui + 1, dx / (d * d)));
+                }
+                accumulate(&dist_row, o.w_dist, r_dist, &mut nmat, &mut gvec);
+                accumulate(&az_row, o.w_az, r_az, &mut nmat, &mut gvec);
+            }
+            let Some(delta) = dense_solve_gauss(nmat, gvec) else {
+                panic!("rigorous_polar_reference: singular normal matrix (degenerate or unanchored geometry)")
+            };
+            let mut maxd = 0.0_f64;
+            for (root, &u) in &uidx {
+                if let Some(p) = pos.get_mut(root) {
+                    p.0 += delta[2 * u];
+                    p.1 += delta[2 * u + 1];
+                }
+                maxd = maxd.max(delta[2 * u].abs()).max(delta[2 * u + 1].abs());
+            }
+            if maxd < 1e-11 {
+                converged = true;
+                break;
+            }
+        }
+    }
+    // The reference is only meaningful at the true optimum; never hand back a
+    // stalled iterate as the "rigorous" answer.
+    assert!(
+        converged,
+        "rigorous_polar_reference: Gauss-Newton did not converge within 200 iterations"
+    );
+
+    let mut out = HashMap::new();
+    for (root, members) in &group_members {
+        let p = pos[root];
+        for &m in members {
+            out.insert(m, p);
+        }
+    }
+    out
+}
+
+/// A 2-D loop with OBLIQUE legs (30°/90°): two paths from a merged, datum-anchored
+/// origin to a closure. Path A's last leg is 10.0 m and path B's is `len_b`, so the
+/// misclosure scales with `len_b − 10`.
+fn oblique_loop(len_b: f64) -> Project {
+    let mut project = Project::new("Oblique".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(30.0, 30.0, 10.0, 0.0, 0.0), shot(90.0, 90.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0), shot(30.0, 30.0, len_b, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap())
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(StationRef::new(a, 2), StationRef::new(b, 2), ClosureStrategy::Batch)
+        .unwrap();
+    project
+}
+
+#[test]
+fn model_soundness_oracle_reproduces_known_rigorous_optima() {
+    // Validate the rigorous reference against optima we can pin by hand, so the
+    // model-soundness comparison below rests on a trustworthy oracle.
+    let config = ClosureAdjustmentConfig::default();
+
+    // (1) An already-closed network has nothing to adjust → measured unchanged.
+    let mut zero = Project::new("RefZero".to_string(), None);
+    let za = zero
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let zb = zero
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    zero.set_zero_datum(StationRef::new(za, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    zero.merge_stations(StationRef::new(za, 0), StationRef::new(zb, 0)).unwrap();
+    zero.create_loop_closure(StationRef::new(za, 2), StationRef::new(zb, 2), ClosureStrategy::Batch).unwrap();
+    let r0 = rigorous_polar_reference(&zero, &config);
+    for m in &zero.compute_station_coordinates() {
+        let (rx, ry) = r0[&m.station_ref];
+        assert!(
+            (m.coordinates.x - rx).abs() < 1e-6 && (m.coordinates.y - ry).abs() < 1e-6,
+            "oracle moved an already-closed network at {:?}",
+            m.station_ref,
+        );
+    }
+
+    // (2) Symmetric V (legs az80°/az100°, 10 m): by symmetry the rigorous optimum
+    // sits on the East axis at distance 10 → (10, 0). Production's once-linearised
+    // cartesian model gives 10·sin80° ≈ 9.848 instead — the legitimate first-order
+    // gap, which at this 10° angular misclosure is ~15 cm. This both validates the
+    // oracle on a known answer and demonstrates the model gap is real and signed.
+    let mut v = Project::new("RefSymV".to_string(), None);
+    let va = v.add_section(SectionData { shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)], ..Default::default() }).id;
+    let vb = v.add_section(SectionData { shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)], ..Default::default() }).id;
+    v.set_zero_datum(StationRef::new(va, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    v.merge_stations(StationRef::new(va, 0), StationRef::new(vb, 0)).unwrap();
+    v.create_loop_closure(StationRef::new(va, 1), StationRef::new(vb, 1), ClosureStrategy::Batch).unwrap();
+    let rv = rigorous_polar_reference(&v, &config);
+    let (rx, ry) = rv[&StationRef::new(va, 1)];
+    assert!(
+        (rx - 10.0).abs() < 1e-4 && ry.abs() < 1e-4,
+        "rigorous symmetric-V optimum ({rx:.6}, {ry:.6}) != (10, 0)"
+    );
+}
+
+#[test]
+fn model_sound_matches_rigorous_in_small_misclosure_regime() {
+    // Production's decoupled, once-linearised solve must track the rigorous
+    // coupled-polar adjustment in the regime real surveys operate in (well-closed
+    // loops). The residual gap is the first-order error of production's
+    // approximation: it grows with ANGULAR misclosure (see
+    // model_soundness_oracle_reproduces_known_rigorous_optima, where a 10° angular
+    // misclosure opens a ~15 cm gap) and, for oblique legs, with the dx–dy
+    // covariance production drops. On ~0.1–0.2 m corrections the two agree to a few
+    // millimetres or better — independent evidence the model is a sound LSQ
+    // adjustment in regime. Tolerances are keyed per case: tight where legs are
+    // axis-aligned (no dropped covariance), looser where they are oblique.
+    let config = ClosureAdjustmentConfig::default();
+    let cases: Vec<(&str, Project, f64)> = vec![
+        ("axis-aligned 0.2 m loop", looped_project_with_misclosure().0, 1e-3),
+        ("oblique 1 cm loop", oblique_loop(10.01), 3e-3),
+    ];
+    for (name, project, tol) in cases {
+        let prod = project.compute_adjusted_station_coordinates(&config);
+        let reference = rigorous_polar_reference(&project, &config);
+        let mut maxd = 0.0_f64;
+        for (sr, (rx, ry)) in &reference {
+            let p = station_coords(&prod, *sr);
+            maxd = maxd.max((p.x - rx).abs()).max((p.y - ry).abs());
+        }
+        assert!(
+            maxd < tol,
+            "{name}: production vs rigorous polar LSQ differ by {maxd:.6} m (> {tol})"
+        );
+    }
+}
+
+// ── GNU Gama gold-standard fixtures ──────────────────────────────────────────
+//
+// Production's closure solve is DECOUPLED per axis, and each axis minimises
+// Σ w·(Δ_meas − (p_j − p_i))² — i.e. exactly a 1-D LEVELLING network. GNU Gama
+// (gama-local) adjusts levelling networks natively, linearly and exactly, so it is
+// an independent GOLD STANDARD: we emit each network's X- and Y-axis as a Gama
+// levelling network, run gama-local ONCE offline, and freeze the adjusted
+// coordinates in tests/fixtures/gama_golden.json. `production_matches_gama_golden`
+// then checks production against the frozen Gama numbers with NO gama dependency.
+//
+// Regenerate after changing the networks or the weight model:
+//   GAMA_LOCAL=/path/to/gama-local cargo test --manifest-path src-tauri/Cargo.toml \
+//       --lib generate_gama_golden_fixtures -- --ignored --nocapture
+// The frozen fixture was produced with gama-local 2.33; use that version (or
+// verify a newer one regenerates byte-identically) when regenerating.
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct GoldStation {
+    s: u32,
+    i: u32,
+    x: f64,
+    y: f64,
+}
+
+/// Deterministic xorshift in [0, 1); seedable so fixtures are reproducible.
+fn xorshift01(state: &mut u64) -> f64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    ((x >> 11) as f64) / ((1u64 << 53) as f64)
+}
+
+/// A fuzzed two-path loop: two sections of random oblique legs from a shared,
+/// datum-anchored origin, joined at their far ends by a closure. Single-component,
+/// single-datum, no spurs — every station lies on the loop. Misclosure is whatever
+/// the random geometry produces (irrelevant to the per-axis levelling gold solve).
+fn fuzz_loop(seed: u64) -> Project {
+    let mut st = seed | 1;
+    let mut p = Project::new(format!("fuzz_{seed}"), None);
+    let na = 2 + (xorshift01(&mut st) * 3.0) as usize;
+    let nb = 2 + (xorshift01(&mut st) * 3.0) as usize;
+    let mkshots = |st: &mut u64, n: usize| -> Vec<ShotData> {
+        (0..n)
+            .map(|_| {
+                let az = xorshift01(st) * 360.0;
+                let len = 5.0 + xorshift01(st) * 10.0;
+                shot(az, az, len, 0.0, 0.0)
+            })
+            .collect()
+    };
+    let a = p.add_section(SectionData { shots: mkshots(&mut st, na), ..Default::default() }).id;
+    let b = p.add_section(SectionData { shots: mkshots(&mut st, nb), ..Default::default() }).id;
+    p.set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    p.create_loop_closure(StationRef::new(a, na as u32), StationRef::new(b, nb as u32), ClosureStrategy::Batch).unwrap();
+    p
+}
+
+/// Random oblique shots with a gentle eastward drift (keeps coordinates bounded at
+/// scale while leaving a real misclosure).
+fn drift_shots(st: &mut u64, n: usize, base_az: f64) -> Vec<ShotData> {
+    (0..n)
+        .map(|_| {
+            let az = base_az + (xorshift01(st) - 0.5) * 80.0;
+            let len = 4.0 + xorshift01(st) * 6.0;
+            shot(az, az, len, 0.0, 0.0)
+        })
+        .collect()
+}
+
+/// One big loop: two paths of `n` shots from a merged datum origin joined by a
+/// single closure at the far end. ~2n+1 stations — pure-scale stress for the O(n)
+/// solve.
+fn big_loop(n: usize, seed: u64) -> Project {
+    let mut st = seed | 1;
+    let mut p = Project::new(format!("loop_{}", 2 * n + 1), None);
+    let a = p.add_section(SectionData { shots: drift_shots(&mut st, n, 60.0), ..Default::default() }).id;
+    let b = p.add_section(SectionData { shots: drift_shots(&mut st, n, 30.0), ..Default::default() }).id;
+    p.set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    p.create_loop_closure(StationRef::new(a, n as u32), StationRef::new(b, n as u32), ClosureStrategy::Batch).unwrap();
+    p
+}
+
+/// A ladder: two rails of `segs*seg` shots from a merged datum origin, joined by a
+/// "rung" closure every `seg` stations → `segs` STACKED loops sharing rails.
+fn ladder(segs: usize, seg: usize, seed: u64) -> Project {
+    let n = segs * seg;
+    let mut st = seed | 1;
+    let mut p = Project::new(format!("ladder_{}", 2 * n + 1), None);
+    let a = p.add_section(SectionData { shots: drift_shots(&mut st, n, 90.0), ..Default::default() }).id;
+    let b = p.add_section(SectionData { shots: drift_shots(&mut st, n, 90.0), ..Default::default() }).id;
+    p.set_zero_datum(StationRef::new(a, 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    p.merge_stations(StationRef::new(a, 0), StationRef::new(b, 0)).unwrap();
+    for k in 1..=segs {
+        let idx = (k * seg) as u32;
+        p.create_loop_closure(StationRef::new(a, idx), StationRef::new(b, idx), ClosureStrategy::Batch).unwrap();
+    }
+    p
+}
+
+/// A 2-D grid mesh: `rows` row-sections (mostly-East shots) and `cols`
+/// column-sections (mostly-North shots), with every grid node (r,c) shared between
+/// its row and column via a merge. A dense lattice of loops — one per cell.
+fn grid(rows: usize, cols: usize, seed: u64) -> Project {
+    let mut st = seed | 1;
+    let mut p = Project::new(format!("grid_{rows}x{cols}"), None);
+    let row_sec: Vec<u32> = (0..rows)
+        .map(|_| p.add_section(SectionData { shots: drift_shots(&mut st, cols - 1, 90.0), ..Default::default() }).id)
+        .collect();
+    let col_sec: Vec<u32> = (0..cols)
+        .map(|_| p.add_section(SectionData { shots: drift_shots(&mut st, rows - 1, 0.0), ..Default::default() }).id)
+        .collect();
+    p.set_zero_datum(StationRef::new(row_sec[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    // Spanning tree of identity merges: row 0 ties every column, column 0 ties every
+    // row. (Tree → each merge joins a new section, never an already-connected pair.)
+    for c in 0..cols {
+        p.merge_stations(StationRef::new(row_sec[0], c as u32), StationRef::new(col_sec[c], 0)).unwrap();
+    }
+    for r in 1..rows {
+        p.merge_stations(StationRef::new(row_sec[r], 0), StationRef::new(col_sec[0], r as u32)).unwrap();
+    }
+    // Interior nodes are already path-connected, so identifying row r / col c there
+    // CLOSES a cell loop — one closure per interior node.
+    for r in 1..rows {
+        for c in 1..cols {
+            p.create_loop_closure(StationRef::new(row_sec[r], c as u32), StationRef::new(col_sec[c], r as u32), ClosureStrategy::Batch).unwrap();
+        }
+    }
+    p
+}
+
+/// `paths` independent random sections from a merged datum origin, all fused at
+/// their far ends by closures → `paths-1` independent loops, no spurs. Shots span
+/// the FULL azimuth circle and a wide length band `[len_min, len_max]`, plus a
+/// random per-section quality — deliberately harsher than the structured nets.
+fn fuzz_paths(seed: u64, paths: usize, max_shots: usize, len_min: f64, len_max: f64) -> Project {
+    let mut st = seed | 1;
+    let mut p = Project::new(format!("wild_{seed:x}"), None);
+    let sids: Vec<u32> = (0..paths)
+        .map(|_| {
+            let n = 2 + (xorshift01(&mut st) * (max_shots as f64 - 1.0)) as usize;
+            let shots: Vec<ShotData> = (0..n)
+                .map(|_| {
+                    let az = xorshift01(&mut st) * 360.0;
+                    let len = len_min + xorshift01(&mut st) * (len_max - len_min);
+                    shot(az, az, len, 0.0, 0.0)
+                })
+                .collect();
+            let q = 0.5 + xorshift01(&mut st) * 2.5;
+            p.add_section(SectionData { shots, quality: q, ..Default::default() }).id
+        })
+        .collect();
+    p.set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    for &sid in &sids[1..] {
+        p.merge_stations(StationRef::new(sids[0], 0), StationRef::new(sid, 0)).unwrap();
+    }
+    let end_of = |p: &Project, sid: u32| {
+        let n = p.sections.iter().find(|s| s.id == sid).map(|s| s.shots.len()).unwrap_or(0);
+        StationRef::new(sid, n as u32)
+    };
+    let end0 = end_of(&p, sids[0]);
+    for &sid in &sids[1..] {
+        let e = end_of(&p, sid);
+        p.create_loop_closure(end0, e, ClosureStrategy::Batch).unwrap();
+    }
+    p
+}
+
+/// Star: single-shot legs `(az°, len, quality)` from a merged datum origin to one
+/// closure-fused endpoint.
+fn build_star(name: &str, legs: &[(f64, f64, f64)]) -> Project {
+    let mut p = Project::new(name.to_string(), None);
+    let sids: Vec<u32> = legs
+        .iter()
+        .map(|&(az, len, q)| p.add_section(SectionData { shots: vec![shot(az, az, len, 0.0, 0.0)], quality: q, ..Default::default() }).id)
+        .collect();
+    p.set_zero_datum(StationRef::new(sids[0], 0), GpsCoordinates::new(0.0, 0.0, 0.0).unwrap()).unwrap();
+    for &sid in &sids[1..] {
+        p.merge_stations(StationRef::new(sids[0], 0), StationRef::new(sid, 0)).unwrap();
+    }
+    for &sid in &sids[1..] {
+        p.create_loop_closure(StationRef::new(sids[0], 1), StationRef::new(sid, 1), ClosureStrategy::Batch).unwrap();
+    }
+    p
+}
+
+/// The fixed roster of networks behind the Gama gold standard. Both the generator
+/// and the CI check call this, so they see identical geometry.
+fn gama_golden_networks() -> Vec<(String, Project)> {
+    let mut nets: Vec<(String, Project)> = vec![
+        ("axis_aligned_loop".to_string(), looped_project_with_misclosure().0),
+        ("oblique_loop".to_string(), oblique_loop(10.5)),
+        ("star_mixed".to_string(), build_star("star_mixed", &[(90.0, 10.0, 1.0), (0.0, 8.0, 1.0), (45.0, 12.0, 2.0)])),
+        // Large scale and dense-redundancy topologies.
+        ("loop_101".to_string(), big_loop(50, 0x10001)),
+        ("ladder_1001".to_string(), ladder(20, 25, 0x1ADDE2)),
+        ("grid_12x12".to_string(), grid(12, 12, 0x6121D)),
+        // Harsh random multi-path bundles: full-circle azimuths, wide length bands.
+        ("wild_2path".to_string(), fuzz_paths(0x21D2, 2, 7, 0.5, 40.0)),
+        ("wild_3path".to_string(), fuzz_paths(0x5A1A, 3, 5, 0.2, 30.0)),
+        ("wild_4path".to_string(), fuzz_paths(0xB17E, 4, 4, 1.0, 50.0)),
+        ("wild_long".to_string(), fuzz_paths(0xF1A5C0, 2, 9, 0.3, 25.0)),
+    ];
+    for seed in [0xA11CE_u64, 0xBEEF, 0xC0FFEE, 0xD15EA5E, 0x5EED] {
+        nets.push((format!("fuzz_{seed}"), fuzz_loop(seed)));
+    }
+    nets
+}
+
+/// Union-find over merges + closures → (station→group index, group→members).
+fn station_groups(project: &Project) -> (HashMap<StationRef, usize>, Vec<Vec<StationRef>>) {
+    fn find(p: &mut HashMap<StationRef, StationRef>, x: StationRef) -> StationRef {
+        let mut r = x;
+        while p[&r] != r {
+            r = p[&r];
+        }
+        let mut c = x;
+        while p[&c] != r {
+            let nx = p[&c];
+            p.insert(c, r);
+            c = nx;
+        }
+        r
+    }
+    let mut stations: Vec<StationRef> = Vec::new();
+    for s in &project.sections {
+        for idx in 0..=s.shots.len() {
+            stations.push(StationRef::new(s.id, idx as u32));
+        }
+    }
+    let mut parent: HashMap<StationRef, StationRef> = stations.iter().map(|&s| (s, s)).collect();
+    let fuse = |parent: &mut HashMap<StationRef, StationRef>, a: StationRef, b: StationRef| {
+        if parent.contains_key(&a) && parent.contains_key(&b) {
+            let (ra, rb) = (find(parent, a), find(parent, b));
+            if ra != rb {
+                parent.insert(ra, rb);
+            }
+        }
+    };
+    for m in &project.station_merges {
+        if let (Some(a), Some(b)) = (project.resolve_key(&m.station_a), project.resolve_key(&m.station_b)) {
+            fuse(&mut parent, a, b);
+        }
+    }
+    for lc in &project.loop_closures {
+        if let (Some(a), Some(b)) = (project.resolve_key(&lc.station_a), project.resolve_key(&lc.station_b)) {
+            fuse(&mut parent, a, b);
+        }
+    }
+    let mut root_idx: HashMap<StationRef, usize> = HashMap::new();
+    let mut members: Vec<Vec<StationRef>> = Vec::new();
+    let mut gidx: HashMap<StationRef, usize> = HashMap::new();
+    for &s in &stations {
+        let r = find(&mut parent, s);
+        let idx = *root_idx.entry(r).or_insert_with(|| {
+            members.push(Vec::new());
+            members.len() - 1
+        });
+        members[idx].push(s);
+        gidx.insert(s, idx);
+    }
+    (gidx, members)
+}
+
+/// Reverse Cuthill–McKee ordering of the group graph. Gama's envelope solver cost
+/// is `O(n·bandwidth²)`, and emitting points in section order leaves a huge
+/// bandwidth on big loops; RCM keeps it near-constant so the gold solve scales.
+/// Returns `rcm[k]` = the group emitted at position `k`.
+fn bandwidth_order(n: usize, edges: &[(usize, usize)], start: usize) -> Vec<usize> {
+    use std::collections::VecDeque;
+    let mut adj = vec![Vec::new(); n];
+    for &(a, b) in edges {
+        if a != b {
+            adj[a].push(b);
+            adj[b].push(a);
+        }
+    }
+    for nb in adj.iter_mut() {
+        nb.sort_unstable();
+        nb.dedup();
+    }
+    let mut visited = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    let mut seeds: Vec<usize> = (0..n).collect();
+    seeds.sort_by_key(|&g| adj[g].len());
+    seeds.retain(|&g| g != start);
+    seeds.insert(0, start);
+    let mut q = VecDeque::new();
+    for &s in &seeds {
+        if visited[s] {
+            continue;
+        }
+        visited[s] = true;
+        q.push_back(s);
+        while let Some(u) = q.pop_front() {
+            order.push(u);
+            let mut nbrs: Vec<usize> = adj[u].iter().copied().filter(|&v| !visited[v]).collect();
+            nbrs.sort_by_key(|&v| adj[v].len());
+            for v in nbrs {
+                visited[v] = true;
+                q.push_back(v);
+            }
+        }
+    }
+    order.reverse();
+    order
+}
+
+/// Emit one axis (0 = X, 1 = Y) of a network as a GNU Gama levelling network: one
+/// point per group (datum group fixed) declared in `rcm` order, one `<dh>` per
+/// inter-group shot with production's measured Δ and σ on that axis. `rank[g]` is
+/// the gama point id of group `g`.
+fn emit_leveling_gkf(
+    project: &Project,
+    config: &ClosureAdjustmentConfig,
+    axis: usize,
+    gidx: &HashMap<StationRef, usize>,
+    rcm: &[usize],
+    rank: &[usize],
+    datum_group: usize,
+    datum_coord: f64,
+) -> String {
+    let mut s = String::new();
+    s.push_str("<?xml version=\"1.0\"?>\n<gama-local xmlns=\"http://www.gnu.org/software/gama/gama-local\">\n");
+    s.push_str("<network axes-xy=\"ne\" angles=\"right-handed\">\n");
+    // tol-abs is the gross-error threshold in MM: gama removes any observation whose
+    // misclosure exceeds it. Our fuzzed loops have metre-scale misclosures by design,
+    // so set it huge to keep every observation in the adjustment.
+    s.push_str("<parameters sigma-apr=\"1.0\" conf-pr=\"0.95\" tol-abs=\"1e12\" sigma-act=\"apriori\"/>\n");
+    s.push_str("<points-observations>\n");
+    for (k, &g) in rcm.iter().enumerate() {
+        if g == datum_group {
+            s.push_str(&format!("<point id=\"g{k}\" z=\"{datum_coord:.12}\" fix=\"Z\"/>\n"));
+        } else {
+            s.push_str(&format!("<point id=\"g{k}\" adj=\"Z\"/>\n"));
+        }
+    }
+    s.push_str("<height-differences>\n");
+    for sec in &project.sections {
+        let q = if sec.quality.is_finite() && sec.quality > 0.0 { sec.quality } else { 1.0 };
+        let s_len = config.base_sigma_length_m * q;
+        let s_az = config.base_sigma_azimuth_deg.to_radians() * q;
+        for (idx, shot) in sec.shots.iter().enumerate() {
+            let gi = gidx[&StationRef::new(sec.id, idx as u32)];
+            let gj = gidx[&StationRef::new(sec.id, (idx + 1) as u32)];
+            if gi == gj {
+                continue;
+            }
+            let az = shot.average_azimuth().to_radians();
+            let len = shot.length;
+            let hlen = shot.horizontal_length();
+            let (val, sigma) = if axis == 0 {
+                (hlen * az.sin(), ((az.sin() * s_len).powi(2) + (len * az.cos() * s_az).powi(2)).sqrt())
+            } else {
+                (hlen * az.cos(), ((az.cos() * s_len).powi(2) + (len * az.sin() * s_az).powi(2)).sqrt())
+            };
+            s.push_str(&format!("  <dh from=\"g{}\" to=\"g{}\" val=\"{val:.12}\" stdev=\"{sigma:.12}\"/>\n", rank[gi], rank[gj]));
+        }
+    }
+    s.push_str("</height-differences>\n</points-observations>\n</network>\n</gama-local>\n");
+    s
+}
+
+/// Extract adjusted heights from gama-local `--xml` output: `id → Z`.
+fn parse_gama_adjusted(xml: &str) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    let body = xml
+        .split_once("<adjusted>")
+        .and_then(|(_, r)| r.split_once("</adjusted>"))
+        .map(|(b, _)| b)
+        .unwrap_or("");
+    for chunk in body.split("<point>").skip(1) {
+        let id = chunk.split_once("<id>").and_then(|(_, r)| r.split_once("</id>")).map(|(v, _)| v.trim().to_string());
+        let z = chunk.split_once("<Z>").and_then(|(_, r)| r.split_once("</Z>")).and_then(|(v, _)| v.trim().parse::<f64>().ok());
+        if let (Some(id), Some(z)) = (id, z) {
+            out.insert(id, z);
+        }
+    }
+    out
+}
+
+/// Run gama on every network/axis and freeze the adjusted coordinates. Ignored by
+/// default; needs `GAMA_LOCAL` pointing at a `gama-local` binary.
+#[test]
+#[ignore = "regenerates Gama gold fixtures; set GAMA_LOCAL=/path/to/gama-local"]
+fn generate_gama_golden_fixtures() {
+    use std::collections::BTreeMap;
+    let gama = std::env::var("GAMA_LOCAL").expect("set GAMA_LOCAL to the gama-local binary");
+    let config = ClosureAdjustmentConfig::default();
+    let mut all: BTreeMap<String, Vec<GoldStation>> = BTreeMap::new();
+    let mut worst = 0.0_f64;
+
+    for (name, project) in gama_golden_networks() {
+        let (gidx, members) = station_groups(&project);
+        let datum = project.zero_datums.first().and_then(|z| project.resolve_key(&z.station_ref)).unwrap();
+        let dg = gidx[&datum];
+        let datum_raw = project.compute_station_raw_coords(datum).unwrap();
+        // Group adjacency from inter-group shots → reverse Cuthill–McKee point order.
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        for sec in &project.sections {
+            for idx in 0..sec.shots.len() {
+                let gi = gidx[&StationRef::new(sec.id, idx as u32)];
+                let gj = gidx[&StationRef::new(sec.id, (idx + 1) as u32)];
+                if gi != gj {
+                    edges.push((gi, gj));
+                }
+            }
+        }
+        let rcm = bandwidth_order(members.len(), &edges, dg);
+        let mut rank = vec![0usize; members.len()];
+        for (k, &g) in rcm.iter().enumerate() {
+            rank[g] = k;
+        }
+        let mut group_xy = vec![(0.0_f64, 0.0_f64); members.len()];
+        for axis in 0..2 {
+            let dcoord = if axis == 0 { datum_raw.x } else { datum_raw.y };
+            let gkf = emit_leveling_gkf(&project, &config, axis, &gidx, &rcm, &rank, dg, dcoord);
+            let tmp = std::env::temp_dir();
+            let infile = tmp.join(format!("gama_{name}_{axis}.gkf"));
+            let outfile = tmp.join(format!("gama_{name}_{axis}.out.xml"));
+            std::fs::write(&infile, &gkf).unwrap();
+            // --cov-band 0 skips the O(n²) a-posteriori covariance matrix (we only
+            // need adjusted coordinates); without it gama is unusably slow at 10⁴ pts.
+            let status = std::process::Command::new(&gama)
+                .arg(&infile)
+                .arg("--cov-band")
+                .arg("0")
+                .arg("--xml")
+                .arg(&outfile)
+                .status()
+                .unwrap();
+            assert!(status.success(), "gama-local failed on {name} axis {axis}");
+            let adj = parse_gama_adjusted(&std::fs::read_to_string(&outfile).unwrap());
+            for (g, item) in group_xy.iter_mut().enumerate() {
+                let c = if g == dg { dcoord } else { *adj.get(&format!("g{}", rank[g])).unwrap_or_else(|| panic!("missing g{} for {name} axis {axis}", rank[g])) };
+                if axis == 0 { item.0 = c; } else { item.1 = c; }
+            }
+        }
+        // Sanity: production must already match the gold; record the worst gap.
+        let prod = project.compute_adjusted_station_coordinates(&config);
+        let mut rows = Vec::new();
+        let mut net_worst = 0.0_f64;
+        for (g, mem) in members.iter().enumerate() {
+            for &sr in mem {
+                let p = station_coords(&prod, sr);
+                net_worst = net_worst.max((p.x - group_xy[g].0).abs()).max((p.y - group_xy[g].1).abs());
+                rows.push(GoldStation { s: sr.section_id, i: sr.station_index, x: group_xy[g].0, y: group_xy[g].1 });
+            }
+        }
+        println!("[gama-golden] {name}: groups={} worst={net_worst:.3e} m", members.len());
+        // Refuse to freeze a fixture production doesn't already reproduce: a large
+        // gap here is an emitter/model bug (wrong Δ/σ/sign), not a production
+        // regression — writing it would bake a wrong gold standard.
+        assert!(
+            net_worst < 1e-5,
+            "regeneration aborted: production diverged from freshly-emitted gama on {name} by {net_worst:.3e} m"
+        );
+        worst = worst.max(net_worst);
+        rows.sort_by_key(|r| (r.s, r.i));
+        all.insert(name, rows);
+    }
+
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/gama_golden.json");
+    std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+    std::fs::write(path, serde_json::to_string(&all).unwrap()).unwrap();
+    println!("[gama-golden] wrote {path}; worst production-vs-gama gap = {worst:.3e} m");
+}
+
+#[test]
+fn production_matches_gama_golden() {
+    use std::collections::BTreeMap;
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/gama_golden.json");
+    let data = std::fs::read_to_string(path).unwrap_or_else(|_| {
+        panic!("missing {path}; regenerate with GAMA_LOCAL=/path/to/gama-local cargo test generate_gama_golden_fixtures -- --ignored")
+    });
+    let frozen: BTreeMap<String, Vec<GoldStation>> = serde_json::from_str(&data).unwrap();
+    let config = ClosureAdjustmentConfig::default();
+    let nets: HashMap<String, Project> = gama_golden_networks().into_iter().collect();
+
+    // Coverage guard: the frozen fixture and the live roster must name the SAME
+    // networks, so adding one without rerunning the generator fails loudly instead
+    // of being silently untested. (frozen is a BTreeMap, so its keys are sorted.)
+    assert!(!frozen.is_empty(), "gama_golden.json is empty; regenerate");
+    let mut roster_names: Vec<&String> = nets.keys().collect();
+    roster_names.sort();
+    let frozen_names: Vec<&String> = frozen.keys().collect();
+    assert_eq!(
+        frozen_names, roster_names,
+        "roster and frozen fixture networks differ; rerun generate_gama_golden_fixtures"
+    );
+
+    for (name, rows) in &frozen {
+        let project = nets.get(name).unwrap_or_else(|| panic!("network {name} not in roster"));
+        let prod = project.compute_adjusted_station_coordinates(&config);
+        // Every production station must be frozen, so added/renumbered stations are
+        // not silently left unchecked.
+        assert_eq!(
+            rows.len(),
+            prod.len(),
+            "{name}: frozen station count {} != production {}; regenerate",
+            rows.len(),
+            prod.len()
+        );
+        for r in rows {
+            let p = station_coords(&prod, StationRef::new(r.s, r.i));
+            // Worst observed gap across the roster is ~2e-10 m; 1e-6 leaves a wide
+            // margin for cross-platform float variation while still being microns
+            // against metre-scale corrections, so any real regression is caught.
+            assert!(
+                (p.x - r.x).abs() < 1e-6 && (p.y - r.y).abs() < 1e-6,
+                "{name} s{}:{}: production ({:.6}, {:.6}) != gama gold ({:.6}, {:.6})",
+                r.s, r.i, p.x, p.y, r.x, r.y,
+            );
+        }
+    }
 }

@@ -15,7 +15,7 @@ import { getDepthColor, getErrorColor } from '../../../utils/colors';
 import { metersToMapCoords } from '../../../utils/coordinates';
 import { formatFixed } from '../../../i18n/format';
 import type { MapThemeColors } from '../../../utils/themeColors';
-import { FEATURE_ID_STRIDE } from '../../../utils/ids';
+import { encodeFeatureId } from '../../../utils/ids';
 
 export type DepthRange = { min: number; max: number };
 
@@ -230,7 +230,7 @@ export function buildSurveyFeatures(
         ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
         : null;
       const shotColor = depthColor ?? section.color;
-      const shotFeatureId = section.id * FEATURE_ID_STRIDE + shotId;
+      const shotFeatureId = encodeFeatureId(section.id, shotId);
 
       const fromXYZ = stationXYZ(fromGlobal);
       const toXYZ = stationXYZ(toGlobal);
@@ -346,7 +346,7 @@ export function buildSurveyFeatures(
     }
 
     const featureStrokeColor = showDepthGradient && isZeroDatumStation ? zeroDatum : strokeColor;
-    const featureId = sectionId * FEATURE_ID_STRIDE + stationIndex;
+    const featureId = encodeFeatureId(sectionId, stationIndex);
 
     stationFeatures.push({
       type: 'Feature',
@@ -573,7 +573,7 @@ export function buildSurveyFeaturesLegacy(
           : null;
         const shotColor = depthColor ?? section.color;
 
-        const shotFeatureId = section.id * FEATURE_ID_STRIDE + shot.id;
+        const shotFeatureId = encodeFeatureId(section.id, shot.id);
 
         // Slim shot feature: only properties actually read by paint/feature-state
         // expressions or by setFeatureState lookups elsewhere in this file.
@@ -702,8 +702,10 @@ export function buildSurveyFeaturesLegacy(
     }
 
     const featureStrokeColor = showDepthGradient && isZeroDatum ? zeroDatum : strokeColor;
-    const featureId =
-      station.station_ref.section_id * FEATURE_ID_STRIDE + station.station_ref.station_index;
+    const featureId = encodeFeatureId(
+      station.station_ref.section_id,
+      station.station_ref.station_index,
+    );
 
     stationFeatures.push({
       type: 'Feature',

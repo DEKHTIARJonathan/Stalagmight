@@ -1395,6 +1395,7 @@
       "center": "Center map on station {{id}}",
       "comment": "Comment",
       "zeroDatum": "Zero datum station",
+      "distanceGradientRoot": "Distance gradient root",
       "mergedWith": "Merged with",
       "connected": "Connected",
       "previousShot": "Previous shot",
@@ -1506,6 +1507,7 @@
       "scaleBar": "Scale bar",
       "satellite": "Satellite",
       "depthGradient": "Depth Gradient",
+      "distanceGradient": "Distance Gradient",
       "devStats": "Dev stats"
     },
     "descriptions": {
@@ -1522,6 +1524,7 @@
       "scaleBar": "Show scale bar",
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
+      "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
       "devStats": "Show developer stats overlay"
     }
   },
@@ -1728,6 +1731,13 @@
     "depthLegend": {
       "aria": "Depth scale from {{min}} (shallow) to {{max}} (deep)",
       "flat": "Flat"
+    },
+    "distanceLegend": {
+      "title": "Distance",
+      "aria": "Distance scale from {{min}} (near) to {{max}} (far)",
+      "fromEntrance": "from entrance",
+      "fromStation": "from {{id}}",
+      "computing": "Distance: computing…"
     },
     "placement": {
       "title": "Placement",

@@ -24,6 +24,7 @@ export * from './ipc/CreateProjectFullResult';
 export * from './ipc/Project';
 export * from './ipc/ProjectMetadata';
 export * from './ipc/ProjectStats';
+export * from './ipc/DistanceField';
 export * from './ipc/Section';
 export * from './ipc/SectionData';
 export * from './ipc/SectionUpdates';
