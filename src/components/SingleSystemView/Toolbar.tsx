@@ -244,17 +244,18 @@ export default function Toolbar({
         {dataTableFullScreen ? (
           <>
             <TableSelectDropdown />
-            {/* Styled like the map-view tool buttons (sh-tool + role accent). */}
-            <IconButton
+            {/* Styled like the map-view tool buttons (sh-tool + role accent),
+                with the label kept for discoverability. */}
+            <Button
               icon={<ShrinkIcon size={16} />}
               onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
-              aria-label={t('dataTable.fullScreen.exit')}
-              title={t('dataTable.fullScreen.exit')}
               size="sm"
               className="sh-tool"
               style={{ '--o': toolAccentVar('pan') } as CSSProperties}
               data-testid="toolbar-map-view-button"
-            />
+            >
+              {t('dataTable.fullScreen.exit')}
+            </Button>
           </>
         ) : (
           <>
