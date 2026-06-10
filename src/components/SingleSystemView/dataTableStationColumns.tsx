@@ -13,11 +13,16 @@ import type { Station } from '../../types/project';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
 import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
+import { xyToGps } from '../../utils/coordinates';
+import type { GpsCoordinates } from '../../types/project';
 
 export interface StationColumnContext {
   t: TFunction;
   precision: { coordinates: number; depth: number; gps: number };
   geometryReadOnly: boolean;
+  /** The survey's GPS anchor (first zero datum), as the map uses it; null when
+   *  the project has none — the GPS columns then stay blank. */
+  gpsOrigin: { latitude: number; longitude: number } | null;
   /** Click on the GPS (zero-datum) cell — opens the Edit Station dialog in
    *  the mode matching the station's zero-datum state. */
   onGpsCellClick: (station: Station) => void;
@@ -41,15 +46,23 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
     format: fixed(prec),
   });
 
-  // GPS coordinates exist only when a zero datum anchors the survey; the
-  // backend computes them per station (null otherwise → blank cells).
+  // GPS per station: the backend only stores coordinates on zero-datum
+  // stations, so derive the rest from local meters through the same
+  // conversion and origin the map uses (utils/coordinates.xyToGps).
+  const stationGps = (r: Station): GpsCoordinates | null => {
+    if (r.gps_coordinates) return r.gps_coordinates;
+    if (!ctx.gpsOrigin) return null;
+    return xyToGps(r.coordinates, { ...ctx.gpsOrigin, depth_reference: 0 });
+  };
   const gpsCol = (key: '_lat' | '_long', header: string): GridColumn<Station> => ({
     key,
     header,
     width: 100,
     align: 'right',
-    getValue: (r) =>
-      key === '_lat' ? r.gps_coordinates?.latitude ?? null : r.gps_coordinates?.longitude ?? null,
+    getValue: (r) => {
+      const gps = stationGps(r);
+      return gps === null ? null : key === '_lat' ? gps.latitude : gps.longitude;
+    },
     format: fixed(precision.gps),
   });
 
@@ -62,7 +75,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
     {
       key: '_zeroDatum',
       header: t('dataTable.stationColumns.zeroDatum'),
-      width: 40,
+      width: 56,
       align: 'center',
       getValue: (r) => r.is_zero_datum,
       format: (v) => (v ? 'true' : 'false'),

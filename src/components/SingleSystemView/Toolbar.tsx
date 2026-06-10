@@ -4,13 +4,11 @@ import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
-  ArrowLeftIcon,
   BugIcon,
   ChevronDownIcon,
   ShrinkIcon,
 } from '../common/icons';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
-import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import TableSelectDropdown from './TableSelectDropdown';
@@ -133,13 +131,12 @@ export default function Toolbar({
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const openDialog = useUIStore((s) => s.openDialog);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
-  const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   // The closure-adjusted view is read-only: geometry-mutating tools are disabled
   // there (edits are made in the measured view).
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
 
   return (
-    <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
+    <header className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
       {/* Left section */}
       <div
         className={`flex items-center gap-2 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
@@ -149,7 +146,6 @@ export default function Toolbar({
           onClick={onBack}
           disabled={placementModeActive}
           size="sm"
-          icon={<ArrowLeftIcon size={14} />}
           data-testid="back-button"
         >
           {t('common.actions.close')}
@@ -157,28 +153,7 @@ export default function Toolbar({
         <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
         </Button>
-        {dataTableFullScreen ? (
-          /* Import/Export make way for the way back to the map; the icon takes
-             the pan-tool accent when toolbar highlighting is on. */
-          <Button
-            onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
-            size="sm"
-            icon={
-              <span
-                style={
-                  syntacticLevelAtLeast(syntacticLevel, 'toolbar_only')
-                    ? ({ color: toolAccentVar('pan') } as CSSProperties)
-                    : undefined
-                }
-              >
-                <ShrinkIcon size={14} />
-              </span>
-            }
-            data-testid="toolbar-map-view-button"
-          >
-            {t('dataTable.fullScreen.exit')}
-          </Button>
-        ) : (
+        {!dataTableFullScreen && (
           <>
             <Button
               onClick={() => { setSource('toolbar'); onImport(); }}
@@ -236,7 +211,13 @@ export default function Toolbar({
           focused section (if any) is shown in the status bar. Fullscreen table
           mode has no active map tool, so it shows the table's title instead. */}
       {dataTableFullScreen ? (
-        <div className="font-medium" data-testid="toolbar-data-table-title">
+        /* Absolutely centered: justify-between would drift the title by the
+           side blocks' width difference, visibly off against the centered
+           sub-header pill below. */
+        <div
+          className="absolute left-1/2 -translate-x-1/2 font-medium"
+          data-testid="toolbar-data-table-title"
+        >
           {t('dataTable.title')}
         </div>
       ) : (
@@ -261,7 +242,20 @@ export default function Toolbar({
           the table picker and a "Map view" shrink button instead. */}
       <div className="flex items-center gap-2">
         {dataTableFullScreen ? (
-          <TableSelectDropdown />
+          <>
+            <TableSelectDropdown />
+            {/* Styled like the map-view tool buttons (sh-tool + role accent). */}
+            <IconButton
+              icon={<ShrinkIcon size={16} />}
+              onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
+              aria-label={t('dataTable.fullScreen.exit')}
+              title={t('dataTable.fullScreen.exit')}
+              size="sm"
+              className="sh-tool"
+              style={{ '--o': toolAccentVar('pan') } as CSSProperties}
+              data-testid="toolbar-map-view-button"
+            />
+          </>
         ) : (
           <>
             <div

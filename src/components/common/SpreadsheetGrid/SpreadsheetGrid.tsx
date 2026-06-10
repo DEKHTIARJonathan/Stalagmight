@@ -1984,6 +1984,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     const isActive = rowIdx === selection.active.row && c === activeColIdx;
                     const isEditingCell = editing?.row === rowIdx && editing.colKey === col.key;
                     const missing = isMissing(rowIdx, col.key);
+                    // Editable column, but locked on this row (frozen geometry,
+                    // read-only mode) — visibly distinct from plain data cells.
+                    const locked = isColWritable(col) && !cellEditable(rowIdx, col);
                     const extraCellClass = cellClassName?.(row, rowIdx, col.key);
                     const cellText = col.render || missing
                       ? null
@@ -1999,7 +2002,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         aria-selected={inSel}
                         className={`sg-cell flex items-center overflow-hidden border-b border-r border-white/5 px-2 text-xs ${
                           col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''
-                        }${missing ? ' sg-cell-missing' : ''}${extraCellClass ? ` ${extraCellClass}` : ''}`}
+                        }${missing ? ' sg-cell-missing' : ''}${locked ? ' sg-cell-locked' : ''}${
+                          extraCellClass ? ` ${extraCellClass}` : ''
+                        }`}
                         style={{
                           width: widths[c],
                           minWidth: widths[c],

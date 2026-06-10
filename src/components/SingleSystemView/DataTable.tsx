@@ -602,7 +602,12 @@ export default function DataTable({ sections }: DataTableProps) {
     setInclinationMode(inclination);
     setHiddenShotCols(new Set(panelsConfig.data_table_shot_hidden_columns));
     setShotColumnOrder(panelsConfig.data_table_shot_column_order);
-    setHiddenStationCols(new Set(panelsConfig.data_table_station_hidden_columns));
+    // An empty station list means "never customized" (configs saved before the
+    // coordinate columns existed) — those get the hidden-coordinates defaults.
+    const stationHidden = panelsConfig.data_table_station_hidden_columns.length
+      ? panelsConfig.data_table_station_hidden_columns
+      : STATION_DEFAULT_HIDDEN;
+    setHiddenStationCols(new Set(stationHidden));
     setStationColumnOrder(panelsConfig.data_table_station_column_order);
     lastSavedViewRef.current = JSON.stringify([
       panelsConfig.data_table_shot_column_order,
@@ -610,7 +615,7 @@ export default function DataTable({ sections }: DataTableProps) {
       azimuth,
       inclination,
       panelsConfig.data_table_station_column_order,
-      panelsConfig.data_table_station_hidden_columns,
+      stationHidden,
     ]);
   }, [panelsConfig]);
   useEffect(() => {
@@ -1166,16 +1171,26 @@ export default function DataTable({ sections }: DataTableProps) {
     [setSelection, setHoveredStation]
   );
 
+  // Same anchor rule as the map (MapCanvas): the first zero datum's GPS.
+  const project = useProjectStore((s) => s.project);
+  const stationGpsOrigin = useMemo(() => {
+    const zeroDatum = project?.zero_datums?.[0];
+    return zeroDatum?.gps
+      ? { latitude: zeroDatum.gps.latitude, longitude: zeroDatum.gps.longitude }
+      : null;
+  }, [project?.zero_datums]);
+
   const stationColumns = useMemo(
     () =>
       buildStationColumns({
         t,
         precision,
         geometryReadOnly,
+        gpsOrigin: stationGpsOrigin,
         onGpsCellClick: handleGpsCellClick,
         onConnectionsCellClick: handleConnectionsCellClick,
       }),
-    [t, precision, geometryReadOnly, handleGpsCellClick, handleConnectionsCellClick]
+    [t, precision, geometryReadOnly, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick]
   );
 
   // Gutter shows the station's ID pill (the old index column); double-click

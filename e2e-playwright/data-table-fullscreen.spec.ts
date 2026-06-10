@@ -197,7 +197,9 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('toolbar-redo-button')).toBeVisible();
     await expect(page.getByTestId('toolbar-import-button')).toHaveCount(0);
     await expect(page.getByTestId('toolbar-export-button')).toHaveCount(0);
-    await expect(page.getByTestId('toolbar-file-controls').getByTestId('toolbar-map-view-button')).toBeVisible();
+    // The map-view button lives on the right, next to the table picker.
+    await expect(page.getByTestId('toolbar-map-view-button')).toBeVisible();
+    await expect(page.getByTestId('toolbar-file-controls').getByTestId('toolbar-map-view-button')).toHaveCount(0);
 
     // Exiting restores the normal toolbar.
     await page.keyboard.press('Escape');

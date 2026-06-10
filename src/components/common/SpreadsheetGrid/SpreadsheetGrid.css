@@ -73,9 +73,15 @@
   white-space: nowrap;
 }
 
-/* Frozen rows (host-locked) carry a faint warning tint. */
+/* Frozen rows (host-locked) carry a warning tint. */
 .sg-row-frozen .sg-cell {
-  background: color-mix(in srgb, var(--cc-warning) 8%, var(--cc-panel));
+  background: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
+}
+/* A cell whose column is editable but which is locked on THIS row (frozen
+   geometry, read-only mode): dimmed text + a not-allowed cursor. */
+.sg-grid .sg-cell-locked {
+  color: var(--cc-text-secondary);
+  cursor: not-allowed;
 }
 /* Externally-hovered row (e.g. the shot hovered on the map) — faint accent
    tint. Selection visuals render in overlays above the cells, so this never
