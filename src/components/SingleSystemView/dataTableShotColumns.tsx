@@ -228,7 +228,20 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       header: t('dataTable.columns.referenceShort'),
       width: 40,
       align: 'center',
+      kind: 'text',
       getValue: (r) => r.is_reference,
+      format: (v) => (v ? 'true' : 'false'),
+      // Editable as a boolean so fill/paste/clear work like any other column
+      // (drag a J/R cell's fill handle to stamp the flag down a range); the
+      // rendered dot stays the pointer affordance for single toggles.
+      editable: true,
+      isEditable: editableUnlessFrozenGeometry('is_reference'), // not locked on frozen
+      parse: (raw) => {
+        const v = raw.trim().toLowerCase();
+        if (v === '' || v === 'false' || v === '0' || v === 'no') return false;
+        if (v === 'true' || v === '1' || v === 'yes') return true;
+        return undefined; // anything else is rejected
+      },
       render: (shot): ReactNode => (
         <span
           className={`flex items-center justify-center ${geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
