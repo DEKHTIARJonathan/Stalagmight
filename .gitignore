@@ -36,6 +36,7 @@ src-tauri/target/
 
 # Test artifacts
 playwright-report/
+.playwright-mcp/
 test-results/
 .pnpm-store/
 .e2e-build-marker
