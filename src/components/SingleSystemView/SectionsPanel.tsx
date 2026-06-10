@@ -125,6 +125,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // shot/station/section selected from the map, data table, or details panel).
   // Unlike the hover scroll, this is a persistent reveal — there's nothing to
   // restore — so it's kept separate from the hover save/restore bookkeeping.
+  // Keyed on the full `selection` (not just the owning section id): selecting
+  // another shot of the SAME section (e.g. clicking rows in the data table)
+  // must re-reveal the section row even though its id didn't change.
   const prevSelectedSectionIdRef = useRef<SectionId | null>(null);
   useEffect(() => {
     const selectionChanged = prevSelectedSectionIdRef.current !== selectedSectionId;
@@ -140,7 +143,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     if (selectionChanged) {
       preHoverScrollTopRef.current = null;
     }
-  }, [selectedSectionId, sections]);
+  }, [selection, selectedSectionId, sections]);
 
   const handleSectionClick = useCallback((section: Section, e?: React.MouseEvent) => {
     // Only handle left mouse button for mouse events
