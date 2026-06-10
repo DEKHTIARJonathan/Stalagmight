@@ -21,6 +21,7 @@ import {
   ROW_HEIGHT,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
+import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
 import {
   arrowTarget,
   clamp,
@@ -111,12 +112,18 @@ export interface SpreadsheetGridProps<Row> {
    *  column, switch column families, ...). The grid only prevents the native
    *  menu when this is set. */
   onHeaderContextMenu?: (colKey: string, pos: { x: number; y: number }) => void;
-  /** Domain noun for a row, used in context-menu labels ("Delete shot",
-   *  "Copy 3 shots"). Default: row/rows. */
-  rowNoun?: (count: number) => string;
+  /** Chrome strings (context menu, shortcut hints, toolbar buttons, editor
+   *  aria-label) — partial, merged over the English {@link DEFAULT_GRID_LABELS}.
+   *  The grid stays i18next-free; hosts pass `t()`-backed labels (including a
+   *  domain `rowNoun` so menus say "Delete shot", "Copy 3 shots"). */
+  labels?: Partial<GridLabels>;
   /** Fired whenever the selection rectangle or active cell changes (and once
    *  on mount) — lets a host render its own name-box/indicator. */
   onSelectionChange?: (sel: { rows: number; cols: number; activeRow: number; activeColKey: string }) => void;
+  /** Host-provided context-menu entries appended after the built-in ones
+   *  (e.g. "Remove draft row"). Called with the selection's row range when the
+   *  menu opens; return [] to add nothing for that selection. */
+  extraContextMenuItems?: (sel: { fromRow: number; toRow: number }) => { label: string; onClick: () => void }[];
 
   maximized?: boolean;
   onToggleMaximize?: () => void;
@@ -176,14 +183,20 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
     showToolbar = true,
-    rowNoun = (count) => (count === 1 ? 'row' : 'rows'),
+    labels: labelOverrides,
     onHeaderContextMenu,
     onSelectionChange,
+    extraContextMenuItems,
     maximized = false,
     onToggleMaximize,
     className = '',
     onActiveCellChange,
   } = props;
+
+  const labels = useMemo<GridLabels>(
+    () => ({ ...DEFAULT_GRID_LABELS, ...labelOverrides }),
+    [labelOverrides],
+  );
 
   // --- Visible columns: order then hide ------------------------------------
   // The full order (hidden included) is kept too: reorders must preserve a
@@ -410,9 +423,32 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   useEffect(() => () => { if (invalidTimer.current) window.clearTimeout(invalidTimer.current); }, []);
 
   // --- Focus movement -------------------------------------------------------
+  // Horizontal counterpart of the virtualizer's scrollToIndex: keep the column
+  // visible past the sticky row-number gutter (a cell hidden behind it counts
+  // as off-screen). Cells start `gutterWidth` into the scroll content, and the
+  // gutter covers the first `gutterWidth` px of the viewport.
+  const scrollColIntoView = useCallback(
+    (colIdx: number) => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const left = offsets[colIdx];
+      const right = offsets[colIdx + 1];
+      if (left === undefined || right === undefined) return;
+      if (gutterWidth + right > el.scrollLeft + el.clientWidth) {
+        el.scrollLeft = gutterWidth + right - el.clientWidth;
+      }
+      // Left check last: a column wider than the viewport shows its left edge.
+      if (left < el.scrollLeft) {
+        el.scrollLeft = left;
+      }
+    },
+    [offsets, gutterWidth],
+  );
+
   const moveFocusTo = useCallback(
     (row: number, colIdx: number, extend: boolean) => {
-      const key = colKeys[clamp(colIdx, 0, Math.max(0, colCount - 1))];
+      const ci = clamp(colIdx, 0, Math.max(0, colCount - 1));
+      const key = colKeys[ci];
       if (key === undefined) return;
       const r = clamp(row, 0, Math.max(0, rowCount - 1));
       const cell = { row: r, colKey: key };
@@ -425,10 +461,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         active: extend ? prev.active : cell,
       }));
       virtualizer.scrollToIndex(r, { align: 'auto' });
+      scrollColIntoView(ci);
       // The active cell only changes on a plain (collapsing) move.
       if (!extend) onActiveCellChange?.(r, key);
     },
-    [colKeys, colCount, rowCount, virtualizer, onActiveCellChange],
+    [colKeys, colCount, rowCount, virtualizer, scrollColIntoView, onActiveCellChange],
   );
 
   // Google-Sheets Ctrl+Arrow: jump to the edge of the contiguous data block in a
@@ -511,9 +548,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         return;
       }
       setEditing(null);
-      if (col && value === undefined && dirty && cur.draft.trim() === '' && col.kind === 'number') {
-        // Required cell emptied via the editor: keep the model value, show the
-        // cell as missing (same rule as Delete).
+      if (col && dirty && value === undefined) {
+        // The dirty draft didn't parse to a value — a required cell emptied, or
+        // unparseable input ("abc" in a number cell, garbage in a custom-parse
+        // column): keep the model value, show the cell as missing until a valid
+        // value is committed (same rule as Delete).
         const k = missKey(cur.row, cur.colKey);
         if (k !== null) markMissing([k]);
       }
@@ -1029,6 +1068,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (key === undefined) return;
         setSelection((prev) => ({ ...prev, active: { row: n.row, colKey: key } }));
         virtualizer.scrollToIndex(n.row, { align: 'auto' });
+        scrollColIntoView(n.colIdx);
         onActiveCellChange?.(n.row, key);
       };
 
@@ -1068,7 +1108,15 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           else doClear();
           return;
         }
-        case 'Escape': setCopiedRect(null); setCutRect(null); return;
+        case 'Escape': {
+          // Consuming a copy/cut marquee owns the keypress — without the
+          // preventDefault the app's global Escape (e.g. exit-fullscreen)
+          // would fire on the same press. A bare Escape bubbles.
+          if (copiedRect || cutRect) e.preventDefault();
+          setCopiedRect(null);
+          setCutRect(null);
+          return;
+        }
         default:
           // Type-to-edit: a printable character starts an edit seeded with it.
           if (!ctrl && !e.altKey && PRINTABLE.test(e.key) && !e.nativeEvent.isComposing) {
@@ -1084,7 +1132,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       editing, selection.focus.row, focusColIdx, colKeys, colCount, rowCount, height,
       writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
       doCopy, doCut, schedulePasteFallback, doFill, doClear, onDeleteRows, colAt, cellEditable,
-      rect, selection.active, onActiveCellChange, virtualizer,
+      rect, selection.active, onActiveCellChange, virtualizer, scrollColIntoView, copiedRect, cutRect,
     ],
   );
 
@@ -1693,7 +1741,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       return { anchor: cell, focus: cell, active: cell };
     });
     virtualizer.scrollToIndex(selectedRow, { align: 'auto' });
-  }, [selectedRow, rowCount, colKeys, virtualizer]);
+    // Follow horizontally too, on the column the updater above lands on (the
+    // active column, or the first one when it no longer exists).
+    const activeKey = colKeys.includes(selection.active.colKey) ? selection.active.colKey : colKeys[0];
+    if (activeKey !== undefined) scrollColIntoView(colIndexOf(activeKey));
+  }, [selectedRow, rowCount, colKeys, virtualizer, selection.active.colKey, colIndexOf, scrollColIntoView]);
 
   // --- Render ---------------------------------------------------------------
   const virtualRows = virtualizer.getVirtualItems();
@@ -1704,13 +1756,18 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const ctxColCount = rect.c1 - rect.c0 + 1;
   const ctxFullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
   const ctxFullCols = rect.r0 === 0 && rect.r1 === rowCount - 1 && rowCount > 1;
-  const ctxRowsLabel = ctxRowCount === 1 ? rowNoun(1) : `${ctxRowCount} ${rowNoun(ctxRowCount)}`;
+  const ctxRowsLabel =
+    ctxRowCount === 1 ? labels.rowNoun(1) : `${ctxRowCount} ${labels.rowNoun(ctxRowCount)}`;
+  const ctxColsLabel =
+    ctxColCount === 1 ? labels.columnNoun(1) : `${ctxColCount} ${labels.columnNoun(ctxColCount)}`;
   const ctxShapeSuffix =
     ctxFullRows && !ctxFullCols
       ? ` ${ctxRowsLabel}`
       : ctxFullCols && !ctxFullRows
-        ? ` ${ctxColCount === 1 ? 'column' : `${ctxColCount} columns`}`
+        ? ` ${ctxColsLabel}`
         : '';
+  // Host entries for the selection the menu opened on (only while it's open).
+  const ctxExtraItems = (ctxMenu && extraContextMenuItems?.({ fromRow: rect.r0, toRow: rect.r1 })) || [];
 
   // Name box: active-cell reference, or selection size while a range is selected.
   const nameBox = multiCell
@@ -1757,10 +1814,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 data-testid="data-table-columns-menu"
                 onClick={() => setMenuOpen((v) => !v)}
               >
-                Columns
+                {labels.columnsButton}
               </button>
               {menuOpen && (
-                <div className="sg-colmenu absolute right-0 top-full z-50 mt-0.5 max-h-64 overflow-auto rounded border p-1 shadow-lg">
+                <div
+                  data-dropdown-open
+                  className="sg-colmenu absolute right-0 top-full z-50 mt-0.5 max-h-64 overflow-auto rounded border p-1 shadow-lg"
+                >
                   {columns.map((c) => (
                     <label
                       key={c.key}
@@ -1786,7 +1846,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               data-testid="data-table-maximize"
               onClick={onToggleMaximize}
             >
-              {maximized ? 'Restore' : 'Maximize'}
+              {maximized ? labels.restore : labels.maximize}
             </button>
           )}
         </div>
@@ -2039,7 +2099,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               <textarea
                 ref={editorRef}
                 data-testid="grid-cell-editor"
-                aria-label={`Edit ${columns.find((c) => c.key === editing.colKey)?.header ?? editing.colKey} row ${editing.row + 1}`}
+                aria-label={labels.editCellAria(
+                  columns.find((c) => c.key === editing.colKey)?.header ?? editing.colKey,
+                  editing.row + 1,
+                )}
                 className="sg-editor"
                 style={{
                   ...rectOverlay({
@@ -2134,33 +2197,40 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       {ctxMenu && (
         <div
           ref={ctxMenuRef}
+          data-dropdown-open
           className="sg-context-menu"
           data-testid="grid-context-menu"
           style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>{`Copy${ctxShapeSuffix}`}<span className="sg-shortcut">Ctrl+C</span></button>
-          <button type="button" onClick={() => { void doCut(); setCtxMenu(null); }}>{`Cut${ctxShapeSuffix}`}<span className="sg-shortcut">Ctrl+X</span></button>
-          <button type="button" onClick={() => { void doPaste(); setCtxMenu(null); }}>Paste<span className="sg-shortcut">Ctrl+V</span></button>
+          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>{labels.copy(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCopy}</span></button>
+          <button type="button" onClick={() => { void doCut(); setCtxMenu(null); }}>{labels.cut(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutCut}</span></button>
+          <button type="button" onClick={() => { void doPaste(); setCtxMenu(null); }}>{labels.paste}<span className="sg-shortcut">{labels.shortcutPaste}</span></button>
           {(onInsertRows || onDeleteRows) && <div className="sg-context-sep" />}
           {onInsertRows && (
             <button type="button" onClick={() => { onInsertRows(rect.r0, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
-              {`Insert ${ctxRowsLabel} above`}
+              {labels.insertAbove(ctxRowsLabel)}
             </button>
           )}
           {onInsertRows && (
             <button type="button" onClick={() => { onInsertRows(rect.r1 + 1, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
-              {`Insert ${ctxRowsLabel} below`}
+              {labels.insertBelow(ctxRowsLabel)}
             </button>
           )}
           {onDeleteRows && (
             <button type="button" onClick={() => { onDeleteRows(rect.r0, rect.r1); setCtxMenu(null); }}>
-              {`Delete ${ctxRowsLabel}`}
+              {labels.deleteRows(ctxRowsLabel)}
             </button>
           )}
           <div className="sg-context-sep" />
-          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>{`Clear${ctxShapeSuffix}`}<span className="sg-shortcut">Del</span></button>
-          <button type="button" onClick={() => { doFill(true); setCtxMenu(null); }}>Fill down<span className="sg-shortcut">Ctrl+D</span></button>
+          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>{labels.clear(ctxShapeSuffix)}<span className="sg-shortcut">{labels.shortcutClear}</span></button>
+          <button type="button" onClick={() => { doFill(true); setCtxMenu(null); }}>{labels.fillDown}<span className="sg-shortcut">{labels.shortcutFillDown}</span></button>
+          {ctxExtraItems.length > 0 && <div className="sg-context-sep" />}
+          {ctxExtraItems.map((item) => (
+            <button key={item.label} type="button" onClick={() => { item.onClick(); setCtxMenu(null); }}>
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
     </div>
