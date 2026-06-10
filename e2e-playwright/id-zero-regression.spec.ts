@@ -293,16 +293,38 @@ test.describe('ID=0 Bug Fixes', () => {
     });
 
     // Wait for DataTable to be visible
-    await page.waitForSelector('text=Data Table', { timeout: 3000 });
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
 
-    // Select the section with id=0 from the dropdown (custom Select component - portaled listbox)
-    const sectionSelect = page.getByTestId('data-table-section-select');
-    const sectionTrigger = sectionSelect.locator('button').first();
-    await sectionTrigger.click();
-    // Wait for aria-controls to be set, then locate the portaled listbox (avoids matching sections panel listbox)
-    await expect(sectionTrigger).toHaveAttribute('aria-controls', /.+/);
-    const listboxId = await sectionTrigger.getAttribute('aria-controls');
-    await page.locator(`[id="${listboxId}"]`).locator('[role="option"]:has-text("Zero Section")').click();
+    // Add a second section (id=1) and park the table on it first, so that the
+    // subsequent switch to section id=0 is observable (the table auto-selects
+    // sections[0] = Zero Section, which would mask a broken id=0 selection).
+    await page.evaluate(() => {
+      const store = (window as any).__E2E_TEST__.projectStore;
+      const project = store.getState().project;
+      const otherSection = {
+        id: 1,
+        name: 'One Section',
+        surveyor: 'Test Surveyor',
+        date: '2026-01-20',
+        color: '#ff6b6b',
+        direction: 'in' as const,
+        shots: [],
+      };
+      store.setState({ project: { ...project, sections: [...project.sections, otherSection] } });
+      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 1 });
+    });
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('One Section', { timeout: 3000 });
+
+    // Select the section with id=0 via the app-wide selection (the table follows
+    // external selection; its header no longer has a section dropdown). This
+    // exercises the `selection.sectionId !== undefined` path with sectionId=0 —
+    // a falsy check would ignore the selection and leave the pill on 'One Section'.
+    await page.evaluate(() => {
+      (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 0 });
+    });
+
+    // Header pill follows the selection — proves the id=0 section was resolved
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('Zero Section', { timeout: 3000 });
 
     // Verify the warning indicator is visible with the correct data-testid
     await expect(page.getByTestId('warning-0-0')).toBeVisible({ timeout: 3000 });

@@ -158,9 +158,9 @@ test.describe('Virtual Scrolling in DataTable', () => {
     await expect(page.getByTestId('grid-gutter-0')).toHaveClass(/sg-gutter-active/);
   });
 
-  test('DataTable section selector shows section name', async ({ page }) => {
-    const sectionSelect = page.getByTestId('data-table-section-select');
-    await expect(sectionSelect).toBeVisible();
-    await expect(sectionSelect).toContainText('Long Passage');
+  test('DataTable header section pill shows section name', async ({ page }) => {
+    const sectionPill = page.getByTestId('data-table-section-pill');
+    await expect(sectionPill).toBeVisible();
+    await expect(sectionPill).toContainText('Long Passage');
   });
 });

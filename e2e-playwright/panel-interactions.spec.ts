@@ -115,12 +115,17 @@ test.describe('Panel Interactions', () => {
     await waitForMapIdle(page);
 
     // Data table should now be visible
-    // Look for "Data Table" text and section selector dropdown
+    // Look for the condensed header: section pill + view toggle
     await expect(dataTable).toBeVisible({ timeout: 3000 });
 
-    // Section selector should be visible when data table is open
-    const sectionSelector = page.getByTestId('data-table-section-select');
-    await expect(sectionSelector).toBeVisible({ timeout: 2000 });
+    // Header section pill should show the auto-selected first section
+    const sectionPill = page.getByTestId('data-table-section-pill');
+    await expect(sectionPill).toBeVisible({ timeout: 2000 });
+    await expect(sectionPill).toContainText('Main Passage');
+
+    // View toggle (shots/stations radio group) should be visible
+    await expect(page.getByTestId('data-table-view-select')).toBeVisible({ timeout: 2000 });
+    await expect(page.getByTestId('data-table-view-shots')).toHaveAttribute('aria-checked', 'true');
 
     // Grid rows should be visible
     const firstRow = dataTable.locator('[data-testid^="grid-row-"]').first();
@@ -278,17 +283,19 @@ test.describe('Panel Interactions', () => {
     await page.keyboard.press('Control+3');
     await waitForMapIdle(page);
 
-    // Select a section with shots in the data table (custom Select component - portaled listbox)
-    const sectionSelector = page.getByTestId('data-table-section-select');
-    if (await sectionSelector.isVisible()) {
-      const selectorTrigger = sectionSelector.locator('button').first();
-      await selectorTrigger.click();
-      // Wait for aria-controls to be set, then locate the portaled listbox (avoids matching sections panel listbox)
-      await expect(selectorTrigger).toHaveAttribute('aria-controls', /.+/);
-      const selectorListboxId = await selectorTrigger.getAttribute('aria-controls');
-      await page.locator(`[id="${selectorListboxId}"]`).locator('[role="option"]:has-text("Main Passage")').click();
-      await waitForMapIdle(page);
-    }
+    // Drive the table to a section with shots via the app-wide selection
+    // (the table follows external selection; its header no longer has a section dropdown)
+    await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      const section = e2e.projectStore
+        .getState()
+        .project?.sections?.find((s: any) => s.name === 'Main Passage');
+      if (!section) throw new Error('Main Passage section not found');
+      e2e.uiStore.getState().setSelection({ type: 'section', sectionId: section.id });
+    });
+    // Header pill reflects the externally-selected section
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('Main Passage');
+    await waitForMapIdle(page);
 
     // The data table should show shots with scrollable content if there are many
     const tableContainer = page.getByTestId('data-table');

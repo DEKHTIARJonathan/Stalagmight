@@ -1,13 +1,14 @@
 /**
- * E2E tests for section dropdown hover highlighting.
+ * E2E tests for the DataTable header section pill.
  *
- * Tests verify that hovering or keyboard-navigating options in the DataTable
- * section Select dropdown highlights the corresponding section on the map
- * via `hoveredSectionId` in uiStore, and that all close paths clear the highlight.
+ * The condensed DataTable header shows the current section as a pill
+ * (`data-table-section-pill`). Hovering the pill highlights the section on the
+ * map via `hoveredSectionId` in uiStore; leaving the pill (or unmounting the
+ * DataTable) clears the highlight. Clicking the pill selects the section
+ * app-wide (uiStore selection of type 'section').
  *
- * The Select component fires `onOptionHover(value)` on mouse enter and keyboard
- * navigation, and `onOptionHover(null)` on every close path. DataTable converts
- * the string value to a section ID and calls `setHoveredSectionId`.
+ * This replaces the old section-dropdown hover tests: the header dropdown is
+ * gone, the table now follows the app-wide selection.
  */
 
 import { test, expect, Page, Locator } from './fixtures/coverage';
@@ -51,7 +52,7 @@ const sectionSeeds: SectionSeed[] = [
  * Setup: create project with sections for all tests.
  */
 async function createProjectWithSections(page: Page): Promise<void> {
-  await createProject(page, 'Dropdown Hover Test');
+  await createProject(page, 'Pill Hover Test');
   await seedProjectWithSections(page, sectionSeeds);
   await waitForNoDialogs(page);
   await waitForMapIdle(page);
@@ -62,24 +63,14 @@ async function createProjectWithSections(page: Page): Promise<void> {
  */
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
-  await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+  await expect(page.getByTestId('data-table')).toHaveAttribute('data-open', 'true', { timeout: 3000 });
 }
 
 /**
- * Get the section select trigger button.
+ * Get the header section pill button.
  */
-function getSectionSelectTrigger(page: Page): Locator {
-  const sectionSelect = page.getByTestId('data-table-section-select');
-  return sectionSelect.locator('button').first();
-}
-
-/**
- * Get the portaled Select listbox from a trigger using aria-controls.
- */
-async function getSelectListbox(page: Page, trigger: Locator): Promise<Locator> {
-  await expect(trigger).toHaveAttribute('aria-controls', /.+/);
-  const listboxId = await trigger.getAttribute('aria-controls');
-  return page.locator(`[id="${listboxId}"]`);
+function getSectionPill(page: Page): Locator {
+  return page.getByTestId('data-table-section-pill');
 }
 
 /**
@@ -139,292 +130,122 @@ async function getSectionIdByName(page: Page, name: string): Promise<number> {
 }
 
 /**
- * Open dropdown and hover an option by text, returning its section ID.
- * Helper used by multiple close-path tests.
+ * Drive the table to a section via the app-wide selection (the table follows
+ * external selection; its header no longer has a section dropdown).
  */
-async function openDropdownAndHoverOption(
-  page: Page,
-  trigger: Locator,
-  optionText: string,
-): Promise<{ listbox: Locator; sectionId: number }> {
-  // Open dropdown
-  await trigger.click();
-  const listbox = await getSelectListbox(page, trigger);
-  await expect(listbox).toBeVisible();
-
-  // Hover an option via mouse
-  const option = listbox.locator(`[role="option"]:has-text("${optionText}")`);
-  await expect(option).toBeVisible();
-  await option.hover();
-
-  // Get the section ID
-  const sectionId = await getSectionIdByName(page, optionText);
-
-  // Wait for hover state
-  await pollHoveredSectionId(page, (id) => id === sectionId);
-
-  return { listbox, sectionId };
+async function selectSectionViaStore(page: Page, sectionId: number): Promise<void> {
+  await page.evaluate((id) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        uiStore: { getState: () => { setSelection: (sel: unknown) => void } };
+      };
+    }).__E2E_TEST__;
+    stores?.uiStore.getState().setSelection({ type: 'section', sectionId: id });
+  }, sectionId);
 }
 
-test.describe('section dropdown hover highlighting', () => {
+test.describe('section pill hover highlighting', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProjectWithSections(page);
     await openDataTable(page);
   });
 
-  test('mouse hover on option sets hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    await trigger.click();
-    const listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
+  test('hovering the section pill sets hoveredSectionId', async ({ page }) => {
+    // The table auto-selects the first section (Alpha Passage)
+    const pill = getSectionPill(page);
+    await expect(pill).toContainText('Alpha Passage');
 
-    // Hover "Beta Tunnel" option
-    const betaOption = listbox.locator('[role="option"]:has-text("Beta Tunnel")');
-    await expect(betaOption).toBeVisible();
-    await betaOption.hover();
+    await pill.hover();
 
+    const alphaId = await getSectionIdByName(page, 'Alpha Passage');
+    const hoveredId = await pollHoveredSectionId(page, (id) => id === alphaId);
+    expect(hoveredId).toBe(alphaId);
+  });
+
+  test('pill hover tracks the externally-selected section', async ({ page }) => {
     const betaId = await getSectionIdByName(page, 'Beta Tunnel');
+
+    // Switch the table to Beta Tunnel via the app-wide selection
+    await selectSectionViaStore(page, betaId);
+    const pill = getSectionPill(page);
+    await expect(pill).toContainText('Beta Tunnel');
+
+    // Hovering the pill must highlight Beta Tunnel, not the previous section
+    await pill.hover();
     const hoveredId = await pollHoveredSectionId(page, (id) => id === betaId);
     expect(hoveredId).toBe(betaId);
   });
 
-  test('ArrowDown keyboard nav updates hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    await trigger.focus();
-
-    // Open dropdown with ArrowDown (highlights current selection = Alpha Passage at index 0)
-    await page.keyboard.press('ArrowDown');
-    const listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
+  test('leaving the pill clears hoveredSectionId', async ({ page }) => {
+    const pill = getSectionPill(page);
+    await pill.hover();
 
     const alphaId = await getSectionIdByName(page, 'Alpha Passage');
-
-    // Initial highlight should be on Alpha Passage (currently selected value)
     await pollHoveredSectionId(page, (id) => id === alphaId);
 
-    // Press ArrowDown to move to Beta Tunnel
-    await page.keyboard.press('ArrowDown');
-    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
-    const hoveredId = await pollHoveredSectionId(page, (id) => id === betaId);
-    expect(hoveredId).toBe(betaId);
+    // Move the pointer off the pill (onto the view toggle in the same header)
+    await page.getByTestId('data-table-view-select').hover();
+
+    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
+    expect(clearedId).toBeNull();
   });
 
-  test('ArrowUp keyboard nav updates hoveredSectionId to previous option', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
+  test('clicking the pill selects the section app-wide', async ({ page }) => {
+    // Start from a different selection so the click is observable
+    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
+    await selectSectionViaStore(page, betaId);
+    const pill = getSectionPill(page);
+    await expect(pill).toContainText('Beta Tunnel');
+
+    // Clear the selection (the pill keeps showing the table's section)
+    await page.evaluate(() => {
+      const stores = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: { getState: () => { setSelection: (sel: unknown) => void } };
+        };
+      }).__E2E_TEST__;
+      stores?.uiStore.getState().setSelection(null);
+    });
+    await expect(pill).toContainText('Beta Tunnel');
+
+    await pill.click();
+
+    // The pill click selects the shown section app-wide
+    await expect.poll(async () =>
+      page.evaluate(() => {
+        const stores = (window as unknown as {
+          __E2E_TEST__?: {
+            uiStore: { getState: () => { selection: { type: string; sectionId?: number } | null } };
+          };
+        }).__E2E_TEST__;
+        return stores?.uiStore.getState().selection ?? null;
+      }),
+    ).toEqual({ type: 'section', sectionId: betaId });
+
+    // The sections panel reflects the app-wide selection too
+    await expect(page.locator(`[data-testid="section-row-${betaId}"]`)).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  test('unmounting the DataTable clears hoveredSectionId', async ({ page }) => {
+    const pill = getSectionPill(page);
+    await pill.hover();
 
     const alphaId = await getSectionIdByName(page, 'Alpha Passage');
-    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
+    await pollHoveredSectionId(page, (id) => id === alphaId);
 
-    // Open dropdown via mouse hover on Beta, then switch to keyboard for ArrowUp.
-    // Using mouse hover avoids keyboard state-batching issues under load.
-    await trigger.click();
-    const listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
+    // Navigate back to the GlobalView, which unmounts the DataTable. Its
+    // cleanup effect must clear the highlight it set. The seeded project has
+    // unsaved changes, so discard them when prompted.
+    await page.getByTestId('back-button').click();
+    const unsavedDialog = page.getByTestId('unsaved-changes-dialog');
+    await expect(unsavedDialog).toBeVisible({ timeout: 3000 });
+    await unsavedDialog.locator('button:has-text("Discard")').click();
+    await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 10000 });
 
-    // Mouse hover on Beta Tunnel to position highlight at index 1
-    const betaOption = listbox.locator('[role="option"]:has-text("Beta Tunnel")');
-    await betaOption.hover();
-    await pollHoveredSectionId(page, (id) => id === betaId);
-
-    // Press ArrowUp from Beta (index 1) — should go to Alpha (index 0)
-    // Re-dispatch keyboard event on the trigger element directly
-    await page.evaluate(() => {
-      const trigger = document.querySelector('[data-testid="data-table-section-select"] button');
-      if (trigger) {
-        trigger.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'ArrowUp',
-          code: 'ArrowUp',
-          bubbles: true,
-          cancelable: true,
-        }));
-      }
-    });
-
-    const hoveredId = await pollHoveredSectionId(page, (id) => id === alphaId);
-    expect(hoveredId).toBe(alphaId);
-  });
-
-  test('Home key jumps to first option and updates hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    await trigger.focus();
-
-    // Open dropdown and navigate to last option
-    await page.keyboard.press('ArrowDown');
-    const listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
-
-    // Go to last with End
-    await page.keyboard.press('End');
-    const gammaId = await getSectionIdByName(page, 'Gamma Gallery');
-    await pollHoveredSectionId(page, (id) => id === gammaId);
-
-    // Press Home to jump to first
-    await page.keyboard.press('Home');
-    const alphaId = await getSectionIdByName(page, 'Alpha Passage');
-    const hoveredId = await pollHoveredSectionId(page, (id) => id === alphaId);
-    expect(hoveredId).toBe(alphaId);
-  });
-
-  test('End key jumps to last option and updates hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    await trigger.focus();
-
-    // Open dropdown
-    await page.keyboard.press('ArrowDown');
-    const listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
-
-    // Press End to jump to last option (Gamma Gallery)
-    await page.keyboard.press('End');
-    const gammaId = await getSectionIdByName(page, 'Gamma Gallery');
-    const hoveredId = await pollHoveredSectionId(page, (id) => id === gammaId);
-    expect(hoveredId).toBe(gammaId);
-  });
-
-  test('Escape closes dropdown and clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    const { listbox } = await openDropdownAndHoverOption(page, trigger, 'Beta Tunnel');
-
-    // Verify highlight is set
-    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
-    expect(await getHoveredSectionId(page)).toBe(betaId);
-
-    // Press Escape
-    await page.keyboard.press('Escape');
-
-    // Dropdown closes
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-
-    // hoveredSectionId cleared
-    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
-    expect(clearedId).toBeNull();
-  });
-
-  test('click outside closes dropdown and clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    const { listbox } = await openDropdownAndHoverOption(page, trigger, 'Beta Tunnel');
-
-    // Click outside the dropdown (on map canvas)
-    await page.getByTestId('map-canvas').dispatchEvent('mousedown');
-
-    // Dropdown closes
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-
-    // hoveredSectionId cleared
-    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
-    expect(clearedId).toBeNull();
-  });
-
-  test('selecting an option clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    await trigger.click();
-    const listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
-
-    // Hover Beta Tunnel
-    const betaOption = listbox.locator('[role="option"]:has-text("Beta Tunnel")');
-    await betaOption.hover();
-
-    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
-    await pollHoveredSectionId(page, (id) => id === betaId);
-
-    // Click to select it
-    await betaOption.click();
-
-    // Dropdown closes
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-
-    // hoveredSectionId cleared
-    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
-    expect(clearedId).toBeNull();
-  });
-
-  test('Tab closes dropdown and clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    const { listbox } = await openDropdownAndHoverOption(page, trigger, 'Beta Tunnel');
-
-    // Focus trigger to send Tab key (hover moved pointer but trigger keeps focus after click-open)
-    await trigger.focus();
-
-    // Press Tab
-    await page.keyboard.press('Tab');
-
-    // Dropdown closes
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-
-    // hoveredSectionId cleared
-    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
-    expect(clearedId).toBeNull();
-  });
-
-  test('trigger-toggle-to-close clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    const { listbox } = await openDropdownAndHoverOption(page, trigger, 'Beta Tunnel');
-
-    // Click trigger button again to close (toggle)
-    await trigger.click();
-
-    // Dropdown closes
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-
-    // hoveredSectionId cleared
-    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
-    expect(clearedId).toBeNull();
-  });
-
-  test('external scroll closes dropdown and clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    const { listbox } = await openDropdownAndHoverOption(page, trigger, 'Beta Tunnel');
-
-    // Dispatch scroll on window (external scroll, not inside dropdown)
-    await page.evaluate(() => {
-      window.dispatchEvent(new Event('scroll'));
-    });
-
-    // Dropdown closes
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-
-    // hoveredSectionId cleared
-    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
-    expect(clearedId).toBeNull();
-  });
-
-  test('window resize closes dropdown and clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    const { listbox } = await openDropdownAndHoverOption(page, trigger, 'Beta Tunnel');
-
-    // Dispatch resize on window
-    await page.evaluate(() => {
-      window.dispatchEvent(new Event('resize'));
-    });
-
-    // Dropdown closes
-    await expect(listbox).not.toBeVisible({ timeout: 2000 });
-
-    // hoveredSectionId cleared
-    const clearedId = await pollHoveredSectionId(page, (id) => id === null);
-    expect(clearedId).toBeNull();
-  });
-
-  test('component unmount clears hoveredSectionId', async ({ page }) => {
-    const trigger = getSectionSelectTrigger(page);
-    await trigger.click();
-    const listbox = await getSelectListbox(page, trigger);
-    await expect(listbox).toBeVisible();
-
-    // Hover Beta Tunnel option
-    const betaOption = listbox.locator('[role="option"]:has-text("Beta Tunnel")');
-    await betaOption.hover();
-
-    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
-    await pollHoveredSectionId(page, (id) => id === betaId);
-
-    // Collapse the DataTable via Ctrl+3, which unmounts the Select component.
-    // Select's useEffect cleanup fires onOptionHover(null) when open.
-    await page.keyboard.press('Control+3');
-
-    // The Select is unmounted — hoveredSectionId should be cleared
     const clearedId = await pollHoveredSectionId(page, (id) => id === null);
     expect(clearedId).toBeNull();
   });
