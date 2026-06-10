@@ -282,6 +282,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         savedConfig = null;
       };
 
+      // Data-table view state persisted via update_data_table_view, merged
+      // back into get_config's panels: the frontend re-syncs its in-memory
+      // config via loadConfig() after each save, so without the merge a
+      // saved view change would silently revert on the next remount.
+      const mockDataTableView: Record<string, unknown> = {};
+
+      // Station comments set via set_station_comment, keyed
+      // "sectionId:stationIndex". get_project_state derives its station array
+      // from the project's sections on every refresh, so comments must be
+      // threaded back in from here or an edit would vanish on the next refresh.
+      const mockStationComments: Record<string, string> = {};
+
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
 
@@ -1013,6 +1025,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return undefined;
           }
 
+          case 'get_recent_logs':
+            // DebugDialog expects string[] log lines prefixed with a level.
+            return ['INFO [mock] app started', 'DEBUG [mock] project loaded'];
+
           case 'get_project':
           case 'get_project_state': {
             // Generate mock stations from sections with merged_with data
@@ -1028,6 +1044,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 via_station: { section_id: number; station_index: number } | null;
                 is_transitive: boolean;
               }>;
+              comment?: string;
             }> = [];
 
             // Collect all section IDs for merged station setup
@@ -1113,6 +1130,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     return [];
                   });
 
+                  const storedComment = mockStationComments[`${section.id}:${i}`];
                   mockStations.push({
                     station_ref: stationRef,
                     coordinates: { x: i * 10, y: 0, z: 0 },
@@ -1120,6 +1138,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     gps_coordinates: matchingDatum ? matchingDatum.gps : null,
                     merged_with: mergedWith,
                     closures_with: closuresWith,
+                    ...(storedComment !== undefined ? { comment: storedComment } : {}),
                   });
                 }
               }
@@ -1130,11 +1149,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
             const shotCount =
               currentProject?.sections.reduce(
-                (count, section) => count + ((section as { shots?: Array<{ length?: number }> }).shots?.length ?? 0),
+                (count: number, section) =>
+                  count + ((section as { shots?: Array<{ length?: number }> }).shots?.length ?? 0),
                 0
               ) ?? 0;
             const totalLength =
-              currentProject?.sections.reduce((total, section) => {
+              currentProject?.sections.reduce((total: number, section) => {
                 const shots = (section as { shots?: Array<{ length?: number }> }).shots ?? [];
                 return total + shots.reduce((sum, shot) => sum + (shot.length ?? 0), 0);
               }, 0) ?? 0;
@@ -1822,6 +1842,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const calls = Array.isArray(existing) ? existing : [];
             calls.push(args?.commands ?? null);
             win.__MOCK_EXECUTE_BATCH_CALLS__ = calls;
+            // Apply contained update_shot commands to currentProject (reusing
+            // the update_shot mutation) so a multi-cell paste/fill survives
+            // the store's post-command refresh. Nested batch payloads bypass
+            // Tauri's top-level camelCase conversion and stay snake_case.
+            const commands = (Array.isArray(args?.commands) ? args?.commands : []) as Array<
+              Record<string, unknown>
+            >;
+            for (const command of commands) {
+              if (command?.type === 'update_shot') {
+                mockHandler('update_shot', {
+                  sectionId: command.section_id,
+                  shotId: command.shot_id,
+                  updates: command.updates,
+                });
+              }
+            }
             return { success: true };
           }
 
@@ -2135,6 +2171,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           }
 
+          case 'set_station_comment': {
+            console.log('[Mock IPC] set_station_comment called with:', args);
+            const stationRef = args?.stationRef as { section_id: number; station_index: number };
+            const comment = (args?.comment as string | null | undefined) ?? null;
+            const key = `${stationRef.section_id}:${stationRef.station_index}`;
+            if (comment === null) {
+              delete mockStationComments[key];
+            } else {
+              mockStationComments[key] = comment;
+            }
+            return { success: true };
+          }
+
           case 'check_section_hashes': {
             const hashes = (Array.isArray(args?.hashes) ? args?.hashes : []) as string[];
             return hashes.map(() => false);
@@ -2174,9 +2223,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { can_undo: false, can_redo: false };
 
           case 'get_config':
-            // Return saved config if available (for testing persistence)
+            // Return saved config if available (for testing persistence),
+            // overlaying any view state stored via update_data_table_view.
             if (savedConfig) {
-              return savedConfig;
+              return {
+                ...savedConfig,
+                panels: {
+                  ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
+                  ...mockDataTableView,
+                },
+              };
             }
             return {
               general: {
@@ -2323,6 +2379,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 sections_panel_width: 250,
                 detail_panel_width: 300,
                 data_table_height: 200,
+                data_table_shot_column_order: [],
+                data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_azimuth_mode: 'avg',
+                data_table_inclination_mode: 'off',
+                data_table_station_column_order: [],
+                data_table_station_hidden_columns: [],
+                ...mockDataTableView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -2357,6 +2420,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] update_config called with:', args);
             savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
             return { success: true };
+
+          case 'update_data_table_view': {
+            console.log('[Mock IPC] update_data_table_view called with:', args);
+            // Record calls for assertions (debounced view-persistence payloads).
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_DATA_TABLE_VIEW_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_DATA_TABLE_VIEW_CALLS__ = calls;
+            // Mirror the Rust impl's partial-update semantics: only provided
+            // fields overwrite the stored view state (merged into get_config's
+            // panels above).
+            const columnOrder = (args?.columnOrder ?? args?.column_order) as string[] | undefined;
+            if (columnOrder != null) mockDataTableView.data_table_shot_column_order = columnOrder;
+            const hiddenColumns = (args?.hiddenColumns ?? args?.hidden_columns) as string[] | undefined;
+            if (hiddenColumns != null) mockDataTableView.data_table_shot_hidden_columns = hiddenColumns;
+            const azimuthMode = (args?.azimuthMode ?? args?.azimuth_mode) as string | undefined;
+            if (azimuthMode != null) mockDataTableView.data_table_azimuth_mode = azimuthMode;
+            const inclinationMode = (args?.inclinationMode ?? args?.inclination_mode) as string | undefined;
+            if (inclinationMode != null) mockDataTableView.data_table_inclination_mode = inclinationMode;
+            const stationColumnOrder = (args?.stationColumnOrder ?? args?.station_column_order) as string[] | undefined;
+            if (stationColumnOrder != null) mockDataTableView.data_table_station_column_order = stationColumnOrder;
+            const stationHiddenColumns = (args?.stationHiddenColumns ?? args?.station_hidden_columns) as string[] | undefined;
+            if (stationHiddenColumns != null) mockDataTableView.data_table_station_hidden_columns = stationHiddenColumns;
+            return null; // Tauri serializes () as null
+          }
 
           case 'reload_config': {
             // Return saved config if available (for testing persistence)
@@ -2510,6 +2599,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 sections_panel_width: 250,
                 detail_panel_width: 300,
                 data_table_height: 200,
+                data_table_shot_column_order: [],
+                data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_azimuth_mode: 'avg',
+                data_table_inclination_mode: 'off',
+                data_table_station_column_order: [],
+                data_table_station_hidden_columns: [],
+                ...mockDataTableView,
               },
               cache: {
                 tile_cache_enabled: true,
@@ -2896,16 +2992,66 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_section called with:', args);
             const sectionId = (args?.sectionId ?? args?.section_id) as number;
             if (currentProject && sectionId !== undefined) {
-              currentProject.sections = currentProject.sections.filter(
-                (s: { id: number }) => s.id !== sectionId,
+              currentProject.sections = (currentProject.sections as Array<{ id: number }>).filter(
+                (s) => s.id !== sectionId,
               );
             }
             return { success: true };
           }
 
-          case 'create_shot':
+          case 'create_shot': {
             console.log('[Mock IPC] create_shot called with:', args);
-            return { success: true, shot_id: Date.now() };
+            // Record calls for assertions (anchor args), mirroring execute_batch.
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_CREATE_SHOT_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_CREATE_SHOT_CALLS__ = calls;
+            // Mutate currentProject so the committed shot survives the store's
+            // refresh: insert after/before the anchor shot (append by default)
+            // with a section-monotonic id.
+            // Note: Tauri invoke passes camelCase from JS side
+            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const section = (currentProject?.sections as Array<{
+              id: number;
+              shots: Array<{ id: number } & Record<string, unknown>>;
+            }> | undefined)?.find((s) => s.id === sectionId);
+            if (!section) {
+              return { success: false, error: `Section ${sectionId} not found` };
+            }
+            const shotData = (args?.shot ?? {}) as Record<string, unknown>;
+            const afterShotId = (args?.afterShotId ?? args?.after_shot_id ?? null) as number | null;
+            const beforeShotId = (args?.beforeShotId ?? args?.before_shot_id ?? null) as number | null;
+            const nextId = section.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+            const newShot = {
+              id: nextId,
+              azimuth_in: (shotData.azimuth_in as number) ?? 0,
+              azimuth_out: (shotData.azimuth_out as number) ?? 0,
+              length: (shotData.length as number) ?? 0,
+              depth_in: (shotData.depth_in as number) ?? 0,
+              depth_out: (shotData.depth_out as number) ?? 0,
+              pitch_in: (shotData.pitch_in as number | null | undefined) ?? null,
+              pitch_out: (shotData.pitch_out as number | null | undefined) ?? null,
+              left: (shotData.left as number | null | undefined) ?? null,
+              right: (shotData.right as number | null | undefined) ?? null,
+              up: (shotData.up as number | null | undefined) ?? null,
+              down: (shotData.down as number | null | undefined) ?? null,
+              comment: (shotData.comment as string | null | undefined) ?? null,
+              is_reference: (shotData.is_reference as boolean | undefined) ?? false,
+              marker_index: (shotData.marker_index as number | null | undefined) ?? null,
+              temperature: (shotData.temperature as number | null | undefined) ?? null,
+            };
+            let insertAt = section.shots.length;
+            if (afterShotId !== null) {
+              const i = section.shots.findIndex((s) => s.id === afterShotId);
+              if (i >= 0) insertAt = i + 1;
+            } else if (beforeShotId !== null) {
+              const i = section.shots.findIndex((s) => s.id === beforeShotId);
+              if (i >= 0) insertAt = i;
+            }
+            section.shots.splice(insertAt, 0, newShot);
+            return { success: true, shot_id: nextId };
+          }
 
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
@@ -2917,15 +3063,122 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shotId = (args?.shotId ?? args?.shot_id) as number;
             const isReference = (args?.isReference ?? args?.is_reference) as boolean;
             if (currentProject && sectionId && shotId !== undefined) {
-              const section = currentProject.sections.find(s => s.id === sectionId);
+              const section = (
+                currentProject.sections as Array<{ id: number; shots: Array<{ id: number }> }>
+              ).find((s) => s.id === sectionId);
               if (section) {
-                const shot = section.shots.find((s: { id: number }) => s.id === shotId);
+                const shot = section.shots.find((s) => s.id === shotId);
                 if (shot) {
                   (shot as { is_reference?: boolean }).is_reference = isReference;
                 }
               }
             }
             return { success: true };
+          }
+
+          // Raw sqlite browsing (data table fullscreen)
+          case 'get_raw_table_names': {
+            console.log('[Mock IPC] get_raw_table_names called');
+            if (!currentProject) {
+              throw new Error('No project database; save the project to browse raw data');
+            }
+            // Alphabetical, mirroring list_raw_table_names' ORDER BY name.
+            return ['project', 'sections', 'shots', 'undo_stack'];
+          }
+
+          case 'get_raw_table': {
+            console.log('[Mock IPC] get_raw_table called with:', args);
+            if (!currentProject) {
+              throw new Error('No project database; save the project to browse raw data');
+            }
+            const project = currentProject;
+            const table = (args?.table as string) ?? '';
+            const limit = Math.min((args?.limit as number) ?? 1000, 10_000);
+            const offset = (args?.offset as number) ?? 0;
+            // Values are stringified "server-side" like Database::read_raw_table:
+            // NULL → "NULL", blobs → a size placeholder like "<blob 4.2 KB>".
+            const str = (value: unknown): string =>
+              value === null || value === undefined ? 'NULL' : String(value);
+            const rawSections = project.sections as Array<{
+              id: number;
+              name?: string | null;
+              surveyor?: string | null;
+              date?: string | null;
+              color?: string | null;
+              direction?: string;
+              shots?: Array<{ id: number } & Record<string, unknown>>;
+            }>;
+            let columns: string[];
+            let allRows: string[][];
+            switch (table) {
+              case 'project':
+                columns = ['id', 'name', 'location', 'created_at', 'modified_at', 'schema_version', 'next_closure_id'];
+                allRows = [[
+                  '1',
+                  project.name,
+                  str(project.location),
+                  project.created_at,
+                  project.modified_at,
+                  '7',
+                  '1',
+                ]];
+                break;
+              case 'sections':
+                columns = ['id', 'name', 'surveyor', 'date', 'color', 'direction', 'quality', 'created_at'];
+                allRows = rawSections.map((section) => [
+                  String(section.id),
+                  str(section.name),
+                  str(section.surveyor),
+                  str(section.date),
+                  str(section.color),
+                  section.direction ?? 'in',
+                  '1',
+                  project.created_at,
+                ]);
+                break;
+              case 'shots':
+                columns = [
+                  'id', 'section_id', 'sequence_order', 'azimuth_in', 'azimuth_out', 'length',
+                  'depth_in', 'depth_out', 'pitch_in', 'pitch_out', 'left_distance', 'right_distance',
+                  'up_distance', 'down_distance', 'comment', 'is_reference', 'marker_index', 'temperature', 'uuid',
+                ];
+                allRows = rawSections.flatMap((section) =>
+                  (section.shots ?? []).map((shot, index) => [
+                    String(shot.id),
+                    String(section.id),
+                    String(index),
+                    str(shot.azimuth_in),
+                    str(shot.azimuth_out),
+                    str(shot.length),
+                    str(shot.depth_in),
+                    str(shot.depth_out),
+                    str(shot.pitch_in),
+                    str(shot.pitch_out),
+                    str(shot.left),
+                    str(shot.right),
+                    str(shot.up),
+                    str(shot.down),
+                    str(shot.comment),
+                    shot.is_reference ? '1' : '0',
+                    str(shot.marker_index),
+                    str(shot.temperature),
+                    'NULL',
+                  ])
+                );
+                break;
+              case 'undo_stack':
+                // BLOB columns render as size placeholders, like the real backend.
+                columns = ['id', 'sequence', 'command_json', 'undo_data_json', 'executed_at'];
+                allRows = [['1', '1', '<blob 1.2 KB>', '<blob 4.2 KB>', project.modified_at]];
+                break;
+              default:
+                throw new Error(`Unknown table: ${table}`);
+            }
+            return {
+              columns,
+              rows: allRows.slice(offset, offset + limit),
+              total_rows: allRows.length,
+            };
           }
 
           // Cache commands

@@ -1,0 +1,247 @@
+import { test, expect, type Page } from './fixtures/coverage';
+import {
+  setupMockedPage,
+  createProject,
+  seedProjectWithSections,
+  waitForMapReady,
+  waitForNoDialogs,
+  type SectionSeed,
+} from './helpers/app';
+
+/**
+ * E2E tests for the data table's draft "new shot" rows.
+ *
+ * The shots grid always shows one empty draft row at the end; the row-gutter
+ * context menu inserts more drafts before/after existing shots. A draft
+ * commits via create_shot once length, both depths and an azimuth are
+ * present, honoring its anchor (afterShotId/beforeShotId). Inserted drafts
+ * mark their missing required cells red immediately; the end draft only once
+ * it holds a value. Delete (or the "Remove draft row" menu entry) discards a
+ * draft without any confirmation; the end draft resets instead.
+ *
+ * Rows are grid-row-{rowIndex}, cells grid-cell-{rowIndex}-{colKey}; draft
+ * rows carry the sg-row-draft class, missing cells sg-cell-missing. The mock
+ * create_shot mutates the project (insert position honors the anchors) and
+ * records its calls in __MOCK_CREATE_SHOT_CALLS__.
+ */
+
+const sectionSeeds: SectionSeed[] = [
+  {
+    name: 'Draft Test Section',
+    direction: 'in',
+    shots: [
+      { azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 },
+      { azimuth_in: 90, azimuth_out: 90, length: 20, depth_in: -1, depth_out: -2 },
+      { azimuth_in: 135, azimuth_out: 135, length: 30, depth_in: -2, depth_out: -3 },
+    ],
+  },
+];
+
+interface ShotSnapshot {
+  id: number;
+  length: number;
+  azimuth_in: number;
+  depth_in: number;
+  depth_out: number;
+}
+
+async function getShots(page: Page): Promise<ShotSnapshot[]> {
+  return page.evaluate(() => {
+    const e2e = (window as any).__E2E_TEST__;
+    const shots = e2e?.projectStore.getState().project?.sections?.[0]?.shots ?? [];
+    return shots.map((s: any) => ({
+      id: s.id,
+      length: s.length,
+      azimuth_in: s.azimuth_in,
+      depth_in: s.depth_in,
+      depth_out: s.depth_out,
+    }));
+  });
+}
+
+async function getCreateShotCalls(
+  page: Page,
+): Promise<Array<{ sectionId: number; afterShotId: number | null; beforeShotId: number | null }>> {
+  return page.evaluate(() => {
+    const calls = ((window as any).__MOCK_CREATE_SHOT_CALLS__ ?? []) as Array<any>;
+    return calls.map((c) => ({
+      sectionId: c?.sectionId ?? null,
+      afterShotId: c?.afterShotId ?? null,
+      beforeShotId: c?.beforeShotId ?? null,
+    }));
+  });
+}
+
+/** Open the DataTable via keyboard shortcut. */
+async function openDataTable(page: Page): Promise<void> {
+  await page.keyboard.press('Control+3');
+  await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+  // 3 shots + the end draft row (auto-selects first section)
+  await expect(page.getByTestId('grid-row-3')).toHaveClass(/sg-row-draft/, { timeout: 5000 });
+}
+
+/** Double-click a cell, type a value, commit with Enter. */
+async function fillCell(page: Page, row: number, colKey: string, value: string): Promise<void> {
+  await page.getByTestId(`grid-cell-${row}-${colKey}`).dblclick();
+  const editor = page.getByTestId('grid-cell-editor');
+  await expect(editor).toBeVisible();
+  await editor.fill(value);
+  await page.keyboard.press('Enter');
+  await expect(editor).toHaveCount(0);
+}
+
+/** Fill a draft row's required fields (length, azimuth avg, both depths). */
+async function fillDraftRow(page: Page, row: number, length: string): Promise<void> {
+  await fillCell(page, row, 'length', length);
+  await fillCell(page, row, '_azimuth_avg', '100');
+  await fillCell(page, row, 'depth_in', '1');
+  await fillCell(page, row, 'depth_out', '2');
+}
+
+/** Right-click the gutter of a row and click a context-menu entry by name. */
+async function clickGutterMenuEntry(page: Page, row: number, entry: string | RegExp): Promise<void> {
+  await page.getByTestId(`grid-gutter-${row}`).click({ button: 'right' });
+  const menu = page.getByTestId('grid-context-menu');
+  await expect(menu).toBeVisible();
+  await menu.getByRole('button', { name: entry }).click();
+  await expect(menu).toHaveCount(0);
+}
+
+test.describe('Draft shot rows', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Draft Row Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+    await openDataTable(page);
+  });
+
+  test('end draft commits a new shot after the last one', async ({ page }) => {
+    // The empty end draft stays quiet: no missing-red before any value.
+    await expect(page.getByTestId('grid-cell-3-length')).not.toHaveClass(/sg-cell-missing/);
+
+    await fillCell(page, 3, 'length', '5');
+    // Now the still-missing required cells surface.
+    await expect(page.getByTestId('grid-cell-3-depth_in')).toHaveClass(/sg-cell-missing/);
+    await fillCell(page, 3, '_azimuth_avg', '100');
+    await fillCell(page, 3, 'depth_in', '1');
+    await fillCell(page, 3, 'depth_out', '2');
+
+    // The draft committed: 4 shots + a fresh, empty end draft below them.
+    await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-cell-4-length')).toHaveText('');
+    await expect(page.getByTestId('grid-cell-4-length')).not.toHaveClass(/sg-cell-missing/);
+
+    const shots = await getShots(page);
+    expect(shots.map((s) => s.length)).toEqual([10, 20, 30, 5]);
+    expect(shots[3]).toMatchObject({ azimuth_in: 100, depth_in: 1, depth_out: 2 });
+
+    // Committed AFTER the previous last shot.
+    const calls = await getCreateShotCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ afterShotId: shots[2]!.id, beforeShotId: null });
+  });
+
+  test('insert above the first shot anchors before it and marks missing cells immediately', async ({ page }) => {
+    await clickGutterMenuEntry(page, 0, 'Insert shot above');
+
+    // A draft row appears at the top, red on every missing required cell
+    // before anything is typed (unlike the lazy end draft).
+    await expect(page.getByTestId('grid-row-0')).toHaveClass(/sg-row-draft/);
+    for (const colKey of ['length', '_azimuth_avg', 'depth_in', 'depth_out']) {
+      await expect(page.getByTestId(`grid-cell-0-${colKey}`)).toHaveClass(/sg-cell-missing/);
+    }
+    // The shots below shifted down; the end draft is still last.
+    await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
+
+    const before = await getShots(page);
+    await fillDraftRow(page, 0, '5');
+
+    // Committed BEFORE the first shot: it is now at index 0.
+    await expect(page.getByTestId('grid-row-0')).not.toHaveClass(/sg-row-draft/);
+    expect((await getShots(page)).map((s) => s.length)).toEqual([5, 10, 20, 30]);
+    const calls = await getCreateShotCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ afterShotId: null, beforeShotId: before[0]!.id });
+  });
+
+  test('insert below a shot anchors after it', async ({ page }) => {
+    await clickGutterMenuEntry(page, 0, 'Insert shot below');
+    await expect(page.getByTestId('grid-row-1')).toHaveClass(/sg-row-draft/);
+
+    const before = await getShots(page);
+    await fillDraftRow(page, 1, '5');
+
+    await expect(page.getByTestId('grid-row-1')).not.toHaveClass(/sg-row-draft/);
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 5, 20, 30]);
+    const calls = await getCreateShotCalls(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ afterShotId: before[0]!.id, beforeShotId: null });
+  });
+
+  test('multiple inserted drafts leave shot edits on the correct shots', async ({ page }) => {
+    // Gutter-select rows 0-1, insert 2 drafts above them.
+    await page.getByTestId('grid-gutter-0').click();
+    await page.getByTestId('grid-gutter-1').click({ modifiers: ['Shift'] });
+    await clickGutterMenuEntry(page, 1, 'Insert 2 shots above');
+
+    // Rows 0-1 are drafts; the shots now sit at rows 2-4, end draft at 5.
+    await expect(page.getByTestId('grid-row-0')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-row-1')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-row-5')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-cell-2-length')).toHaveText('10.0');
+
+    // Regression guard: editing the shot at grid row 3 (the SECOND shot) must
+    // not land on a neighbour shifted by the drafts above it.
+    await fillCell(page, 3, 'length', '99');
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('99.0');
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 99, 30]);
+  });
+
+  test('Delete discards a gutter-selected draft without confirmation', async ({ page }) => {
+    await clickGutterMenuEntry(page, 0, 'Insert shot above');
+    await expect(page.getByTestId('grid-row-0')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-row-4')).toBeVisible();
+
+    // Gutter-select the draft row, then Delete: the draft vanishes, no dialog.
+    await page.getByTestId('grid-gutter-0').click();
+    await page.keyboard.press('Delete');
+    await expect(page.getByTestId('grid-row-4')).toHaveCount(0);
+    await expect(page.getByTestId('grid-row-0')).not.toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30]);
+  });
+
+  test('Delete on the end draft resets it instead of removing it', async ({ page }) => {
+    await fillCell(page, 3, 'length', '5');
+    await expect(page.getByTestId('grid-cell-3-depth_in')).toHaveClass(/sg-cell-missing/);
+
+    await page.getByTestId('grid-gutter-3').click();
+    await page.keyboard.press('Delete');
+
+    // Still there, but emptied — the partial value and the red marks are gone.
+    await expect(page.getByTestId('grid-row-3')).toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('');
+    await expect(page.getByTestId('grid-cell-3-depth_in')).not.toHaveClass(/sg-cell-missing/);
+    await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+    expect(await getCreateShotCalls(page)).toHaveLength(0);
+  });
+
+  test('"Remove draft row" context-menu entry discards the draft', async ({ page }) => {
+    // The entry is only offered on draft rows.
+    await page.getByTestId('grid-gutter-1').click({ button: 'right' });
+    const menu = page.getByTestId('grid-context-menu');
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('button', { name: 'Remove draft row' })).toHaveCount(0);
+    await menu.getByRole('button', { name: 'Insert shot above' }).click();
+
+    await expect(page.getByTestId('grid-row-1')).toHaveClass(/sg-row-draft/);
+    await clickGutterMenuEntry(page, 1, 'Remove draft row');
+
+    await expect(page.getByTestId('grid-row-1')).not.toHaveClass(/sg-row-draft/);
+    await expect(page.getByTestId('grid-row-4')).toHaveCount(0);
+    await expect(page.getByTestId('confirm-dialog')).toHaveCount(0);
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30]);
+  });
+});
