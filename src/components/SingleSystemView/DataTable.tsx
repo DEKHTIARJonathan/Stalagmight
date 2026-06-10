@@ -60,6 +60,7 @@ export default function DataTable({ sections }: DataTableProps) {
     dataTableHeight,
     announceSelection,
     setHoveredSectionId,
+    openDialog,
     triggerCenterOnStation,
     setHoveredStation,
     hoveredStation,
@@ -74,6 +75,7 @@ export default function DataTable({ sections }: DataTableProps) {
     dataTableHeight: s.dataTableHeight,
     announceSelection: s.announceSelection,
     setHoveredSectionId: s.setHoveredSectionId,
+    openDialog: s.openDialog,
     triggerCenterOnStation: s.triggerCenterOnStation,
     setHoveredStation: s.setHoveredStation,
     hoveredStation: s.hoveredStation,
@@ -526,6 +528,28 @@ export default function DataTable({ sections }: DataTableProps) {
     [t, showToast]
   );
 
+  // Delete on a gutter-selected row (or the context menu's "Delete rows"):
+  // route a single row to the existing shot-delete confirm dialog (it owns the
+  // split/last-shot handling); multi-shot delete has no safe backend flow yet.
+  const onShotDeleteRows = useCallback(
+    (fromRow: number, toRow: number) => {
+      if (!selectedSection || geometryReadOnly) return;
+      setSource('data-table');
+      if (fromRow !== toRow) {
+        showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete');
+        return;
+      }
+      const shot = selectedSection.shots[fromRow];
+      if (!shot) return;
+      openDialog('confirm-delete', {
+        type: 'shot',
+        sectionId: selectedSection.id,
+        shotId: shot.id,
+      });
+    },
+    [selectedSection, geometryReadOnly, showToast, t, openDialog]
+  );
+
   const handleToggleReference = useCallback(
     (shot: Shot) => {
       if (selectedSection && !geometryReadOnly) {
@@ -857,6 +881,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 gutterWidth={72}
                 showToolbar={false}
                 onSelectionChange={setGridSel}
+                onDeleteRows={onShotDeleteRows}
                 hiddenColumns={shotHiddenColumns}
                 columnOrder={shotColumnOrder}
                 onColumnOrderChange={setShotColumnOrder}

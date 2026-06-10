@@ -357,6 +357,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (key === undefined) return;
       const r = clamp(row, 0, Math.max(0, rowCount - 1));
       const cell = { row: r, colKey: key };
+      rowSelectIntent.current = false;
       setSelection((prev) => ({
         anchor: extend ? prev.anchor : cell,
         focus: cell,
@@ -891,6 +892,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         e.preventDefault();
         // Two-stage (Google Sheets): first Ctrl+A selects the contiguous data
         // region around the active cell, the second expands to the whole grid.
+        rowSelectIntent.current = false;
         const ai = colIndexOf(selection.active.colKey);
         const region = {
           r0: dataEdgeTarget(selection.active.row, ai, -1, 0).row,
@@ -953,7 +955,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         }
         case 'F2': e.preventDefault(); beginEdit(row, colIdx, null); return;
         case 'Delete':
-        case 'Backspace': e.preventDefault(); doClear(); return;
+        case 'Backspace': {
+          e.preventDefault();
+          // The grid owns Delete here — without this the app's global
+          // delete-selected-entity shortcut would fire on a plain cell clear.
+          e.stopPropagation();
+          const fullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
+          if (onDeleteRows && rowSelectIntent.current && fullRows) onDeleteRows(rect.r0, rect.r1);
+          else doClear();
+          return;
+        }
         case 'Escape': setCopiedRect(null); setCutRect(null); return;
         default:
           // Type-to-edit: a printable character starts an edit seeded with it.
@@ -969,7 +980,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [
       editing, selection.focus.row, focusColIdx, colKeys, colCount, rowCount, height,
       writableColIdxs, colIndexOf, moveFocusTo, dataEdgeTarget, beginEdit, commitEdit, cancelEdit,
-      doCopy, doCut, schedulePasteFallback, doFill, doClear, colAt, cellEditable,
+      doCopy, doCut, schedulePasteFallback, doFill, doClear, onDeleteRows, colAt, cellEditable,
       rect, selection.active, onActiveCellChange, virtualizer,
     ],
   );
@@ -988,6 +999,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       pendingDrag.current = { x: e.clientX, y: e.clientY };
       setInteracting(true);
       setCopiedRect(null);
+      rowSelectIntent.current = false;
       setSelection((prev) =>
         e.shiftKey
           ? { anchor: prev.anchor, focus: cell, active: prev.active }
@@ -1051,6 +1063,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const fk = colKeys[clamp(focusColIdx, 0, colCount - 1)];
       if (ak === undefined || fk === undefined || rowCount === 0) return;
       setCopiedRect(null);
+      rowSelectIntent.current = false;
       setSelection({
         anchor: { row: 0, colKey: ak },
         focus: { row: rowCount - 1, colKey: fk },
@@ -1090,8 +1103,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [selectColumnRange],
   );
 
+  // True while the current selection was made via the row-number gutter —
+  // Delete then means "delete these rows" (when the host wires onDeleteRows),
+  // not "clear these cells". Any other selection gesture resets it.
+  const rowSelectIntent = useRef(false);
   const selectRowRange = useCallback(
     (anchorRow: number, focusRow: number) => {
+      rowSelectIntent.current = true;
       const firstKey = colKeys[0];
       const lastKey = colKeys[colCount - 1];
       if (firstKey === undefined || lastKey === undefined) return;
@@ -1467,6 +1485,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         const key = colKeys[c];
         if (key !== undefined) {
           const cell = { row: rowIdx, colKey: key };
+          rowSelectIntent.current = false;
           setSelection({ anchor: cell, focus: cell, active: cell });
         }
       }
@@ -1550,6 +1569,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (prevSel.active.row === selectedRow) return prevSel;
       const colKey = colKeys.includes(prevSel.active.colKey) ? prevSel.active.colKey : colKeys[0];
       if (colKey === undefined) return prevSel;
+      rowSelectIntent.current = false;
       const cell = { row: selectedRow, colKey };
       return { anchor: cell, focus: cell, active: cell };
     });
