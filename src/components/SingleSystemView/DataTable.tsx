@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
@@ -7,12 +7,13 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid, type GridLabels } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
-import { ExpandIcon, EyeIcon } from '../common/icons';
+import { ChevronDownIcon, ExpandIcon, EyeIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
 import { buildStationColumns } from './dataTableStationColumns';
@@ -71,6 +72,96 @@ const STATION_MENU_COLS: { key: string; nameKey: string }[] = [
   { key: 'comment', nameKey: 'comment' },
 ];
 
+/** Chevron trigger + small picker menu used in the sub-header next to the
+ *  section / raw-table pill. Closes on outside click and Escape (and declares
+ *  data-dropdown-open so the global Escape guard yields to it). */
+function SubHeaderPickerMenu({
+  testId,
+  title,
+  options,
+  onPick,
+  onHoverOption,
+}: {
+  testId: string;
+  title: string;
+  options: { value: string; label: string; disabled?: boolean }[];
+  onPick: (value: string) => void;
+  onHoverOption?: (value: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={open ? 'text-text' : 'text-text-secondary hover:text-text'}
+        title={title}
+        data-testid={testId}
+      >
+        <ChevronDownIcon size={12} />
+      </button>
+      {open && (
+        <div
+          data-dropdown-open
+          className="absolute left-1/2 top-full z-50 mt-1 max-h-64 w-52 -translate-x-1/2 overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
+          data-testid={`${testId}-list`}
+          onMouseLeave={() => onHoverOption?.(null)}
+        >
+          {options.map((o) => (
+            <button
+              key={o.value}
+              disabled={o.disabled}
+              className="block w-full truncate rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50"
+              onMouseEnter={() => onHoverOption?.(o.value)}
+              onClick={() => {
+                onHoverOption?.(null);
+                setOpen(false);
+                onPick(o.value);
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Raw-table name pill: neutral gray sibling of the section EntityBlob, with
+ *  the same syntactic-level gate (plain text below 'full'). */
+function RawTablePill({ name }: { name: string }) {
+  const level = useUIStore((s) => s.syntacticLevel);
+  if (!syntacticLevelAtLeast(level, 'full')) {
+    return (
+      <span className="font-medium" data-testid="data-table-raw-name">
+        {name}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums"
+      style={{ '--o': 'var(--cc-text-secondary)' } as CSSProperties}
+      data-testid="data-table-raw-name"
+    >
+      {name}
+    </span>
+  );
+}
+
 export default function DataTable({ sections }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -102,6 +193,7 @@ export default function DataTable({ sections }: DataTableProps) {
     dataTableHeight,
     dataTableFullScreen,
     rawTableSelection,
+    setRawTableSelection,
     enterDataTableFullScreen,
     announceSelection,
     setHoveredSectionId,
@@ -120,6 +212,7 @@ export default function DataTable({ sections }: DataTableProps) {
     dataTableHeight: s.dataTableHeight,
     dataTableFullScreen: s.dataTableFullScreen,
     rawTableSelection: s.rawTableSelection,
+    setRawTableSelection: s.setRawTableSelection,
     enterDataTableFullScreen: s.enterDataTableFullScreen,
     announceSelection: s.announceSelection,
     setHoveredSectionId: s.setHoveredSectionId,
@@ -1048,6 +1141,33 @@ export default function DataTable({ sections }: DataTableProps) {
   // (occluded horizontal scrollbar) or grows a second scrollbar. Measure the
   // body instead of hand-summing chrome heights; the observer also tracks the
   // panel's resize drag and its open/close height transition.
+  const [rawTables, setRawTables] = useState<string[] | 'unavailable' | null>(null);
+  const lastRawTableRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!dataTableFullScreen) return undefined;
+    let cancelled = false;
+    invokeIpc<string[]>('get_raw_table_names', undefined, {
+      purpose: 'list raw sqlite tables for the data viewer',
+    })
+      .then((names) => {
+        if (!cancelled) setRawTables(Array.isArray(names) ? names : 'unavailable');
+      })
+      .catch(() => {
+        if (!cancelled) setRawTables('unavailable');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataTableFullScreen]);
+  useEffect(() => {
+    if (rawTableSelection) lastRawTableRef.current = rawTableSelection;
+    // '' = raw mode entered from the toolbar picker with no table chosen yet.
+    if (rawTableSelection === '' && Array.isArray(rawTables) && rawTables.length > 0) {
+      const last = lastRawTableRef.current;
+      setRawTableSelection(last !== null && rawTables.includes(last) ? last : rawTables[0]!);
+    }
+  }, [rawTableSelection, rawTables, setRawTableSelection]);
+
   const gridBodyRef = useRef<HTMLDivElement | null>(null);
   const [gridBodyHeight, setGridBodyHeight] = useState<number | null>(null);
   useEffect(() => {
@@ -1208,12 +1328,28 @@ export default function DataTable({ sections }: DataTableProps) {
            (the viewer shows last-saved state, so flag pending edits). */
         <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
           <span className="font-medium">{t('dataTable.title')}</span>
-          <span
-            className="absolute left-1/2 -translate-x-1/2 font-medium"
-            data-testid="data-table-raw-name"
-          >
-            {rawTableSelection}
-          </span>
+          <div className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-1">
+            {rawTableSelection !== '' && <RawTablePill name={rawTableSelection} />}
+            <SubHeaderPickerMenu
+              testId="data-table-raw-table-menu"
+              title={t('dataTable.rawTableMenu')}
+              options={
+                Array.isArray(rawTables)
+                  ? rawTables.map((name) => ({ value: name, label: name }))
+                  : [
+                      {
+                        value: '',
+                        label:
+                          rawTables === 'unavailable'
+                            ? t('dataTable.rawData.unavailable')
+                            : t('dataTable.rawData.loading'),
+                        disabled: true,
+                      },
+                    ]
+              }
+              onPick={setRawTableSelection}
+            />
+          </div>
           {isDirty && (
             <span className="ml-auto text-text-secondary" data-testid="data-table-raw-dirty-hint">
               {t('dataTable.rawData.asOfLastSave')}
@@ -1230,18 +1366,35 @@ export default function DataTable({ sections }: DataTableProps) {
           </span>
         )}
         {selectedSection && (
-          <button
-            className="absolute left-1/2 -translate-x-1/2 cursor-pointer"
-            onClick={handleSectionPillClick}
-            onMouseEnter={() => handleSectionHover(String(selectedSection.id))}
-            onMouseLeave={() => handleSectionHover(null)}
-            title={t('dataTable.selectSectionPill')}
-            data-testid="data-table-section-pill"
-          >
-            <EntityBlob entity="section">
-              {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
-            </EntityBlob>
-          </button>
+          <div className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-1">
+            <button
+              className="cursor-pointer"
+              onClick={handleSectionPillClick}
+              onMouseEnter={() => handleSectionHover(String(selectedSection.id))}
+              onMouseLeave={() => handleSectionHover(null)}
+              title={t('dataTable.selectSectionPill')}
+              data-testid="data-table-section-pill"
+            >
+              <EntityBlob entity="section">
+                {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
+              </EntityBlob>
+            </button>
+            <SubHeaderPickerMenu
+              testId="data-table-section-menu"
+              title={t('dataTable.sectionMenu')}
+              options={sections.map((s) => ({
+                value: String(s.id),
+                label: s.name ?? t('sections.defaultName', { id: s.id }),
+              }))}
+              onPick={(value) => {
+                const id = Number(value);
+                setSelectedSectionId(id);
+                setSource('data-table');
+                setSelection({ type: 'section', sectionId: id });
+              }}
+              onHoverOption={handleSectionHover}
+            />
+          </div>
         )}
         <div
           className="ml-auto flex items-center rounded border border-border overflow-hidden"
@@ -1336,7 +1489,15 @@ export default function DataTable({ sections }: DataTableProps) {
       {dataTableOpen && (
         <div ref={gridBodyRef} className="flex-1 overflow-hidden">
           {rawTableSelection !== null ? (
-            <RawTableView tableName={rawTableSelection} height={gridHeight} />
+            rawTableSelection === '' ? (
+              <div className="flex items-center justify-center h-full text-text-secondary">
+                {rawTables === 'unavailable'
+                  ? t('dataTable.rawData.unavailable')
+                  : t('dataTable.rawData.loading')}
+              </div>
+            ) : (
+              <RawTableView tableName={rawTableSelection} height={gridHeight} />
+            )
           ) : selectedSection ? (
             tableView === 'shots' ? (
               <SpreadsheetGrid<Shot>

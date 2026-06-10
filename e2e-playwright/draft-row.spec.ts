@@ -144,7 +144,7 @@ test.describe('Draft shot rows', () => {
   });
 
   test('insert above the first shot anchors before it and marks missing cells immediately', async ({ page }) => {
-    await clickGutterMenuEntry(page, 0, 'Insert shot above');
+    await clickGutterMenuEntry(page, 0, 'Insert shot before');
 
     // A draft row appears at the top, red on every missing required cell
     // before anything is typed (unlike the lazy end draft).
@@ -167,7 +167,7 @@ test.describe('Draft shot rows', () => {
   });
 
   test('insert below a shot anchors after it', async ({ page }) => {
-    await clickGutterMenuEntry(page, 0, 'Insert shot below');
+    await clickGutterMenuEntry(page, 0, 'Insert shot after');
     await expect(page.getByTestId('grid-row-1')).toHaveClass(/sg-row-draft/);
 
     const before = await getShots(page);
@@ -184,7 +184,7 @@ test.describe('Draft shot rows', () => {
     // Gutter-select rows 0-1, insert 2 drafts above them.
     await page.getByTestId('grid-gutter-0').click();
     await page.getByTestId('grid-gutter-1').click({ modifiers: ['Shift'] });
-    await clickGutterMenuEntry(page, 1, 'Insert 2 shots above');
+    await clickGutterMenuEntry(page, 1, 'Insert 2 shots before');
 
     // Rows 0-1 are drafts; the shots now sit at rows 2-4, end draft at 5.
     await expect(page.getByTestId('grid-row-0')).toHaveClass(/sg-row-draft/);
@@ -200,7 +200,7 @@ test.describe('Draft shot rows', () => {
   });
 
   test('Delete discards a gutter-selected draft without confirmation', async ({ page }) => {
-    await clickGutterMenuEntry(page, 0, 'Insert shot above');
+    await clickGutterMenuEntry(page, 0, 'Insert shot before');
     await expect(page.getByTestId('grid-row-0')).toHaveClass(/sg-row-draft/);
     await expect(page.getByTestId('grid-row-4')).toBeVisible();
 
@@ -234,7 +234,7 @@ test.describe('Draft shot rows', () => {
     const menu = page.getByTestId('grid-context-menu');
     await expect(menu).toBeVisible();
     await expect(menu.getByRole('button', { name: 'Remove draft row' })).toHaveCount(0);
-    await menu.getByRole('button', { name: 'Insert shot above' }).click();
+    await menu.getByRole('button', { name: 'Insert shot before' }).click();
 
     await expect(page.getByTestId('grid-row-1')).toHaveClass(/sg-row-draft/);
     await clickGutterMenuEntry(page, 1, 'Remove draft row');

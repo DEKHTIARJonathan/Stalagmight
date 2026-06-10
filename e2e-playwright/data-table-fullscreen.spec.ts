@@ -96,11 +96,20 @@ async function openTablePicker(page: Page): Promise<Locator> {
   return listbox;
 }
 
-/** Pick a table in the fullscreen table picker by its option label. */
-async function pickTable(page: Page, optionName: string): Promise<void> {
+/** Pick a view in the fullscreen toolbar picker ('Sections' | 'Raw data'). */
+async function pickView(page: Page, optionName: string): Promise<void> {
   const listbox = await openTablePicker(page);
   await listbox.getByRole('option', { name: optionName, exact: true }).click();
   await expect(listbox).not.toBeVisible();
+}
+
+/** Pick a raw table via the sub-header menu next to the table-name pill. */
+async function pickRawTable(page: Page, name: string): Promise<void> {
+  await page.getByTestId('data-table-raw-table-menu').click();
+  const list = page.getByTestId('data-table-raw-table-menu-list');
+  await expect(list).toBeVisible();
+  await list.getByRole('button', { name, exact: true }).click();
+  await expect(list).not.toBeVisible();
 }
 
 test.describe('Data table fullscreen mode', () => {
@@ -248,15 +257,20 @@ test.describe('Data table fullscreen mode', () => {
     await expect.poll(() => getIsDirty(page)).toBe(false);
 
     // The picker groups "Sections" and "Raw data" (raw = the sqlite tables).
+    // The toolbar picker offers just the two views; tables are chosen in the
+    // sub-header.
     const listbox = await openTablePicker(page);
-    const sectionsGroup = listbox.locator('[role="group"][aria-label="Sections"]');
-    await expect(sectionsGroup.getByRole('option')).toHaveText(['Sections']);
-    const rawGroup = listbox.locator('[role="group"][aria-label="Raw data"]');
-    await expect(rawGroup.getByRole('option')).toHaveText(['project', 'sections', 'shots', 'undo_stack']);
+    await expect(listbox.getByRole('option')).toHaveText(['Sections', 'Raw data']);
 
-    // Pick the raw shots table: the sub-header swaps to the raw-table name
-    // (no Shots|Stations toggle) and the read-only grid shows the saved rows.
-    await listbox.getByRole('option', { name: 'shots', exact: true }).click();
+    // Entering raw mode auto-selects a table; the sub-header menu lists them
+    // all and switches to the shots table. No Shots|Stations toggle in raw
+    // mode; the read-only grid shows the saved rows.
+    await listbox.getByRole('option', { name: 'Raw data', exact: true }).click();
+    await expect(page.getByTestId('data-table-raw-name')).not.toHaveText('');
+    await page.getByTestId('data-table-raw-table-menu').click();
+    const tableList = page.getByTestId('data-table-raw-table-menu-list');
+    await expect(tableList.getByRole('button')).toHaveText(['project', 'sections', 'shots', 'undo_stack']);
+    await tableList.getByRole('button', { name: 'shots', exact: true }).click();
     await expect(page.getByTestId('raw-table-view')).toBeVisible();
     await expect(page.getByTestId('data-table-raw-name')).toHaveText('shots');
     await expect(page.getByTestId('data-table-view-select')).toHaveCount(0);
@@ -268,12 +282,12 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
 
     // Blob columns arrive as size placeholders.
-    await pickTable(page, 'undo_stack');
+    await pickRawTable(page, 'undo_stack');
     await expect(page.getByTestId('data-table-raw-name')).toHaveText('undo_stack');
     await expect(page.getByTestId('grid-cell-0-command_json')).toHaveText('<blob 1.2 KB>');
 
     // Back to Sections: the editable table with its normal sub-header.
-    await pickTable(page, 'Sections');
+    await pickView(page, 'Sections');
     await expect(page.getByTestId('raw-table-view')).toHaveCount(0);
     await expect(page.getByTestId('data-table-raw-name')).toHaveCount(0);
     await expect(page.getByTestId('data-table-view-select')).toBeVisible();
@@ -282,7 +296,8 @@ test.describe('Data table fullscreen mode', () => {
     // shows until a save clears it (the page refetches on dirty → clean).
     await fillCell(page, 0, 'length', '42');
     await expect.poll(() => getIsDirty(page)).toBe(true);
-    await pickTable(page, 'shots');
+    await pickView(page, 'Raw data');
+    await pickRawTable(page, 'shots');
     await expect(page.getByTestId('data-table-raw-dirty-hint')).toHaveText('As of last save');
     await page.keyboard.press('Control+s');
     await expect(page.getByTestId('data-table-raw-dirty-hint')).toHaveCount(0);

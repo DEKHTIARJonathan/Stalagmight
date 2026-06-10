@@ -1,75 +1,41 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { Select, type SelectOption, type SelectOptionGroup } from '../common/Select';
-import { invokeIpc } from '../../utils/ipc';
+import { Select, type SelectOption } from '../common/Select';
 
-/** The normal Sections-backed data table. Raw tables use `raw:<name>` — the
- *  prefix keeps the sqlite table literally named "sections" unambiguous. */
-const SECTIONS_VALUE = 'view:sections';
-const RAW_PREFIX = 'raw:';
+const SECTIONS_VALUE = 'sections';
+const RAW_VALUE = 'raw';
 
 /**
- * Fullscreen-toolbar table picker: the Sections view (the editable data table)
- * or any raw sqlite table of the project database, browsed read-only.
+ * Fullscreen-toolbar view picker: the Sections-backed data table, or the raw
+ * sqlite tables of the project database. WHICH raw table is browsed is chosen
+ * in the data-table sub-header next to the table-name pill; selecting "Raw
+ * data" here enters raw mode with an empty selection that the sub-header
+ * resolves to the last-browsed (or first) table.
  */
 export default function TableSelectDropdown() {
   const { t } = useTranslation();
   const rawTableSelection = useUIStore((s) => s.rawTableSelection);
   const setRawTableSelection = useUIStore((s) => s.setRawTableSelection);
-  // null = still loading; 'unavailable' = no database yet (unsaved project) or
-  // the listing failed — shown as one disabled explanatory entry.
-  const [rawTables, setRawTables] = useState<string[] | 'unavailable' | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    invokeIpc<string[]>('get_raw_table_names', undefined, {
-      purpose: 'list raw sqlite tables for the fullscreen table picker',
-    })
-      .then((names) => {
-        // Defensive: anything but a list (e.g. a mocked null) reads as "no
-        // database to browse", same as the unsaved-project error.
-        if (!cancelled) setRawTables(Array.isArray(names) ? names : 'unavailable');
-      })
-      .catch(() => {
-        if (!cancelled) setRawTables('unavailable');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const handleChange = useCallback(
     (value: string) => {
-      if (value === SECTIONS_VALUE) setRawTableSelection(null);
-      else if (value.startsWith(RAW_PREFIX)) setRawTableSelection(value.slice(RAW_PREFIX.length));
+      setRawTableSelection(value === RAW_VALUE ? '' : null);
     },
     [setRawTableSelection]
   );
 
-  const rawOptions: SelectOption[] = Array.isArray(rawTables)
-    ? rawTables.map((name) => ({ value: `${RAW_PREFIX}${name}`, label: name }))
-    : [
-        {
-          value: RAW_PREFIX,
-          label: rawTables === 'unavailable' ? t('dataTable.rawData.unavailable') : t('dataTable.rawData.loading'),
-          disabled: true,
-        },
-      ];
-  const groups: SelectOptionGroup[] = [
-    {
-      label: t('dataTable.tableSelect.sections'),
-      options: [{ value: SECTIONS_VALUE, label: t('dataTable.tableSelect.sections') }],
-    },
-    { label: t('dataTable.tableSelect.rawData'), options: rawOptions },
+  const options: SelectOption[] = [
+    { value: SECTIONS_VALUE, label: t('dataTable.tableSelect.sections') },
+    { value: RAW_VALUE, label: t('dataTable.tableSelect.rawData') },
   ];
 
   return (
     <Select
-      value={rawTableSelection === null ? SECTIONS_VALUE : `${RAW_PREFIX}${rawTableSelection}`}
+      value={rawTableSelection === null ? SECTIONS_VALUE : RAW_VALUE}
       onChange={handleChange}
-      options={groups}
-      className="w-52 text-sm"
+      options={options}
+      className="w-40 text-sm"
       aria-label={t('dataTable.title')}
       data-testid="table-select-dropdown"
     />

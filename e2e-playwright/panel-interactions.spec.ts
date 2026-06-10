@@ -257,6 +257,28 @@ test.describe('Panel Interactions', () => {
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
+  test('section picker in the data-table sub-header switches sections', async ({ page }) => {
+    await createProjectWithSections(page);
+    await page.keyboard.press('Control+3');
+    await waitForMapIdle(page);
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('Main Passage');
+
+    await page.getByTestId('data-table-section-menu').click();
+    const list = page.getByTestId('data-table-section-menu-list');
+    await expect(list.getByRole('button')).toHaveText(['Main Passage', 'Side Tunnel']);
+    await list.getByRole('button', { name: 'Side Tunnel' }).click();
+    await expect(list).not.toBeVisible();
+
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('Side Tunnel');
+    // The pick selects the section app-wide, like the old dropdown did.
+    const selection = await page.evaluate(
+      () => (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { selection: unknown } } } })
+        .__E2E_TEST__.uiStore.getState().selection
+    );
+    expect(selection).toMatchObject({ type: 'section' });
+  });
+
   test('should handle panel overflow with scrolling', async ({ page }) => {
     // Create a project with sections
     await createProjectWithSections(page);
