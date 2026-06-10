@@ -244,16 +244,18 @@ export default function Toolbar({
         {dataTableFullScreen ? (
           <>
             <TableSelectDropdown />
-            {/* Regular button chrome with the pan-tool accent on the icon —
-                the sh-tool wash read poorly behind a text label. */}
+            {/* Tool-button treatment: the pan-accent icon AND the sh-tool
+                background wash, like the map toolbar's tool buttons. */}
             <Button
               icon={
-                <span style={{ color: toolAccentVar('pan') } as CSSProperties}>
+                <span style={{ color: 'var(--o)' } as CSSProperties}>
                   <ShrinkIcon size={16} />
                 </span>
               }
               onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
               size="sm"
+              className="sh-tool"
+              style={{ '--o': toolAccentVar('pan') } as CSSProperties}
               data-testid="toolbar-map-view-button"
             >
               {t('dataTable.fullScreen.exit')}
