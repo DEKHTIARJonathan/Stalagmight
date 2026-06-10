@@ -36,6 +36,20 @@ import {
   type Rect,
 } from './gridGeometry';
 
+let editorMeasureCtx: CanvasRenderingContext2D | null = null;
+/** Width of the widest line at the editor's font — drives the GS-style
+ *  grow-rightward single-line editor. */
+function measureEditorText(text: string): number {
+  if (!editorMeasureCtx) editorMeasureCtx = document.createElement('canvas').getContext('2d');
+  if (!editorMeasureCtx) return 0;
+  editorMeasureCtx.font = '13px Arial, Roboto, sans-serif';
+  let max = 0;
+  for (const line of text.split('\n')) {
+    max = Math.max(max, editorMeasureCtx.measureText(line).width);
+  }
+  return max;
+}
+
 const HEADER_HEIGHT = 33;
 const MIN_COL_WIDTH = 40;
 const EDGE_SCROLL_ZONE = 26;
@@ -2112,6 +2126,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   editing.row + 1,
                 )}
                 className="sg-editor"
+                wrap={columns.find((c) => c.key === editing.colKey)?.multiline ? 'soft' : 'off'}
                 style={(() => {
                   const cellRect = rectOverlay({
                     r0: editing.row,
@@ -2119,13 +2134,25 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     c0: colIndexOf(editing.colKey),
                     c1: colIndexOf(editing.colKey),
                   });
-                  // Multiline columns (comments) get a roomy editor anchored at
-                  // the cell instead of one squeezed into the cell box.
                   if (columns.find((c) => c.key === editing.colKey)?.multiline) {
+                    // Multiline columns (comments) get a roomy wrap box
+                    // anchored at the cell instead of one squeezed into it.
                     cellRect.width = Math.max(Number(cellRect.width) || 0, 280);
                     cellRect.height = Math.max(Number(cellRect.height) || 0, 110);
+                    return { ...cellRect, pointerEvents: 'auto', zIndex: 20 };
                   }
-                  return { ...cellRect, pointerEvents: 'auto', zIndex: 20 };
+                  // Single-line editors never wrap: like Google Sheets they
+                  // grow rightward over the neighbours as the draft gets
+                  // longer, capped at the scroller's right edge.
+                  const el = scrollRef.current;
+                  const left = Number(cellRect.left) || 0;
+                  const maxWidth = el ? el.scrollLeft + el.clientWidth - left - 2 : Infinity;
+                  const wanted = measureEditorText(editing.draft) + 20;
+                  cellRect.width = Math.max(
+                    Number(cellRect.width) || 0,
+                    Math.min(wanted, maxWidth)
+                  );
+                  return { ...cellRect, pointerEvents: 'auto', zIndex: 20, whiteSpace: 'pre' };
                 })()}
                 value={editing.draft}
                 onChange={(ev) => setEditing({ ...editing, draft: ev.target.value })}

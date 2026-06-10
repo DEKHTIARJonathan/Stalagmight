@@ -59,7 +59,7 @@ export default function TableSelectDropdown() {
       value={rawTableSelection === null ? SECTIONS_VALUE : RAW_VALUE}
       onChange={handleChange}
       options={options}
-      className="w-56 text-sm"
+      className="w-48 text-sm"
       aria-label={t('dataTable.title')}
       data-testid="table-select-dropdown"
     />
