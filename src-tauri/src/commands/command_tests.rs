@@ -160,10 +160,14 @@ fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf
 
 #[test]
 fn test_get_config_defaults_general_auto_save() {
-    let app = app_with_state();
-    let cfg = config::get_config(state(&app));
-    assert!(cfg.general.auto_save);
-    assert_eq!(cfg.general.auto_save_interval_seconds, 30);
+    // Isolate from the real config file: this asserts DEFAULTS, which only
+    // holds when no user config (e.g. auto_save = false) is readable.
+    with_config_lock(|| {
+        let app = app_with_state();
+        let cfg = config::get_config(state(&app));
+        assert!(cfg.general.auto_save);
+        assert_eq!(cfg.general.auto_save_interval_seconds, 30);
+    });
 }
 
 #[test]
@@ -177,10 +181,13 @@ fn test_get_config_defaults_panels() {
 
 #[test]
 fn test_get_config_defaults_validation() {
-    let app = app_with_state();
-    let cfg = config::get_config(state(&app));
-    assert_eq!(cfg.validation.warn_shot_length_min, 0.1);
-    assert_eq!(cfg.validation.warn_shot_length_max, 50.0);
+    // Same isolation as above: defaults must not depend on the real config.
+    with_config_lock(|| {
+        let app = app_with_state();
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.validation.warn_shot_length_min, 0.1);
+        assert_eq!(cfg.validation.warn_shot_length_max, 50.0);
+    });
 }
 
 #[test]
