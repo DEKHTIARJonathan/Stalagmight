@@ -5,6 +5,7 @@ mod config;
 mod display_settings;
 mod import_tracking;
 mod project_io;
+mod raw_data;
 mod recent_projects;
 mod undo;
 mod warnings;

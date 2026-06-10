@@ -12,7 +12,7 @@ use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
 use stalagmight_lib::commands::section::{SegmentGeometry, SegmentSectionGeometry};
 use stalagmight_lib::commands::survey_geometry::{GeometryShot, SurveyGeometry, SurveyGeometryError};
-use stalagmight_lib::persistence::{BackupInfo, RepairResult, SalvagedData};
+use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config, ProviderCacheConfig,
     DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, ExportConfig, GeneralConfig,
@@ -207,6 +207,9 @@ fn main() {
     export::<RepairResult>(&out_dir);
     export::<SalvagedData>(&out_dir);
 
+    // Raw table browsing (data table fullscreen)
+    export::<RawTableData>(&out_dir);
+
     // Config types
     export::<Config>(&out_dir);
     export::<GeneralConfig>(&out_dir);
@@ -354,6 +357,7 @@ fn main() {
         "BackupInfo",
         "RepairResult",
         "SalvagedData",
+        "RawTableData",
         "Config",
         "GeneralConfig",
         "UnitsConfig",

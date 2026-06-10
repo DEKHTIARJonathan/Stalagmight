@@ -3,6 +3,7 @@ use chrono::{NaiveDate, Utc};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
@@ -32,6 +33,26 @@ const SCHEMA_VERSION: i32 = 7;
 /// (v8+) must NOT re-drop undo history unless the undo payload format changes
 /// again, in which case bump this constant too.
 const UNDO_FORMAT_SAFE_VERSION: i32 = 7;
+
+/// Maximum number of rows a single raw-table page request may return.
+pub const MAX_RAW_PAGE_ROWS: u32 = 10_000;
+
+/// Render a blob value as a size placeholder, e.g. `<blob 4.2 KB>`.
+fn format_blob_placeholder(len: usize) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let len = len as f64;
+    if len < KB {
+        format!("<blob {len:.0} B>")
+    } else if len < MB {
+        format!("<blob {:.1} KB>", len / KB)
+    } else if len < GB {
+        format!("<blob {:.1} MB>", len / MB)
+    } else {
+        format!("<blob {:.1} GB>", len / GB)
+    }
+}
 
 fn compress_json(json: &str) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -2739,6 +2760,75 @@ impl Database {
     }
 
     // =========================================================================
+    // Raw table browsing (data table fullscreen)
+    // =========================================================================
+
+    /// List user table names in the database, excluding sqlite-internal tables.
+    pub fn list_raw_table_names(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        let mut names = Vec::new();
+        for row in rows {
+            names.push(row?);
+        }
+        Ok(names)
+    }
+
+    /// Read a page of rows from a raw table, with every value stringified
+    /// (NULL → `"NULL"`, blobs → a size placeholder like `<blob 4.2 KB>`).
+    ///
+    /// Injection guard: `table` must be an exact member of
+    /// [`Self::list_raw_table_names`]; the identifier is double-quoted and
+    /// LIMIT/OFFSET are bound parameters. `limit` is clamped to
+    /// [`MAX_RAW_PAGE_ROWS`].
+    pub fn read_raw_table(&self, table: &str, limit: u32, offset: u32) -> Result<RawTableData> {
+        let known = self.list_raw_table_names()?;
+        if !known.iter().any(|name| name == table) {
+            anyhow::bail!("Unknown table: {table}");
+        }
+        let limit = limit.min(MAX_RAW_PAGE_ROWS);
+        let ident = format!("\"{}\"", table.replace('"', "\"\""));
+
+        let total_rows: u32 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM {ident}"),
+            [],
+            |row| row.get(0),
+        )?;
+
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT * FROM {ident} LIMIT ?1 OFFSET ?2"))?;
+        let columns: Vec<String> = stmt.column_names().iter().map(|c| (*c).to_string()).collect();
+        let column_count = columns.len();
+        let mapped = stmt.query_map(params![limit, offset], |row| {
+            let mut values = Vec::with_capacity(column_count);
+            for i in 0..column_count {
+                values.push(match row.get_ref(i)? {
+                    ValueRef::Null => "NULL".to_string(),
+                    ValueRef::Integer(v) => v.to_string(),
+                    ValueRef::Real(v) => v.to_string(),
+                    ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
+                    ValueRef::Blob(b) => format_blob_placeholder(b.len()),
+                });
+            }
+            Ok(values)
+        })?;
+
+        let mut rows = Vec::new();
+        for row in mapped {
+            rows.push(row?);
+        }
+        Ok(RawTableData {
+            columns,
+            rows,
+            total_rows,
+        })
+    }
+
+    // =========================================================================
     // Recovery methods (SPEC 14.4)
     // =========================================================================
 
@@ -2961,6 +3051,15 @@ impl Database {
         let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM station_merges", [], |row| row.get(0))?;
         Ok(count as usize)
     }
+}
+
+/// A stringified page of rows from a raw sqlite table.
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct RawTableData {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub total_rows: u32,
 }
 
 /// Information about a backup file.

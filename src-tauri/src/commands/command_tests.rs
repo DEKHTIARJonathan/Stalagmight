@@ -1,6 +1,6 @@
 //! Command wrapper tests focused on critical/edge behaviors.
 
-use super::{cache, config, export, history, import, project, section, shot, station, validation};
+use super::{cache, config, export, history, import, project, raw_data, section, shot, station, validation};
 use crate::core::{AppState, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
@@ -177,6 +177,8 @@ fn test_get_config_defaults_panels() {
     assert_eq!(cfg.panels.sections_panel_width, 250);
     assert_eq!(cfg.panels.detail_panel_width, 300);
     assert_eq!(cfg.panels.data_table_height, 200);
+    assert!(cfg.panels.data_table_station_column_order.is_empty());
+    assert!(cfg.panels.data_table_station_hidden_columns.is_empty());
 }
 
 #[test]
@@ -189,6 +191,8 @@ fn test_update_data_table_view_roundtrip() {
             Some(vec!["left".to_string(), "right".to_string(), "up".to_string(), "down".to_string()]),
             Some("inout".to_string()),
             None,
+            Some(vec!["_zeroDatum".to_string(), "_x".to_string()]),
+            Some(vec!["_connections".to_string()]),
         )
         .expect("update data-table view");
         let cfg = config::get_config(state(&app));
@@ -197,8 +201,18 @@ fn test_update_data_table_view_roundtrip() {
         assert_eq!(cfg.panels.data_table_azimuth_mode, "inout");
         // untouched field keeps its default
         assert_eq!(cfg.panels.data_table_inclination_mode, "off");
+        assert_eq!(cfg.panels.data_table_station_column_order, vec!["_zeroDatum", "_x"]);
+        assert_eq!(cfg.panels.data_table_station_hidden_columns, vec!["_connections"]);
         // invalid mode is rejected, config untouched
-        let err = config::update_data_table_view_impl(state(&app).inner(), None, None, Some("sideways".to_string()), None);
+        let err = config::update_data_table_view_impl(
+            state(&app).inner(),
+            None,
+            None,
+            Some("sideways".to_string()),
+            None,
+            None,
+            None,
+        );
         assert!(err.is_err());
         assert_eq!(config::get_config(state(&app)).panels.data_table_azimuth_mode, "inout");
     });
@@ -2449,4 +2463,78 @@ fn test_get_segment_geometry_queried_from_either_end() {
     let sec_b = geom.sections.iter().find(|s| s.section_id == id_b).unwrap();
     assert!((sec_b.shot_lines[0][0][0]).abs() < 1e-6, "Section B starts at anchor origin");
     assert!((sec_b.shot_lines[0][0][1]).abs() < 1e-6, "Section B starts at anchor origin");
+}
+
+// === Raw data commands ===
+
+#[test]
+fn test_get_raw_table_names_lists_project_tables() {
+    let project = project_with_section(vec![shot_data(5.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let names = raw_data::get_raw_table_names_impl(state(&app).inner()).unwrap();
+    for expected in ["project", "sections", "shots"] {
+        assert!(names.iter().any(|n| n == expected), "missing table {expected}");
+    }
+    assert!(!names.iter().any(|n| n.starts_with("sqlite_")));
+}
+
+#[test]
+fn test_get_raw_table_row_shape_and_total() {
+    let project = project_with_section(vec![shot_data(5.0), shot_data(3.0), shot_data(2.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let data =
+        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 100, 0).unwrap();
+    assert!(!data.columns.is_empty());
+    assert_eq!(data.total_rows, 3);
+    assert_eq!(data.rows.len(), 3);
+    for row in &data.rows {
+        assert_eq!(row.len(), data.columns.len());
+    }
+}
+
+#[test]
+fn test_get_raw_table_offset_paging() {
+    let project = project_with_section(vec![shot_data(5.0), shot_data(3.0), shot_data(2.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let first =
+        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 2, 0).unwrap();
+    let second =
+        raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 2, 2).unwrap();
+    assert_eq!(first.rows.len(), 2);
+    assert_eq!(second.rows.len(), 1);
+    assert_eq!(first.total_rows, 3);
+    assert_eq!(second.total_rows, 3);
+    assert!(!second.rows.contains(&first.rows[0]));
+    assert!(!second.rows.contains(&first.rows[1]));
+}
+
+#[test]
+fn test_get_raw_table_rejects_injection_names() {
+    let project = project_with_section(vec![shot_data(5.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    for name in ["shots; DROP TABLE shots", "sqlite_master"] {
+        let err = raw_data::get_raw_table_impl(state(&app).inner(), name.to_string(), 100, 0)
+            .unwrap_err();
+        assert!(err.contains("Unknown table"), "expected rejection for {name:?}, got: {err}");
+    }
+}
+
+#[test]
+fn test_raw_data_commands_fail_without_db() {
+    let app = app_with_state();
+
+    let err = raw_data::get_raw_table_names_impl(state(&app).inner()).unwrap_err();
+    assert!(err.contains("save the project"), "got: {err}");
+
+    let err = raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 100, 0)
+        .unwrap_err();
+    assert!(err.contains("save the project"), "got: {err}");
 }
