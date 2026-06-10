@@ -857,25 +857,35 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const doClear = useCallback(() => {
     const edits: CellEdit[] = [];
     const missing: string[] = [];
+    const restored: string[] = [];
     for (let r = rect.r0; r <= rect.r1; r++) {
       for (let c = rect.c0; c <= rect.c1; c++) {
         const col = colAt(c);
         if (!col || !cellEditable(r, col)) continue;
         // Route through the column's coercion: number → undefined (required —
         // never write 0; mark the cell as missing instead), number-nullable →
-        // null, text/custom-parse → its empty value.
+        // null, text/custom-parse → its empty value. Delete on an already-
+        // missing cell restores it: the model still holds the value, so
+        // unmarking re-reveals it.
         const value = parseForColumn(col, '', r);
         if (value === undefined) {
           const k = missKey(r, col.key);
-          if (k !== null) missing.push(k);
+          if (k !== null) (missingCells.has(k) ? restored : missing).push(k);
           continue;
         }
         edits.push({ row: r, colKey: col.key, value });
       }
     }
-    markMissing(missing);
+    if (missing.length || restored.length) {
+      setMissingCells((prev) => {
+        const next = new Set(prev);
+        for (const k of missing) next.add(k);
+        for (const k of restored) next.delete(k);
+        return next;
+      });
+    }
     applyEdits(edits);
-  }, [rect, colAt, cellEditable, parseForColumn, applyEdits, missKey, markMissing]);
+  }, [rect, colAt, cellEditable, parseForColumn, applyEdits, missKey, missingCells]);
 
   // --- Keyboard -------------------------------------------------------------
   const onKeyDown = useCallback(
