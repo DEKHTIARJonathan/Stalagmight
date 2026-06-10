@@ -1,26 +1,30 @@
-/* Google-Sheets light theme for SpreadsheetGrid. The descendant selectors below
-   intentionally override the app's dark Tailwind utility classes (bg-panel,
-   text-*, border-white/*) so the grid reads as Google Sheets regardless of host
-   theme. */
+/* SpreadsheetGrid theming: Google-Sheets layout and typography, colored from
+   the app's theme tokens (the --cc-* custom properties defined per
+   [data-theme] in src/index.css), so the grid follows whichever theme the
+   host app is using. The descendant selectors below intentionally override
+   Tailwind utility classes used inside the grid markup. */
 .sg-grid {
-  --sg-blue: #1a73e8;
-  --sg-blue-fill: rgba(26, 115, 232, 0.1); /* ~#e8f0fe over white */
-  --sg-line: #e1e1e1; /* cell gridlines */
-  --sg-line-strong: #c0c0c0; /* header / gutter lines */
-  --sg-header-bg: #f8f9fa;
-  --sg-header-text: #444746;
-  --sg-header-sel-bg: #d3e3fd;
-  background: #ffffff;
-  color: #1f1f1f;
+  /* Internal palette, derived from the app theme. --sg-blue / --sg-blue-fill
+     keep their historical names because the TSX references them inline. */
+  --sg-blue: var(--cc-accent);
+  --sg-blue-fill: color-mix(in srgb, var(--cc-accent) 12%, transparent);
+  --sg-line: color-mix(in srgb, var(--cc-border) 60%, var(--cc-panel)); /* cell gridlines */
+  --sg-line-strong: var(--cc-border); /* header / gutter lines */
+  --sg-header-bg: color-mix(in srgb, var(--cc-panel) 92%, var(--cc-text-primary));
+  --sg-header-text: var(--cc-text-secondary);
+  --sg-header-sel-bg: color-mix(in srgb, var(--cc-accent) 22%, var(--cc-panel));
+  --sg-header-active-bg: color-mix(in srgb, var(--cc-accent) 38%, var(--cc-panel));
+  background: var(--cc-panel);
+  color: var(--cc-text-primary);
   font-family: Arial, Roboto, 'Helvetica Neue', sans-serif;
 }
 
-/* Light gridlines + 13px cells. */
+/* Subtle gridlines + 13px cells. */
 .sg-grid .sg-cell {
   border-color: var(--sg-line);
   font-size: 13px;
 }
-/* Light header bar, headers, gutter, corner. */
+/* Header bar, headers, gutter, corner. */
 .sg-grid .sg-header-bar,
 .sg-grid .sg-header,
 .sg-grid .sg-gutter,
@@ -39,8 +43,8 @@
   border-color: var(--sg-line-strong);
 }
 .sg-grid textarea {
-  background: #ffffff;
-  color: #1f1f1f;
+  background: var(--cc-input-bg);
+  color: var(--cc-text-primary);
 }
 
 /* Suppress native text selection across the whole grid so click-drag selects
@@ -69,6 +73,17 @@
   white-space: nowrap;
 }
 
+/* Frozen rows (host-locked) carry a faint warning tint. */
+.sg-row-frozen .sg-cell {
+  background: color-mix(in srgb, var(--cc-warning) 8%, var(--cc-panel));
+}
+/* Externally-hovered row (e.g. the shot hovered on the map) — faint accent
+   tint. Selection visuals render in overlays above the cells, so this never
+   masks them. Declared after the frozen tint so hover wins on frozen rows. */
+.sg-row-hover .sg-cell {
+  background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
+}
+
 /* The selection rectangle glides when moved by keyboard; the glide is disabled
    mid-drag (.sg-no-anim) so it tracks the pointer 1:1. */
 .sg-selection-overlay {
@@ -88,7 +103,7 @@
   height: 8px;
   box-sizing: border-box;
   background: var(--sg-blue);
-  border: 1px solid #fff;
+  border: 1px solid var(--cc-panel);
   cursor: crosshair;
   pointer-events: auto;
   transition: transform 80ms ease-out;
@@ -97,7 +112,7 @@
   transform: scale(1.3);
 }
 
-/* Marching-ants animated dashed border for a copied/cut range. */
+/* Marching-ants animated dashed border for a copied range. */
 @keyframes sg-ants {
   to {
     background-position: 8px 0, -8px 100%, 0 -8px, 100% 8px;
@@ -108,6 +123,19 @@
     linear-gradient(90deg, var(--sg-blue) 50%, transparent 0),
     linear-gradient(0deg, var(--sg-blue) 50%, transparent 0),
     linear-gradient(0deg, var(--sg-blue) 50%, transparent 0);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: sg-ants 0.6s linear infinite;
+}
+
+/* Cut range: same geometry as the copy marquee, but warning-colored so a
+   pending cut reads differently from a copy. */
+.sg-cut-marquee {
+  background-image: linear-gradient(90deg, var(--cc-warning) 50%, transparent 0),
+    linear-gradient(90deg, var(--cc-warning) 50%, transparent 0),
+    linear-gradient(0deg, var(--cc-warning) 50%, transparent 0),
+    linear-gradient(0deg, var(--cc-warning) 50%, transparent 0);
   background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
   background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
   background-position: 0 0, 0 100%, 0 0, 100% 0;
@@ -141,9 +169,9 @@
   box-sizing: border-box;
   margin: 0;
   padding: 5px 7px; /* horizontal ~matches the cell's px-2; vertical centers a line */
-  border: 2px solid var(--sg-blue);
-  background: #ffffff;
-  color: #1f1f1f;
+  border: 2px solid var(--cc-focus-ring);
+  background: var(--cc-input-bg);
+  color: var(--cc-text-primary);
   font: 13px/1.35 Arial, Roboto, sans-serif;
   resize: none;
   outline: none;
@@ -164,13 +192,13 @@
 .sg-grid.sg-grabbing * {
   cursor: grabbing !important;
 }
-/* Rejected-edit flash: a red ring that pulses briefly over the cell/editor. */
+/* Rejected-edit flash: an error-colored ring that pulses briefly over the cell/editor. */
 @keyframes sg-invalid-pulse {
-  0% { background: rgba(217, 48, 37, 0.22); }
-  100% { background: rgba(217, 48, 37, 0); }
+  0% { background: color-mix(in srgb, var(--cc-error) 22%, transparent); }
+  100% { background: transparent; }
 }
 .sg-invalid-flash {
-  border: 2px solid #d93025;
+  border: 2px solid var(--cc-error);
   box-sizing: border-box;
   pointer-events: none;
   animation: sg-invalid-pulse 0.9s ease-out;
@@ -180,13 +208,13 @@
 .sg-move-target {
   border: 2px solid var(--sg-blue);
   box-sizing: border-box;
-  background: rgba(26, 115, 232, 0.06);
+  background: color-mix(in srgb, var(--cc-accent) 6%, transparent);
 }
 
 /* Column-move drop indicator (thick line between columns). */
 .sg-drop-line {
   background: var(--sg-blue);
-  box-shadow: 0 0 0 1px rgba(26, 115, 232, 0.25);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cc-accent) 25%, transparent);
 }
 
 /* Floating ghost of the column(s) being moved. */
@@ -195,10 +223,10 @@
   padding: 4px 10px;
   font-size: 12px;
   font-family: Arial, Roboto, sans-serif;
-  color: #fff;
-  background: rgba(26, 115, 232, 0.92);
+  color: var(--cc-accent-on);
+  background: color-mix(in srgb, var(--cc-accent) 92%, transparent);
   border-radius: 3px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 4px 14px var(--cc-overlay);
 }
 
 /* Header cell of a selected column gets a tinted underline (like GS). */
@@ -211,7 +239,7 @@
   box-shadow: inset 0 -2px 0 0 var(--sg-blue);
 }
 .sg-grid .sg-header:hover {
-  background-color: #f1f3f4;
+  background-color: var(--cc-hover);
 }
 
 /* Drag-to-resize affordance on a header's right edge. */
@@ -233,7 +261,7 @@
   transition: box-shadow 120ms ease-out;
 }
 .sg-header-bar.sg-scrolled {
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--cc-overlay) 35%, transparent);
 }
 
 /* Frozen row-number gutter. */
@@ -244,7 +272,7 @@
   transition: box-shadow 90ms ease-out;
 }
 .sg-grid .sg-gutter:hover {
-  box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.06);
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--cc-text-primary) 8%, transparent);
 }
 /* Layered insets keep the gutter opaque while tinting + marking it. */
 .sg-grid .sg-gutter-selected {
@@ -256,11 +284,11 @@
 .sg-context-menu {
   min-width: 160px;
   padding: 4px 0;
-  background: #ffffff;
-  color: #1f1f1f;
-  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: var(--cc-panel);
+  color: var(--cc-text-primary);
+  border: 1px solid var(--cc-border);
   border-radius: 6px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 10px var(--cc-overlay);
 }
 .sg-context-menu button {
   display: flex;
@@ -277,8 +305,8 @@
   cursor: pointer;
 }
 .sg-context-menu button:hover {
-  background: var(--sg-blue);
-  color: #fff;
+  background: var(--cc-accent);
+  color: var(--cc-accent-on);
 }
 .sg-context-menu .sg-shortcut {
   font-size: 11px;
@@ -290,22 +318,22 @@
 .sg-context-sep {
   height: 1px;
   margin: 4px 0;
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--cc-border);
 }
 
-/* Column show/hide dropdown (light). */
+/* Column show/hide dropdown. */
 .sg-grid .sg-colmenu {
-  background: #ffffff;
-  color: #1f1f1f;
-  border-color: rgba(0, 0, 0, 0.15);
+  background: var(--cc-panel);
+  color: var(--cc-text-primary);
+  border-color: var(--cc-border);
 }
 .sg-grid .sg-colmenu label:hover {
-  background-color: #f1f3f4;
+  background-color: var(--cc-hover);
 }
 
 /* Toolbar buttons (Columns / Maximize). */
 .sg-grid .sg-toolbar button:hover {
-  background-color: #f1f3f4;
+  background-color: var(--cc-hover);
 }
 
 /* Name box: active-cell reference / selection size (top-left, like GS). */
@@ -320,10 +348,10 @@
 /* Stronger tint on the ACTIVE cell's header / row-number than the rest of a
    range selection (Google-Sheets cross-highlight emphasis). */
 .sg-grid .sg-header-active {
-  background-color: #c2dbfc;
+  background-color: var(--sg-header-active-bg);
 }
 .sg-grid .sg-gutter-active {
-  box-shadow: inset 0 0 0 999px #c2dbfc, inset -2px 0 0 0 var(--sg-blue);
+  box-shadow: inset 0 0 0 999px var(--sg-header-active-bg), inset -2px 0 0 0 var(--sg-blue);
   color: var(--sg-blue);
   font-weight: 600;
 }
