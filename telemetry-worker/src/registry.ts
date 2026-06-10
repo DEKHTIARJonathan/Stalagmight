@@ -373,4 +373,9 @@ export const EVENT_NAMES: readonly string[] = [
   'display-state.geometryMode:closureAdjusted',
   // Lazy IPC query that returns the closure-adjusted station coordinates.
   'command.get_adjusted_stations',
+  // Data-table spreadsheet editing: persisted view config + raw-table browsing
+  // (fullscreen data table).
+  'command.update_data_table_view',
+  'command.get_raw_table_names',
+  'command.get_raw_table',
 ];
