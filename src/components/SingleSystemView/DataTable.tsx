@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Section, type Shot, type Station } from '../../types/project';
+import { type Section, type Shot, type ShotData, type Station } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
@@ -24,6 +24,9 @@ interface DataTableProps {
 
 /** Column keys per angle family and mode (the Avg column and the In+Out pair
  *  swap into each other's slot when the mode changes). */
+/** Sentinel id of the draft "new shot" row appended to the grid. */
+const DRAFT_SHOT_ID = -1;
+
 const ANGLE_FAMILY_KEYS = {
   azimuth: { avg: [AZIMUTH_AVG_KEY], inout: ['azimuth_in', 'azimuth_out'] },
   inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'] },
@@ -44,7 +47,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, warnings, isShotFrozen, updateStationComment, executeBatch } = useProjectStore();
+  const { updateShot, warnings, isShotFrozen, updateStationComment, executeBatch, createShot } = useProjectStore();
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
@@ -457,16 +460,101 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Single edit → one update_shot (one undo). Values are already coerced by the
   // column; the virtual azimuth-average expands to in/out via buildShotUpdates.
+  // --- Draft "new shot" row -------------------------------------------------
+  // The grid always shows one extra editable row at the end. Its values live
+  // here until length, both depths and an azimuth are present, then it commits
+  // as a real shot via create_shot (a missing azimuth leg duplicates the other;
+  // inclination stays optional).
+  const [draftShot, setDraftShot] = useState<Partial<ShotData>>({});
+  useEffect(() => setDraftShot({}), [selectedSectionId]);
+  const draftRow = useMemo(
+    (): Shot => ({
+      id: DRAFT_SHOT_ID,
+      azimuth_in: (draftShot.azimuth_in ?? NaN) as number,
+      azimuth_out: (draftShot.azimuth_out ?? NaN) as number,
+      length: (draftShot.length ?? NaN) as number,
+      depth_in: (draftShot.depth_in ?? NaN) as number,
+      depth_out: (draftShot.depth_out ?? NaN) as number,
+      pitch_in: draftShot.pitch_in ?? null,
+      pitch_out: draftShot.pitch_out ?? null,
+      left: draftShot.left ?? null,
+      right: draftShot.right ?? null,
+      up: draftShot.up ?? null,
+      down: draftShot.down ?? null,
+      comment: draftShot.comment ?? null,
+      is_reference: draftShot.is_reference ?? false,
+      marker_index: null,
+      temperature: null,
+    }),
+    [draftShot]
+  );
+  const applyDraftEdit = useCallback((colKey: string, value: unknown) => {
+    setDraftShot((prev) => {
+      const d: Record<string, unknown> = { ...prev };
+      if (colKey === AZIMUTH_AVG_KEY) {
+        d.azimuth_in = value;
+        d.azimuth_out = value;
+      } else if (colKey === PITCH_AVG_KEY) {
+        d.pitch_in = value;
+        d.pitch_out = value;
+      } else {
+        d[colKey] = value;
+      }
+      return d as Partial<ShotData>;
+    });
+  }, []);
+  // Commit the draft once the required fields are present.
+  const draftCommitting = useRef(false);
+  useEffect(() => {
+    if (!selectedSection || draftCommitting.current) return;
+    const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+    const azimuth = fin(draftShot.azimuth_in) ? draftShot.azimuth_in : draftShot.azimuth_out;
+    const complete =
+      fin(draftShot.length) && draftShot.length > 0 &&
+      fin(draftShot.depth_in) && fin(draftShot.depth_out) && fin(azimuth);
+    if (!complete) return;
+    const data: ShotData = {
+      azimuth_in: fin(draftShot.azimuth_in) ? draftShot.azimuth_in : (azimuth as number),
+      azimuth_out: fin(draftShot.azimuth_out) ? draftShot.azimuth_out : (azimuth as number),
+      length: draftShot.length as number,
+      depth_in: draftShot.depth_in as number,
+      depth_out: draftShot.depth_out as number,
+      pitch_in: draftShot.pitch_in ?? null,
+      pitch_out: draftShot.pitch_out ?? null,
+      left: draftShot.left ?? null,
+      right: draftShot.right ?? null,
+      up: draftShot.up ?? null,
+      down: draftShot.down ?? null,
+      comment: draftShot.comment ?? null,
+      is_reference: draftShot.is_reference ?? false,
+      marker_index: null,
+      temperature: null,
+    };
+    const lastShot = selectedSection.shots[selectedSection.shots.length - 1];
+    draftCommitting.current = true;
+    setSource('data-table');
+    void createShot(selectedSection.id, data, lastShot?.id)
+      .then(() => setDraftShot({}))
+      .finally(() => {
+        draftCommitting.current = false;
+      });
+  }, [draftShot, selectedSection, createShot]);
+
+
   const onShotEdit = useCallback(
     (rowIndex: number, colKey: string, value: unknown) => {
       if (!selectedSection || geometryReadOnly) return;
+      if (rowIndex >= selectedSection.shots.length) {
+        applyDraftEdit(colKey, value);
+        return;
+      }
       const shot = selectedSection.shots[rowIndex];
       if (!shot) return;
       selectShotRow(shot);
       const updates = buildShotUpdates(shot, [{ colKey, value }]);
       if (Object.keys(updates).length > 0) void updateShot(selectedSection.id, shot.id, updates);
     },
-    [selectedSection, geometryReadOnly, selectShotRow, updateShot]
+    [selectedSection, geometryReadOnly, selectShotRow, updateShot, applyDraftEdit]
   );
 
   // Multi-cell paste/fill → one execute_batch (one undo).
@@ -474,10 +562,14 @@ export default function DataTable({ sections }: DataTableProps) {
     (edits: CellEdit[]) => {
       if (!selectedSection || geometryReadOnly) return;
       setSource('data-table');
+      // Edits landing on the draft row (paste/fill into the last row) feed the
+      // draft; the rest commit as one batch.
+      const draftEdits = edits.filter((e) => e.row >= selectedSection.shots.length);
       const commands = buildShotUpdateBatch(edits, selectedSection.shots, selectedSection.id);
       if (commands.length > 0) void executeBatch(commands);
+      for (const e of draftEdits) applyDraftEdit(e.colKey, e.value);
     },
-    [selectedSection, geometryReadOnly, executeBatch]
+    [selectedSection, geometryReadOnly, executeBatch, applyDraftEdit]
   );
 
   const onShotActiveCellChange = useCallback(
@@ -509,10 +601,12 @@ export default function DataTable({ sections }: DataTableProps) {
   }, [hoveredShot, selectedSection, selectedSectionId]);
 
   const shotRowClassName = useCallback(
-    (_shot: Shot, rowIndex: number) =>
-      selectedSectionId !== null && isShotFrozen(selectedSectionId, rowIndex)
+    (shot: Shot, rowIndex: number) => {
+      if (shot.id === DRAFT_SHOT_ID) return 'sg-row-draft';
+      return selectedSectionId !== null && isShotFrozen(selectedSectionId, rowIndex)
         ? 'sg-row-frozen'
-        : undefined,
+        : undefined;
+    },
     [selectedSectionId, isShotFrozen]
   );
 
@@ -552,11 +646,14 @@ export default function DataTable({ sections }: DataTableProps) {
 
   const handleToggleReference = useCallback(
     (shot: Shot) => {
-      if (selectedSection && !geometryReadOnly) {
-        void updateShot(selectedSection.id, shot.id, { is_reference: !shot.is_reference });
+      if (!selectedSection || geometryReadOnly) return;
+      if (shot.id === DRAFT_SHOT_ID) {
+        applyDraftEdit('is_reference', !shot.is_reference);
+        return;
       }
+      void updateShot(selectedSection.id, shot.id, { is_reference: !shot.is_reference });
     },
-    [selectedSection, geometryReadOnly, updateShot]
+    [selectedSection, geometryReadOnly, updateShot, applyDraftEdit]
   );
 
   const handlePanToShot = useCallback(
@@ -586,6 +683,13 @@ export default function DataTable({ sections }: DataTableProps) {
     [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, handleToggleReference]
   );
 
+  // Rows handed to the grid: the section's shots plus the draft row (hidden in
+  // the read-only closure-adjusted view).
+  const gridShotRows = useMemo(
+    () => (selectedSection ? (geometryReadOnly ? selectedSection.shots : [...selectedSection.shots, draftRow]) : []),
+    [selectedSection, geometryReadOnly, draftRow]
+  );
+
   const shotScrollToRow = useMemo(() => {
     if (scrollToKey === null || !selectedSection) return null;
     const idx = selectedSection.shots.findIndex((s) => s.id === scrollToKey);
@@ -610,14 +714,17 @@ export default function DataTable({ sections }: DataTableProps) {
   // Gutter shows the shot's ID pill (replaces the old ID column); double-click
   // pans the map to the shot, as it did on the column's pill.
   const shotRowLabel = useCallback(
-    (shot: Shot, rowIndex: number) =>
-      selectedSectionId !== null ? (
+    (shot: Shot, rowIndex: number) => {
+      // The draft row earns its pill only once it becomes a real shot.
+      if (shot.id === DRAFT_SHOT_ID) return <span className="opacity-50">+</span>;
+      return selectedSectionId !== null ? (
         <span onDoubleClick={() => handlePanToShot(shot)}>
           <EntityBlob entity="shot">{formatShotId(selectedSectionId, rowIndex + 1)}</EntityBlob>
         </span>
       ) : (
         rowIndex + 1
-      ),
+      );
+    },
     [selectedSectionId, handlePanToShot]
   );
 
@@ -634,6 +741,21 @@ export default function DataTable({ sections }: DataTableProps) {
     () => new Set(['section_id', 'shot_id'])
   );
   const [colMenuOpen, setColMenuOpen] = useState(false);
+  // Right-click on a column header: hide it / switch the angle family's mode.
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
+  useEffect(() => {
+    if (!headerMenu) return undefined;
+    const close = () => setHeaderMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHeaderMenu(null);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [headerMenu]);
   // Open the dropdown toward the larger free space — the data table sits at
   // the bottom of the window, so this usually means upward.
   const [colMenuUp, setColMenuUp] = useState(false);
@@ -715,6 +837,32 @@ export default function DataTable({ sections }: DataTableProps) {
     },
     [azimuthMode, inclinationMode, shotColumns]
   );
+
+  // Items of the header right-click menu: angle-family columns get a mode
+  // switch and Off; everything else gets a plain hide.
+  const headerMenuItems = useMemo(() => {
+    if (!headerMenu) return [];
+    const key = headerMenu.colKey;
+    const family = (['azimuth', 'inclination'] as const).find((f) => {
+      const fam = ANGLE_FAMILY_KEYS[f];
+      return (fam.avg as readonly string[]).includes(key) || (fam.inout as readonly string[]).includes(key);
+    });
+    const items: { label: string; onClick: () => void }[] = [];
+    if (family) {
+      const onAvg = (ANGLE_FAMILY_KEYS[family].avg as readonly string[]).includes(key);
+      items.push({
+        label: onAvg ? t('dataTable.headerMenu.showInOut') : t('dataTable.headerMenu.showAverage'),
+        onClick: () => changeAngleMode(family, onAvg ? 'inout' : 'avg'),
+      });
+      items.push({
+        label: t('dataTable.headerMenu.hide'),
+        onClick: () => changeAngleMode(family, 'off'),
+      });
+    } else {
+      items.push({ label: t('dataTable.headerMenu.hide'), onClick: () => toggleShotCols([key]) });
+    }
+    return items;
+  }, [headerMenu, t, changeAngleMode, toggleShotCols]);
 
   // Rows of the column-visibility menu: a checkbox per column (or group — the
   // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
@@ -865,7 +1013,7 @@ export default function DataTable({ sections }: DataTableProps) {
               <SpreadsheetGrid<Shot>
                 key={selectedSectionId ?? 'none'}
                 columns={shotColumns}
-                rows={selectedSection.shots}
+                rows={gridShotRows}
                 rowKey={(s) => s.id}
                 locale={numberLocale}
                 height={gridHeight}
@@ -881,6 +1029,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 gutterWidth={72}
                 showToolbar={false}
                 onSelectionChange={setGridSel}
+                onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
                 onDeleteRows={onShotDeleteRows}
                 hiddenColumns={shotHiddenColumns}
                 columnOrder={shotColumnOrder}
@@ -921,6 +1070,27 @@ export default function DataTable({ sections }: DataTableProps) {
               {t('dataTable.selectSection')}
             </div>
           )}
+        </div>
+      )}
+      {headerMenu && (
+        <div
+          className="fixed z-50 w-44 rounded border border-border bg-panel p-1 text-xs shadow-lg"
+          style={{ left: headerMenu.x, top: headerMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          data-testid="data-table-header-menu"
+        >
+          {headerMenuItems.map((item) => (
+            <button
+              key={item.label}
+              className="block w-full rounded px-2 py-0.5 text-left hover:bg-accent-10"
+              onClick={() => {
+                item.onClick();
+                setHeaderMenu(null);
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
     </div>

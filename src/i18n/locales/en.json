@@ -1220,6 +1220,11 @@
       "sectionIdShort": "Sec ID",
       "shotIdShort": "Shot ID"
     },
+    "headerMenu": {
+      "hide": "Hide column",
+      "showInOut": "Show In+Out instead",
+      "showAverage": "Show average instead"
+    },
     "columnsMenu": {
       "button": "Choose visible columns",
       "warnings": "Warnings",

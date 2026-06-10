@@ -84,6 +84,18 @@
   background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
 }
 
+/* A required cell the user emptied: the model keeps its value, the cell shows
+   blank with an error tint until a replacement value is committed. */
+.sg-grid .sg-cell-missing {
+  background: color-mix(in srgb, var(--cc-error) 14%, var(--cc-panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-error) 60%, transparent);
+}
+
+/* The phantom "new shot" draft row at the end of the table. */
+.sg-row-draft .sg-cell {
+  background: color-mix(in srgb, var(--cc-text-primary) 3%, var(--cc-panel));
+}
+
 /* The selection rectangle glides when moved by keyboard; the glide is disabled
    mid-drag (.sg-no-anim) so it tracks the pointer 1:1. */
 .sg-selection-overlay {

@@ -104,6 +104,10 @@ export interface SpreadsheetGridProps<Row> {
    *  true; hosts that fold the grid into their own chrome turn it off and
    *  track {@link onSelectionChange} instead. */
   showToolbar?: boolean;
+  /** Right-click on a column header — let the host show its own menu (hide
+   *  column, switch column families, ...). The grid only prevents the native
+   *  menu when this is set. */
+  onHeaderContextMenu?: (colKey: string, pos: { x: number; y: number }) => void;
   /** Fired whenever the selection rectangle or active cell changes (and once
    *  on mount) — lets a host render its own name-box/indicator. */
   onSelectionChange?: (sel: { rows: number; cols: number; activeRow: number; activeColKey: string }) => void;
@@ -160,6 +164,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
     showToolbar = true,
+    onHeaderContextMenu,
     onSelectionChange,
     maximized = false,
     onToggleMaximize,
@@ -287,14 +292,43 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [rows],
   );
 
+  // Cells whose REQUIRED value (kind 'number') the user cleared: the model
+  // keeps the old value (never write 0 / never drop the field), but the cell
+  // displays empty with a red "missing" tint until a value is committed.
+  // Keyed by row identity, not index, so row inserts/deletes don't shift marks.
+  const [missingCells, setMissingCells] = useState<ReadonlySet<string>>(new Set());
+  const missKey = useCallback(
+    (rowIdx: number, colKey: string): string | null => {
+      const row = rows[rowIdx];
+      return row === undefined ? null : `${rowKey(row, rowIdx)}:${colKey}`;
+    },
+    [rows, rowKey],
+  );
+  const markMissing = useCallback(
+    (keys: string[]) => {
+      if (keys.length) setMissingCells((prev) => new Set([...prev, ...keys]));
+    },
+    [],
+  );
+
+  const isMissing = useCallback(
+    (rowIdx: number, colKey: string): boolean => {
+      if (missingCells.size === 0) return false;
+      const k = missKey(rowIdx, colKey);
+      return k !== null && missingCells.has(k);
+    },
+    [missingCells, missKey],
+  );
+
   const displayAt = useCallback(
     (rowIdx: number, col: GridColumn<Row>): string => {
       const row = rows[rowIdx];
       if (row === undefined) return '';
+      if (isMissing(rowIdx, col.key)) return '';
       const value = col.getValue(row, rowIdx);
       return col.format ? col.format(value, row) : String(value ?? '');
     },
-    [rows],
+    [rows, isMissing],
   );
 
   const parseForColumn = useCallback(
@@ -415,7 +449,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const row = rows[rowIdx];
       // Seed with the FULL-PRECISION value (not the rounded display string), so
       // open+commit can never silently rewrite stored data at display precision.
-      const initial = row === undefined ? '' : formatEditValue(col.getValue(row, rowIdx), locale);
+      const initial =
+        row === undefined || isMissing(rowIdx, col.key) ? '' : formatEditValue(col.getValue(row, rowIdx), locale);
       const cell = { row: rowIdx, colKey: col.key };
       // The edited cell becomes the sole active selection, so the editor and the
       // selection overlay always coincide (e.g. on double-click).
@@ -425,7 +460,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       suppressBlurCommitRef.current = false; // a stale flag must not eat this session's blur-commit
       setEditing({ row: rowIdx, colKey: col.key, draft: seed ?? initial, initial });
     },
-    [colAt, cellEditable, rows, locale],
+    [colAt, cellEditable, rows, locale, isMissing],
   );
 
   // Commit the editor's draft. Side effects run OUTSIDE setEditing (a state
@@ -451,7 +486,23 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         return;
       }
       setEditing(null);
-      if (col && value !== undefined) onEdit(cur.row, cur.colKey, value);
+      if (col && value === undefined && dirty && cur.draft.trim() === '' && col.kind === 'number') {
+        // Required cell emptied via the editor: keep the model value, show the
+        // cell as missing (same rule as Delete).
+        const k = missKey(cur.row, cur.colKey);
+        if (k !== null) markMissing([k]);
+      }
+      if (col && value !== undefined) {
+        const k = missKey(cur.row, cur.colKey);
+        if (k !== null && missingCells.has(k)) {
+          setMissingCells((prev) => {
+            const next = new Set(prev);
+            next.delete(k);
+            return next;
+          });
+        }
+        onEdit(cur.row, cur.colKey, value);
+      }
       if (advance) {
         const t = arrowTarget(cur.row, colIdx, advance === 'down' ? 1 : -1, 0, rowCount, colCount);
         moveFocusTo(t.row, t.colIdx, false);
@@ -464,7 +515,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         scrollRef.current?.focus({ preventScroll: true });
       }
     },
-    [editing, colIndexOf, colAt, parseForColumn, rows, flashInvalid, onEdit, rowCount, colCount, moveFocusTo],
+    [editing, colIndexOf, colAt, parseForColumn, rows, flashInvalid, onEdit, rowCount, colCount, moveFocusTo, missKey, markMissing, missingCells],
   );
 
   // Refocusing the scroller (from commitEdit or cancelEdit) blurs the still-
@@ -574,6 +625,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const applyEdits = useCallback(
     (edits: CellEdit[]) => {
       if (edits.length === 0) return;
+      // A committed value clears the cell's "missing" mark.
+      setMissingCells((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        for (const e of edits) {
+          const k = missKey(e.row, e.colKey);
+          if (k !== null) next.delete(k);
+        }
+        return next.size === prev.size ? prev : next;
+      });
       if (edits.length === 1 && edits[0]) {
         onEdit(edits[0].row, edits[0].colKey, edits[0].value);
       } else if (onBatchEdit) {
@@ -582,7 +643,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         for (const e of edits) onEdit(e.row, e.colKey, e.value);
       }
     },
-    [onEdit, onBatchEdit],
+    [onEdit, onBatchEdit, missKey],
   );
 
   const pasteText = useCallback(
@@ -795,19 +856,26 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   const doClear = useCallback(() => {
     const edits: CellEdit[] = [];
+    const missing: string[] = [];
     for (let r = rect.r0; r <= rect.r1; r++) {
       for (let c = rect.c0; c <= rect.c1; c++) {
         const col = colAt(c);
         if (!col || !cellEditable(r, col)) continue;
-        // Route through the column's coercion: number → undefined (skip, never
-        // write 0), number-nullable → null, text/custom-parse → its empty value.
+        // Route through the column's coercion: number → undefined (required —
+        // never write 0; mark the cell as missing instead), number-nullable →
+        // null, text/custom-parse → its empty value.
         const value = parseForColumn(col, '', r);
-        if (value === undefined) continue;
+        if (value === undefined) {
+          const k = missKey(r, col.key);
+          if (k !== null) missing.push(k);
+          continue;
+        }
         edits.push({ row: r, colKey: col.key, value });
       }
     }
+    markMissing(missing);
     applyEdits(edits);
-  }, [rect, colAt, cellEditable, parseForColumn, applyEdits]);
+  }, [rect, colAt, cellEditable, parseForColumn, applyEdits, missKey, markMissing]);
 
   // --- Keyboard -------------------------------------------------------------
   const onKeyDown = useCallback(
@@ -1148,6 +1216,22 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
     },
     [rect, colCount, onMoveRows, selection.anchor.row, selectRowRange, colKeys, onActiveCellChange],
+  );
+
+  // Right-click on the gutter: select that row (unless it's already inside the
+  // current gutter selection) and open the grid context menu — its Copy/Cut/
+  // Paste/Clear/Delete-rows entries then apply to the row(s).
+  const onGutterContextMenu = useCallback(
+    (rowIdx: number, e: ReactMouseEvent) => {
+      e.preventDefault();
+      scrollRef.current?.focus({ preventScroll: true });
+      const fullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
+      if (!(fullRows && rowSelectIntent.current && rowIdx >= rect.r0 && rowIdx <= rect.r1)) {
+        selectRowRange(rowIdx, rowIdx);
+      }
+      setCtxMenu({ x: e.clientX, y: e.clientY });
+    },
+    [rect, colCount, selectRowRange],
   );
 
   const onGutterMouseEnter = useCallback(
@@ -1723,6 +1807,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 }}
                 onMouseDown={(e) => onHeaderMouseDown(i, e)}
                 onMouseEnter={() => onHeaderMouseEnter(i)}
+                onContextMenu={(e) => {
+                  if (!onHeaderContextMenu) return;
+                  e.preventDefault();
+                  onHeaderContextMenu(c.key, { x: e.clientX, y: e.clientY });
+                }}
                 data-testid={`grid-header-${c.key}`}
               >
                 <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{c.header}</span>
@@ -1777,6 +1866,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     data-testid={`grid-gutter-${rowIdx}`}
                     onMouseDown={(e) => onGutterMouseDown(rowIdx, e)}
                     onMouseEnter={() => onGutterMouseEnter(rowIdx)}
+                    onContextMenu={(e) => onGutterContextMenu(rowIdx, e)}
                   >
                     {rowLabel ? rowLabel(row, rowIdx) : rowIdx + 1}
                   </div>
@@ -1784,7 +1874,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     const inSel = isInRect(rect, rowIdx, c);
                     const isActive = rowIdx === selection.active.row && c === activeColIdx;
                     const isEditingCell = editing?.row === rowIdx && editing.colKey === col.key;
-                    const cellText = col.render
+                    const missing = isMissing(rowIdx, col.key);
+                    const cellText = col.render || missing
                       ? null
                       : col.format
                         ? col.format(col.getValue(row, rowIdx), row)
@@ -1798,7 +1889,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         aria-selected={inSel}
                         className={`sg-cell flex items-center overflow-hidden border-b border-r border-white/5 px-2 text-xs ${
                           col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''
-                        }`}
+                        }${missing ? ' sg-cell-missing' : ''}`}
                         style={{
                           width: widths[c],
                           minWidth: widths[c],
