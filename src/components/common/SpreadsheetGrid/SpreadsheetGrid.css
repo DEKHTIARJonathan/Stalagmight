@@ -77,17 +77,20 @@
 .sg-row-frozen .sg-cell {
   background: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
 }
-/* A cell whose column is editable but which is locked on THIS row (frozen
-   geometry, read-only mode): dimmed text + a not-allowed cursor. */
-.sg-grid .sg-cell-locked {
-  color: var(--cc-text-secondary);
-  cursor: not-allowed;
-}
 /* Externally-hovered row (e.g. the shot hovered on the map) — faint accent
    tint. Selection visuals render in overlays above the cells, so this never
    masks them. Declared after the frozen tint so hover wins on frozen rows. */
 .sg-row-hover .sg-cell {
   background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
+}
+/* A cell that cannot be edited while the grid as a whole can (read-only
+   column, frozen geometry, read-only mode): visibly recessed — darker
+   background, dimmed text, not-allowed cursor. Declared after the row tints
+   so the recess survives frozen/hover backgrounds. */
+.sg-grid .sg-cell-locked {
+  background: color-mix(in srgb, var(--cc-background) 60%, var(--cc-panel));
+  color: var(--cc-text-secondary);
+  cursor: not-allowed;
 }
 
 /* A required cell the user emptied: the model keeps its value, the cell shows

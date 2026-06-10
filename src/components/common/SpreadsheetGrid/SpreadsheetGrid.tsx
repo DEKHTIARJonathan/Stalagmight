@@ -237,6 +237,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   // --- State ----------------------------------------------------------------
   const firstWritable = writableColIdxs[0] ?? 0;
+  const gridHasWritableColumns = writableColIdxs.length > 0;
   const [selection, setSelection] = useState<GridSelection>(() => {
     const key = colKeys[firstWritable] ?? colKeys[0] ?? '';
     const c = { row: 0, colKey: key };
@@ -1984,9 +1985,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     const isActive = rowIdx === selection.active.row && c === activeColIdx;
                     const isEditingCell = editing?.row === rowIdx && editing.colKey === col.key;
                     const missing = isMissing(rowIdx, col.key);
-                    // Editable column, but locked on this row (frozen geometry,
-                    // read-only mode) — visibly distinct from plain data cells.
-                    const locked = isColWritable(col) && !cellEditable(rowIdx, col);
+                    // Any cell that can't be edited while the grid has editable
+                    // columns at all (read-only column, frozen geometry,
+                    // read-only mode) reads as visibly locked. Fully read-only
+                    // grids (the raw viewer) stay uniform instead.
+                    const locked = gridHasWritableColumns && !cellEditable(rowIdx, col);
                     const extraCellClass = cellClassName?.(row, rowIdx, col.key);
                     const cellText = col.render || missing
                       ? null
