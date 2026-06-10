@@ -587,7 +587,11 @@ export default function DataTable({ sections }: DataTableProps) {
           inclinationMode,
         },
         { purpose: 'persist data-table view state' }
-      ).catch((e) => console.error('Failed to save data-table view state:', e));
+      )
+        // Re-sync the in-memory config: a remount re-seeds from it, so a stale
+        // copy would silently revert what was just saved to disk.
+        .then(() => useProjectStore.getState().loadConfig())
+        .catch((e) => console.error('Failed to save data-table view state:', e));
     }, 500);
     return () => clearTimeout(timer);
   }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode]);

@@ -180,6 +180,31 @@ fn test_get_config_defaults_panels() {
 }
 
 #[test]
+fn test_update_data_table_view_roundtrip() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        config::update_data_table_view_impl(
+            state(&app).inner(),
+            Some(vec!["length".to_string(), "_azimuth_avg".to_string()]),
+            Some(vec!["left".to_string(), "right".to_string(), "up".to_string(), "down".to_string()]),
+            Some("inout".to_string()),
+            None,
+        )
+        .expect("update data-table view");
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.panels.data_table_shot_column_order, vec!["length", "_azimuth_avg"]);
+        assert_eq!(cfg.panels.data_table_shot_hidden_columns, vec!["left", "right", "up", "down"]);
+        assert_eq!(cfg.panels.data_table_azimuth_mode, "inout");
+        // untouched field keeps its default
+        assert_eq!(cfg.panels.data_table_inclination_mode, "off");
+        // invalid mode is rejected, config untouched
+        let err = config::update_data_table_view_impl(state(&app).inner(), None, None, Some("sideways".to_string()), None);
+        assert!(err.is_err());
+        assert_eq!(config::get_config(state(&app)).panels.data_table_azimuth_mode, "inout");
+    });
+}
+
+#[test]
 fn test_get_config_defaults_validation() {
     // Same isolation as above: defaults must not depend on the real config.
     with_config_lock(|| {
