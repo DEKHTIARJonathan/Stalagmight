@@ -1204,6 +1204,11 @@
       "idShort": "ID",
       "length": "Len ({{unit}})",
       "azimuthShort": "Az",
+      "azimuthInShort": "Az In",
+      "azimuthOutShort": "Az Out",
+      "inclinationShort": "Incl",
+      "pitchInShort": "Incl In",
+      "pitchOutShort": "Incl Out",
       "depthIn": "Depth In",
       "depthOut": "Depth Out",
       "leftShort": "L",
@@ -1211,7 +1216,26 @@
       "upShort": "U",
       "downShort": "D",
       "referenceShort": "J/R",
-      "comment": "Comment"
+      "comment": "Comment",
+      "sectionIdShort": "Sec ID",
+      "shotIdShort": "Shot ID"
+    },
+    "columnsMenu": {
+      "button": "Choose visible columns",
+      "warnings": "Warnings",
+      "length": "Length",
+      "azimuth": "Azimuth",
+      "inclination": "Inclination",
+      "avg": "Avg",
+      "inOut": "In+Out",
+      "off": "Off",
+      "depthIn": "Depth in",
+      "depthOut": "Depth out",
+      "lrud": "LRUD",
+      "reference": "Jump/Reference",
+      "comment": "Comment",
+      "sectionId": "Section ID",
+      "shotId": "Shot ID"
     },
     "viewShots": "Shots",
     "viewStations": "Stations",
@@ -1229,6 +1253,7 @@
     "validation": {
       "nonPositiveLength": "Length must be greater than 0",
       "azimuthRange": "Azimuth must be between 0 and 360",
+      "pitchRange": "Inclination must be between -90 and 90",
       "negativeLrud": "Passage dimension cannot be negative"
     },
     "selectSection": "Select a section to view shots.",

@@ -8,14 +8,14 @@ import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
-import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
+import { DotIcon, EyeIcon, LinkIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId } from '../../utils/formatters';
 import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
 import { buildShotColumns } from './dataTableShotColumns';
-import { buildShotUpdates, buildShotUpdateBatch } from './dataTableEdits';
+import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
@@ -50,7 +50,6 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredShot,
     triggerPanToShot,
     dataTableOpen,
-    toggleDataTable,
     dataTableHeight,
     announceSelection,
     setHoveredSectionId,
@@ -65,7 +64,6 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredShot: s.hoveredShot,
     triggerPanToShot: s.triggerPanToShot,
     dataTableOpen: s.dataTableOpen,
-    toggleDataTable: s.toggleDataTable,
     dataTableHeight: s.dataTableHeight,
     announceSelection: s.announceSelection,
     setHoveredSectionId: s.setHoveredSectionId,
@@ -596,6 +594,53 @@ export default function DataTable({ sections }: DataTableProps) {
   // session-local for now, not persisted in config. Empty = declaration order.
   const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
 
+  // Column visibility (session-local). Azimuth/inclination are tri-state —
+  // the average column, the in/out leg pair, or neither; the raw ID columns
+  // start hidden; L/R/U/D toggle as one LRUD group.
+  const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
+  const [inclinationMode, setInclinationMode] = useState<'avg' | 'inout' | 'off'>('off');
+  const [hiddenShotCols, setHiddenShotCols] = useState<ReadonlySet<string>>(
+    () => new Set(['section_id', 'shot_id'])
+  );
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+
+  const shotHiddenColumns = useMemo(() => {
+    const hidden = [...hiddenShotCols];
+    if (azimuthMode !== 'avg') hidden.push(AZIMUTH_AVG_KEY);
+    if (azimuthMode !== 'inout') hidden.push('azimuth_in', 'azimuth_out');
+    if (inclinationMode !== 'avg') hidden.push(PITCH_AVG_KEY);
+    if (inclinationMode !== 'inout') hidden.push('pitch_in', 'pitch_out');
+    return hidden;
+  }, [hiddenShotCols, azimuthMode, inclinationMode]);
+
+  // Toggle a column (or a whole group, e.g. LRUD): visible iff none of its
+  // keys are hidden, so a mixed group resolves to "show all" first.
+  const toggleShotCols = useCallback((keys: string[]) => {
+    setHiddenShotCols((prev) => {
+      const next = new Set(prev);
+      const visible = keys.every((k) => !prev.has(k));
+      for (const k of keys) {
+        if (visible) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!colMenuOpen) return undefined;
+    const close = () => setColMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setColMenuOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [colMenuOpen]);
+
   // The grid must fit the panel body EXACTLY: taller and the wrapper clips it
   // (occluded horizontal scrollbar) or grows a second scrollbar. Measure the
   // body instead of hand-summing chrome heights; the observer also tracks the
@@ -611,6 +656,52 @@ export default function DataTable({ sections }: DataTableProps) {
     return () => ro.disconnect();
   }, [dataTableOpen]);
   const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
+
+  // Rows of the column-visibility menu: a checkbox per column (or group — the
+  // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
+  // the azimuth and inclination column families.
+  const colCheckRow = (keys: string[], label: string) => (
+    <label
+      key={keys[0]}
+      className="flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10"
+    >
+      <input
+        type="checkbox"
+        checked={keys.every((k) => !hiddenShotCols.has(k))}
+        onChange={() => toggleShotCols(keys)}
+        data-testid={`col-vis-${keys[0]}`}
+      />
+      {label}
+    </label>
+  );
+  const angleModeRow = (
+    label: string,
+    mode: 'avg' | 'inout' | 'off',
+    setMode: (m: 'avg' | 'inout' | 'off') => void,
+    testId: string,
+  ) => (
+    <div className="flex items-center justify-between gap-2 px-2 py-0.5">
+      <span>{label}</span>
+      <span className="flex overflow-hidden rounded border border-border">
+        {(['avg', 'inout', 'off'] as const).map((m) => (
+          <button
+            key={m}
+            className={`px-1.5 py-0.5 ${
+              mode === m ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
+            }`}
+            onClick={() => setMode(m)}
+            data-testid={`${testId}-${m}`}
+          >
+            {m === 'avg'
+              ? t('dataTable.columnsMenu.avg')
+              : m === 'inout'
+                ? t('dataTable.columnsMenu.inOut')
+                : t('dataTable.columnsMenu.off')}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
 
   return (
     <div
@@ -665,15 +756,36 @@ export default function DataTable({ sections }: DataTableProps) {
             </button>
           ))}
         </div>
-        <button
-          onClick={toggleDataTable}
-          className="text-text-secondary hover:text-text transition-transform duration-200"
-          style={{ transform: dataTableOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-          title={dataTableOpen ? t('dataTable.toggle.collapse') : t('dataTable.toggle.expand')}
-          data-testid="data-table-toggle"
-        >
-          <ChevronDownIcon size={14} />
-        </button>
+        {/* Column-visibility menu; inside clicks must not reach the window
+            mousedown listener that closes it. */}
+        <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => setColMenuOpen((v) => !v)}
+            className={colMenuOpen ? 'text-text' : 'text-text-secondary hover:text-text'}
+            title={t('dataTable.columnsMenu.button')}
+            data-testid="data-table-columns-menu"
+          >
+            <EyeIcon size={14} />
+          </button>
+          {colMenuOpen && (
+            <div
+              className="absolute right-0 top-full z-50 mt-1 w-48 rounded border border-border bg-panel p-1 shadow-lg"
+              data-testid="data-table-columns-dropdown"
+            >
+              {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
+              {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
+              {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, setAzimuthMode, 'col-azimuth')}
+              {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, setInclinationMode, 'col-inclination')}
+              {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'))}
+              {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'))}
+              {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
+              {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
+              {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
+              {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
+              {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Table - only render when open for performance. The shots grid scrolls
@@ -702,6 +814,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 gutterWidth={72}
                 showToolbar={false}
                 onSelectionChange={setGridSel}
+                hiddenColumns={shotHiddenColumns}
                 columnOrder={shotColumnOrder}
                 onColumnOrderChange={setShotColumnOrder}
               />

@@ -16,10 +16,15 @@ import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
 
 /** Virtual column key for the displayed average azimuth (not a real shot field). */
 export const AZIMUTH_AVG_KEY = '_azimuth_avg';
+/** Virtual column key for the displayed average inclination (pitch). */
+export const PITCH_AVG_KEY = '_pitch_avg';
 
 /** Build a ShotUpdates patch for one shot from its edits. The azimuth-average
- *  column rotates both legs by (newMean - currentMean); a non-finite new mean is
- *  skipped. All other column keys are real shot fields, assigned directly. */
+ *  column rotates both legs by (newMean - currentMean); the pitch-average column
+ *  shifts both legs the same way when both are present, otherwise it sets the
+ *  present leg (or both, when neither is) to the typed value. A non-finite new
+ *  mean is skipped. All other column keys are real shot fields, assigned
+ *  directly. */
 export function buildShotUpdates(
   shot: Shot,
   edits: { colKey: string; value: unknown }[],
@@ -32,6 +37,21 @@ export function buildShotUpdates(
       const delta = newMean - circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
       updates.azimuth_in = normalizeAngle(shot.azimuth_in + delta);
       updates.azimuth_out = normalizeAngle(shot.azimuth_out + delta);
+    } else if (colKey === PITCH_AVG_KEY) {
+      const newMean = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(newMean)) continue;
+      const pitchIn = shot.pitch_in;
+      const pitchOut = shot.pitch_out;
+      if (typeof pitchIn === 'number' && typeof pitchOut === 'number') {
+        // Pitch doesn't wrap, so no normalization; the column's validate
+        // rejects means that would push a leg outside ±90.
+        const delta = newMean - (pitchIn + pitchOut) / 2;
+        updates.pitch_in = pitchIn + delta;
+        updates.pitch_out = pitchOut + delta;
+      } else {
+        if (typeof pitchIn === 'number' || typeof pitchOut !== 'number') updates.pitch_in = newMean;
+        if (typeof pitchOut === 'number' || typeof pitchIn !== 'number') updates.pitch_out = newMean;
+      }
     } else {
       (updates as Record<string, unknown>)[colKey] = value;
     }

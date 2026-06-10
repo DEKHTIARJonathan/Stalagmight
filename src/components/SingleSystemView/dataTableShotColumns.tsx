@@ -16,15 +16,25 @@ import { AlertCircleIcon, AlertTriangleIcon, DotIcon, LockIcon } from '../common
 import { circularMeanDegrees } from '../../utils/angles';
 import { formatFixed } from '../../i18n/format';
 import type { ProjectWarning } from '../../types/commands';
-import { AZIMUTH_AVG_KEY } from './dataTableEdits';
+import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 
 /** Columns whose edits touch the adjusted centerline geometry → locked on a frozen
  *  shot (matches the Rust `ShotUpdates::touches_geometry` set, minus LRUD). */
-const FROZEN_LOCKED = new Set<string>(['length', AZIMUTH_AVG_KEY, 'depth_in', 'depth_out']);
+const FROZEN_LOCKED = new Set<string>([
+  'length',
+  AZIMUTH_AVG_KEY,
+  'azimuth_in',
+  'azimuth_out',
+  PITCH_AVG_KEY,
+  'pitch_in',
+  'pitch_out',
+  'depth_in',
+  'depth_out',
+]);
 
 export interface ShotColumnContext {
   t: TFunction;
-  precision: { length: number; azimuth: number; depth: number };
+  precision: { length: number; azimuth: number; depth: number; inclination: number };
   sectionId: number | null;
   geometryReadOnly: boolean;
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
@@ -80,6 +90,32 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
     validate: (v) => (typeof v === 'number' && v < 0 ? t('dataTable.validation.negativeLrud') : null),
   });
 
+  const azimuthLegCol = (key: 'azimuth_in' | 'azimuth_out', header: string): GridColumn<Shot> => ({
+    key,
+    header,
+    width: 70,
+    align: 'right',
+    kind: 'number',
+    getValue: (r) => r[key],
+    format: fixed(precision.azimuth),
+    editable: true,
+    isEditable: editableUnlessFrozenGeometry(key),
+    validate: (v) => (typeof v === 'number' && (v < 0 || v >= 360) ? t('dataTable.validation.azimuthRange') : null),
+  });
+
+  const pitchLegCol = (key: 'pitch_in' | 'pitch_out', header: string): GridColumn<Shot> => ({
+    key,
+    header,
+    width: 70,
+    align: 'right',
+    kind: 'number-nullable',
+    getValue: (r) => r[key],
+    format: fixed(precision.inclination),
+    editable: true,
+    isEditable: editableUnlessFrozenGeometry(key),
+    validate: (v) => (typeof v === 'number' && (v < -90 || v > 90) ? t('dataTable.validation.pitchRange') : null),
+  });
+
   return [
     {
       key: '_warnings',
@@ -129,6 +165,40 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       isEditable: editableUnlessFrozenGeometry(AZIMUTH_AVG_KEY),
       validate: (v) => (typeof v === 'number' && (v < 0 || v >= 360) ? t('dataTable.validation.azimuthRange') : null),
     },
+    azimuthLegCol('azimuth_in', t('dataTable.columns.azimuthInShort')),
+    azimuthLegCol('azimuth_out', t('dataTable.columns.azimuthOutShort')),
+    {
+      key: PITCH_AVG_KEY,
+      header: t('dataTable.columns.inclinationShort'),
+      width: 70,
+      align: 'right',
+      kind: 'number',
+      // Mean of the present legs; a single present leg IS the mean, no legs → blank.
+      getValue: (r) =>
+        typeof r.pitch_in === 'number' && typeof r.pitch_out === 'number'
+          ? (r.pitch_in + r.pitch_out) / 2
+          : r.pitch_in ?? r.pitch_out ?? null,
+      format: fixed(precision.inclination),
+      editable: true,
+      isEditable: editableUnlessFrozenGeometry(PITCH_AVG_KEY),
+      // Reject means outside ±90, and means whose delta would push a leg past ±90
+      // (pitch doesn't wrap like azimuth).
+      validate: (v, r) => {
+        if (typeof v !== 'number') return null;
+        if (v < -90 || v > 90) return t('dataTable.validation.pitchRange');
+        if (typeof r.pitch_in === 'number' && typeof r.pitch_out === 'number') {
+          const delta = v - (r.pitch_in + r.pitch_out) / 2;
+          const movedIn = r.pitch_in + delta;
+          const movedOut = r.pitch_out + delta;
+          if (movedIn < -90 || movedIn > 90 || movedOut < -90 || movedOut > 90) {
+            return t('dataTable.validation.pitchRange');
+          }
+        }
+        return null;
+      },
+    },
+    pitchLegCol('pitch_in', t('dataTable.columns.pitchInShort')),
+    pitchLegCol('pitch_out', t('dataTable.columns.pitchOutShort')),
     numberCol('depth_in', t('dataTable.columns.depthIn'), 80, precision.depth),
     numberCol('depth_out', t('dataTable.columns.depthOut'), 95, precision.depth),
     lrudCol('left', t('dataTable.columns.leftShort')),
@@ -169,6 +239,22 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       editable: true,
       isEditable: editableUnlessFrozenGeometry('comment'), // not locked on frozen
       parse: (raw) => (raw.trim() === '' ? null : raw), // empty/whitespace clears to null
+    },
+    // Raw identifiers (read-only, hidden by default) — for cross-referencing and
+    // copying out alongside the data.
+    {
+      key: 'section_id',
+      header: t('dataTable.columns.sectionIdShort'),
+      width: 60,
+      align: 'right',
+      getValue: () => sectionId ?? '',
+    },
+    {
+      key: 'shot_id',
+      header: t('dataTable.columns.shotIdShort'),
+      width: 60,
+      align: 'right',
+      getValue: (r) => r.id,
     },
   ];
 }

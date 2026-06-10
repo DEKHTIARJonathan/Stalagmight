@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY } from '../dataTableEdits';
+import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from '../dataTableEdits';
 import type { Shot } from '../../../types/project';
 
 const shot = (over: Partial<Shot> = {}): Shot => ({
@@ -53,6 +53,31 @@ describe('buildShotUpdates', () => {
     ]);
     expect(u.azimuth_in).toBeCloseTo(355, 6);
     expect(u.azimuth_out).toBeCloseTo(15, 6);
+  });
+
+  it('shifts both pitch legs by the delta when both are present', () => {
+    // mean of (10,30) = 20; new mean 25 → +5 to each leg.
+    const u = buildShotUpdates(shot({ pitch_in: 10, pitch_out: 30 }), [
+      { colKey: PITCH_AVG_KEY, value: 25 },
+    ]);
+    expect(u.pitch_in).toBeCloseTo(15, 6);
+    expect(u.pitch_out).toBeCloseTo(35, 6);
+  });
+
+  it('sets the single present pitch leg to the typed mean', () => {
+    const u = buildShotUpdates(shot({ pitch_in: 10, pitch_out: null }), [
+      { colKey: PITCH_AVG_KEY, value: -5 },
+    ]);
+    expect(u).toEqual({ pitch_in: -5 });
+  });
+
+  it('sets both pitch legs when neither is present', () => {
+    const u = buildShotUpdates(shot(), [{ colKey: PITCH_AVG_KEY, value: 12 }]);
+    expect(u).toEqual({ pitch_in: 12, pitch_out: 12 });
+  });
+
+  it('skips a non-finite pitch average', () => {
+    expect(buildShotUpdates(shot(), [{ colKey: PITCH_AVG_KEY, value: 'abc' }])).toEqual({});
   });
 });
 
