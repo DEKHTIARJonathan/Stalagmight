@@ -164,7 +164,9 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       header: t('dataTable.columns.shotIdShort'),
       width: 60,
       align: 'right',
-      getValue: (r) => r.id,
+      // The shot sub-portion of the displayed id — the 1-based position after
+      // the ':' in the pill, not the internal row id.
+      getValue: (_r, rowIndex) => rowIndex + 1,
     },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>
       typeof v === 'number' && v <= 0 ? t('dataTable.validation.nonPositiveLength') : null,

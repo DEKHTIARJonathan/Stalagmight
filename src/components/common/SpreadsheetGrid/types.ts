@@ -27,7 +27,7 @@ export interface GridColumn<Row> {
   align?: 'left' | 'center' | 'right';
 
   /** Read the cell's logical value from a row. */
-  getValue: (row: Row) => unknown;
+  getValue: (row: Row, rowIndex: number) => unknown;
   /** Format the value for display AND for the clipboard (so a copy round-trips
    *  into a same-locale spreadsheet). Defaults to `String(value ?? '')`. */
   format?: (value: unknown, row: Row) => string;

@@ -291,7 +291,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     (rowIdx: number, col: GridColumn<Row>): string => {
       const row = rows[rowIdx];
       if (row === undefined) return '';
-      const value = col.getValue(row);
+      const value = col.getValue(row, rowIdx);
       return col.format ? col.format(value, row) : String(value ?? '');
     },
     [rows],
@@ -385,7 +385,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         const col = colAt(ci);
         const data = rows[r];
         if (!col || data === undefined) return true;
-        const v = col.getValue(data);
+        const v = col.getValue(data, r);
         return v == null || v === '';
       };
       let i = vertical ? startRow : startColIdx;
@@ -414,7 +414,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const row = rows[rowIdx];
       // Seed with the FULL-PRECISION value (not the rounded display string), so
       // open+commit can never silently rewrite stored data at display precision.
-      const initial = row === undefined ? '' : formatEditValue(col.getValue(row), locale);
+      const initial = row === undefined ? '' : formatEditValue(col.getValue(row, rowIdx), locale);
       const cell = { row: rowIdx, colKey: col.key };
       // The edited cell becomes the sole active selection, so the editor and the
       // selection overlay always coincide (e.g. on double-click).
@@ -545,7 +545,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const line: unknown[] = [];
       for (let c = rect.c0; c <= rect.c1; c++) {
         const col = colAt(c);
-        line.push(col && data !== undefined ? col.getValue(data) : undefined);
+        line.push(col && data !== undefined ? col.getValue(data, r) : undefined);
       }
       values.push(line);
     }
@@ -734,7 +734,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (!cellEditable(dstRow, dstCol)) return;
         const data = rows[srcRow];
         if (data === undefined) return;
-        const value = transferValue(srcCol.getValue(data), srcCol.key, dstCol, dstRow);
+        const value = transferValue(srcCol.getValue(data, srcRow), srcCol.key, dstCol, dstRow);
         if (value !== undefined) edits.push({ row: dstRow, colKey: dstCol.key, value });
       };
       const vertical = preview.r1 > rect.r1 || preview.r0 < rect.r0;
@@ -784,7 +784,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         const srcCol = colAt(f.srcColIdx);
         const data = rows[f.srcRow];
         if (!col || !srcCol || data === undefined || !cellEditable(f.row, col)) continue;
-        const value = transferValue(srcCol.getValue(data), srcCol.key, col, f.row);
+        const value = transferValue(srcCol.getValue(data, f.srcRow), srcCol.key, col, f.row);
         if (value !== undefined) edits.push({ row: f.row, colKey: col.key, value });
       }
       applyEdits(edits);
@@ -1192,7 +1192,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     for (let r = rect.r1 + 1; r < rowCount; r++) {
       const data = rows[r];
       if (!data) break;
-      const v = guide.getValue(data);
+      const v = guide.getValue(data, r);
       if (v == null || v === '') break;
       end = r;
     }
@@ -1250,7 +1250,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const vals: unknown[][] = [];
       for (let dr = 0; dr <= h; dr++) {
         const data = rows[src.r0 + dr];
-        vals.push(srcCols.map((col) => (col && data !== undefined ? col.getValue(data) : undefined)));
+        vals.push(srcCols.map((col) => (col && data !== undefined ? col.getValue(data, src.r0 + dr) : undefined)));
       }
       const edits: CellEdit[] = [];
       const written = new Set<string>(); // destination cells written
@@ -1766,8 +1766,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     const cellText = col.render
                       ? null
                       : col.format
-                        ? col.format(col.getValue(row), row)
-                        : String(col.getValue(row) ?? '');
+                        ? col.format(col.getValue(row, rowIdx), row)
+                        : String(col.getValue(row, rowIdx) ?? '');
                     return (
                       <div
                         key={col.key}
