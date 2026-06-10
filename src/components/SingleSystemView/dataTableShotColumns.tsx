@@ -39,6 +39,9 @@ export interface ShotColumnContext {
   geometryReadOnly: boolean;
   isShotFrozen: (sectionId: number, shotIndex: number) => boolean;
   getShotWarnings: (sectionId: number, shotId: number) => ProjectWarning[];
+  /** Map a grid row index to its index in the section's shots array — `null`
+   *  for draft rows (grid rows interleave drafts with the real shots). */
+  shotIndexAt: (gridRowIndex: number) => number | null;
   /** Toggle a shot's reference flag (the inline dot control). */
   onToggleReference: (shot: Shot) => void;
 }
@@ -47,14 +50,18 @@ const fixed = (precision: number) => (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value) ? formatFixed(value, undefined, precision) : '';
 
 export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
-  const { t, precision, sectionId, geometryReadOnly, isShotFrozen, getShotWarnings } = ctx;
+  const { t, precision, sectionId, geometryReadOnly, isShotFrozen, getShotWarnings, shotIndexAt } = ctx;
 
   // Editable iff the view is writable AND (non-geometry, or a non-frozen shot).
+  // Draft rows (no shot index) are always editable.
   const editableUnlessFrozenGeometry =
     (key: string) =>
     (_row: Shot, rowIndex: number): boolean => {
       if (geometryReadOnly) return false;
-      if (FROZEN_LOCKED.has(key) && sectionId !== null) return !isShotFrozen(sectionId, rowIndex);
+      if (FROZEN_LOCKED.has(key) && sectionId !== null) {
+        const shotIndex = shotIndexAt(rowIndex);
+        return shotIndex === null || !isShotFrozen(sectionId, shotIndex);
+      }
       return true;
     };
 
@@ -125,7 +132,9 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       getValue: () => '',
       render: (shot, index): ReactNode => {
         if (sectionId === null) return null;
-        const frozen = isShotFrozen(sectionId, index);
+        const shotIndex = shotIndexAt(index);
+        if (shotIndex === null) return null; // draft rows carry no warnings/frozen state
+        const frozen = isShotFrozen(sectionId, shotIndex);
         const shotWarnings = getShotWarnings(sectionId, shot.id).filter((w) => !w.isResolved);
         if (shotWarnings.length === 0 && !frozen) return null;
         const hasError = shotWarnings.some((w) => w.severity === 'error');
@@ -165,8 +174,11 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       width: 60,
       align: 'right',
       // The shot sub-portion of the displayed id — the 1-based position after
-      // the ':' in the pill, not the internal row id.
-      getValue: (_r, rowIndex) => rowIndex + 1,
+      // the ':' in the pill, not the internal row id. Drafts have none yet.
+      getValue: (_r, rowIndex) => {
+        const shotIndex = shotIndexAt(rowIndex);
+        return shotIndex === null ? '' : shotIndex + 1;
+      },
     },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>
       typeof v === 'number' && v <= 0 ? t('dataTable.validation.nonPositiveLength') : null,
