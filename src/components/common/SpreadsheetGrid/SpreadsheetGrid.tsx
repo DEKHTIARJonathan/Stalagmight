@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -252,6 +253,18 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const [invalidCell, setInvalidCell] = useState<CellCoord | null>(null); // rejected-edit flash
   const invalidTimer = useRef<number | undefined>(undefined);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement | null>(null);
+  // Open toward the available space: measured after render (pre-paint), the
+  // menu flips above/left of the cursor when it would cross a viewport edge.
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!el || !ctxMenu) return;
+    const r = el.getBoundingClientRect();
+    let { x, y } = ctxMenu;
+    if (y + r.height > window.innerHeight) y = Math.max(4, y - r.height);
+    if (x + r.width > window.innerWidth) x = Math.max(4, x - r.width);
+    if (x !== ctxMenu.x || y !== ctxMenu.y) setCtxMenu({ x, y });
+  }, [ctxMenu]);
   // Header drag: 'select' extends a multi-column selection; 'move' reorders the
   // already-selected column block (Google-Sheets behaviour).
   const colDrag = useRef<{ mode: 'select' | 'move'; anchorCol: number; fromC0: number; fromC1: number } | null>(null);
@@ -2120,6 +2133,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
       {ctxMenu && (
         <div
+          ref={ctxMenuRef}
           className="sg-context-menu"
           data-testid="grid-context-menu"
           style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}

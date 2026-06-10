@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
@@ -493,6 +493,17 @@ export default function DataTable({ sections }: DataTableProps) {
   const [colMenuOpen, setColMenuOpen] = useState(false);
   // Right-click on a column header: hide it / switch the angle family's mode.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  // Flip the menu above/left of the cursor when it would cross a viewport edge.
+  useLayoutEffect(() => {
+    const el = headerMenuRef.current;
+    if (!el || !headerMenu) return;
+    const r = el.getBoundingClientRect();
+    let { x, y } = headerMenu;
+    if (y + r.height > window.innerHeight) y = Math.max(4, y - r.height);
+    if (x + r.width > window.innerWidth) x = Math.max(4, x - r.width);
+    if (x !== headerMenu.x || y !== headerMenu.y) setHeaderMenu({ ...headerMenu, x, y });
+  }, [headerMenu]);
   useEffect(() => {
     if (!headerMenu) return undefined;
     const close = () => setHeaderMenu(null);
@@ -1200,6 +1211,7 @@ export default function DataTable({ sections }: DataTableProps) {
       )}
       {headerMenu && (
         <div
+          ref={headerMenuRef}
           className="fixed z-50 w-44 rounded border border-border bg-panel p-1 text-xs shadow-lg"
           style={{ left: headerMenu.x, top: headerMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
