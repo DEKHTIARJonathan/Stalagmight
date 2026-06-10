@@ -22,14 +22,22 @@ integrated into `DataTable` later (see `docs/plans/issue-61-spreadsheet-editing.
   (off-screen rows unmount).
 - **Copy / cut / paste** single cells and ranges, including **paste from external
   spreadsheets** (TSV on the clipboard) with locale-aware number parsing,
-  1×1-fills-selection, integer-multiple tiling, and clip-to-bounds.
-- **Fill** down (Ctrl/Cmd+D) and right (Ctrl/Cmd+R) — copy-fill only (no numeric
+  1×1-fills-selection, integer-multiple tiling, and clip-to-bounds. A cut clears
+  its source on **paste** (Esc cancels it); pasting the grid's own copy moves the
+  raw values, so full numeric precision survives the display formatting.
+- **Fill** down (Ctrl/Cmd+D), right (Ctrl/Cmd+R), and via the drag fill-handle —
+  copy-fill only (the selection block is tiled across the extension; no numeric
   auto-series, deliberate for survey data).
 - **Delete/Backspace** clears the selection (never writes 0 into a required
   numeric column).
 - **Column hiding** (controlled `hiddenColumns`) and **reordering** (controlled
   `columnOrder`, header drag).
 - **Full-screen / maximized** mode (controlled `maximized` + `onToggleMaximize`).
+- **Host sync props**: `selectedRow` (moves the active cell to an externally
+  selected row, e.g. from the map; never loops back through
+  `onActiveCellChange`), `hoveredRow` (tints a row with `sg-row-hover`),
+  `rowClassName(row, i)` (extra per-row class, e.g. a frozen-row tint),
+  `scrollToRow`, and `onRowHover`. The active row carries `data-active="true"`.
 
 All edits are **coerced** (locale-aware) and emitted via callbacks; the grid never
 mutates your data. Multi-cell paste/fill/clear go through `onBatchEdit` so the
