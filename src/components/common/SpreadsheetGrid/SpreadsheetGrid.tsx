@@ -108,6 +108,9 @@ export interface SpreadsheetGridProps<Row> {
    *  column, switch column families, ...). The grid only prevents the native
    *  menu when this is set. */
   onHeaderContextMenu?: (colKey: string, pos: { x: number; y: number }) => void;
+  /** Domain noun for a row, used in context-menu labels ("Delete shot",
+   *  "Copy 3 shots"). Default: row/rows. */
+  rowNoun?: (count: number) => string;
   /** Fired whenever the selection rectangle or active cell changes (and once
    *  on mount) — lets a host render its own name-box/indicator. */
   onSelectionChange?: (sel: { rows: number; cols: number; activeRow: number; activeColKey: string }) => void;
@@ -134,10 +137,15 @@ const PRINTABLE = /^.$/u;
 
 /** Full-precision, group-free, locale-decimal string for editing/converting —
  *  must round-trip through parseLocaleNumber. */
-const formatEditValue = (value: unknown, locale: string): string =>
-  typeof value === 'number' && Number.isFinite(value)
-    ? new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 12 }).format(value)
-    : String(value ?? '');
+const formatEditValue = (value: unknown, locale: string): string => {
+  if (typeof value === 'number') {
+    // Non-finite (e.g. a draft row's unset field) edits as empty, never "NaN".
+    return Number.isFinite(value)
+      ? new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 12 }).format(value)
+      : '';
+  }
+  return String(value ?? '');
+};
 
 export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const {
@@ -164,6 +172,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
     showToolbar = true,
+    rowNoun = (count) => (count === 1 ? 'row' : 'rows'),
     onHeaderContextMenu,
     onSelectionChange,
     maximized = false,
@@ -1673,6 +1682,20 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // --- Render ---------------------------------------------------------------
   const virtualRows = virtualizer.getVirtualItems();
   const totalHeight = virtualizer.getTotalSize();
+  // Context-menu labels speak the host's language: full-row selections name
+  // the domain rows ("3 shots"), full-column selections name columns.
+  const ctxRowCount = rect.r1 - rect.r0 + 1;
+  const ctxColCount = rect.c1 - rect.c0 + 1;
+  const ctxFullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
+  const ctxFullCols = rect.r0 === 0 && rect.r1 === rowCount - 1 && rowCount > 1;
+  const ctxRowsLabel = ctxRowCount === 1 ? rowNoun(1) : `${ctxRowCount} ${rowNoun(ctxRowCount)}`;
+  const ctxShapeSuffix =
+    ctxFullRows && !ctxFullCols
+      ? ` ${ctxRowsLabel}`
+      : ctxFullCols && !ctxFullRows
+        ? ` ${ctxColCount === 1 ? 'column' : `${ctxColCount} columns`}`
+        : '';
+
   // Name box: active-cell reference, or selection size while a range is selected.
   const nameBox = multiCell
     ? `${rect.r1 - rect.r0 + 1}R × ${rect.c1 - rect.c0 + 1}C`
@@ -2098,27 +2121,27 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           style={{ position: 'fixed', top: ctxMenu.y, left: ctxMenu.x, zIndex: 60 }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>Copy<span className="sg-shortcut">Ctrl+C</span></button>
-          <button type="button" onClick={() => { void doCut(); setCtxMenu(null); }}>Cut<span className="sg-shortcut">Ctrl+X</span></button>
+          <button type="button" onClick={() => { void doCopy(); setCtxMenu(null); }}>{`Copy${ctxShapeSuffix}`}<span className="sg-shortcut">Ctrl+C</span></button>
+          <button type="button" onClick={() => { void doCut(); setCtxMenu(null); }}>{`Cut${ctxShapeSuffix}`}<span className="sg-shortcut">Ctrl+X</span></button>
           <button type="button" onClick={() => { void doPaste(); setCtxMenu(null); }}>Paste<span className="sg-shortcut">Ctrl+V</span></button>
           {(onInsertRows || onDeleteRows) && <div className="sg-context-sep" />}
           {onInsertRows && (
             <button type="button" onClick={() => { onInsertRows(rect.r0, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
-              {`Insert ${rect.r1 - rect.r0 + 1} row${rect.r1 > rect.r0 ? 's' : ''} above`}
+              {`Insert ${ctxRowsLabel} above`}
             </button>
           )}
           {onInsertRows && (
             <button type="button" onClick={() => { onInsertRows(rect.r1 + 1, rect.r1 - rect.r0 + 1); setCtxMenu(null); }}>
-              {`Insert ${rect.r1 - rect.r0 + 1} row${rect.r1 > rect.r0 ? 's' : ''} below`}
+              {`Insert ${ctxRowsLabel} below`}
             </button>
           )}
           {onDeleteRows && (
             <button type="button" onClick={() => { onDeleteRows(rect.r0, rect.r1); setCtxMenu(null); }}>
-              {`Delete ${rect.r1 - rect.r0 + 1} row${rect.r1 > rect.r0 ? 's' : ''}`}
+              {`Delete ${ctxRowsLabel}`}
             </button>
           )}
           <div className="sg-context-sep" />
-          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>Clear<span className="sg-shortcut">Del</span></button>
+          <button type="button" onClick={() => { doClear(); setCtxMenu(null); }}>{`Clear${ctxShapeSuffix}`}<span className="sg-shortcut">Del</span></button>
           <button type="button" onClick={() => { doFill(true); setCtxMenu(null); }}>Fill down<span className="sg-shortcut">Ctrl+D</span></button>
         </div>
       )}

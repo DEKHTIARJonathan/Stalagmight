@@ -27,6 +27,23 @@ interface DataTableProps {
 /** Sentinel id of the draft "new shot" row appended to the grid. */
 const DRAFT_SHOT_ID = -1;
 
+/** Header right-click hide targets: the clicked column's display name and the
+ *  key group it hides with (L/R/U/D hide together as LRUD). */
+const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = {
+  _warnings: { nameKey: 'warnings', keys: ['_warnings'] },
+  length: { nameKey: 'length', keys: ['length'] },
+  depth_in: { nameKey: 'depthIn', keys: ['depth_in'] },
+  depth_out: { nameKey: 'depthOut', keys: ['depth_out'] },
+  left: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  right: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  up: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  down: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  is_reference: { nameKey: 'reference', keys: ['is_reference'] },
+  comment: { nameKey: 'comment', keys: ['comment'] },
+  section_id: { nameKey: 'sectionId', keys: ['section_id'] },
+  shot_id: { nameKey: 'shotId', keys: ['shot_id'] },
+};
+
 const ANGLE_FAMILY_KEYS = {
   azimuth: { avg: [AZIMUTH_AVG_KEY], inout: ['azimuth_in', 'azimuth_out'] },
   inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'] },
@@ -683,6 +700,9 @@ export default function DataTable({ sections }: DataTableProps) {
     [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, handleToggleReference]
   );
 
+  // The grid's context menus speak in shots, not rows.
+  const shotNoun = useCallback((count: number) => t('dataTable.shotNoun', { count }), [t]);
+
   // Rows handed to the grid: the section's shots plus the draft row (hidden in
   // the read-only closure-adjusted view).
   const gridShotRows = useMemo(
@@ -814,6 +834,11 @@ export default function DataTable({ sections }: DataTableProps) {
   }, [dataTableOpen]);
   const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
 
+  // Unconditional hide (header right-click) — unlike the menu checkbox toggle.
+  const hideShotCols = useCallback((keys: string[]) => {
+    setHiddenShotCols((prev) => new Set([...prev, ...keys]));
+  }, []);
+
   // Switch an angle family's mode, putting the newly shown columns in the slot
   // of the ones they replace (Avg ↔ In+Out swap in place). Transitions through
   // Off keep every slot — hidden columns remember their position in the order.
@@ -855,14 +880,21 @@ export default function DataTable({ sections }: DataTableProps) {
         onClick: () => changeAngleMode(family, onAvg ? 'inout' : 'avg'),
       });
       items.push({
-        label: t('dataTable.headerMenu.hide'),
+        label: t('dataTable.headerMenu.hide', { name: t(`dataTable.columnsMenu.${family}`) }),
         onClick: () => changeAngleMode(family, 'off'),
       });
     } else {
-      items.push({ label: t('dataTable.headerMenu.hide'), onClick: () => toggleShotCols([key]) });
+      const group = HEADER_HIDE_GROUPS[key] ?? { nameKey: null, keys: [key] };
+      const name = group.nameKey
+        ? t(`dataTable.columnsMenu.${group.nameKey}`)
+        : shotColumns.find((c) => c.key === key)?.header ?? key;
+      items.push({
+        label: t('dataTable.headerMenu.hide', { name }),
+        onClick: () => hideShotCols(group.keys),
+      });
     }
     return items;
-  }, [headerMenu, t, changeAngleMode, toggleShotCols]);
+  }, [headerMenu, t, changeAngleMode, hideShotCols, shotColumns]);
 
   // Rows of the column-visibility menu: a checkbox per column (or group — the
   // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
@@ -1026,6 +1058,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
                 rowLabel={shotRowLabel}
+                rowNoun={shotNoun}
                 gutterWidth={72}
                 showToolbar={false}
                 onSelectionChange={setGridSel}

@@ -1221,7 +1221,7 @@
       "shotIdShort": "Shot ID"
     },
     "headerMenu": {
-      "hide": "Hide column",
+      "hide": "Hide {{name}}",
       "showInOut": "Show In+Out instead",
       "showAverage": "Show average instead"
     },
@@ -1263,7 +1263,9 @@
     },
     "selectSection": "Select a section to view shots.",
     "selectSectionPill": "Select this section on the map",
-    "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet — delete one row at a time.",
+    "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet — delete one shot at a time.",
+    "shotNoun_one": "shot",
+    "shotNoun_other": "shots",
     "shotCount": "{{countFormatted}} shots",
     "stationCount": "{{countFormatted}} stations",
     "stationColumns": {
