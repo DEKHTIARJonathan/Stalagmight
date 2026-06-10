@@ -5,18 +5,31 @@ import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
-import { EditableTable } from '../common/Table';
-import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
+import { SpreadsheetGrid, type GridLabels } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
-import { DotIcon, EyeIcon, LinkIcon } from '../common/icons';
+import { ExpandIcon, EyeIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
-import { formatShotId } from '../../utils/formatters';
-import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
+import { formatShotId, formatStationId } from '../../utils/formatters';
+import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
 import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
+import { buildStationColumns } from './dataTableStationColumns';
+import RawTableView from './RawTableView';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
+import {
+  type RowEntry,
+  type ShotDraft,
+  endDraft,
+  interleaveRows,
+  pruneDrafts,
+  insertDraftsAt,
+  materializeDraft,
+  draftMissing,
+  completeDraftData,
+  commitAnchorArgs,
+} from './dataTableDrafts';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
@@ -25,9 +38,6 @@ interface DataTableProps {
 
 /** Column keys per angle family and mode (the Avg column and the In+Out pair
  *  swap into each other's slot when the mode changes). */
-/** Sentinel id of the draft "new shot" row appended to the grid. */
-const DRAFT_SHOT_ID = -1;
-
 /** Header right-click hide targets: the clicked column's display name and the
  *  key group it hides with (L/R/U/D hide together as LRUD). */
 const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = {
@@ -50,6 +60,17 @@ const ANGLE_FAMILY_KEYS = {
   inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'] },
 } as const;
 
+/** Stations-view columns in the eye menu / header hide entries (plain hide —
+ *  no angle modes). The index pill lives in the gutter, so it never hides. */
+const STATION_MENU_COLS: { key: string; nameKey: string }[] = [
+  { key: '_x', nameKey: 'x' },
+  { key: '_y', nameKey: 'y' },
+  { key: '_depth', nameKey: 'depth' },
+  { key: '_zeroDatum', nameKey: 'zeroDatum' },
+  { key: '_connections', nameKey: 'connections' },
+  { key: 'comment', nameKey: 'comment' },
+];
+
 export default function DataTable({ sections }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -65,7 +86,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, warnings, isShotFrozen, updateStationComment, executeBatch, createShot } = useProjectStore();
+  const { updateShot, warnings, isShotFrozen, updateStationComment, executeBatch, createShot, isDirty } = useProjectStore();
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
@@ -79,6 +100,9 @@ export default function DataTable({ sections }: DataTableProps) {
     triggerPanToShot,
     dataTableOpen,
     dataTableHeight,
+    dataTableFullScreen,
+    rawTableSelection,
+    enterDataTableFullScreen,
     announceSelection,
     setHoveredSectionId,
     openDialog,
@@ -94,6 +118,9 @@ export default function DataTable({ sections }: DataTableProps) {
     triggerPanToShot: s.triggerPanToShot,
     dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
+    dataTableFullScreen: s.dataTableFullScreen,
+    rawTableSelection: s.rawTableSelection,
+    enterDataTableFullScreen: s.enterDataTableFullScreen,
     announceSelection: s.announceSelection,
     setHoveredSectionId: s.setHoveredSectionId,
     openDialog: s.openDialog,
@@ -161,9 +188,18 @@ export default function DataTable({ sections }: DataTableProps) {
         selection.stationRef?.section_id !== prevSelection.stationRef?.section_id ||
         selection.stationRef?.station_index !== prevSelection.stationRef?.station_index);
 
+    const referenceChanged = selection !== prevSelection;
     prevSelectionRef.current = selection;
 
-    if (!selectionChanged) return;
+    if (!selectionChanged) {
+      // A table-internal re-dispatch of the SAME selection (e.g. keyboard
+      // column moves re-selecting the active shot) still consumed its event —
+      // a stale flag here would swallow the next genuinely external selection.
+      if (referenceChanged && internalSelectionRef.current) {
+        internalSelectionRef.current = false;
+      }
+      return;
+    }
 
     // Skip scroll/view-switch for selections made from within the table
     if (internalSelectionRef.current) {
@@ -325,136 +361,12 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // --- Station view data ---
 
-  type StationRow = Station & { id: number };
-
-  const sectionStations = useMemo((): StationRow[] => {
+  const sectionStations = useMemo((): Station[] => {
     if (tableView !== 'stations' || selectedSectionId === null) return [];
     // X/Y/Z columns follow the active geometry so they match the map; the row
     // refs/comments are unchanged, so comment editing still targets measured data.
-    return activeStations
-      .filter((s) => s.station_ref.section_id === selectedSectionId)
-      .map((s) => ({ ...s, id: s.station_ref.station_index }));
+    return activeStations.filter((s) => s.station_ref.section_id === selectedSectionId);
   }, [activeStations, selectedSectionId, tableView]);
-
-  const highlightedStationIndex = useMemo((): number | null => {
-    if (tableView !== 'stations') return null;
-    if (!selection || selection.type !== 'station') return null;
-    if (selection.stationRef?.section_id !== selectedSectionId) return null;
-    return selection.stationRef.station_index;
-  }, [selection, selectedSectionId, tableView]);
-
-  const stationColumns = useMemo(() => [
-    {
-      key: 'id',
-      header: t('dataTable.stationColumns.index'),
-      width: '60px',
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">
-          <EntityBlob entity="station" className="relative -top-0.5">{row.station_ref.section_id}.{row.station_ref.station_index}</EntityBlob>
-        </span>,
-    },
-    {
-      key: '_x',
-      header: t('dataTable.stationColumns.x'),
-      width: '90px',
-      align: 'right' as const,
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.x, undefined, precision.coordinates)}</span>,
-    },
-    {
-      key: '_y',
-      header: t('dataTable.stationColumns.y'),
-      width: '90px',
-      align: 'right' as const,
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.y, undefined, precision.coordinates)}</span>,
-    },
-    {
-      key: '_depth',
-      header: t('dataTable.stationColumns.depth'),
-      width: '90px',
-      align: 'right' as const,
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.z, undefined, precision.depth)}</span>,
-    },
-    {
-      key: '_zeroDatum',
-      header: t('dataTable.stationColumns.zeroDatum'),
-      width: '40px',
-      align: 'center' as const,
-      render: (row: StationRow) =>
-        row.is_zero_datum
-          ? <span className="px-2 py-1 flex items-center justify-center"><DotIcon size={20} /></span>
-          : '',
-    },
-    {
-      key: '_connections',
-      header: t('dataTable.stationColumns.connections'),
-      width: '60px',
-      align: 'center' as const,
-      render: (row: StationRow) => {
-        const mergeCount = row.merged_with?.length ?? 0;
-        const closureCount = row.closures_with?.length ?? 0;
-        const total = mergeCount + closureCount;
-        if (total === 0) return '';
-        const tooltipParts: string[] = [];
-        if (mergeCount > 0) {
-          tooltipParts.push(`Merges: ${row.merged_with.map((m) => `${m.section_id}.${m.station_index}`).join(', ')}`);
-        }
-        if (closureCount > 0) {
-          tooltipParts.push(`Closures: ${closureCount}`);
-        }
-        return (
-          <span className="px-2 py-1 inline-flex items-center justify-center gap-1" title={tooltipParts.join('\n')}>
-            <LinkIcon size={12} />{total}
-          </span>
-        );
-      },
-    },
-    {
-      key: 'comment',
-      header: t('dataTable.stationColumns.comment'),
-      inputMode: 'textarea' as const,
-    },
-  ], [t, precision.coordinates, precision.depth]);
-
-  // Station interaction handlers
-  const handleStationRowClick = useCallback(
-    (row: StationRow, _index: number) => {
-      internalSelectionRef.current = true;
-      setSource('data-table');
-      setSelection({ type: 'station', stationRef: row.station_ref });
-    },
-    [setSelection]
-  );
-
-  const handleStationRowDoubleClick = useCallback(
-    (row: StationRow, _index: number) => {
-      setSource('data-table');
-      triggerCenterOnStation(row.station_ref);
-    },
-    [triggerCenterOnStation]
-  );
-
-  const handleStationRowHover = useCallback(
-    (row: StationRow | null, _index: number | null) => {
-      if (row) {
-        setHoveredStation(row.station_ref);
-      } else {
-        setHoveredStation(null);
-      }
-    },
-    [setHoveredStation]
-  );
-
-  const handleStationCellEdit = useCallback(
-    async (row: StationRow, key: string, value: unknown) => {
-      if (geometryReadOnly || key !== 'comment') return;
-      const comment = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
-      await updateStationComment(row.station_ref, comment);
-    },
-    [updateStationComment, geometryReadOnly]
-  );
 
   const handleViewChange = useCallback((value: 'shots' | 'stations') => {
     setTableView(value);
@@ -490,6 +402,10 @@ export default function DataTable({ sections }: DataTableProps) {
   const [hiddenShotCols, setHiddenShotCols] = useState<ReadonlySet<string>>(
     () => new Set(['section_id', 'shot_id'])
   );
+  // The stations view keeps its own order/visibility (no angle modes there);
+  // persisted alongside the shot view state below.
+  const [stationColumnOrder, setStationColumnOrder] = useState<string[]>([]);
+  const [hiddenStationCols, setHiddenStationCols] = useState<ReadonlySet<string>>(() => new Set());
   const [colMenuOpen, setColMenuOpen] = useState(false);
   // Right-click on a column header: hide it / switch the angle family's mode.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
@@ -543,6 +459,19 @@ export default function DataTable({ sections }: DataTableProps) {
       return next;
     });
   }, []);
+  const toggleStationCols = useCallback((keys: string[]) => {
+    setHiddenStationCols((prev) => {
+      const next = new Set(prev);
+      const visible = keys.every((k) => !prev.has(k));
+      for (const k of keys) {
+        if (visible) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+
+  const stationHiddenColumns = useMemo(() => [...hiddenStationCols], [hiddenStationCols]);
 
 
   // Persist the view state (order, visibility, angle modes) in the app config.
@@ -564,17 +493,29 @@ export default function DataTable({ sections }: DataTableProps) {
     setInclinationMode(inclination);
     setHiddenShotCols(new Set(panelsConfig.data_table_shot_hidden_columns));
     setShotColumnOrder(panelsConfig.data_table_shot_column_order);
+    setHiddenStationCols(new Set(panelsConfig.data_table_station_hidden_columns));
+    setStationColumnOrder(panelsConfig.data_table_station_column_order);
     lastSavedViewRef.current = JSON.stringify([
       panelsConfig.data_table_shot_column_order,
       panelsConfig.data_table_shot_hidden_columns,
       azimuth,
       inclination,
+      panelsConfig.data_table_station_column_order,
+      panelsConfig.data_table_station_hidden_columns,
     ]);
   }, [panelsConfig]);
   useEffect(() => {
     if (lastSavedViewRef.current === null) return undefined;
     const hidden = [...hiddenShotCols].sort();
-    const snapshot = JSON.stringify([shotColumnOrder, hidden, azimuthMode, inclinationMode]);
+    const stationHidden = [...hiddenStationCols].sort();
+    const snapshot = JSON.stringify([
+      shotColumnOrder,
+      hidden,
+      azimuthMode,
+      inclinationMode,
+      stationColumnOrder,
+      stationHidden,
+    ]);
     if (snapshot === lastSavedViewRef.current) return undefined;
     const timer = setTimeout(() => {
       lastSavedViewRef.current = snapshot;
@@ -585,6 +526,8 @@ export default function DataTable({ sections }: DataTableProps) {
           hiddenColumns: hidden,
           azimuthMode,
           inclinationMode,
+          stationColumnOrder,
+          stationHiddenColumns: stationHidden,
         },
         { purpose: 'persist data-table view state' }
       )
@@ -594,7 +537,7 @@ export default function DataTable({ sections }: DataTableProps) {
         .catch((e) => console.error('Failed to save data-table view state:', e));
     }, 500);
     return () => clearTimeout(timer);
-  }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode]);
+  }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode, stationColumnOrder, hiddenStationCols]);
 
   useEffect(() => {
     if (!colMenuOpen) return undefined;
@@ -610,134 +553,143 @@ export default function DataTable({ sections }: DataTableProps) {
     };
   }, [colMenuOpen]);
 
-  // --- Draft "new shot" row -------------------------------------------------
-  // The grid always shows one extra editable row at the end. Its values live
-  // here until length, both depths and an azimuth are present, then it commits
-  // as a real shot via create_shot (a missing azimuth leg duplicates the other;
-  // inclination stays optional).
-  const [draftShot, setDraftShot] = useState<Partial<ShotData>>({});
-  useEffect(() => setDraftShot({}), [selectedSectionId]);
-  const draftRow = useMemo(
-    (): Shot => ({
-      id: DRAFT_SHOT_ID,
-      azimuth_in: (draftShot.azimuth_in ?? NaN) as number,
-      azimuth_out: (draftShot.azimuth_out ?? NaN) as number,
-      length: (draftShot.length ?? NaN) as number,
-      depth_in: (draftShot.depth_in ?? NaN) as number,
-      depth_out: (draftShot.depth_out ?? NaN) as number,
-      pitch_in: draftShot.pitch_in ?? null,
-      pitch_out: draftShot.pitch_out ?? null,
-      left: draftShot.left ?? null,
-      right: draftShot.right ?? null,
-      up: draftShot.up ?? null,
-      down: draftShot.down ?? null,
-      comment: draftShot.comment ?? null,
-      is_reference: draftShot.is_reference ?? false,
-      marker_index: null,
-      temperature: null,
-    }),
-    [draftShot]
+  // --- Draft "new shot" rows --------------------------------------------------
+  // The grid always shows one empty editable row at the end (the end draft);
+  // "Insert shot above/below" adds more drafts anchored to a neighbouring shot.
+  // A draft's values live here until length, both depths and an azimuth are
+  // present, then it commits as a real shot via create_shot at its anchor (a
+  // missing azimuth leg duplicates the other; inclination stays optional).
+  const [drafts, setDrafts] = useState<ShotDraft[]>(() => [endDraft()]);
+  // Draft keys come from a monotonic counter and are NEVER reused (incl. the
+  // end draft, which gets a fresh key on every reset): the grid keys per-cell
+  // state (missing-cell marks) by row identity, and a reused key would leak a
+  // stale mark onto an unrelated later draft.
+  const draftKeyRef = useRef(-2);
+  useEffect(() => {
+    setDrafts([endDraft()]);
+    draftKeyRef.current = -2;
+  }, [selectedSectionId]);
+  // Drop drafts whose anchor shot was deleted (the end draft always survives).
+  useEffect(() => {
+    if (!selectedSection) return;
+    setDrafts((prev) => pruneDrafts(prev, selectedSection.shots));
+  }, [selectedSection]);
+
+  // The grid's row list: shots interleaved with draft rows (drafts hidden in
+  // the read-only closure-adjusted view). EVERY grid row index maps through
+  // here — never into the shots array directly.
+  const rowEntries = useMemo(
+    (): RowEntry[] =>
+      selectedSection ? interleaveRows(selectedSection.shots, geometryReadOnly ? [] : drafts) : [],
+    [selectedSection, geometryReadOnly, drafts]
   );
-  const applyDraftEdit = useCallback((colKey: string, value: unknown) => {
-    setDraftShot((prev) => {
-      const d: Record<string, unknown> = { ...prev };
-      if (colKey === AZIMUTH_AVG_KEY) {
-        d.azimuth_in = value;
-        d.azimuth_out = value;
-      } else if (colKey === PITCH_AVG_KEY) {
-        d.pitch_in = value;
-        d.pitch_out = value;
-      } else {
-        d[colKey] = value;
-      }
-      return d as Partial<ShotData>;
-    });
+  const shotIndexAt = useCallback(
+    (gridRowIndex: number): number | null => {
+      const entry = rowEntries[gridRowIndex];
+      return entry?.kind === 'shot' ? entry.shotIndex : null;
+    },
+    [rowEntries]
+  );
+
+  const applyDraftEdit = useCallback((key: number, colKey: string, value: unknown) => {
+    setDrafts((prev) =>
+      prev.map((draft) => {
+        if (draft.key !== key) return draft;
+        const d: Record<string, unknown> = { ...draft.data };
+        if (colKey === AZIMUTH_AVG_KEY) {
+          d.azimuth_in = value;
+          d.azimuth_out = value;
+        } else if (colKey === PITCH_AVG_KEY) {
+          d.pitch_in = value;
+          d.pitch_out = value;
+        } else {
+          d[colKey] = value;
+        }
+        return { ...draft, data: d as Partial<ShotData> };
+      })
+    );
   }, []);
-  // Once the draft has ANY value, the still-missing required fields surface:
-  // visible columns tint their draft cell red; hidden ones tint the columns
-  // (eye) button and their dropdown row instead, until shown or filled.
-  const draftMissing = useMemo(() => {
-    const cells = new Set<string>();
-    const hiddenProblems = new Set<string>();
-    const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-    if (Object.keys(draftShot).length === 0) return { cells, hiddenProblems };
-    const need = (colKey: string, menuKey: string) => {
-      if (hiddenShotCols.has(colKey)) hiddenProblems.add(menuKey);
-      else cells.add(colKey);
-    };
-    if (!fin(draftShot.length)) need('length', 'length');
-    if (!fin(draftShot.depth_in)) need('depth_in', 'depthIn');
-    if (!fin(draftShot.depth_out)) need('depth_out', 'depthOut');
-    if (!fin(draftShot.azimuth_in) && !fin(draftShot.azimuth_out)) {
-      if (azimuthMode === 'avg') cells.add(AZIMUTH_AVG_KEY);
-      else if (azimuthMode === 'inout') {
-        cells.add('azimuth_in');
-        cells.add('azimuth_out');
-      } else {
-        hiddenProblems.add('azimuth');
+
+  // Discard the draft rows in a grid-row range; the end draft resets to empty
+  // instead of disappearing (it is always present).
+  const discardDraftRows = useCallback(
+    (fromRow: number, toRow: number) => {
+      const keys = new Set<number>();
+      for (const entry of rowEntries.slice(fromRow, toRow + 1)) {
+        if (entry.kind === 'draft') keys.add(entry.draft.key);
       }
-    }
-    return { cells, hiddenProblems };
-  }, [draftShot, hiddenShotCols, azimuthMode]);
+      if (keys.size === 0) return;
+      setDrafts((prev) =>
+        prev.flatMap((d) =>
+          keys.has(d.key) ? (d.anchor === 'end' ? [endDraft(draftKeyRef.current--)] : []) : [d]
+        )
+      );
+    },
+    [rowEntries]
+  );
+
+  // Each draft's still-missing required fields: visible columns tint their
+  // draft cell red; hidden ones tint the columns (eye) button and their
+  // dropdown row instead, until shown or filled. Inserted drafts surface them
+  // immediately; the end draft only once it has ANY value.
+  const draftMissingByKey = useMemo(() => {
+    const map = new Map<number, ReturnType<typeof draftMissing>>();
+    for (const d of drafts) map.set(d.key, draftMissing(d, hiddenShotCols, azimuthMode));
+    return map;
+  }, [drafts, hiddenShotCols, azimuthMode]);
+  const draftHiddenProblems = useMemo(() => {
+    const union = new Set<string>();
+    for (const m of draftMissingByKey.values()) for (const k of m.hiddenProblems) union.add(k);
+    return union;
+  }, [draftMissingByKey]);
 
   const shotCellClassName = useCallback(
     (shot: Shot, _rowIndex: number, colKey: string) =>
-      shot.id === DRAFT_SHOT_ID && draftMissing.cells.has(colKey) ? 'sg-cell-missing' : undefined,
-    [draftMissing]
+      shot.id < 0 && draftMissingByKey.get(shot.id)?.cells.has(colKey) ? 'sg-cell-missing' : undefined,
+    [draftMissingByKey]
   );
 
-  // Commit the draft once the required fields are present.
+  // Commit a draft once its required fields are present — one at a time; the
+  // refresh after create_shot re-runs the effect for the next complete one.
   const draftCommitting = useRef(false);
   useEffect(() => {
     if (!selectedSection || draftCommitting.current) return;
-    const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-    const azimuth = fin(draftShot.azimuth_in) ? draftShot.azimuth_in : draftShot.azimuth_out;
-    const complete =
-      fin(draftShot.length) && draftShot.length > 0 &&
-      fin(draftShot.depth_in) && fin(draftShot.depth_out) && fin(azimuth);
-    if (!complete) return;
-    const data: ShotData = {
-      azimuth_in: fin(draftShot.azimuth_in) ? draftShot.azimuth_in : (azimuth as number),
-      azimuth_out: fin(draftShot.azimuth_out) ? draftShot.azimuth_out : (azimuth as number),
-      length: draftShot.length as number,
-      depth_in: draftShot.depth_in as number,
-      depth_out: draftShot.depth_out as number,
-      pitch_in: draftShot.pitch_in ?? null,
-      pitch_out: draftShot.pitch_out ?? null,
-      left: draftShot.left ?? null,
-      right: draftShot.right ?? null,
-      up: draftShot.up ?? null,
-      down: draftShot.down ?? null,
-      comment: draftShot.comment ?? null,
-      is_reference: draftShot.is_reference ?? false,
-      marker_index: null,
-      temperature: null,
-    };
-    const lastShot = selectedSection.shots[selectedSection.shots.length - 1];
-    draftCommitting.current = true;
-    setSource('data-table');
-    void createShot(selectedSection.id, data, lastShot?.id)
-      .then(() => setDraftShot({}))
-      .finally(() => {
-        draftCommitting.current = false;
-      });
-  }, [draftShot, selectedSection, createShot]);
+    for (const draft of drafts) {
+      const data = completeDraftData(draft);
+      if (data === null) continue;
+      const { afterShotId, beforeShotId } = commitAnchorArgs(draft, selectedSection.shots);
+      draftCommitting.current = true;
+      setSource('data-table');
+      void createShot(selectedSection.id, data, afterShotId, beforeShotId)
+        .then(() =>
+          setDrafts((prev) =>
+            prev.flatMap((d) =>
+              d.key === draft.key ? (d.anchor === 'end' ? [endDraft(draftKeyRef.current--)] : []) : [d]
+            )
+          )
+        )
+        .finally(() => {
+          draftCommitting.current = false;
+        });
+      return;
+    }
+  }, [drafts, selectedSection, createShot]);
 
 
   const onShotEdit = useCallback(
     (rowIndex: number, colKey: string, value: unknown) => {
       if (!selectedSection || geometryReadOnly) return;
-      if (rowIndex >= selectedSection.shots.length) {
-        applyDraftEdit(colKey, value);
+      const entry = rowEntries[rowIndex];
+      if (!entry) return;
+      if (entry.kind === 'draft') {
+        applyDraftEdit(entry.draft.key, colKey, value);
         return;
       }
-      const shot = selectedSection.shots[rowIndex];
-      if (!shot) return;
-      selectShotRow(shot);
-      const updates = buildShotUpdates(shot, [{ colKey, value }]);
-      if (Object.keys(updates).length > 0) void updateShot(selectedSection.id, shot.id, updates);
+      selectShotRow(entry.shot);
+      const updates = buildShotUpdates(entry.shot, [{ colKey, value }]);
+      if (Object.keys(updates).length > 0) void updateShot(selectedSection.id, entry.shot.id, updates);
     },
-    [selectedSection, geometryReadOnly, selectShotRow, updateShot, applyDraftEdit]
+    [selectedSection, geometryReadOnly, rowEntries, selectShotRow, updateShot, applyDraftEdit]
   );
 
   // Multi-cell paste/fill → one execute_batch (one undo).
@@ -745,22 +697,27 @@ export default function DataTable({ sections }: DataTableProps) {
     (edits: CellEdit[]) => {
       if (!selectedSection || geometryReadOnly) return;
       setSource('data-table');
-      // Edits landing on the draft row (paste/fill into the last row) feed the
-      // draft; the rest commit as one batch.
-      const draftEdits = edits.filter((e) => e.row >= selectedSection.shots.length);
-      const commands = buildShotUpdateBatch(edits, selectedSection.shots, selectedSection.id);
+      // Edits landing on draft rows (paste/fill into them) feed the drafts;
+      // the rest are remapped to shots-array indices and commit as one batch.
+      const shotEdits: CellEdit[] = [];
+      for (const e of edits) {
+        const entry = rowEntries[e.row];
+        if (!entry) continue;
+        if (entry.kind === 'draft') applyDraftEdit(entry.draft.key, e.colKey, e.value);
+        else shotEdits.push({ ...e, row: entry.shotIndex });
+      }
+      const commands = buildShotUpdateBatch(shotEdits, selectedSection.shots, selectedSection.id);
       if (commands.length > 0) void executeBatch(commands);
-      for (const e of draftEdits) applyDraftEdit(e.colKey, e.value);
     },
-    [selectedSection, geometryReadOnly, executeBatch, applyDraftEdit]
+    [selectedSection, geometryReadOnly, rowEntries, executeBatch, applyDraftEdit]
   );
 
   const onShotActiveCellChange = useCallback(
     (rowIndex: number) => {
-      const shot = selectedSection?.shots[rowIndex];
-      if (shot) selectShotRow(shot);
+      const entry = rowEntries[rowIndex];
+      if (entry?.kind === 'shot') selectShotRow(entry.shot);
     },
-    [selectedSection, selectShotRow]
+    [rowEntries, selectShotRow]
   );
 
   const onShotRowHover = useCallback(
@@ -769,28 +726,59 @@ export default function DataTable({ sections }: DataTableProps) {
         setHoveredShot(null);
         return;
       }
-      const shot = selectedSection.shots[rowIndex];
-      setHoveredShot(shot ? { sectionId: selectedSection.id, shotId: shot.id } : null);
+      const entry = rowEntries[rowIndex];
+      setHoveredShot(
+        entry?.kind === 'shot' ? { sectionId: selectedSection.id, shotId: entry.shot.id } : null
+      );
     },
-    [selectedSection, setHoveredShot]
+    [rowEntries, selectedSection, setHoveredShot]
   );
 
   // Map → grid hover tint (the reverse of onShotRowHover; purely visual, so the
   // pair can't feed back into each other).
   const shotHoveredRow = useMemo(() => {
-    if (!selectedSection || hoveredShot?.sectionId !== selectedSectionId) return null;
-    const idx = selectedSection.shots.findIndex((s) => s.id === hoveredShot.shotId);
+    if (hoveredShot?.sectionId !== selectedSectionId) return null;
+    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === hoveredShot.shotId);
     return idx >= 0 ? idx : null;
-  }, [hoveredShot, selectedSection, selectedSectionId]);
+  }, [hoveredShot, rowEntries, selectedSectionId]);
 
   const shotRowClassName = useCallback(
     (shot: Shot, rowIndex: number) => {
-      if (shot.id === DRAFT_SHOT_ID) return 'sg-row-draft';
-      return selectedSectionId !== null && isShotFrozen(selectedSectionId, rowIndex)
+      if (shot.id < 0) return 'sg-row-draft';
+      const shotIndex = shotIndexAt(rowIndex);
+      return selectedSectionId !== null && shotIndex !== null && isShotFrozen(selectedSectionId, shotIndex)
         ? 'sg-row-frozen'
         : undefined;
     },
-    [selectedSectionId, isShotFrozen]
+    [selectedSectionId, isShotFrozen, shotIndexAt]
+  );
+
+  // "Insert N shots above/below" → blank draft rows anchored at the boundary;
+  // they commit (and turn real) once filled.
+  const onShotInsertRows = useCallback(
+    (beforeIndex: number, count: number) => {
+      if (!selectedSection || geometryReadOnly) return;
+      const next = insertDraftsAt(selectedSection.shots, drafts, beforeIndex, count, () => draftKeyRef.current--);
+      if (next) setDrafts(next);
+    },
+    [selectedSection, geometryReadOnly, drafts]
+  );
+
+  // "Remove draft row" appears when the selection covers draft rows only —
+  // discarding a draft never asks for confirmation (nothing is stored yet).
+  const shotExtraMenuItems = useCallback(
+    ({ fromRow, toRow }: { fromRow: number; toRow: number }) => {
+      if (geometryReadOnly) return [];
+      const entries = rowEntries.slice(fromRow, toRow + 1);
+      if (entries.length === 0 || entries.some((e) => e.kind !== 'draft')) return [];
+      return [
+        {
+          label: t('dataTable.removeDraft', { count: entries.length }),
+          onClick: () => discardDraftRows(fromRow, toRow),
+        },
+      ];
+    },
+    [rowEntries, geometryReadOnly, t, discardDraftRows]
   );
 
   // Surface partially-applied pastes (only the non-zero parts).
@@ -805,33 +793,39 @@ export default function DataTable({ sections }: DataTableProps) {
     [t, showToast]
   );
 
-  // Delete on a gutter-selected row (or the context menu's "Delete rows"):
-  // route a single row to the existing shot-delete confirm dialog (it owns the
-  // split/last-shot handling); multi-shot delete has no safe backend flow yet.
+  // Delete on a gutter-selected range (or the context menu's "Delete rows"):
+  // draft rows in the range are discarded outright (the end draft resets, no
+  // confirm — nothing is stored yet); a single real shot routes to the
+  // existing shot-delete confirm dialog (it owns the split/last-shot
+  // handling); multi-shot delete has no safe backend flow yet.
   const onShotDeleteRows = useCallback(
     (fromRow: number, toRow: number) => {
       if (!selectedSection || geometryReadOnly) return;
       setSource('data-table');
-      if (fromRow !== toRow) {
+      const shotsInRange = rowEntries
+        .slice(fromRow, toRow + 1)
+        .flatMap((e) => (e.kind === 'shot' ? [e.shot] : []));
+      discardDraftRows(fromRow, toRow);
+      if (shotsInRange.length === 0) return;
+      if (shotsInRange.length > 1) {
         showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete');
         return;
       }
-      const shot = selectedSection.shots[fromRow];
-      if (!shot) return;
       openDialog('confirm-delete', {
         type: 'shot',
         sectionId: selectedSection.id,
-        shotId: shot.id,
+        shotId: shotsInRange[0]!.id,
       });
     },
-    [selectedSection, geometryReadOnly, showToast, t, openDialog]
+    [selectedSection, geometryReadOnly, rowEntries, discardDraftRows, showToast, t, openDialog]
   );
 
   const handleToggleReference = useCallback(
     (shot: Shot) => {
       if (!selectedSection || geometryReadOnly) return;
-      if (shot.id === DRAFT_SHOT_ID) {
-        applyDraftEdit('is_reference', !shot.is_reference);
+      if (shot.id < 0) {
+        // A draft row — its id is the draft key.
+        applyDraftEdit(shot.id, 'is_reference', !shot.is_reference);
         return;
       }
       void updateShot(selectedSection.id, shot.id, { is_reference: !shot.is_reference });
@@ -858,29 +852,56 @@ export default function DataTable({ sections }: DataTableProps) {
         geometryReadOnly,
         isShotFrozen,
         getShotWarnings,
+        shotIndexAt,
         onToggleReference: handleToggleReference,
       }),
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, handleToggleReference]
+    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, shotIndexAt, handleToggleReference]
   );
 
-  // The grid's context menus speak in shots, not rows.
-  const shotNoun = useCallback((count: number) => t('dataTable.shotNoun', { count }), [t]);
+  // Localized grid chrome; rowNoun makes the context menus speak in shots
+  // (or stations), not rows.
+  const makeGridLabels = useCallback(
+    (rowNounKey: 'dataTable.shotNoun' | 'dataTable.stationNoun'): GridLabels => ({
+      copy: (suffix) => t('grid.contextMenu.copy', { suffix }),
+      cut: (suffix) => t('grid.contextMenu.cut', { suffix }),
+      clear: (suffix) => t('grid.contextMenu.clear', { suffix }),
+      paste: t('grid.contextMenu.paste'),
+      fillDown: t('grid.contextMenu.fillDown'),
+      insertAbove: (rows) => t('grid.contextMenu.insertAbove', { rows }),
+      insertBelow: (rows) => t('grid.contextMenu.insertBelow', { rows }),
+      deleteRows: (rows) => t('grid.contextMenu.deleteRows', { rows }),
+      rowNoun: (count) => t(rowNounKey, { count }),
+      columnNoun: (count) => t('grid.columnNoun', { count }),
+      columnsButton: t('grid.columnsButton'),
+      maximize: t('grid.maximize'),
+      restore: t('grid.restore'),
+      editCellAria: (column, row) => t('grid.editCellAria', { column, row }),
+      shortcutCopy: t('grid.shortcuts.copy'),
+      shortcutCut: t('grid.shortcuts.cut'),
+      shortcutPaste: t('grid.shortcuts.paste'),
+      shortcutClear: t('grid.shortcuts.clear'),
+      shortcutFillDown: t('grid.shortcuts.fillDown'),
+    }),
+    [t]
+  );
+  const gridLabels = useMemo(() => makeGridLabels('dataTable.shotNoun'), [makeGridLabels]);
+  const stationGridLabels = useMemo(() => makeGridLabels('dataTable.stationNoun'), [makeGridLabels]);
 
-  // Rows handed to the grid: the section's shots plus the draft row (hidden in
-  // the read-only closure-adjusted view).
+  // Rows handed to the grid, materializing each draft as a Shot-shaped row
+  // whose id is the (negative) draft key.
   const gridShotRows = useMemo(
-    () => (selectedSection ? (geometryReadOnly ? selectedSection.shots : [...selectedSection.shots, draftRow]) : []),
-    [selectedSection, geometryReadOnly, draftRow]
+    () => rowEntries.map((e) => (e.kind === 'shot' ? e.shot : materializeDraft(e.draft))),
+    [rowEntries]
   );
 
   const shotScrollToRow = useMemo(() => {
-    if (scrollToKey === null || !selectedSection) return null;
-    const idx = selectedSection.shots.findIndex((s) => s.id === scrollToKey);
+    if (scrollToKey === null) return null;
+    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === scrollToKey);
     return idx >= 0 ? idx : null;
-  }, [scrollToKey, selectedSection]);
+  }, [scrollToKey, rowEntries]);
 
   // The grid's name-box content, lifted into the condensed panel header:
   // "<column> <row>" for a single cell, "3R × 2C" for a range.
@@ -901,20 +922,127 @@ export default function DataTable({ sections }: DataTableProps) {
   // pans the map to the shot, as it did on the column's pill.
   const shotRowLabel = useCallback(
     (shot: Shot, rowIndex: number) => {
-      // The draft row earns its pill only once it becomes a real shot.
-      if (shot.id === DRAFT_SHOT_ID) return <span className="opacity-50">+</span>;
-      return selectedSectionId !== null ? (
+      // Draft rows earn their pill only once they become real shots.
+      if (shot.id < 0) return <span className="opacity-50">+</span>;
+      const shotIndex = shotIndexAt(rowIndex);
+      return selectedSectionId !== null && shotIndex !== null ? (
         <span onDoubleClick={() => handlePanToShot(shot)}>
-          <EntityBlob entity="shot">{formatShotId(selectedSectionId, rowIndex + 1)}</EntityBlob>
+          <EntityBlob entity="shot">{formatShotId(selectedSectionId, shotIndex + 1)}</EntityBlob>
         </span>
       ) : (
         rowIndex + 1
       );
     },
-    [selectedSectionId, handlePanToShot]
+    [selectedSectionId, handlePanToShot, shotIndexAt]
   );
 
+  // --- Stations view (SpreadsheetGrid) --------------------------------------
+  // Stations are derived from shots, so only the comment is editable — a
+  // single edit per commit (set_station_comment has no batch form, so the
+  // grid gets no onBatchEdit).
+  const onStationEdit = useCallback(
+    (rowIndex: number, colKey: string, value: unknown) => {
+      if (geometryReadOnly || colKey !== 'comment') return;
+      const station = sectionStations[rowIndex];
+      if (!station) return;
+      setSource('data-table');
+      const comment = typeof value === 'string' && value.trim() !== '' ? value : null;
+      void updateStationComment(station.station_ref, comment);
+    },
+    [geometryReadOnly, sectionStations, updateStationComment]
+  );
 
+  const onStationActiveCellChange = useCallback(
+    (rowIndex: number) => {
+      const station = sectionStations[rowIndex];
+      if (!station) return;
+      internalSelectionRef.current = true;
+      setSource('data-table');
+      setSelection({ type: 'station', stationRef: station.station_ref });
+    },
+    [sectionStations, setSelection]
+  );
+
+  const onStationRowHover = useCallback(
+    (rowIndex: number | null) => {
+      const station = rowIndex !== null ? sectionStations[rowIndex] : undefined;
+      setHoveredStation(station ? station.station_ref : null);
+    },
+    [sectionStations, setHoveredStation]
+  );
+
+  // Map → grid hover tint (mirrors shotHoveredRow).
+  const stationHoveredRow = useMemo(() => {
+    if (hoveredStation?.section_id !== selectedSectionId) return null;
+    const idx = sectionStations.findIndex(
+      (s) => s.station_ref.station_index === hoveredStation.station_index
+    );
+    return idx >= 0 ? idx : null;
+  }, [hoveredStation, sectionStations, selectedSectionId]);
+
+  const stationScrollToRow = useMemo(() => {
+    if (stationScrollToKey === null) return null;
+    const idx = sectionStations.findIndex(
+      (s) => s.station_ref.station_index === stationScrollToKey
+    );
+    return idx >= 0 ? idx : null;
+  }, [stationScrollToKey, sectionStations]);
+
+  // GPS (zero-datum) cell click: a station that already is — or is merged
+  // with — a zero datum opens the dialog in plain edit mode; the rest open in
+  // add-zero-datum mode with the GPS input enabled and focused.
+  const handleGpsCellClick = useCallback(
+    (station: Station) => {
+      setSource('data-table');
+      const mergedWithDatum = station.merged_with.some((ref) =>
+        activeStations.some(
+          (s) =>
+            s.station_ref.section_id === ref.section_id &&
+            s.station_ref.station_index === ref.station_index &&
+            s.is_zero_datum
+        )
+      );
+      if (station.is_zero_datum || mergedWithDatum) {
+        openDialog('edit-station', { stationRef: station.station_ref });
+      } else {
+        openDialog('edit-station', {
+          stationRef: station.station_ref,
+          forceEnableZeroDatum: true,
+          focusGpsInput: true,
+        });
+      }
+    },
+    [activeStations, openDialog]
+  );
+
+  const stationColumns = useMemo(
+    () =>
+      buildStationColumns({
+        t,
+        precision,
+        geometryReadOnly,
+        onGpsCellClick: handleGpsCellClick,
+      }),
+    [t, precision, geometryReadOnly, handleGpsCellClick]
+  );
+
+  // Gutter shows the station's ID pill (the old index column); double-click
+  // centers the map on the station, as the row double-click used to.
+  const stationRowLabel = useCallback(
+    (station: Station) => (
+      <span
+        onDoubleClick={() => {
+          setSource('data-table');
+          triggerCenterOnStation(station.station_ref);
+        }}
+      >
+        <EntityBlob entity="station">
+          {formatStationId(station.station_ref.section_id, station.station_ref.station_index)}
+        </EntityBlob>
+      </span>
+    ),
+    [triggerCenterOnStation]
+  );
 
   // The grid must fit the panel body EXACTLY: taller and the wrapper clips it
   // (occluded horizontal scrollbar) or grows a second scrollbar. Measure the
@@ -935,6 +1063,9 @@ export default function DataTable({ sections }: DataTableProps) {
   // Unconditional hide (header right-click) — unlike the menu checkbox toggle.
   const hideShotCols = useCallback((keys: string[]) => {
     setHiddenShotCols((prev) => new Set([...prev, ...keys]));
+  }, []);
+  const hideStationCols = useCallback((keys: string[]) => {
+    setHiddenStationCols((prev) => new Set([...prev, ...keys]));
   }, []);
 
   // Switch an angle family's mode, putting the newly shown columns in the slot
@@ -962,10 +1093,23 @@ export default function DataTable({ sections }: DataTableProps) {
   );
 
   // Items of the header right-click menu: angle-family columns get a mode
-  // switch and Off; everything else gets a plain hide.
+  // switch and Off; everything else gets a plain hide. Station columns only
+  // ever hide (no angle modes there).
   const headerMenuItems = useMemo(() => {
     if (!headerMenu) return [];
     const key = headerMenu.colKey;
+    if (tableView === 'stations') {
+      const entry = STATION_MENU_COLS.find((c) => c.key === key);
+      const name = entry
+        ? t(`dataTable.stationColumnsMenu.${entry.nameKey}`)
+        : stationColumns.find((c) => c.key === key)?.header ?? key;
+      return [
+        {
+          label: t('dataTable.headerMenu.hide', { name }),
+          onClick: () => hideStationCols([key]),
+        },
+      ];
+    }
     const family = (['azimuth', 'inclination'] as const).find((f) => {
       const fam = ANGLE_FAMILY_KEYS[f];
       return (fam.avg as readonly string[]).includes(key) || (fam.inout as readonly string[]).includes(key);
@@ -992,11 +1136,14 @@ export default function DataTable({ sections }: DataTableProps) {
       });
     }
     return items;
-  }, [headerMenu, t, changeAngleMode, hideShotCols, shotColumns]);
+  }, [headerMenu, tableView, t, changeAngleMode, hideShotCols, shotColumns, stationColumns, hideStationCols]);
 
   // Rows of the column-visibility menu: a checkbox per column (or group — the
   // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
-  // the azimuth and inclination column families.
+  // the azimuth and inclination column families. The menu serves whichever
+  // view is active, so the checkboxes read/write that view's hidden set.
+  const menuHiddenCols = tableView === 'shots' ? hiddenShotCols : hiddenStationCols;
+  const menuToggleCols = tableView === 'shots' ? toggleShotCols : toggleStationCols;
   const colCheckRow = (keys: string[], label: string, className = '', problem = false) => (
     <label
       key={keys[0]}
@@ -1006,8 +1153,8 @@ export default function DataTable({ sections }: DataTableProps) {
     >
       <input
         type="checkbox"
-        checked={keys.every((k) => !hiddenShotCols.has(k))}
-        onChange={() => toggleShotCols(keys)}
+        checked={keys.every((k) => !menuHiddenCols.has(k))}
+        onChange={() => menuToggleCols(keys)}
         data-testid={`col-vis-${keys[0]}`}
       />
       {label}
@@ -1047,13 +1194,34 @@ export default function DataTable({ sections }: DataTableProps) {
     <div
       className="flex flex-col bg-panel border-t border-border transition-all duration-300 ease-in-out"
       style={{
-        height: dataTableOpen ? `${dataTableHeight}px` : '40px',
+        // Fullscreen mode fills the fixed overlay wrapper; the existing
+        // gridBody ResizeObserver handles the resulting grid height.
+        height: dataTableFullScreen ? '100%' : dataTableOpen ? `${dataTableHeight}px` : '40px',
         minHeight: '40px',
       }}
       data-testid="data-table"
       data-open={dataTableOpen ? 'true' : 'false'}
+      data-fullscreen={dataTableFullScreen ? 'true' : 'false'}
     >
-      {/* Condensed header: title + selection indicator | section pill | view toggle + collapse */}
+      {rawTableSelection !== null ? (
+        /* Raw-data sub-header: title | raw table name | "as of last save" hint
+           (the viewer shows last-saved state, so flag pending edits). */
+        <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
+          <span className="font-medium">{t('dataTable.title')}</span>
+          <span
+            className="absolute left-1/2 -translate-x-1/2 font-medium"
+            data-testid="data-table-raw-name"
+          >
+            {rawTableSelection}
+          </span>
+          {isDirty && (
+            <span className="ml-auto text-text-secondary" data-testid="data-table-raw-dirty-hint">
+              {t('dataTable.rawData.asOfLastSave')}
+            </span>
+          )}
+        </div>
+      ) : (
+      /* Condensed header: title + selection indicator | section pill | view toggle + collapse */
       <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
         <span className="font-medium">{t('dataTable.title')}</span>
         {selectionIndicator && (
@@ -1106,7 +1274,7 @@ export default function DataTable({ sections }: DataTableProps) {
               setColMenuOpen((v) => !v);
             }}
             className={
-              draftMissing.hiddenProblems.size > 0
+              tableView === 'shots' && draftHiddenProblems.size > 0
                 ? 'text-error'
                 : colMenuOpen
                   ? 'text-text'
@@ -1122,32 +1290,54 @@ export default function DataTable({ sections }: DataTableProps) {
               className={`absolute right-0 z-50 w-56 rounded border border-border bg-panel p-1 shadow-lg ${
                 colMenuUp ? 'bottom-full mb-1' : 'top-full mt-1'
               }`}
+              data-dropdown-open
               data-testid="data-table-columns-dropdown"
             >
-              {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
-              {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
-              {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
-              {colCheckRow(['length'], t('dataTable.columnsMenu.length'), '', draftMissing.hiddenProblems.has('length'))}
-              {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth', draftMissing.hiddenProblems.has('azimuth'))}
-              {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, (m) => changeAngleMode('inclination', m), 'col-inclination')}
-              <div className="flex">
-                {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1', draftMissing.hiddenProblems.has('depthIn'))}
-                {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1', draftMissing.hiddenProblems.has('depthOut'))}
-              </div>
-              {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
-              {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
-              {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
+              {tableView === 'shots' ? (
+                <>
+                  {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
+                  {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
+                  {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
+                  {colCheckRow(['length'], t('dataTable.columnsMenu.length'), '', draftHiddenProblems.has('length'))}
+                  {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth', draftHiddenProblems.has('azimuth'))}
+                  {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, (m) => changeAngleMode('inclination', m), 'col-inclination')}
+                  <div className="flex">
+                    {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1', draftHiddenProblems.has('depthIn'))}
+                    {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1', draftHiddenProblems.has('depthOut'))}
+                  </div>
+                  {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
+                  {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
+                  {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
+                </>
+              ) : (
+                STATION_MENU_COLS.map(({ key, nameKey }) =>
+                  colCheckRow([key], t(`dataTable.stationColumnsMenu.${nameKey}`))
+                )
+              )}
             </div>
           )}
         </div>
+        {!dataTableFullScreen && (
+          <button
+            onClick={enterDataTableFullScreen}
+            className="text-text-secondary hover:text-text"
+            title={t('dataTable.fullScreen.enter')}
+            data-testid="data-table-expand-button"
+          >
+            <ExpandIcon size={14} />
+          </button>
+        )}
       </div>
+      )}
 
-      {/* Table - only render when open for performance. The shots grid scrolls
-          internally and is sized to this body exactly, so the wrapper must
-          never scroll alongside it (double scrollbars). */}
+      {/* Table - only render when open for performance. Both grids scroll
+          internally and are sized to this body exactly, so the wrapper must
+          never scroll alongside them (double scrollbars). */}
       {dataTableOpen && (
-        <div ref={gridBodyRef} className={`flex-1 ${tableView === 'shots' ? 'overflow-hidden' : 'overflow-auto'}`}>
-          {selectedSection ? (
+        <div ref={gridBodyRef} className="flex-1 overflow-hidden">
+          {rawTableSelection !== null ? (
+            <RawTableView tableName={rawTableSelection} height={gridHeight} />
+          ) : selectedSection ? (
             tableView === 'shots' ? (
               <SpreadsheetGrid<Shot>
                 key={selectedSectionId ?? 'none'}
@@ -1166,44 +1356,43 @@ export default function DataTable({ sections }: DataTableProps) {
                 rowClassName={shotRowClassName}
                 cellClassName={shotCellClassName}
                 rowLabel={shotRowLabel}
-                rowNoun={shotNoun}
+                labels={gridLabels}
                 gutterWidth={72}
                 showToolbar={false}
                 onSelectionChange={setGridSel}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
+                {...(geometryReadOnly ? {} : { onInsertRows: onShotInsertRows })}
                 onDeleteRows={onShotDeleteRows}
+                extraContextMenuItems={shotExtraMenuItems}
                 hiddenColumns={shotHiddenColumns}
                 columnOrder={shotColumnOrder}
                 onColumnOrderChange={setShotColumnOrder}
               />
+            ) : sectionStations.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-text-secondary">
+                {t('dataTable.stationsEmpty')}
+              </div>
             ) : (
-              <EditableTable<StationRow>
+              <SpreadsheetGrid<Station>
+                key={`stations-${selectedSectionId ?? 'none'}`}
                 columns={stationColumns}
-                data={sectionStations}
-                keyField="id"
-                onCellEdit={handleStationCellEdit}
-                editableColumns={geometryReadOnly ? [] : ['comment']}
-                selectedKey={highlightedStationIndex}
-                hoveredKey={
-                  hoveredStation?.section_id === selectedSectionId
-                    ? hoveredStation.station_index
-                    : null
-                }
-                scrollToKey={stationScrollToKey}
-                onRowClick={handleStationRowClick}
-                onRowDoubleClick={handleStationRowDoubleClick}
-                onRowHover={handleStationRowHover}
-                emptyMessage={t('dataTable.stationsEmpty')}
-                rowClassName={(_row: StationRow, isSelected, isHovered) => {
-                  const classes: string[] = [];
-                  if (isSelected) {
-                    classes.push('bg-accent-20');
-                  } else if (isHovered) {
-                    classes.push('bg-accent-10');
-                  }
-                  classes.push('cursor-pointer');
-                  return classes.join(' ');
-                }}
+                rows={sectionStations}
+                rowKey={(s) => s.station_ref.station_index}
+                locale={numberLocale}
+                height={gridHeight}
+                onEdit={onStationEdit}
+                onActiveCellChange={onStationActiveCellChange}
+                onRowHover={onStationRowHover}
+                selectedRow={stationScrollToRow}
+                hoveredRow={stationHoveredRow}
+                rowLabel={stationRowLabel}
+                labels={stationGridLabels}
+                gutterWidth={72}
+                showToolbar={false}
+                onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
+                hiddenColumns={stationHiddenColumns}
+                columnOrder={stationColumnOrder}
+                onColumnOrderChange={setStationColumnOrder}
               />
             )
           ) : (
@@ -1219,6 +1408,7 @@ export default function DataTable({ sections }: DataTableProps) {
           className="fixed z-50 w-44 rounded border border-border bg-panel p-1 text-xs shadow-lg"
           style={{ left: headerMenu.x, top: headerMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
+          data-dropdown-open
           data-testid="data-table-header-menu"
         >
           {headerMenuItems.map((item) => (

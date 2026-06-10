@@ -173,6 +173,16 @@ interface UIStore {
     dataTableHeight?: number
   ) => Promise<void>;
 
+  // Data-table fullscreen mode: the table overlays the whole window below the
+  // toolbar. Session-only — never persisted, so the app always starts windowed.
+  dataTableFullScreen: boolean;
+  /** Raw sqlite table browsed read-only while fullscreen (null = the normal
+   *  Sections-backed view). Only reachable from the fullscreen toolbar. */
+  rawTableSelection: string | null;
+  enterDataTableFullScreen: () => void;
+  exitDataTableFullScreen: () => void;
+  setRawTableSelection: (table: string | null) => void;
+
   // Section focus mode (#50): double-clicking a section collapses both side
   // panels and opens the data table so the screen is dedicated to one section.
   // Exiting restores the layout captured at entry.
@@ -370,6 +380,8 @@ export const useUIStore = create<UIStore>((set) => ({
     // any view switch so a stale focus can't outlive the view or project that
     // opened it. No-op when not focused; restores the pre-focus panel layout.
     useUIStore.getState().exitSectionFocus();
+    // Fullscreen table is single-view scoped too — a view switch can't strand it.
+    useUIStore.getState().exitDataTableFullScreen();
     setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
     if (view === 'single') {
       void advanceProjectSeq();
@@ -566,6 +578,21 @@ export const useUIStore = create<UIStore>((set) => ({
       console.error('Failed to save panel sizes:', e);
     }
   },
+
+  // Data-table fullscreen mode (session-only, never persisted)
+  dataTableFullScreen: false,
+  rawTableSelection: null,
+  enterDataTableFullScreen: () => {
+    // The overlay grows out of the docked table, so the table must be open.
+    set({ dataTableFullScreen: true, dataTableOpen: true });
+  },
+  exitDataTableFullScreen: () => {
+    if (!useUIStore.getState().dataTableFullScreen) return;
+    // Leaving fullscreen also leaves the raw-data view: the picker that could
+    // switch back to Sections only exists in the fullscreen toolbar.
+    set({ dataTableFullScreen: false, rawTableSelection: null });
+  },
+  setRawTableSelection: (rawTableSelection) => set({ rawTableSelection }),
 
   // Section focus mode (#50)
   focusedSectionId: null,

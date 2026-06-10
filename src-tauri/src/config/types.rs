@@ -303,6 +303,12 @@ pub struct PanelsConfig {
     /// Shots-table inclination display: "avg" | "inout" | "off"
     #[serde(default = "default_inclination_mode")]
     pub data_table_inclination_mode: String,
+    /// Stations-table column order (grid column keys; empty = declaration order)
+    #[serde(default)]
+    pub data_table_station_column_order: Vec<String>,
+    /// Stations-table hidden column keys
+    #[serde(default)]
+    pub data_table_station_hidden_columns: Vec<String>,
 }
 
 fn default_data_table_hidden_columns() -> Vec<String> {

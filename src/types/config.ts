@@ -200,6 +200,8 @@ export const defaultConfig: Config = {
     data_table_shot_hidden_columns: ['section_id', 'shot_id'],
     data_table_azimuth_mode: 'avg',
     data_table_inclination_mode: 'off',
+    data_table_station_column_order: [],
+    data_table_station_hidden_columns: [],
   },
   cache: {
     tile_cache_enabled: true,

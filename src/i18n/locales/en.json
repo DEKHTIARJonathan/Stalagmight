@@ -1264,8 +1264,12 @@
     "selectSection": "Select a section to view shots.",
     "selectSectionPill": "Select this section on the map",
     "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet — delete one shot at a time.",
+    "removeDraft_one": "Remove draft row",
+    "removeDraft_other": "Remove {{count}} draft rows",
     "shotNoun_one": "shot",
     "shotNoun_other": "shots",
+    "stationNoun_one": "station",
+    "stationNoun_other": "stations",
     "shotCount": "{{countFormatted}} shots",
     "stationCount": "{{countFormatted}} stations",
     "stationColumns": {
@@ -1277,8 +1281,60 @@
       "connections": "Conn",
       "comment": "Comment"
     },
+    "stationColumnsMenu": {
+      "x": "X",
+      "y": "Y",
+      "depth": "Depth",
+      "zeroDatum": "Zero datum (GPS)",
+      "connections": "Connections",
+      "comment": "Comment"
+    },
+    "stationGps": {
+      "edit": "Set or edit this station's zero datum"
+    },
     "announcement": {
       "shotSelected": "Selected shot {{shotId}}."
+    },
+    "fullScreen": {
+      "enter": "Full screen",
+      "exit": "Map view"
+    },
+    "tableSelect": {
+      "sections": "Sections",
+      "rawData": "Raw data"
+    },
+    "rawData": {
+      "asOfLastSave": "As of last save",
+      "loading": "Loading…",
+      "unavailable": "Save the project to browse raw data",
+      "pager": "Rows {{from}}–{{to}} of {{total}}"
+    }
+  },
+  "grid": {
+    "contextMenu": {
+      "copy": "Copy{{suffix}}",
+      "cut": "Cut{{suffix}}",
+      "paste": "Paste",
+      "clear": "Clear{{suffix}}",
+      "fillDown": "Fill down",
+      "insertAbove": "Insert {{rows}} above",
+      "insertBelow": "Insert {{rows}} below",
+      "deleteRows": "Delete {{rows}}"
+    },
+    "rowNoun_one": "row",
+    "rowNoun_other": "rows",
+    "columnNoun_one": "column",
+    "columnNoun_other": "columns",
+    "columnsButton": "Columns",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "editCellAria": "Edit {{column}} row {{row}}",
+    "shortcuts": {
+      "copy": "Ctrl+C",
+      "cut": "Ctrl+X",
+      "paste": "Ctrl+V",
+      "clear": "Del",
+      "fillDown": "Ctrl+D"
     }
   },
   "detailPanel": {

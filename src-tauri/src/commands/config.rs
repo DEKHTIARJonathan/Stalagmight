@@ -46,8 +46,8 @@ pub fn update_panel_sizes(
     )
 }
 
-/// Update the shots data-table view state (column order/visibility, angle
-/// display modes) in configuration (efficient partial update)
+/// Update the data-table view state (shot/station column order and
+/// visibility, angle display modes) in configuration (efficient partial update)
 #[tauri::command]
 pub fn update_data_table_view(
     state: State<AppState>,
@@ -55,8 +55,18 @@ pub fn update_data_table_view(
     hidden_columns: Option<Vec<String>>,
     azimuth_mode: Option<String>,
     inclination_mode: Option<String>,
+    station_column_order: Option<Vec<String>>,
+    station_hidden_columns: Option<Vec<String>>,
 ) -> Result<(), String> {
-    update_data_table_view_impl(state.inner(), column_order, hidden_columns, azimuth_mode, inclination_mode)
+    update_data_table_view_impl(
+        state.inner(),
+        column_order,
+        hidden_columns,
+        azimuth_mode,
+        inclination_mode,
+        station_column_order,
+        station_hidden_columns,
+    )
 }
 
 pub(crate) fn update_data_table_view_impl(
@@ -65,6 +75,8 @@ pub(crate) fn update_data_table_view_impl(
     hidden_columns: Option<Vec<String>>,
     azimuth_mode: Option<String>,
     inclination_mode: Option<String>,
+    station_column_order: Option<Vec<String>>,
+    station_hidden_columns: Option<Vec<String>>,
 ) -> Result<(), String> {
     const MODES: [&str; 3] = ["avg", "inout", "off"];
     let mut config = state.get_config();
@@ -85,6 +97,12 @@ pub(crate) fn update_data_table_view_impl(
             return Err(format!("Invalid inclination mode '{mode}'"));
         }
         config.panels.data_table_inclination_mode = mode;
+    }
+    if let Some(order) = station_column_order {
+        config.panels.data_table_station_column_order = order;
+    }
+    if let Some(hidden) = station_hidden_columns {
+        config.panels.data_table_station_hidden_columns = hidden;
     }
     state.update_config(config).map_err(|e| e.to_string())
 }

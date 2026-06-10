@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { useProject } from '../../hooks/useProject';
 import { useAutoSave, type AutoSaveStatus } from '../../hooks/useAutoSave';
@@ -60,6 +60,7 @@ export default function SingleSystemView() {
     detailPanelWidth,
     dataTableOpen,
     dataTableHeight,
+    dataTableFullScreen,
     focusedSectionId,
     exitSectionFocus,
     setFocusedSection,
@@ -80,6 +81,7 @@ export default function SingleSystemView() {
     detailPanelWidth: s.detailPanelWidth,
     dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
+    dataTableFullScreen: s.dataTableFullScreen,
     focusedSectionId: s.focusedSectionId,
     exitSectionFocus: s.exitSectionFocus,
     setFocusedSection: s.setFocusedSection,
@@ -183,6 +185,24 @@ export default function SingleSystemView() {
     }
   }, [focusedSectionId, focusedSectionExists, project, exitSectionFocus]);
 
+  // Fullscreen data table: the overlay's top edge tracks the live toolbar
+  // height (it can change with wrapping/zoom), published as a CSS var on the
+  // root so the fixed-position wrapper can reference it. useLayoutEffect so the
+  // var is set before the overlay's first paint.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const projectLoaded = project != null;
+  useLayoutEffect(() => {
+    if (!projectLoaded) return undefined;
+    const root = rootRef.current;
+    const toolbar = root?.querySelector<HTMLElement>('[data-testid="toolbar"]');
+    if (!root || !toolbar) return undefined;
+    const apply = () => root.style.setProperty('--toolbar-h', `${toolbar.offsetHeight}px`);
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(toolbar);
+    return () => ro.disconnect();
+  }, [projectLoaded]);
+
   const sectionsPanelOpenedByOnboardingRef = useRef(false);
   const detailPanelOpenedByOnboardingRef = useRef(false);
   const dataTableOpenedByOnboardingRef = useRef(false);
@@ -284,7 +304,7 @@ export default function SingleSystemView() {
   }
 
   return (
-    <div className="h-full flex flex-col" data-testid="single-system-view">
+    <div ref={rootRef} className="h-full flex flex-col" data-testid="single-system-view">
       {/* Page heading for screen readers. The toolbar center now shows the
           active tool name (#51), so the project/focused-section name — the real
           page heading — lives here, visually hidden but still in the heading
@@ -302,6 +322,7 @@ export default function SingleSystemView() {
         canUndo={canUndo}
         canRedo={canRedo}
         placementModeActive={placementModeActive}
+        dataTableFullScreen={dataTableFullScreen}
       />
 
       {/* Main content */}
@@ -380,19 +401,33 @@ export default function SingleSystemView() {
               }}
               className="border-t border-border"
             >
-              <div className="relative h-full">
-                <button
-                  type="button"
-                  className="absolute left-1/2 top-0 z-10 h-3 w-12 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
-                  onClick={toggleDataTable}
-                  title={t('dataTable.toggle.collapse')}
-                  aria-label={t('dataTable.toggle.collapse')}
-                  data-testid="data-table-open-collapse-toggle"
-                >
-                  <span className="flex h-full items-center justify-center">
-                    <ChevronDownIcon size={10} />
-                  </span>
-                </button>
+              {/* Fullscreen mode swaps this wrapper to a fixed overlay covering
+                  the whole window below the toolbar (incl. the status bar). Only
+                  the className/style change — the parent chain stays identical,
+                  so the DataTable instance (grid selection, scroll, view state)
+                  survives entering/exiting the mode. */}
+              <div
+                className={
+                  dataTableFullScreen
+                    ? 'fixed inset-x-0 bottom-0 z-40 bg-panel'
+                    : 'relative h-full'
+                }
+                style={dataTableFullScreen ? { top: 'var(--toolbar-h, 48px)' } : undefined}
+              >
+                {!dataTableFullScreen && (
+                  <button
+                    type="button"
+                    className="absolute left-1/2 top-0 z-10 h-3 w-12 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-border bg-panel text-text-secondary transition-colors hover:bg-background-80"
+                    onClick={toggleDataTable}
+                    title={t('dataTable.toggle.collapse')}
+                    aria-label={t('dataTable.toggle.collapse')}
+                    data-testid="data-table-open-collapse-toggle"
+                  >
+                    <span className="flex h-full items-center justify-center">
+                      <ChevronDownIcon size={10} />
+                    </span>
+                  </button>
+                )}
                 <div className={`h-full ${placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : ''}`}>
                   <ErrorBoundary panelName="Data Table">
                     <DataTable sections={project.sections} />

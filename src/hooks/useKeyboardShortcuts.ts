@@ -159,6 +159,18 @@ const PLACEMENT_MODE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
 ]);
 
 /**
+ * While the data table is fullscreen, only save/undo/redo stay active. Escape
+ * and the `toggle_data_table` action exit the mode; every other shortcut is
+ * blocked so stray tool/import keys can't act on the hidden map. Grid-internal
+ * keys are unaffected — the grid stops propagation of what it handles.
+ */
+const FULLSCREEN_TABLE_ALLOWED_SHORTCUTS: Set<ShortcutAction> = new Set([
+  'save',
+  'undo',
+  'redo',
+]);
+
+/**
  * Determine if a toast should be shown for an action based on feedback preference.
  */
 function shouldShowToast(action: ShortcutAction, feedback: ShortcutFeedback): boolean {
@@ -324,11 +336,12 @@ export function useKeyboardShortcuts() {
       setSource('keyboard');
 
       const placementModeActive = useUIStore.getState().placementMode !== null;
+      const dataTableFullScreen = useUIStore.getState().dataTableFullScreen;
 
       // Handle Cmd/Ctrl+, to open Settings - works even when focus is in an input
       // Must be BEFORE the input guard check
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
-        if (placementModeActive) {
+        if (placementModeActive || dataTableFullScreen) {
           event.preventDefault();
           return;
         }
@@ -364,6 +377,12 @@ export function useKeyboardShortcuts() {
           event.preventDefault();
           closeDialog();
           // IMPORTANT: Don't return - continue to clear tool state
+        } else if (dataTableFullScreen) {
+          // Fullscreen data table: with no dialog to close, Escape exits the
+          // mode (grid-internal Escape already won via its preventDefault).
+          event.preventDefault();
+          useUIStore.getState().exitDataTableFullScreen();
+          return;
         }
 
         // Always clear tool state (existing behavior)
@@ -393,7 +412,7 @@ export function useKeyboardShortcuts() {
 
       // Handle Delete/Backspace - delete selected items
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (placementModeActive) {
+        if (placementModeActive || dataTableFullScreen) {
           event.preventDefault();
           return;
         }
@@ -429,7 +448,7 @@ export function useKeyboardShortcuts() {
       if (isCtrlOrCmd && event.key.toLowerCase() === 'a') {
         // ALWAYS prevent browser select-all
         event.preventDefault();
-        if (placementModeActive) {
+        if (placementModeActive || dataTableFullScreen) {
           return;
         }
         // GUARD: No select all for pan/zoom tools
@@ -453,7 +472,7 @@ export function useKeyboardShortcuts() {
       // Toggle keyboard shortcuts overlay
       if (event.key === '?') {
         event.preventDefault();
-        if (placementModeActive) {
+        if (placementModeActive || dataTableFullScreen) {
           return;
         }
         const { activeDialog: currentDialog } = useUIStore.getState();
@@ -483,6 +502,17 @@ export function useKeyboardShortcuts() {
 
       if (placementModeActive && !PLACEMENT_MODE_ALLOWED_SHORTCUTS.has(action)) {
         event.preventDefault();
+        return;
+      }
+
+      if (dataTableFullScreen && !FULLSCREEN_TABLE_ALLOWED_SHORTCUTS.has(action)) {
+        event.preventDefault();
+        // Exit is keyed to the toggle_data_table ACTION (not a literal key),
+        // so rebinding the shortcut keeps it working. Everything else —
+        // including import_dmp/export — is swallowed.
+        if (action === 'toggle_data_table') {
+          useUIStore.getState().exitDataTableFullScreen();
+        }
         return;
       }
 

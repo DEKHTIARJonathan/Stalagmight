@@ -255,6 +255,8 @@ impl Default for PanelsConfig {
             data_table_shot_hidden_columns: vec!["section_id".to_string(), "shot_id".to_string()],
             data_table_azimuth_mode: "avg".to_string(),
             data_table_inclination_mode: "off".to_string(),
+            data_table_station_column_order: Vec::new(),
+            data_table_station_hidden_columns: Vec::new(),
         }
     }
 }
