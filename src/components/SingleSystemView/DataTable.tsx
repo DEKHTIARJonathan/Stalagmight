@@ -7,12 +7,11 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { EditableTable } from '../common/Table';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
-import { Select, type SelectOption } from '../common/Select';
 import { EntityBlob } from '../common/EntityBlob';
 import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId } from '../../utils/formatters';
-import { formatFixed, formatNumber, getNumberFormatLocale } from '../../i18n/format';
+import { formatFixed, getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
 import { buildShotColumns } from './dataTableShotColumns';
@@ -38,9 +37,9 @@ export default function DataTable({ sections }: DataTableProps) {
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, warnings, isShotFrozen, stations, updateStationComment, executeBatch } = useProjectStore();
+  const { updateShot, warnings, isShotFrozen, updateStationComment, executeBatch } = useProjectStore();
   // Coordinate columns follow the active geometry (adjusted in the read-only
-  // closure-adjusted view); `stations` stays measured for counts/editing.
+  // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
   // Closure-adjusted view is read-only: cell editing and the reference toggle are disabled.
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
@@ -92,15 +91,6 @@ export default function DataTable({ sections }: DataTableProps) {
   const getShotWarnings = (sectionId: number, shotId: number): ProjectWarning[] => {
     return shotWarningsMap.get(`${sectionId}:${shotId}`) ?? [];
   };
-
-  // Convert sections to SelectOption format
-  const sectionOptions: SelectOption[] = useMemo(() =>
-    sections.map((section) => ({
-      value: String(section.id),
-      label: section.name ?? t('sections.defaultName', { id: section.id }),
-    })),
-    [sections, t]
-  );
 
   // Update selected section when sections change (e.g., first load or section deleted)
   useEffect(() => {
@@ -263,19 +253,13 @@ export default function DataTable({ sections }: DataTableProps) {
   // Shot cell-editing, selection, pan, hover and context-menu are now handled by
   // SpreadsheetGrid via the onShot* handlers defined below.
 
-  // Section dropdown manual change - select the new section
-  // Note: Select component with controlled value doesn't call onChange when value changes
-  // programmatically, only on user interaction, so no feedback loop prevention needed
-  const handleSectionChange = useCallback(
-    (value: string) => {
-      const newSectionId = Number(value);
-      // Manual dropdown change - select the section and clear any shot selection
-      setSelectedSectionId(newSectionId);
-      setSource('data-table');
-      setSelection({ type: 'section', sectionId: newSectionId });
-    },
-    [setSelection]
-  );
+  // Clicking the header's section pill selects the section app-wide (map/panels
+  // follow), mirroring the section pills elsewhere in the app.
+  const handleSectionPillClick = useCallback(() => {
+    if (selectedSectionId === null) return;
+    setSource('data-table');
+    setSelection({ type: 'section', sectionId: selectedSectionId });
+  }, [selectedSectionId, setSelection]);
 
   // Track last hovered section ID for ref-based cleanup (matches SectionsPanel pattern)
   const lastHoveredSectionIdRef = useRef<number | null>(null);
@@ -444,14 +428,8 @@ export default function DataTable({ sections }: DataTableProps) {
     [updateStationComment, geometryReadOnly]
   );
 
-  // View toggle options
-  const viewOptions: SelectOption[] = useMemo(() => [
-    { value: 'shots', label: t('dataTable.viewShots') },
-    { value: 'stations', label: t('dataTable.viewStations') },
-  ], [t]);
-
-  const handleViewChange = useCallback((value: string) => {
-    setTableView(value as 'shots' | 'stations');
+  const handleViewChange = useCallback((value: 'shots' | 'stations') => {
+    setTableView(value);
   }, []);
 
 
@@ -585,6 +563,21 @@ export default function DataTable({ sections }: DataTableProps) {
     return idx >= 0 ? idx : null;
   }, [scrollToKey, selectedSection]);
 
+  // The grid's name-box content, lifted into the condensed panel header:
+  // "<column> <row>" for a single cell, "3R × 2C" for a range.
+  const [gridSel, setGridSel] = useState<{
+    rows: number;
+    cols: number;
+    activeRow: number;
+    activeColKey: string;
+  } | null>(null);
+  const selectionIndicator = useMemo(() => {
+    if (!gridSel || !dataTableOpen || tableView !== 'shots' || !selectedSection) return null;
+    if (gridSel.rows > 1 || gridSel.cols > 1) return `${gridSel.rows}R × ${gridSel.cols}C`;
+    const header = shotColumns.find((c) => c.key === gridSel.activeColKey)?.header ?? gridSel.activeColKey;
+    return `${header} ${gridSel.activeRow + 1}`;
+  }, [gridSel, dataTableOpen, tableView, selectedSection, shotColumns]);
+
   // Gutter shows the shot's ID pill (replaces the old ID column); double-click
   // pans the map to the shot, as it did on the column's pill.
   const shotRowLabel = useCallback(
@@ -603,9 +596,21 @@ export default function DataTable({ sections }: DataTableProps) {
   // session-local for now, not persisted in config. Empty = declaration order.
   const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
 
-  // Grid height inside the panel body (panel header ≈ 49, grid toolbar ≈ 30,
-  // status bar ≈ 24 sit outside the scroll area).
-  const gridHeight = Math.max(120, dataTableHeight - 110);
+  // The grid must fit the panel body EXACTLY: taller and the wrapper clips it
+  // (occluded horizontal scrollbar) or grows a second scrollbar. Measure the
+  // body instead of hand-summing chrome heights; the observer also tracks the
+  // panel's resize drag and its open/close height transition.
+  const gridBodyRef = useRef<HTMLDivElement | null>(null);
+  const [gridBodyHeight, setGridBodyHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const el = gridBodyRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(() => setGridBodyHeight(el.clientHeight));
+    ro.observe(el);
+    setGridBodyHeight(el.clientHeight);
+    return () => ro.disconnect();
+  }, [dataTableOpen]);
+  const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
 
   return (
     <div
@@ -617,8 +622,49 @@ export default function DataTable({ sections }: DataTableProps) {
       data-testid="data-table"
       data-open={dataTableOpen ? 'true' : 'false'}
     >
-      {/* Header with section selector and collapse toggle */}
-      <div className="flex items-center gap-4 px-4 py-2 border-b border-border shrink-0">
+      {/* Condensed header: title + selection indicator | section pill | view toggle + collapse */}
+      <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
+        <span className="font-medium">{t('dataTable.title')}</span>
+        {selectionIndicator && (
+          <span className="text-text-secondary tabular-nums" data-testid="data-table-selection-indicator">
+            {selectionIndicator}
+          </span>
+        )}
+        {selectedSection && (
+          <button
+            className="absolute left-1/2 -translate-x-1/2 cursor-pointer"
+            onClick={handleSectionPillClick}
+            onMouseEnter={() => handleSectionHover(String(selectedSection.id))}
+            onMouseLeave={() => handleSectionHover(null)}
+            title={t('dataTable.selectSectionPill')}
+            data-testid="data-table-section-pill"
+          >
+            <EntityBlob entity="section">
+              {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
+            </EntityBlob>
+          </button>
+        )}
+        <div
+          className="ml-auto flex items-center rounded border border-border overflow-hidden"
+          role="radiogroup"
+          aria-label={t('dataTable.title')}
+          data-testid="data-table-view-select"
+        >
+          {(['shots', 'stations'] as const).map((view) => (
+            <button
+              key={view}
+              role="radio"
+              aria-checked={tableView === view}
+              className={`px-2 py-0.5 ${
+                tableView === view ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
+              }`}
+              onClick={() => handleViewChange(view)}
+              data-testid={`data-table-view-${view}`}
+            >
+              {view === 'shots' ? t('dataTable.viewShots') : t('dataTable.viewStations')}
+            </button>
+          ))}
+        </div>
         <button
           onClick={toggleDataTable}
           className="text-text-secondary hover:text-text transition-transform duration-200"
@@ -628,50 +674,13 @@ export default function DataTable({ sections }: DataTableProps) {
         >
           <ChevronDownIcon size={14} />
         </button>
-        <span className="text-sm font-medium">{t('dataTable.title')}</span>
-        {dataTableOpen && (
-          <>
-            <span className="text-text-secondary">|</span>
-            <Select
-              value={tableView}
-              onChange={handleViewChange}
-              options={viewOptions}
-              className="min-w-[100px]"
-              data-testid="data-table-view-select"
-            />
-            <span className="text-text-secondary">|</span>
-            <label className="text-sm text-text-secondary">{t('common.labels.section')}:</label>
-            <Select
-              value={String(selectedSectionId ?? '')}
-              onChange={handleSectionChange}
-              options={sectionOptions}
-              onOptionHover={handleSectionHover}
-              className="min-w-[220px] w-64"
-              data-testid="data-table-section-select"
-            />
-          </>
-        )}
-        {!dataTableOpen && selectedSection && (
-          <span className="text-sm text-text-secondary ml-auto">
-            {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}{' '}
-            ({tableView === 'stations'
-              ? t('dataTable.stationCount', {
-                  countFormatted: formatNumber(
-                    stations.filter((s) => s.station_ref.section_id === selectedSectionId).length
-                  ),
-                })
-              : t('dataTable.shotCount', {
-                  count: selectedSection.shots.length,
-                  countFormatted: formatNumber(selectedSection.shots.length),
-                })
-            })
-          </span>
-        )}
       </div>
 
-      {/* Table - only render when open for performance */}
+      {/* Table - only render when open for performance. The shots grid scrolls
+          internally and is sized to this body exactly, so the wrapper must
+          never scroll alongside it (double scrollbars). */}
       {dataTableOpen && (
-        <div className="flex-1 overflow-auto">
+        <div ref={gridBodyRef} className={`flex-1 ${tableView === 'shots' ? 'overflow-hidden' : 'overflow-auto'}`}>
           {selectedSection ? (
             tableView === 'shots' ? (
               <SpreadsheetGrid<Shot>
@@ -691,7 +700,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 rowClassName={shotRowClassName}
                 rowLabel={shotRowLabel}
                 gutterWidth={72}
-                showSelectionStats={false}
+                showToolbar={false}
+                onSelectionChange={setGridSel}
                 columnOrder={shotColumnOrder}
                 onColumnOrderChange={setShotColumnOrder}
               />

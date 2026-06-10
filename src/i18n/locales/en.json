@@ -1232,6 +1232,7 @@
       "negativeLrud": "Passage dimension cannot be negative"
     },
     "selectSection": "Select a section to view shots.",
+    "selectSectionPill": "Select this section on the map",
     "shotCount": "{{countFormatted}} shots",
     "stationCount": "{{countFormatted}} stations",
     "stationColumns": {
