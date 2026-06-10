@@ -8675,6 +8675,8 @@ fn model_sound_matches_rigorous_in_small_misclosure_regime() {
 // Regenerate after changing the networks or the weight model:
 //   GAMA_LOCAL=/path/to/gama-local cargo test --manifest-path src-tauri/Cargo.toml \
 //       --lib generate_gama_golden_fixtures -- --ignored --nocapture
+// The frozen fixture was produced with gama-local 2.33; use that version (or
+// verify a newer one regenerates byte-identically) when regenerating.
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct GoldStation {
