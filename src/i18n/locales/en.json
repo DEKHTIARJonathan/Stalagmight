@@ -1218,6 +1218,14 @@
     "empty": "No shots in this section.",
     "stationsEmpty": "No stations in this section.",
     "frozen": "Geometry locked — part of adjusted network",
+    "pasteReport": {
+      "written_one": "Pasted {{count}} cell",
+      "written_other": "Pasted {{count}} cells",
+      "clipped_one": "{{count}} outside the table was dropped",
+      "clipped_other": "{{count}} outside the table were dropped",
+      "skipped_one": "{{count}} skipped (read-only or invalid)",
+      "skipped_other": "{{count}} skipped (read-only or invalid)"
+    },
     "validation": {
       "nonPositiveLength": "Length must be greater than 0",
       "azimuthRange": "Azimuth must be between 0 and 360",

@@ -48,6 +48,7 @@ export default function DataTable({ sections }: DataTableProps) {
     selection,
     setSelection,
     setHoveredShot,
+    hoveredShot,
     triggerPanToShot,
     dataTableOpen,
     toggleDataTable,
@@ -57,6 +58,7 @@ export default function DataTable({ sections }: DataTableProps) {
     triggerCenterOnStation,
     setHoveredStation,
     hoveredStation,
+    showToast,
   } = useUIStore(useShallow((s) => ({
     selection: s.selection,
     setSelection: s.setSelection,
@@ -71,6 +73,7 @@ export default function DataTable({ sections }: DataTableProps) {
     triggerCenterOnStation: s.triggerCenterOnStation,
     setHoveredStation: s.setHoveredStation,
     hoveredStation: s.hoveredStation,
+    showToast: s.showToast,
   })));
 
   // Create a map of shot warnings for quick lookup
@@ -512,6 +515,34 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSection, setHoveredShot]
   );
 
+  // Map → grid hover tint (the reverse of onShotRowHover; purely visual, so the
+  // pair can't feed back into each other).
+  const shotHoveredRow = useMemo(() => {
+    if (!selectedSection || hoveredShot?.sectionId !== selectedSectionId) return null;
+    const idx = selectedSection.shots.findIndex((s) => s.id === hoveredShot.shotId);
+    return idx >= 0 ? idx : null;
+  }, [hoveredShot, selectedSection, selectedSectionId]);
+
+  const shotRowClassName = useCallback(
+    (_shot: Shot, rowIndex: number) =>
+      selectedSectionId !== null && isShotFrozen(selectedSectionId, rowIndex)
+        ? 'sg-row-frozen'
+        : undefined,
+    [selectedSectionId, isShotFrozen]
+  );
+
+  // Surface partially-applied pastes (only the non-zero parts).
+  const onShotPasteReport = useCallback(
+    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
+      const parts: string[] = [];
+      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
+      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
+      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
+      if (parts.length > 0) showToast(parts.join(' · '), 'data-table-paste');
+    },
+    [t, showToast]
+  );
+
   const handleToggleReference = useCallback(
     (shot: Shot) => {
       if (selectedSection && !geometryReadOnly) {
@@ -627,6 +658,7 @@ export default function DataTable({ sections }: DataTableProps) {
           {selectedSection ? (
             tableView === 'shots' ? (
               <SpreadsheetGrid<Shot>
+                key={selectedSectionId ?? 'none'}
                 columns={shotColumns}
                 rows={selectedSection.shots}
                 rowKey={(s) => s.id}
@@ -636,7 +668,10 @@ export default function DataTable({ sections }: DataTableProps) {
                 onBatchEdit={onShotBatchEdit}
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
-                scrollToRow={shotScrollToRow}
+                onPasteReport={onShotPasteReport}
+                selectedRow={shotScrollToRow}
+                hoveredRow={shotHoveredRow}
+                rowClassName={shotRowClassName}
               />
             ) : (
               <EditableTable<StationRow>
