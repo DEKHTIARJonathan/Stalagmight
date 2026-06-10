@@ -610,6 +610,9 @@ export default function DataTable({ sections }: DataTableProps) {
     () => new Set(['section_id', 'shot_id'])
   );
   const [colMenuOpen, setColMenuOpen] = useState(false);
+  // Open the dropdown toward the larger free space — the data table sits at
+  // the bottom of the window, so this usually means upward.
+  const [colMenuUp, setColMenuUp] = useState(false);
 
   const shotHiddenColumns = useMemo(() => {
     const hidden = [...hiddenShotCols];
@@ -692,10 +695,10 @@ export default function DataTable({ sections }: DataTableProps) {
   // Rows of the column-visibility menu: a checkbox per column (or group — the
   // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
   // the azimuth and inclination column families.
-  const colCheckRow = (keys: string[], label: string) => (
+  const colCheckRow = (keys: string[], label: string, className = '') => (
     <label
       key={keys[0]}
-      className="flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10"
+      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${className}`}
     >
       <input
         type="checkbox"
@@ -792,7 +795,11 @@ export default function DataTable({ sections }: DataTableProps) {
             mousedown listener that closes it. */}
         <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
           <button
-            onClick={() => setColMenuOpen((v) => !v)}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setColMenuUp(r.top > window.innerHeight - r.bottom);
+              setColMenuOpen((v) => !v);
+            }}
             className={colMenuOpen ? 'text-text' : 'text-text-secondary hover:text-text'}
             title={t('dataTable.columnsMenu.button')}
             data-testid="data-table-columns-menu"
@@ -801,20 +808,24 @@ export default function DataTable({ sections }: DataTableProps) {
           </button>
           {colMenuOpen && (
             <div
-              className="absolute right-0 top-full z-50 mt-1 w-48 rounded border border-border bg-panel p-1 shadow-lg"
+              className={`absolute right-0 z-50 w-56 rounded border border-border bg-panel p-1 shadow-lg ${
+                colMenuUp ? 'bottom-full mb-1' : 'top-full mt-1'
+              }`}
               data-testid="data-table-columns-dropdown"
             >
               {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
+              {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
+              {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
               {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
               {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth')}
               {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, (m) => changeAngleMode('inclination', m), 'col-inclination')}
-              {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'))}
-              {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'))}
+              <div className="flex">
+                {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1')}
+                {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1')}
+              </div>
               {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
               {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
               {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
-              {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
-              {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
             </div>
           )}
         </div>

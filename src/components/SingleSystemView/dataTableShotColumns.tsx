@@ -150,6 +150,22 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
         );
       },
     },
+    // Raw identifiers (read-only, hidden by default) — for cross-referencing and
+    // copying out alongside the data.
+    {
+      key: 'section_id',
+      header: t('dataTable.columns.sectionIdShort'),
+      width: 60,
+      align: 'right',
+      getValue: () => sectionId ?? '',
+    },
+    {
+      key: 'shot_id',
+      header: t('dataTable.columns.shotIdShort'),
+      width: 60,
+      align: 'right',
+      getValue: (r) => r.id,
+    },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>
       typeof v === 'number' && v <= 0 ? t('dataTable.validation.nonPositiveLength') : null,
     ),
@@ -239,22 +255,6 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       editable: true,
       isEditable: editableUnlessFrozenGeometry('comment'), // not locked on frozen
       parse: (raw) => (raw.trim() === '' ? null : raw), // empty/whitespace clears to null
-    },
-    // Raw identifiers (read-only, hidden by default) — for cross-referencing and
-    // copying out alongside the data.
-    {
-      key: 'section_id',
-      header: t('dataTable.columns.sectionIdShort'),
-      width: 60,
-      align: 'right',
-      getValue: () => sectionId ?? '',
-    },
-    {
-      key: 'shot_id',
-      header: t('dataTable.columns.shotIdShort'),
-      width: 60,
-      align: 'right',
-      getValue: (r) => r.id,
     },
   ];
 }
