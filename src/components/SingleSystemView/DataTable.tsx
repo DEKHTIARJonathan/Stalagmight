@@ -477,6 +477,72 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Single edit → one update_shot (one undo). Values are already coerced by the
   // column; the virtual azimuth-average expands to in/out via buildShotUpdates.
+  // Column visibility (session-local). Azimuth/inclination are tri-state —
+  // the average column, the in/out leg pair, or neither; the raw ID columns
+  // start hidden; L/R/U/D toggle as one LRUD group.
+  const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
+  const [inclinationMode, setInclinationMode] = useState<'avg' | 'inout' | 'off'>('off');
+  const [hiddenShotCols, setHiddenShotCols] = useState<ReadonlySet<string>>(
+    () => new Set(['section_id', 'shot_id'])
+  );
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  // Right-click on a column header: hide it / switch the angle family's mode.
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
+  useEffect(() => {
+    if (!headerMenu) return undefined;
+    const close = () => setHeaderMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHeaderMenu(null);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [headerMenu]);
+  // Open the dropdown toward the larger free space — the data table sits at
+  // the bottom of the window, so this usually means upward.
+  const [colMenuUp, setColMenuUp] = useState(false);
+
+  const shotHiddenColumns = useMemo(() => {
+    const hidden = [...hiddenShotCols];
+    if (azimuthMode !== 'avg') hidden.push(AZIMUTH_AVG_KEY);
+    if (azimuthMode !== 'inout') hidden.push('azimuth_in', 'azimuth_out');
+    if (inclinationMode !== 'avg') hidden.push(PITCH_AVG_KEY);
+    if (inclinationMode !== 'inout') hidden.push('pitch_in', 'pitch_out');
+    return hidden;
+  }, [hiddenShotCols, azimuthMode, inclinationMode]);
+
+  // Toggle a column (or a whole group, e.g. LRUD): visible iff none of its
+  // keys are hidden, so a mixed group resolves to "show all" first.
+  const toggleShotCols = useCallback((keys: string[]) => {
+    setHiddenShotCols((prev) => {
+      const next = new Set(prev);
+      const visible = keys.every((k) => !prev.has(k));
+      for (const k of keys) {
+        if (visible) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+
+
+  useEffect(() => {
+    if (!colMenuOpen) return undefined;
+    const close = () => setColMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setColMenuOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [colMenuOpen]);
+
   // --- Draft "new shot" row -------------------------------------------------
   // The grid always shows one extra editable row at the end. Its values live
   // here until length, both depths and an azimuth are present, then it commits
@@ -520,6 +586,39 @@ export default function DataTable({ sections }: DataTableProps) {
       return d as Partial<ShotData>;
     });
   }, []);
+  // Once the draft has ANY value, the still-missing required fields surface:
+  // visible columns tint their draft cell red; hidden ones tint the columns
+  // (eye) button and their dropdown row instead, until shown or filled.
+  const draftMissing = useMemo(() => {
+    const cells = new Set<string>();
+    const hiddenProblems = new Set<string>();
+    const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+    if (Object.keys(draftShot).length === 0) return { cells, hiddenProblems };
+    const need = (colKey: string, menuKey: string) => {
+      if (hiddenShotCols.has(colKey)) hiddenProblems.add(menuKey);
+      else cells.add(colKey);
+    };
+    if (!fin(draftShot.length)) need('length', 'length');
+    if (!fin(draftShot.depth_in)) need('depth_in', 'depthIn');
+    if (!fin(draftShot.depth_out)) need('depth_out', 'depthOut');
+    if (!fin(draftShot.azimuth_in) && !fin(draftShot.azimuth_out)) {
+      if (azimuthMode === 'avg') cells.add(AZIMUTH_AVG_KEY);
+      else if (azimuthMode === 'inout') {
+        cells.add('azimuth_in');
+        cells.add('azimuth_out');
+      } else {
+        hiddenProblems.add('azimuth');
+      }
+    }
+    return { cells, hiddenProblems };
+  }, [draftShot, hiddenShotCols, azimuthMode]);
+
+  const shotCellClassName = useCallback(
+    (shot: Shot, _rowIndex: number, colKey: string) =>
+      shot.id === DRAFT_SHOT_ID && draftMissing.cells.has(colKey) ? 'sg-cell-missing' : undefined,
+    [draftMissing]
+  );
+
   // Commit the draft once the required fields are present.
   const draftCommitting = useRef(false);
   useEffect(() => {
@@ -752,71 +851,6 @@ export default function DataTable({ sections }: DataTableProps) {
   // session-local for now, not persisted in config. Empty = declaration order.
   const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
 
-  // Column visibility (session-local). Azimuth/inclination are tri-state —
-  // the average column, the in/out leg pair, or neither; the raw ID columns
-  // start hidden; L/R/U/D toggle as one LRUD group.
-  const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
-  const [inclinationMode, setInclinationMode] = useState<'avg' | 'inout' | 'off'>('off');
-  const [hiddenShotCols, setHiddenShotCols] = useState<ReadonlySet<string>>(
-    () => new Set(['section_id', 'shot_id'])
-  );
-  const [colMenuOpen, setColMenuOpen] = useState(false);
-  // Right-click on a column header: hide it / switch the angle family's mode.
-  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
-  useEffect(() => {
-    if (!headerMenu) return undefined;
-    const close = () => setHeaderMenu(null);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setHeaderMenu(null);
-    };
-    window.addEventListener('mousedown', close);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', close);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [headerMenu]);
-  // Open the dropdown toward the larger free space — the data table sits at
-  // the bottom of the window, so this usually means upward.
-  const [colMenuUp, setColMenuUp] = useState(false);
-
-  const shotHiddenColumns = useMemo(() => {
-    const hidden = [...hiddenShotCols];
-    if (azimuthMode !== 'avg') hidden.push(AZIMUTH_AVG_KEY);
-    if (azimuthMode !== 'inout') hidden.push('azimuth_in', 'azimuth_out');
-    if (inclinationMode !== 'avg') hidden.push(PITCH_AVG_KEY);
-    if (inclinationMode !== 'inout') hidden.push('pitch_in', 'pitch_out');
-    return hidden;
-  }, [hiddenShotCols, azimuthMode, inclinationMode]);
-
-  // Toggle a column (or a whole group, e.g. LRUD): visible iff none of its
-  // keys are hidden, so a mixed group resolves to "show all" first.
-  const toggleShotCols = useCallback((keys: string[]) => {
-    setHiddenShotCols((prev) => {
-      const next = new Set(prev);
-      const visible = keys.every((k) => !prev.has(k));
-      for (const k of keys) {
-        if (visible) next.add(k);
-        else next.delete(k);
-      }
-      return next;
-    });
-  }, []);
-
-
-  useEffect(() => {
-    if (!colMenuOpen) return undefined;
-    const close = () => setColMenuOpen(false);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setColMenuOpen(false);
-    };
-    window.addEventListener('mousedown', close);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', close);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [colMenuOpen]);
 
   // The grid must fit the panel body EXACTLY: taller and the wrapper clips it
   // (occluded horizontal scrollbar) or grows a second scrollbar. Measure the
@@ -899,10 +933,12 @@ export default function DataTable({ sections }: DataTableProps) {
   // Rows of the column-visibility menu: a checkbox per column (or group — the
   // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
   // the azimuth and inclination column families.
-  const colCheckRow = (keys: string[], label: string, className = '') => (
+  const colCheckRow = (keys: string[], label: string, className = '', problem = false) => (
     <label
       key={keys[0]}
-      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${className}`}
+      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${
+        problem ? 'text-error' : ''
+      } ${className}`}
     >
       <input
         type="checkbox"
@@ -918,9 +954,10 @@ export default function DataTable({ sections }: DataTableProps) {
     mode: 'avg' | 'inout' | 'off',
     setMode: (m: 'avg' | 'inout' | 'off') => void,
     testId: string,
+    problem = false,
   ) => (
     <div className="flex items-center justify-between gap-2 px-2 py-0.5">
-      <span>{label}</span>
+      <span className={problem ? 'text-error' : undefined}>{label}</span>
       <span className="flex overflow-hidden rounded border border-border">
         {(['avg', 'inout', 'off'] as const).map((m) => (
           <button
@@ -1004,7 +1041,13 @@ export default function DataTable({ sections }: DataTableProps) {
               setColMenuUp(r.top > window.innerHeight - r.bottom);
               setColMenuOpen((v) => !v);
             }}
-            className={colMenuOpen ? 'text-text' : 'text-text-secondary hover:text-text'}
+            className={
+              draftMissing.hiddenProblems.size > 0
+                ? 'text-error'
+                : colMenuOpen
+                  ? 'text-text'
+                  : 'text-text-secondary hover:text-text'
+            }
             title={t('dataTable.columnsMenu.button')}
             data-testid="data-table-columns-menu"
           >
@@ -1020,12 +1063,12 @@ export default function DataTable({ sections }: DataTableProps) {
               {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
               {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
               {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
-              {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
-              {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth')}
+              {colCheckRow(['length'], t('dataTable.columnsMenu.length'), '', draftMissing.hiddenProblems.has('length'))}
+              {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth', draftMissing.hiddenProblems.has('azimuth'))}
               {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, (m) => changeAngleMode('inclination', m), 'col-inclination')}
               <div className="flex">
-                {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1')}
-                {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1')}
+                {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1', draftMissing.hiddenProblems.has('depthIn'))}
+                {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1', draftMissing.hiddenProblems.has('depthOut'))}
               </div>
               {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
               {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
@@ -1057,6 +1100,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 selectedRow={shotScrollToRow}
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
+                cellClassName={shotCellClassName}
                 rowLabel={shotRowLabel}
                 rowNoun={shotNoun}
                 gutterWidth={72}

@@ -94,6 +94,8 @@ export interface SpreadsheetGridProps<Row> {
   hoveredRow?: number | null;
   /** Extra class for a row element (e.g. a frozen-row tint). */
   rowClassName?: (row: Row, rowIndex: number) => string | undefined;
+  /** Extra class for a single cell (e.g. tint a required-but-empty field). */
+  cellClassName?: (row: Row, rowIndex: number, colKey: string) => string | undefined;
   /** Label for the row-number gutter (default: 1-based row index). E.g. a
    *  domain id like "5:3" so rows match what the rest of the app calls them. */
   rowLabel?: (row: Row, rowIndex: number) => ReactNode;
@@ -169,6 +171,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     selectedRow,
     hoveredRow,
     rowClassName,
+    cellClassName,
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
     showToolbar = true,
@@ -1908,6 +1911,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     const isActive = rowIdx === selection.active.row && c === activeColIdx;
                     const isEditingCell = editing?.row === rowIdx && editing.colKey === col.key;
                     const missing = isMissing(rowIdx, col.key);
+                    const extraCellClass = cellClassName?.(row, rowIdx, col.key);
                     const cellText = col.render || missing
                       ? null
                       : col.format
@@ -1922,7 +1926,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                         aria-selected={inSel}
                         className={`sg-cell flex items-center overflow-hidden border-b border-r border-white/5 px-2 text-xs ${
                           col.align === 'right' ? 'justify-end' : col.align === 'center' ? 'justify-center' : ''
-                        }${missing ? ' sg-cell-missing' : ''}`}
+                        }${missing ? ' sg-cell-missing' : ''}${extraCellClass ? ` ${extraCellClass}` : ''}`}
                         style={{
                           width: widths[c],
                           minWidth: widths[c],
