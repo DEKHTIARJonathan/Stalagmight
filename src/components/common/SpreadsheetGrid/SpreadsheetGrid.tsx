@@ -100,9 +100,13 @@ export interface SpreadsheetGridProps<Row> {
   /** Gutter width in px (default 48) — widen when rowLabel renders something
    *  larger than a plain row number. */
   gutterWidth?: number;
-  /** Sum/Avg/Min/Max/Count bar for multi-cell selections (default true) —
-   *  turn off where aggregates are meaningless for the data. */
-  showSelectionStats?: boolean;
+  /** Render the built-in toolbar row (name box, Columns, Maximize). Default
+   *  true; hosts that fold the grid into their own chrome turn it off and
+   *  track {@link onSelectionChange} instead. */
+  showToolbar?: boolean;
+  /** Fired whenever the selection rectangle or active cell changes (and once
+   *  on mount) — lets a host render its own name-box/indicator. */
+  onSelectionChange?: (sel: { rows: number; cols: number; activeRow: number; activeColKey: string }) => void;
 
   maximized?: boolean;
   onToggleMaximize?: () => void;
@@ -155,7 +159,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     rowClassName,
     rowLabel,
     gutterWidth = GUTTER_WIDTH,
-    showSelectionStats = true,
+    showToolbar = true,
+    onSelectionChange,
     maximized = false,
     onToggleMaximize,
     className = '',
@@ -249,43 +254,24 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   // --- Derived rectangle ----------------------------------------------------
   const rect = useMemo(() => selectionRect(selection, colIndexOf), [selection, colIndexOf]);
+
+  // Host name-box feed: selection dims + active cell, on mount and every change.
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+  useEffect(() => {
+    onSelectionChangeRef.current?.({
+      rows: rect.r1 - rect.r0 + 1,
+      cols: rect.c1 - rect.c0 + 1,
+      activeRow: selection.active.row,
+      activeColKey: selection.active.colKey,
+    });
+  }, [rect, selection.active.row, selection.active.colKey]);
   const focusColIdx = colIndexOf(selection.focus.colKey);
   const activeColIdx = colIndexOf(selection.active.colKey);
   const multiCell = !rectIsSingleCell(rect);
 
   // --- Helpers --------------------------------------------------------------
   const colAt = useCallback((idx: number) => visibleColumns[idx], [visibleColumns]);
-
-  // Google-Sheets-style selection summary (Count + Sum/Avg/Min/Max of numerics).
-  // Shown when >1 cell is selected.
-  const selectionStats = useMemo(() => {
-    if (!showSelectionStats) return null;
-    const cellsSelected = (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1);
-    if (cellsSelected <= 1) return null;
-    const nums: number[] = [];
-    let count = 0;
-    for (let r = rect.r0; r <= rect.r1; r++) {
-      const data = rows[r];
-      if (data === undefined) continue;
-      for (let c = rect.c0; c <= rect.c1; c++) {
-        const col = visibleColumns[c];
-        if (!col) continue;
-        const v = col.getValue(data);
-        if (v !== null && v !== undefined && v !== '') count += 1;
-        const n = typeof v === 'number' ? v : parseLocaleNumber(String(v ?? ''), locale);
-        if (n !== undefined && Number.isFinite(n)) nums.push(n);
-      }
-    }
-    let sum = 0;
-    let min = Infinity;
-    let max = -Infinity;
-    for (const n of nums) {
-      sum += n;
-      if (n < min) min = n;
-      if (n > max) max = n;
-    }
-    return { count, numeric: nums.length, sum, avg: nums.length ? sum / nums.length : 0, min, max };
-  }, [showSelectionStats, rect, rows, visibleColumns, locale]);
 
   const cellEditable = useCallback(
     (rowIdx: number, col: GridColumn<Row> | undefined): boolean => {
@@ -1603,6 +1589,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       className={`sg-grid relative flex flex-col ${grabbing ? 'sg-grabbing' : ''} ${maximized ? 'fixed inset-0 z-50 bg-panel' : ''} ${className}`}
       data-testid="spreadsheet-grid"
     >
+      {showToolbar && (
       <div className="sg-toolbar flex items-center justify-between gap-2 px-2 py-0.5">
         <span className="sg-namebox" data-testid="grid-namebox">{nameBox}</span>
         <div className="flex items-center gap-1">
@@ -1648,6 +1635,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           )}
         </div>
       </div>
+      )}
 
       <div
         ref={scrollRef}
@@ -1967,21 +1955,6 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         </div>
       </div>
 
-      {/* Selection summary (Google-Sheets-style), shown when >1 cell is selected. */}
-      {selectionStats && (
-        <div className="sg-statusbar" data-testid="grid-statusbar">
-          {selectionStats.numeric > 0 && (
-            <>
-              <span>Sum: {fmtStat(selectionStats.sum, locale)}</span>
-              <span>Avg: {fmtStat(selectionStats.avg, locale)}</span>
-              <span>Min: {fmtStat(selectionStats.min, locale)}</span>
-              <span>Max: {fmtStat(selectionStats.max, locale)}</span>
-            </>
-          )}
-          <span>Count: {selectionStats.count}</span>
-        </div>
-      )}
-
       {/* Floating "ghost" of the column(s) being moved. */}
       {colGhost && (
         <div
@@ -2032,6 +2005,3 @@ function isColWritable<Row>(c: GridColumn<Row>): boolean {
   return !!(c.editable || c.isEditable);
 }
 
-function fmtStat(n: number, locale: string): string {
-  return n.toLocaleString(locale, { maximumFractionDigits: 3 });
-}

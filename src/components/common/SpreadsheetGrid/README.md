@@ -42,8 +42,10 @@ integrated into `DataTable` later (see `docs/plans/issue-61-spreadsheet-editing.
   (e.g. a domain-id pill) instead of the 1-based row number; pair with
   `gutterWidth` when the label needs more than the default 48px. The gutter
   participates in row hover/selection like any cell.
-- **`showSelectionStats`**: set `false` to drop the Sum/Avg/Min/Max bar where
-  aggregates are meaningless for the data.
+- **Chrome embedding**: `showToolbar={false}` drops the built-in toolbar row
+  (name box / Columns / Maximize) for hosts that fold the grid into their own
+  header; subscribe to `onSelectionChange` (selection dims + active cell) to
+  render the name-box indicator there instead.
 
 All edits are **coerced** (locale-aware) and emitted via callbacks; the grid never
 mutates your data. Multi-cell paste/fill/clear go through `onBatchEdit` so the
