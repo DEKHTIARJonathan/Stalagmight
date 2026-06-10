@@ -15,6 +15,11 @@ import {
  * display a lock icon with a warning background. Non-geometry fields
  * (like comment) remain editable.
  *
+ * The shots view renders a SpreadsheetGrid: rows are grid-row-{rowIndex}
+ * (index, not shot id), cells grid-cell-{rowIndex}-{colKey}, and editing
+ * opens the grid-cell-editor textarea. Frozen rows get the sg-row-frozen
+ * class; the lock icon keeps its frozen-{sectionId}-{shotId} testid.
+ *
  * Strategy: After seeding sections, open the DataTable, then inject
  * frozenShots into the store so the DataTable re-renders with frozen state.
  */
@@ -74,8 +79,8 @@ async function injectFrozenShots(
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  // Wait for table rows to render (auto-selects first section)
-  await page.waitForSelector('[data-testid^="table-row-"]', { timeout: 5000 });
+  // Wait for grid rows to render (auto-selects first section)
+  await page.waitForSelector('[data-testid^="grid-row-"]', { timeout: 5000 });
 }
 
 test.describe('Frozen Shots', () => {
@@ -105,10 +110,15 @@ test.describe('Frozen Shots', () => {
     await expect(frozenIndicator).toBeVisible();
   });
 
-  test('frozen shot row has bg-warning-5 class', async ({ page }) => {
-    const row = page.getByTestId(`table-row-${shotIds[0]}`);
+  test('frozen shot row has sg-row-frozen class', async ({ page }) => {
+    // Shot index 0 is frozen (grid rows are addressed by index, not shot id)
+    const row = page.getByTestId('grid-row-0');
     await expect(row).toBeVisible();
-    await expect(row).toHaveClass(/bg-warning-5/);
+    await expect(row).toHaveClass(/sg-row-frozen/);
+
+    // Non-frozen row does not get the tint
+    const otherRow = page.getByTestId('grid-row-1');
+    await expect(otherRow).not.toHaveClass(/sg-row-frozen/);
   });
 
   test('non-frozen shots do not show lock icon', async ({ page }) => {
@@ -118,31 +128,30 @@ test.describe('Frozen Shots', () => {
   });
 
   test('geometry field (length) not editable on frozen shot', async ({ page }) => {
-    // For frozen rows, isRowEditable returns false, so EditableCell is not rendered.
-    // The cell renders as a plain <span> instead of an <input>.
-    // Verify the table-cell testid (which is on the <input>) does NOT exist for frozen row.
-    const frozenLengthInput = page.getByTestId(`table-cell-${shotIds[0]}-length`);
-    await expect(frozenLengthInput).toHaveCount(0);
+    const editor = page.getByTestId('grid-cell-editor');
 
-    // Also verify clicking the row's length td does not produce an input
-    const row = page.getByTestId(`table-row-${shotIds[0]}`);
-    const lengthTd = row.locator('td').nth(2); // length column (after warnings + id)
-    await lengthTd.click();
+    // Positive control: the same gesture opens the editor on the non-frozen row,
+    // so an editor-less frozen row below cannot pass vacuously.
+    await page.getByTestId('grid-cell-1-length').dblclick();
+    await expect(editor).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(editor).toHaveCount(0);
+
+    // Frozen row: double-clicking the length cell must NOT open the editor
+    await page.getByTestId('grid-cell-0-length').dblclick();
     await page.waitForTimeout(300);
-
-    // No editable input should appear in the frozen row
-    const inputs = row.locator('input');
-    await expect(inputs).toHaveCount(0);
+    await expect(editor).toHaveCount(0);
   });
 
   test('non-frozen shot geometry fields remain editable', async ({ page }) => {
-    // Non-frozen row should have EditableCell with table-cell testid
-    const cell = page.getByTestId(`table-cell-${shotIds[1]}-length`);
+    const cell = page.getByTestId('grid-cell-1-length');
     await expect(cell).toBeVisible();
 
-    // Click to focus the input
-    await cell.click();
-    await expect(cell).toBeFocused();
+    // Double-click opens the cell editor, focused and ready for input
+    await cell.dblclick();
+    const editor = page.getByTestId('grid-cell-editor');
+    await expect(editor).toBeVisible();
+    await expect(editor).toBeFocused();
   });
 
   test('multiple frozen shots in same section all display lock icons', async ({ page }) => {

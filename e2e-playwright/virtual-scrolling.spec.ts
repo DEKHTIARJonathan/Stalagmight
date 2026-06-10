@@ -11,12 +11,14 @@ import {
 /**
  * E2E tests for the DataTable with large datasets.
  *
- * The EditableTable uses @tanstack/react-virtual with:
+ * The shots view renders a SpreadsheetGrid backed by @tanstack/react-virtual:
  *   ROW_HEIGHT = 33px
- *   overscan = 5
+ *   overscan = 8
  *
- * Tests verify that the DataTable correctly loads and renders a large number
- * of shots, supports row selection, and displays correct shot data.
+ * Rows are grid-row-{rowIndex} (index, not shot id); the active row carries
+ * data-active="true". Tests verify that the DataTable correctly loads and
+ * renders a large number of shots, supports row selection, and displays
+ * correct shot data.
  */
 
 const SHOT_COUNT = 120;
@@ -42,8 +44,8 @@ function buildLargeSection(): SectionSeed {
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
-  // Wait for table rows to render (auto-selects first section)
-  await page.waitForSelector('[data-testid^="table-row-"]', { timeout: 10000 });
+  // Wait for grid rows to render (auto-selects first section)
+  await page.waitForSelector('[data-testid^="grid-row-"]', { timeout: 10000 });
 }
 
 test.describe('Virtual Scrolling in DataTable', () => {
@@ -67,24 +69,24 @@ test.describe('Virtual Scrolling in DataTable', () => {
     });
     expect(totalShots).toBe(SHOT_COUNT);
 
-    const renderedRows = page.locator('[data-testid^="table-row-"]');
+    const renderedRows = page.locator('[data-testid^="grid-row-"]');
     const rowCount = await renderedRows.count();
     expect(rowCount).toBeGreaterThan(0);
     expect(rowCount).toBeLessThan(SHOT_COUNT);
   });
 
   test('first row is visible and has correct shot ID', async ({ page }) => {
-    const firstShotId = await page.evaluate(() => {
+    const sectionId = await page.evaluate(() => {
       const e2e = (window as any).__E2E_TEST__;
       if (!e2e) return null;
-      const state = e2e.projectStore.getState();
-      const section = state.project?.sections?.[0];
-      return section?.shots?.[0]?.id ?? null;
+      return e2e.projectStore.getState().project?.sections?.[0]?.id ?? null;
     });
-    expect(firstShotId).not.toBeNull();
+    expect(sectionId).not.toBeNull();
 
-    const firstRow = page.getByTestId(`table-row-${firstShotId}`);
+    const firstRow = page.getByTestId('grid-row-0');
     await expect(firstRow).toBeVisible();
+    // The id column shows the section:position shot id (positions are 1-based)
+    await expect(page.getByTestId('grid-cell-0-id')).toContainText(`${sectionId}:1`);
   });
 
   test('last row exists in the DOM', async ({ page }) => {
@@ -106,8 +108,10 @@ test.describe('Virtual Scrolling in DataTable', () => {
       e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId });
     }, lastShotId);
 
-    const lastRow = page.getByTestId(`table-row-${lastShotId}`);
+    // The grid scrolls to the externally-selected row and marks it active
+    const lastRow = page.getByTestId(`grid-row-${SHOT_COUNT - 1}`);
     await expect(lastRow).toBeVisible({ timeout: 5000 });
+    await expect(lastRow).toHaveAttribute('data-active', 'true');
   });
 
   test('selection via store updates row highlight', async ({ page }) => {
@@ -134,27 +138,24 @@ test.describe('Virtual Scrolling in DataTable', () => {
       { sectionId: ids.sectionId, shotId: targetShotId },
     );
 
-    await page.waitForTimeout(300);
-
-    // The target row should have data-selected attribute
-    const targetRow = page.getByTestId(`table-row-${targetShotId}`);
-    await expect(targetRow).toHaveAttribute('data-selected', 'true');
+    // The grid moves its active cell to the externally-selected row
+    // (exercises the selectedRow prop, including the scroll into view)
+    const targetRow = page.getByTestId('grid-row-100');
+    await expect(targetRow).toHaveAttribute('data-active', 'true', { timeout: 5000 });
   });
 
   test('row click selects shot in large table', async ({ page }) => {
-    const firstRow = page.locator('[data-testid^="table-row-"]').first();
-    await firstRow.click();
+    await page.getByTestId('grid-cell-0-length').click();
 
-    // Row should have selected state
-    await expect(firstRow).toHaveAttribute('data-selected', 'true');
+    // Clicked row becomes the grid's active row
+    await expect(page.getByTestId('grid-row-0')).toHaveAttribute('data-active', 'true');
   });
 
   test('selected row has visual highlight class', async ({ page }) => {
-    const firstRow = page.locator('[data-testid^="table-row-"]').first();
-    await firstRow.click();
+    await page.getByTestId('grid-cell-0-length').click();
 
-    // Selected row gets bg-accent-20 class
-    await expect(firstRow).toHaveClass(/bg-accent-20/);
+    // The row-number gutter of the active row gets the active highlight
+    await expect(page.getByTestId('grid-gutter-0')).toHaveClass(/sg-gutter-active/);
   });
 
   test('DataTable section selector shows section name', async ({ page }) => {

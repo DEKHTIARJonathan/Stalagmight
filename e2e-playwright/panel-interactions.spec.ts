@@ -122,9 +122,9 @@ test.describe('Panel Interactions', () => {
     const sectionSelector = page.getByTestId('data-table-section-select');
     await expect(sectionSelector).toBeVisible({ timeout: 2000 });
 
-    // Table rows should be visible
-    const tableBody = dataTable.locator('tbody');
-    await expect(tableBody).toBeVisible({ timeout: 2000 });
+    // Grid rows should be visible
+    const firstRow = dataTable.locator('[data-testid^="grid-row-"]').first();
+    await expect(firstRow).toBeVisible({ timeout: 2000 });
 
     // Toggle closed with Ctrl+3
     await page.keyboard.press('Control+3');
@@ -294,23 +294,25 @@ test.describe('Panel Interactions', () => {
     const tableContainer = page.getByTestId('data-table');
 
     if (await tableContainer.isVisible()) {
-      // Check that the table has rows
-      const tableRows = tableContainer.locator('tbody tr');
-      const rowCount = await tableRows.count();
+      // Check that the grid has rows
+      const gridRows = tableContainer.locator('[data-testid^="grid-row-"]');
+      const rowCount = await gridRows.count();
       expect(rowCount).toBeGreaterThan(0);
 
-      // If there are enough rows to scroll, we can test scroll behavior
-      if (rowCount > 5) {
+      // The shots grid scrolls inside its own container (not the panel element)
+      const gridScroller = tableContainer.locator('[data-testid="spreadsheet-grid"] > div[tabindex="0"]');
+      const canScroll = await gridScroller.evaluate((el) => el.scrollHeight > el.clientHeight);
+      if (canScroll) {
         // Get scroll position
-        const scrollTop = await tableContainer.evaluate((el) => el.scrollTop);
+        const scrollTop = await gridScroller.evaluate((el) => el.scrollTop);
 
         // Scroll down
-        await tableContainer.evaluate((el) => el.scrollBy(0, 100));
+        await gridScroller.evaluate((el) => el.scrollBy(0, 100));
         await waitForMapIdle(page);
 
         // Check that scroll position changed
-        const newScrollTop = await tableContainer.evaluate((el) => el.scrollTop);
-        expect(newScrollTop).toBeGreaterThanOrEqual(scrollTop);
+        const newScrollTop = await gridScroller.evaluate((el) => el.scrollTop);
+        expect(newScrollTop).toBeGreaterThan(scrollTop);
       }
     }
 
