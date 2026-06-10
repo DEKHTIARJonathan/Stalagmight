@@ -1672,11 +1672,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         aria-activedescendant={`sg-cell-${selection.active.row}-${selection.active.colKey}`}
       >
         <div style={{ width: totalWidth, position: 'relative' }}>
-          {/* Sticky header */}
+          {/* Sticky header. z-30 beats the gutter cells' z-20 — rows scrolling
+              under the header must pass beneath the corner, not bleed over it. */}
           <div
             role="row"
             aria-rowindex={1}
-            className={`sg-header-bar sticky top-0 z-10 flex bg-panel ${scrolled ? 'sg-scrolled' : ''}`}
+            className={`sg-header-bar sticky top-0 z-30 flex bg-panel ${scrolled ? 'sg-scrolled' : ''}`}
             style={{ height: HEADER_HEIGHT }}
           >
             {/* Frozen top-left corner above the row-number gutter. */}
