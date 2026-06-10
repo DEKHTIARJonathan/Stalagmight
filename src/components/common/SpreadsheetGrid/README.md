@@ -38,6 +38,12 @@ integrated into `DataTable` later (see `docs/plans/issue-61-spreadsheet-editing.
   `onActiveCellChange`), `hoveredRow` (tints a row with `sg-row-hover`),
   `rowClassName(row, i)` (extra per-row class, e.g. a frozen-row tint),
   `scrollToRow`, and `onRowHover`. The active row carries `data-active="true"`.
+- **Gutter customization**: `rowLabel(row, i)` renders a custom gutter label
+  (e.g. a domain-id pill) instead of the 1-based row number; pair with
+  `gutterWidth` when the label needs more than the default 48px. The gutter
+  participates in row hover/selection like any cell.
+- **`showSelectionStats`**: set `false` to drop the Sum/Avg/Min/Max bar where
+  aggregates are meaningless for the data.
 
 All edits are **coerced** (locale-aware) and emitted via callbacks; the grid never
 mutates your data. Multi-cell paste/fill/clear go through `onBatchEdit` so the

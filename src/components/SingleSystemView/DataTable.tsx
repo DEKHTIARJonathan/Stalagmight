@@ -572,12 +572,11 @@ export default function DataTable({ sections }: DataTableProps) {
         isShotFrozen,
         getShotWarnings,
         onToggleReference: handleToggleReference,
-        onPanToShot: handlePanToShot,
       }),
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, handleToggleReference, handlePanToShot]
+    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, handleToggleReference]
   );
 
   const shotScrollToRow = useMemo(() => {
@@ -586,11 +585,18 @@ export default function DataTable({ sections }: DataTableProps) {
     return idx >= 0 ? idx : null;
   }, [scrollToKey, selectedSection]);
 
-  // Gutter shows the app's shot ID (matches the map/detail panel labels).
+  // Gutter shows the shot's ID pill (replaces the old ID column); double-click
+  // pans the map to the shot, as it did on the column's pill.
   const shotRowLabel = useCallback(
-    (_shot: Shot, rowIndex: number) =>
-      selectedSectionId !== null ? formatShotId(selectedSectionId, rowIndex + 1) : rowIndex + 1,
-    [selectedSectionId]
+    (shot: Shot, rowIndex: number) =>
+      selectedSectionId !== null ? (
+        <span onDoubleClick={() => handlePanToShot(shot)}>
+          <EntityBlob entity="shot">{formatShotId(selectedSectionId, rowIndex + 1)}</EntityBlob>
+        </span>
+      ) : (
+        rowIndex + 1
+      ),
+    [selectedSectionId, handlePanToShot]
   );
 
   // Column order is view state (drag a selected column header to move it);
@@ -684,6 +690,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
                 rowLabel={shotRowLabel}
+                gutterWidth={72}
+                showSelectionStats={false}
                 columnOrder={shotColumnOrder}
                 onColumnOrderChange={setShotColumnOrder}
               />

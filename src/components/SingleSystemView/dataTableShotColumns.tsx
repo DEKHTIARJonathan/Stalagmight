@@ -12,10 +12,8 @@ import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { Shot } from '../../types/project';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
-import { EntityBlob } from '../common/EntityBlob';
 import { AlertCircleIcon, AlertTriangleIcon, DotIcon, LockIcon } from '../common/icons';
 import { circularMeanDegrees } from '../../utils/angles';
-import { formatShotId } from '../../utils/formatters';
 import { formatFixed } from '../../i18n/format';
 import type { ProjectWarning } from '../../types/commands';
 import { AZIMUTH_AVG_KEY } from './dataTableEdits';
@@ -33,8 +31,6 @@ export interface ShotColumnContext {
   getShotWarnings: (sectionId: number, shotId: number) => ProjectWarning[];
   /** Toggle a shot's reference flag (the inline dot control). */
   onToggleReference: (shot: Shot) => void;
-  /** Pan the map to a shot (double-click its id pill). */
-  onPanToShot: (shot: Shot) => void;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -117,27 +113,6 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
           </span>
         );
       },
-    },
-    {
-      key: 'id',
-      header: t('dataTable.columns.idShort'),
-      width: 60,
-      getValue: (r) => r.id,
-      render: (shot, index): ReactNode =>
-        sectionId !== null ? (
-          <span
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              ctx.onPanToShot(shot);
-            }}
-          >
-            <EntityBlob entity="shot" className="relative -top-0.5">
-              {formatShotId(sectionId, index + 1)}
-            </EntityBlob>
-          </span>
-        ) : (
-          ''
-        ),
     },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>
       typeof v === 'number' && v <= 0 ? t('dataTable.validation.nonPositiveLength') : null,

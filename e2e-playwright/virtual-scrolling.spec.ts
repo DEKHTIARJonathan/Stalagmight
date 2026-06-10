@@ -85,8 +85,8 @@ test.describe('Virtual Scrolling in DataTable', () => {
 
     const firstRow = page.getByTestId('grid-row-0');
     await expect(firstRow).toBeVisible();
-    // The id column shows the section:position shot id (positions are 1-based)
-    await expect(page.getByTestId('grid-cell-0-id')).toContainText(`${sectionId}:1`);
+    // The row gutter shows the section:position shot id (positions are 1-based)
+    await expect(page.getByTestId('grid-gutter-0')).toContainText(`${sectionId}:1`);
   });
 
   test('last row exists in the DOM', async ({ page }) => {

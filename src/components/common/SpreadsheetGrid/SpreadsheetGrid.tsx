@@ -97,6 +97,12 @@ export interface SpreadsheetGridProps<Row> {
   /** Label for the row-number gutter (default: 1-based row index). E.g. a
    *  domain id like "5:3" so rows match what the rest of the app calls them. */
   rowLabel?: (row: Row, rowIndex: number) => ReactNode;
+  /** Gutter width in px (default 48) — widen when rowLabel renders something
+   *  larger than a plain row number. */
+  gutterWidth?: number;
+  /** Sum/Avg/Min/Max/Count bar for multi-cell selections (default true) —
+   *  turn off where aggregates are meaningless for the data. */
+  showSelectionStats?: boolean;
 
   maximized?: boolean;
   onToggleMaximize?: () => void;
@@ -148,6 +154,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     hoveredRow,
     rowClassName,
     rowLabel,
+    gutterWidth = GUTTER_WIDTH,
+    showSelectionStats = true,
     maximized = false,
     onToggleMaximize,
     className = '',
@@ -178,7 +186,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [visibleColumns, colWidthOverrides],
   );
   const offsets = useMemo(() => columnOffsets(widths), [widths]);
-  const totalWidth = GUTTER_WIDTH + (offsets[offsets.length - 1] ?? 0);
+  const totalWidth = gutterWidth + (offsets[offsets.length - 1] ?? 0);
   const colIndexOf = useCallback((key: string) => colKeys.indexOf(key), [colKeys]);
   const writableColIdxs = useMemo(
     () => visibleColumns.map((c, i) => (isColWritable(c) ? i : -1)).filter((i) => i >= 0),
@@ -251,6 +259,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // Google-Sheets-style selection summary (Count + Sum/Avg/Min/Max of numerics).
   // Shown when >1 cell is selected.
   const selectionStats = useMemo(() => {
+    if (!showSelectionStats) return null;
     const cellsSelected = (rect.r1 - rect.r0 + 1) * (rect.c1 - rect.c0 + 1);
     if (cellsSelected <= 1) return null;
     const nums: number[] = [];
@@ -276,7 +285,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (n > max) max = n;
     }
     return { count, numeric: nums.length, sum, avg: nums.length ? sum / nums.length : 0, min, max };
-  }, [rect, rows, visibleColumns, locale]);
+  }, [showSelectionStats, rect, rows, visibleColumns, locale]);
 
   const cellEditable = useCallback(
     (rowIdx: number, col: GridColumn<Row> | undefined): boolean => {
@@ -1220,7 +1229,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (!el) return { row: 0, col: 0 };
       const r = el.getBoundingClientRect();
       const yC = clientY - r.top + el.scrollTop - HEADER_HEIGHT;
-      const xC = clientX - r.left + el.scrollLeft - GUTTER_WIDTH;
+      const xC = clientX - r.left + el.scrollLeft - gutterWidth;
       const row = clamp(Math.floor(yC / ROW_HEIGHT), 0, Math.max(0, rowCount - 1));
       let col = 0;
       for (let i = 0; i < colCount; i++) {
@@ -1229,7 +1238,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
       return { row, col: clamp(col, 0, Math.max(0, colCount - 1)) };
     },
-    [rowCount, colCount, offsets],
+    [rowCount, colCount, offsets, gutterWidth],
   );
 
   // Cut-and-drop: move the source rect's values to the destination rect (same
@@ -1360,13 +1369,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const el = scrollRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      const xContent = e.clientX - r.left + el.scrollLeft - GUTTER_WIDTH;
+      const xContent = e.clientX - r.left + el.scrollLeft - gutterWidth;
       let idx = 0;
       for (let i = 0; i < colCount; i++) {
         if (xContent > (offsets[i] ?? 0) + (widths[i] ?? 0) / 2) idx = i + 1;
         else break;
       }
-      setColMoveDrop({ index: idx, lineX: GUTTER_WIDTH + (offsets[idx] ?? 0) });
+      setColMoveDrop({ index: idx, lineX: gutterWidth + (offsets[idx] ?? 0) });
       const from = colDrag.current.fromC0;
       setColGhost({
         x: e.clientX,
@@ -1571,7 +1580,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     // The overlay lives INSIDE the rows-area (which starts below the sticky
     // header), where row 0 is at y=0 — so no header offset here.
     top: rect.r0 * ROW_HEIGHT,
-    left: GUTTER_WIDTH + (offsets[rect.c0] ?? 0),
+    left: gutterWidth + (offsets[rect.c0] ?? 0),
     width: (offsets[rect.c1 + 1] ?? 0) - (offsets[rect.c0] ?? 0),
     height: (rect.r1 - rect.r0 + 1) * ROW_HEIGHT,
     border: '2px solid var(--sg-blue)',
@@ -1583,7 +1592,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const rectOverlay = (r: Rect): CSSProperties => ({
     position: 'absolute',
     top: r.r0 * ROW_HEIGHT,
-    left: GUTTER_WIDTH + (offsets[r.c0] ?? 0),
+    left: gutterWidth + (offsets[r.c0] ?? 0),
     width: (offsets[r.c1 + 1] ?? 0) - (offsets[r.c0] ?? 0),
     height: (r.r1 - r.r0 + 1) * ROW_HEIGHT,
     pointerEvents: 'none',
@@ -1682,7 +1691,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             {/* Frozen top-left corner above the row-number gutter. */}
             <div
               className="sg-corner sticky left-0 z-30 flex items-center justify-center border-b border-r border-white/10 bg-panel"
-              style={{ width: GUTTER_WIDTH, minWidth: GUTTER_WIDTH }}
+              style={{ width: gutterWidth, minWidth: gutterWidth }}
             />
             {visibleColumns.map((c, i) => {
               const fullColSel = rect.r0 === 0 && rect.r1 === rowCount - 1;
@@ -1746,8 +1755,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                       rowIdx >= rect.r0 && rowIdx <= rect.r1 ? 'sg-gutter-selected' : ''
                     } ${rowIdx === selection.active.row ? 'sg-gutter-active' : ''}`}
                     style={{
-                      width: GUTTER_WIDTH,
-                      minWidth: GUTTER_WIDTH,
+                      width: gutterWidth,
+                      minWidth: gutterWidth,
                       cursor:
                         onMoveRows && rect.c0 === 0 && rect.c1 === colCount - 1 && rowIdx >= rect.r0 && rowIdx <= rect.r1
                           ? 'grab'
