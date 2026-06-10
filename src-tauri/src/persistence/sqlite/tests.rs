@@ -1255,6 +1255,204 @@ fn test_clear_undo_after_sequence() {
     assert_eq!(loaded[2].0, 2); // sequence = 2
 }
 
+// === Legacy (pre-v7) undo history must be dropped on load ===
+//
+// Pre-v7 builds serialized every untouched nullable ShotUpdates field as an
+// explicit null inside persisted undo/redo payloads. Under the v7
+// double_option semantics an explicit null means "clear the field", so
+// replaying such an entry would silently wipe pitch/LRUD/comment/marker/
+// temperature. The legacy JSON is ambiguous, so the only safe upgrade is to
+// drop the stacks (gated on PRAGMA user_version < 7).
+
+/// A pre-v7 UpdateShot command payload: untouched nullable fields serialized
+/// as explicit nulls (this is what `serde_json::to_string(&ShotUpdates)`
+/// produced before `skip_serializing_if` was added).
+fn legacy_null_style_update_shot_command(section_id: u32, shot_id: u32) -> String {
+    format!(
+        r#"{{"type":"update_shot","section_id":{section_id},"shot_id":{shot_id},"updates":{{"azimuth_in":null,"azimuth_out":null,"length":4.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}}}}"#
+    )
+}
+
+/// A pre-v7 PreviousValues undo payload with the same explicit-null shape.
+fn legacy_null_style_previous_values(section_id: u32, shot_id: u32) -> String {
+    let values_json = r#"{"azimuth_in":null,"azimuth_out":null,"length":2.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}"#;
+    format!(
+        r#"{{"PreviousValues":{{"section_id":{section_id},"shot_id":{shot_id},"values_json":{}}}}}"#,
+        serde_json::to_string(values_json).unwrap()
+    )
+}
+
+/// Create a v6-stamped project file containing legacy-shaped undo AND redo
+/// entries, returning its path.
+fn write_legacy_v6_project_with_undo_history(dir: &TempDir, name: &str) -> std::path::PathBuf {
+    let path = dir.path().join(name);
+
+    let mut project = Project::new("Legacy Undo".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length: 2.0,
+            depth_in: 10.0,
+            depth_out: 11.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    let saved = db.load_project().unwrap();
+    let section_id = saved.sections[0].id;
+    let shot_id = saved.sections[0].shots[0].id;
+
+    let cmd = legacy_null_style_update_shot_command(section_id, shot_id);
+    let undo_data = legacy_null_style_previous_values(section_id, shot_id);
+    db.save_undo_stack_with_timestamps(vec![(cmd.clone(), undo_data.clone(), None)])
+        .unwrap();
+    db.save_redo_stack_with_timestamps(vec![(cmd, undo_data, None)])
+        .unwrap();
+
+    // Database::open stamped the current schema version; rewind the stamp so
+    // the file looks exactly like one written by a pre-v7 build.
+    db.set_user_version(6).unwrap();
+    drop(db);
+
+    path
+}
+
+#[test]
+fn test_legacy_v6_undo_history_dropped_on_open_existing() {
+    let temp_dir = TempDir::new().unwrap();
+    let path = write_legacy_v6_project_with_undo_history(&temp_dir, "legacy_undo.stalx");
+
+    // Sanity: the legacy payload IS the dangerous shape — under the new
+    // deserializer its explicit nulls decode to Some(None) ("clear field").
+    let dangerous: crate::models::ShotUpdates = serde_json::from_str(
+        r#"{"length":2.0,"left":null,"pitch_in":null,"comment":null}"#,
+    )
+    .unwrap();
+    assert_eq!(dangerous.left, Some(None));
+    assert_eq!(dangerous.pitch_in, Some(None));
+    assert_eq!(dangerous.comment, Some(None));
+
+    let db = Database::open_existing(&path).unwrap();
+
+    // The v6→v7 migration must have dropped both stacks wholesale.
+    assert!(
+        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
+        "legacy undo entries must not survive the v7 upgrade"
+    );
+    assert!(
+        db.load_redo_stack_with_timestamps().unwrap().is_empty(),
+        "legacy redo entries must not survive the v7 upgrade"
+    );
+    // And the file is now stamped current, so the drop happens exactly once.
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+
+    // The project data itself is untouched.
+    let project = db.load_project().unwrap();
+    assert_eq!(project.sections.len(), 1);
+    assert_eq!(project.sections[0].shots.len(), 1);
+}
+
+#[test]
+fn test_legacy_v6_undo_history_dropped_on_open() {
+    // Database::open stamps SCHEMA_VERSION without running the migration
+    // chain, so it must drop legacy stacks itself before the stamp erases the
+    // evidence that the file predates the format change.
+    let temp_dir = TempDir::new().unwrap();
+    let path = write_legacy_v6_project_with_undo_history(&temp_dir, "legacy_undo_open.stalx");
+
+    let db = Database::open(&path).unwrap();
+    assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
+    assert!(db.load_redo_stack_with_timestamps().unwrap().is_empty());
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+}
+
+#[test]
+fn test_new_format_undo_history_survives_reload() {
+    use crate::core::undo::{UndoData, UndoEntry};
+    use crate::core::{Command, UndoStack};
+    use crate::models::ShotUpdates;
+
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("new_format_undo.stalx");
+
+    let mut project = Project::new("New Undo".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![ShotData {
+            azimuth_in: 45.0,
+            azimuth_out: 225.0,
+            length: 2.0,
+            depth_in: 10.0,
+            depth_out: 11.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    let saved = db.load_project().unwrap();
+    let section_id = saved.sections[0].id;
+    let shot_id = saved.sections[0].shots[0].id;
+
+    // New-format entry: only the edited field is present (untouched nullable
+    // fields are omitted thanks to skip_serializing_if).
+    let prev_values = ShotUpdates {
+        comment: Some(Some("original".to_string())),
+        ..Default::default()
+    };
+    let values_json = serde_json::to_string(&prev_values).unwrap();
+    assert!(
+        !values_json.contains("left") && !values_json.contains("pitch_in"),
+        "untouched nullable fields must serialize as absent, got: {values_json}"
+    );
+    let entry = UndoEntry {
+        command: Command::UpdateShot {
+            section_id,
+            shot_id,
+            updates: ShotUpdates {
+                comment: Some(Some("edited".to_string())),
+                ..Default::default()
+            },
+        },
+        undo_data: UndoData::PreviousValues {
+            section_id,
+            shot_id: Some(shot_id),
+            values_json,
+        },
+        timestamp: None,
+    };
+    let persisted = UndoStack::serialize_entry_with_timestamp(&entry).unwrap();
+    db.save_undo_stack_with_timestamps(vec![persisted]).unwrap();
+    drop(db);
+
+    // Reload: the v7-stamped file keeps its history.
+    let db = Database::open_existing(&path).unwrap();
+    let loaded = db.load_undo_stack_with_timestamps().unwrap();
+    assert_eq!(loaded.len(), 1, "new-format undo entry must survive reload");
+
+    let (_, cmd_json, undo_json, ts) = &loaded[0];
+    let restored =
+        UndoStack::deserialize_entry_with_timestamp(cmd_json, undo_json, ts.as_deref()).unwrap();
+    match &restored.undo_data {
+        UndoData::PreviousValues { values_json, .. } => {
+            let prev: ShotUpdates = serde_json::from_str(values_json).unwrap();
+            // Exactly the edited field round-trips...
+            assert_eq!(prev.comment, Some(Some("original".to_string())));
+            // ...and untouched nullable fields stay untouched (None), so
+            // replaying this entry cannot clear them.
+            assert_eq!(prev.left, None);
+            assert_eq!(prev.pitch_in, None);
+            assert_eq!(prev.marker_index, None);
+            assert_eq!(prev.temperature, None);
+        }
+        other => panic!("Expected PreviousValues, got {}", other.variant_name()),
+    }
+}
+
 // === Schema migration idempotency ===
 
 #[test]

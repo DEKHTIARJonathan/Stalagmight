@@ -291,6 +291,156 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     }
 }
 
+/// Shot with every nullable field populated — the fields a replayed legacy
+/// (pre-v7) undo entry would silently clear under the v7 `double_option`
+/// null-means-clear semantics.
+fn shot_with_nullable_fields() -> ShotData {
+    ShotData {
+        pitch_in: Some(5.0),
+        pitch_out: Some(-5.0),
+        left: Some(1.5),
+        right: Some(2.5),
+        up: Some(0.5),
+        down: Some(3.5),
+        comment: Some("original".to_string()),
+        marker_index: Some(2),
+        temperature: Some(14.5),
+        ..test_shot_data(2.0)
+    }
+}
+
+#[test]
+fn test_open_project_drops_legacy_null_style_undo_history() {
+    // open_project records the path in recent projects (stored in the global
+    // config), so isolate the config from the real file.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("legacy_undo.stalx");
+
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot_with_nullable_fields()],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    let saved = db.load_project().unwrap();
+    let section_id = saved.sections[0].id;
+    let shot_id = saved.sections[0].shots[0].id;
+
+    // Persist undo/redo entries exactly as a pre-v7 build wrote them: every
+    // untouched nullable field serialized as an explicit null, in both the
+    // command payload and the PreviousValues snapshot.
+    let legacy_command = format!(
+        r#"{{"type":"update_shot","section_id":{section_id},"shot_id":{shot_id},"updates":{{"azimuth_in":null,"azimuth_out":null,"length":4.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}}}}"#
+    );
+    let legacy_values = r#"{"azimuth_in":null,"azimuth_out":null,"length":2.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}"#;
+    let legacy_undo_data = format!(
+        r#"{{"PreviousValues":{{"section_id":{section_id},"shot_id":{shot_id},"values_json":{}}}}}"#,
+        serde_json::to_string(legacy_values).unwrap()
+    );
+    db.save_undo_stack_with_timestamps(vec![(
+        legacy_command.clone(),
+        legacy_undo_data.clone(),
+        None,
+    )])
+    .unwrap();
+    db.save_redo_stack_with_timestamps(vec![(legacy_command, legacy_undo_data, None)])
+        .unwrap();
+    drop(db);
+
+    // Rewind the version stamp so the file looks exactly like one written by
+    // a pre-v7 build (Database::open stamped the current schema version).
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("PRAGMA user_version = 6", []).unwrap();
+    drop(conn);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path).success);
+
+    // The legacy stacks are dropped wholesale — nothing to undo or redo, so
+    // nothing can replay the explicit nulls and clear fields.
+    {
+        let undo_stack = state.undo_stack.lock().unwrap();
+        assert_eq!(undo_stack.len(), 0, "legacy undo entries must be dropped");
+        assert_eq!(undo_stack.redo_len(), 0, "legacy redo entries must be dropped");
+    }
+
+    // The shot's nullable fields are intact.
+    let project = state.get_project_state().unwrap();
+    let shot = &project.sections[0].shots[0];
+    assert_eq!(shot.pitch_in, Some(5.0));
+    assert_eq!(shot.left, Some(1.5));
+    assert_eq!(shot.comment.as_deref(), Some("original"));
+    assert_eq!(shot.marker_index, Some(2));
+    assert_eq!(shot.temperature, Some(14.5));
+}
+
+#[test]
+fn test_undo_after_reload_restores_exactly_the_edited_field() {
+    // open_project/save_project record the path in recent projects (stored in
+    // the global config), so isolate the config from the real file.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("new_format_undo.stalx");
+
+    let mut project = Project::new("New Format".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot_with_nullable_fields()],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    drop(db);
+
+    // Session 1: open, edit ONLY the comment, save (persists the undo stack
+    // in the new format).
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path.clone()).success);
+    let (section_id, shot_id) = {
+        let project = state.get_project_state().unwrap();
+        (project.sections[0].id, project.sections[0].shots[0].id)
+    };
+    let result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            comment: Some(Some("edited".to_string())),
+            ..Default::default()
+        },
+    });
+    assert!(result.success);
+    assert!(state.save_project(Some(path.clone()), false).success);
+
+    // Session 2: fresh app instance, reload, undo.
+    let state2 = AppState::new().unwrap();
+    assert!(state2.open_project(path).success);
+    {
+        let stack = state2.undo_stack.lock().unwrap();
+        assert!(stack.can_undo(), "new-format undo history must survive reload");
+    }
+    let project = state2.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots[0].comment.as_deref(), Some("edited"));
+
+    assert!(state2.undo().success);
+
+    let project = state2.get_project_state().unwrap();
+    let shot = &project.sections[0].shots[0];
+    // Exactly the edited field is restored...
+    assert_eq!(shot.comment.as_deref(), Some("original"));
+    // ...and the untouched nullable fields were NOT cleared by the undo.
+    assert_eq!(shot.pitch_in, Some(5.0));
+    assert_eq!(shot.pitch_out, Some(-5.0));
+    assert_eq!(shot.left, Some(1.5));
+    assert_eq!(shot.right, Some(2.5));
+    assert_eq!(shot.up, Some(0.5));
+    assert_eq!(shot.down, Some(3.5));
+    assert_eq!(shot.marker_index, Some(2));
+    assert_eq!(shot.temperature, Some(14.5));
+}
+
 #[test]
 fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     let temp_dir = TempDir::new().unwrap();

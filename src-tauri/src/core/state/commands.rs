@@ -3142,3 +3142,83 @@ mod integrity_capability_tests {
         }));
     }
 }
+
+#[cfg(test)]
+mod update_shot_clear_undo_tests {
+    use super::*;
+
+    fn shot_data(left: Option<f64>) -> ShotData {
+        ShotData {
+            azimuth_in: 10.0,
+            azimuth_out: 10.0,
+            length: 5.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            left,
+            ..Default::default()
+        }
+    }
+
+    fn state_with_one_shot(left: Option<f64>) -> (AppState, SectionId, ShotId) {
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject { name: "Clear".to_string(), location: None });
+        let section_id = state
+            .execute(Command::CreateSection {
+                name: None,
+                surveyor: None,
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                shots: vec![shot_data(left)],
+            })
+            .section_id
+            .unwrap();
+        let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
+        (state, section_id, shot_id)
+    }
+
+    /// A grid cell clear arrives as JSON `null` (deserialized to `Some(None)`,
+    /// see `double_option`); the command must apply it and undo must restore
+    /// the cleared value through the serialized `values_json` round-trip.
+    #[test]
+    fn update_shot_null_clears_field_and_undo_restores_it() {
+        let (state, section_id, shot_id) = state_with_one_shot(Some(0.5));
+
+        let updates: ShotUpdates =
+            serde_json::from_value(serde_json::json!({ "left": null })).unwrap();
+        let result = state.execute(Command::UpdateShot { section_id, shot_id, updates });
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(state.get_project_state().unwrap().sections[0].shots[0].left, None);
+
+        assert!(state.undo().success);
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0].left,
+            Some(0.5),
+            "undo must restore the cleared value"
+        );
+    }
+
+    /// The reverse direction: setting a previously-empty field must undo back
+    /// to empty — the captured previous value `Some(None)` has to survive the
+    /// `values_json` round-trip as `null` rather than fold into "no update".
+    #[test]
+    fn update_shot_set_on_empty_field_undoes_back_to_empty() {
+        let (state, section_id, shot_id) = state_with_one_shot(None);
+
+        let updates: ShotUpdates =
+            serde_json::from_value(serde_json::json!({ "left": 1.2 })).unwrap();
+        let result = state.execute(Command::UpdateShot { section_id, shot_id, updates });
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0].left,
+            Some(1.2)
+        );
+
+        assert!(state.undo().success);
+        assert_eq!(
+            state.get_project_state().unwrap().sections[0].shots[0].left,
+            None,
+            "undo must clear the field back to its previous empty state"
+        );
+    }
+}
