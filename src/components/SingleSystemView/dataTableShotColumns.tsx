@@ -278,6 +278,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       header: t('dataTable.columns.comment'),
       width: 240,
       kind: 'text',
+      multiline: true,
       getValue: (r) => r.comment ?? '',
       editable: true,
       isEditable: editableUnlessFrozenGeometry('comment'), // not locked on frozen

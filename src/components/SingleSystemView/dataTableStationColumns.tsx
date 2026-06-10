@@ -11,16 +11,19 @@ import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { Station } from '../../types/project';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
-import { DotIcon, LinkIcon } from '../common/icons';
+import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 
 export interface StationColumnContext {
   t: TFunction;
-  precision: { coordinates: number; depth: number };
+  precision: { coordinates: number; depth: number; gps: number };
   geometryReadOnly: boolean;
   /** Click on the GPS (zero-datum) cell — opens the Edit Station dialog in
    *  the mode matching the station's zero-datum state. */
   onGpsCellClick: (station: Station) => void;
+  /** Click on a connections cell with connections — opens the merged/closure
+   *  station picker at the pointer. */
+  onConnectionsCellClick: (station: Station, pos: { x: number; y: number }) => void;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -38,9 +41,23 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
     format: fixed(prec),
   });
 
+  // GPS coordinates exist only when a zero datum anchors the survey; the
+  // backend computes them per station (null otherwise → blank cells).
+  const gpsCol = (key: '_lat' | '_long', header: string): GridColumn<Station> => ({
+    key,
+    header,
+    width: 100,
+    align: 'right',
+    getValue: (r) =>
+      key === '_lat' ? r.gps_coordinates?.latitude ?? null : r.gps_coordinates?.longitude ?? null,
+    format: fixed(precision.gps),
+  });
+
   return [
     coordCol('_x', t('dataTable.stationColumns.x'), precision.coordinates),
     coordCol('_y', t('dataTable.stationColumns.y'), precision.coordinates),
+    gpsCol('_lat', t('dataTable.stationColumns.lat')),
+    gpsCol('_long', t('dataTable.stationColumns.long')),
     coordCol('_depth', t('dataTable.stationColumns.depth'), precision.depth),
     {
       key: '_zeroDatum',
@@ -91,8 +108,19 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
           tooltipParts.push(`Closures: ${closureCount}`);
         }
         return (
-          <span className="inline-flex items-center justify-center gap-1" title={tooltipParts.join('\n')}>
-            <LinkIcon size={12} />{total}
+          <span
+            className="inline-flex cursor-pointer items-center justify-center gap-1"
+            title={tooltipParts.join('\n')}
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.onConnectionsCellClick(station, { x: e.clientX, y: e.clientY });
+            }}
+            data-testid={`station-conn-${station.station_ref.section_id}-${station.station_ref.station_index}`}
+          >
+            <LinkIcon size={12} />
+            {total}
+            {/* The arrowhead signals the picker behind the cell. */}
+            <ChevronDownIcon size={10} />
           </span>
         );
       },
@@ -102,6 +130,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       header: t('dataTable.stationColumns.comment'),
       width: 240,
       kind: 'text',
+      multiline: true,
       getValue: (r) => r.comment ?? '',
       editable: !geometryReadOnly,
       parse: (raw) => (raw.trim() === '' ? null : raw), // empty/whitespace clears to null

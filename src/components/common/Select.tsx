@@ -4,13 +4,17 @@
  * Dropdown renders via createPortal to document.body with position:fixed
  * to escape stacking contexts (e.g. sticky table headers).
  */
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, useMemo } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, useMemo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 export interface SelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  /** Optional leading icon for the option row. */
+  icon?: ReactNode;
+  /** Optional trailing node after the label (e.g. an italic qualifier). */
+  labelSuffix?: ReactNode;
 }
 
 export interface SelectOptionGroup {
@@ -484,7 +488,11 @@ export function Select({
             }
           }}
         >
-          {option.label}
+          <span className="inline-flex items-center gap-1.5">
+            {option.icon}
+            {option.label}
+            {option.labelSuffix}
+          </span>
         </div>
       </div>
     );

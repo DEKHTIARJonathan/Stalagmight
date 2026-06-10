@@ -80,8 +80,9 @@ async function openStationsView(page: Page): Promise<void> {
   await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
   await page.getByTestId('data-table-view-stations').click();
   await expect(page.getByTestId('data-table-view-stations')).toHaveAttribute('aria-checked', 'true');
-  // 3 shots → 4 stations; the X column marks the stations grid.
-  await expect(page.getByTestId('grid-header-_x')).toBeVisible({ timeout: 5000 });
+  // 3 shots → 4 stations; the Depth column marks the stations grid (the
+  // coordinate pairs start hidden).
+  await expect(page.getByTestId('grid-header-_depth')).toBeVisible({ timeout: 5000 });
   await expect(page.getByTestId('grid-row-3')).toBeVisible();
 }
 
@@ -101,6 +102,12 @@ test.describe('Stations grid', () => {
     // The index pill moved into the row gutter ("1:0" ... "1:3").
     await expect(page.getByTestId('grid-gutter-0')).toHaveText(`${sectionId}:0`);
     await expect(page.getByTestId('grid-gutter-3')).toHaveText(`${sectionId}:3`);
+
+    // X/Y start hidden; the "Coordinates (m)" eye-menu entry shows the pair.
+    await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-_x').check();
+    await page.keyboard.press('Escape');
 
     // Coordinates from the mock (x = index * 10, 2 decimals; depth 1 decimal).
     await expect(page.getByTestId('grid-cell-1-_x')).toHaveText('10.00');
@@ -187,23 +194,34 @@ test.describe('Stations grid', () => {
     await expect(dropdown.getByTestId('col-vis-_zeroDatum')).toBeVisible();
     await expect(dropdown.getByTestId('col-vis-length')).toHaveCount(0);
 
-    // Hide X, then bring it back.
-    await dropdown.getByTestId('col-vis-_x').uncheck();
+    // The metric coordinate pair starts hidden and toggles together.
+    await expect(dropdown.getByTestId('col-vis-_x')).not.toBeChecked();
     await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
-    await expect(page.getByTestId('grid-header-_y')).toBeVisible();
     await dropdown.getByTestId('col-vis-_x').check();
     await expect(page.getByTestId('grid-header-_x')).toBeVisible();
+    await expect(page.getByTestId('grid-header-_y')).toBeVisible();
+    await dropdown.getByTestId('col-vis-_x').uncheck();
+    await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
+    await expect(page.getByTestId('grid-header-_y')).toHaveCount(0);
   });
 
   test('header right-click offers a plain hide entry', async ({ page }) => {
+    // Show the metric pair first (hidden by default), then hide via the header:
+    // X and Y hide together as the Coordinates (m) group.
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-_x').check();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('grid-header-_y')).toBeVisible();
+
     await page.getByTestId('grid-header-_y').click({ button: 'right' });
     const menu = page.getByTestId('data-table-header-menu');
     await expect(menu).toBeVisible();
 
-    // No angle-mode entries in the stations view — just the hide.
+    // No angle-mode entries in the stations view — just the group hide.
     await expect(menu.getByRole('button')).toHaveCount(1);
-    await menu.getByRole('button', { name: 'Hide Y' }).click();
+    await menu.getByRole('button', { name: 'Hide Coordinates (m)' }).click();
     await expect(page.getByTestId('grid-header-_y')).toHaveCount(0);
-    await expect(page.getByTestId('grid-header-_x')).toBeVisible();
+    await expect(page.getByTestId('grid-header-_x')).toHaveCount(0);
+    await expect(page.getByTestId('grid-header-_depth')).toBeVisible();
   });
 });

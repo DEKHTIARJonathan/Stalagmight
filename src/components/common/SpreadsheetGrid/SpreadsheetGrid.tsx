@@ -2104,16 +2104,21 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                   editing.row + 1,
                 )}
                 className="sg-editor"
-                style={{
-                  ...rectOverlay({
+                style={(() => {
+                  const cellRect = rectOverlay({
                     r0: editing.row,
                     r1: editing.row,
                     c0: colIndexOf(editing.colKey),
                     c1: colIndexOf(editing.colKey),
-                  }),
-                  pointerEvents: 'auto',
-                  zIndex: 20,
-                }}
+                  });
+                  // Multiline columns (comments) get a roomy editor anchored at
+                  // the cell instead of one squeezed into the cell box.
+                  if (columns.find((c) => c.key === editing.colKey)?.multiline) {
+                    cellRect.width = Math.max(Number(cellRect.width) || 0, 280);
+                    cellRect.height = Math.max(Number(cellRect.height) || 0, 110);
+                  }
+                  return { ...cellRect, pointerEvents: 'auto', zIndex: 20 };
+                })()}
                 value={editing.draft}
                 onChange={(ev) => setEditing({ ...editing, draft: ev.target.value })}
                 onBlur={() => {

@@ -2,6 +2,9 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { Select, type SelectOption } from '../common/Select';
+import { DatabaseIcon } from '../common/icons';
+import { EntitySymbol } from '../common/toolIcons';
+import { syntacticLevelAtLeast, syntacticVarName } from '../../theme/syntacticPalette';
 
 const SECTIONS_VALUE = 'sections';
 const RAW_VALUE = 'raw';
@@ -17,6 +20,8 @@ export default function TableSelectDropdown() {
   const { t } = useTranslation();
   const rawTableSelection = useUIStore((s) => s.rawTableSelection);
   const setRawTableSelection = useUIStore((s) => s.setRawTableSelection);
+  const syntacticLevel = useUIStore((s) => s.syntacticLevel);
+  const showIcons = syntacticLevelAtLeast(syntacticLevel, 'icons');
 
   const handleChange = useCallback(
     (value: string) => {
@@ -26,8 +31,27 @@ export default function TableSelectDropdown() {
   );
 
   const options: SelectOption[] = [
-    { value: SECTIONS_VALUE, label: t('dataTable.tableSelect.sections') },
-    { value: RAW_VALUE, label: t('dataTable.tableSelect.rawData') },
+    {
+      value: SECTIONS_VALUE,
+      label: t('dataTable.tableSelect.sections'),
+      ...(showIcons
+        ? {
+            icon: (
+              <span style={{ color: `var(${syntacticVarName('section')})` }}>
+                <EntitySymbol entity="section" size={13} />
+              </span>
+            ),
+          }
+        : {}),
+    },
+    {
+      value: RAW_VALUE,
+      label: t('dataTable.tableSelect.rawData'),
+      labelSuffix: (
+        <i className="italic text-text-secondary">{t('dataTable.tableSelect.readOnly')}</i>
+      ),
+      ...(showIcons ? { icon: <DatabaseIcon size={13} /> } : {}),
+    },
   ];
 
   return (

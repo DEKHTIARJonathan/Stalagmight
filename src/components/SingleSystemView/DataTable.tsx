@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Section, type Shot, type ShotData, type Station } from '../../types/project';
+import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
@@ -18,6 +18,7 @@ import { invokeIpc } from '../../utils/ipc';
 import { buildShotColumns } from './dataTableShotColumns';
 import { buildStationColumns } from './dataTableStationColumns';
 import RawTableView from './RawTableView';
+import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import {
   type RowEntry,
@@ -61,16 +62,20 @@ const ANGLE_FAMILY_KEYS = {
   inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'] },
 } as const;
 
-/** Stations-view columns in the eye menu / header hide entries (plain hide —
- *  no angle modes). The index pill lives in the gutter, so it never hides. */
-const STATION_MENU_COLS: { key: string; nameKey: string }[] = [
-  { key: '_x', nameKey: 'x' },
-  { key: '_y', nameKey: 'y' },
-  { key: '_depth', nameKey: 'depth' },
-  { key: '_zeroDatum', nameKey: 'zeroDatum' },
-  { key: '_connections', nameKey: 'connections' },
-  { key: 'comment', nameKey: 'comment' },
+/** Stations-view column groups in the eye menu / header hide entries (plain
+ *  hide — no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
+ *  as the GPS pair. The index pill lives in the gutter, so it never hides. */
+const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
+  { keys: ['_x', '_y'], nameKey: 'coordsMeters' },
+  { keys: ['_lat', '_long'], nameKey: 'coordsGps' },
+  { keys: ['_depth'], nameKey: 'depth' },
+  { keys: ['_zeroDatum'], nameKey: 'zeroDatum' },
+  { keys: ['_connections'], nameKey: 'connections' },
+  { keys: ['comment'], nameKey: 'comment' },
 ];
+
+/** Both coordinate pairs start hidden; the eye menu re-enables them. */
+const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
 
 /** Chevron trigger + small picker menu used in the sub-header next to the
  *  section / raw-table pill. Closes on outside click and Escape (and declares
@@ -84,7 +89,7 @@ function SubHeaderPickerMenu({
 }: {
   testId: string;
   title: string;
-  options: { value: string; label: string; disabled?: boolean }[];
+  options: { value: string; label: string; disabled?: boolean; dot?: string }[];
   onPick: (value: string) => void;
   onHoverOption?: (value: string | null) => void;
 }) {
@@ -103,7 +108,9 @@ function SubHeaderPickerMenu({
     };
   }, [open]);
   return (
-    <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+    // No positioning here: the list anchors to the centered GROUP wrapper
+    // (pill + chevron), so it opens centered under the whole pair.
+    <div onMouseDown={(e) => e.stopPropagation()}>
       <button
         onClick={() => setOpen((v) => !v)}
         className={open ? 'text-text' : 'text-text-secondary hover:text-text'}
@@ -123,7 +130,7 @@ function SubHeaderPickerMenu({
             <button
               key={o.value}
               disabled={o.disabled}
-              className="block w-full truncate rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50"
+              className="flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50"
               onMouseEnter={() => onHoverOption?.(o.value)}
               onClick={() => {
                 onHoverOption?.(null);
@@ -131,7 +138,14 @@ function SubHeaderPickerMenu({
                 onPick(o.value);
               }}
             >
-              {o.label}
+              {o.dot !== undefined && (
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: o.dot }}
+                  aria-hidden="true"
+                />
+              )}
+              <span className="truncate">{o.label}</span>
             </button>
           ))}
         </div>
@@ -498,7 +512,9 @@ export default function DataTable({ sections }: DataTableProps) {
   // The stations view keeps its own order/visibility (no angle modes there);
   // persisted alongside the shot view state below.
   const [stationColumnOrder, setStationColumnOrder] = useState<string[]>([]);
-  const [hiddenStationCols, setHiddenStationCols] = useState<ReadonlySet<string>>(() => new Set());
+  const [hiddenStationCols, setHiddenStationCols] = useState<ReadonlySet<string>>(
+    () => new Set(STATION_DEFAULT_HIDDEN)
+  );
   const [colMenuOpen, setColMenuOpen] = useState(false);
   // Right-click on a column header: hide it / switch the angle family's mode.
   const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
@@ -1108,6 +1124,48 @@ export default function DataTable({ sections }: DataTableProps) {
     [activeStations, openDialog]
   );
 
+  // Merged/closure picker opened from a connections cell: lists the linked
+  // stations as Detail-panel-style links (click selects, hover highlights).
+  const [connMenu, setConnMenu] = useState<{ x: number; y: number; station: Station } | null>(null);
+  const connMenuRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = connMenuRef.current;
+    if (!el || !connMenu) return;
+    const r = el.getBoundingClientRect();
+    let { x, y } = connMenu;
+    if (y + r.height > window.innerHeight) y = Math.max(4, y - r.height);
+    if (x + r.width > window.innerWidth) x = Math.max(4, x - r.width);
+    if (x !== connMenu.x || y !== connMenu.y) setConnMenu({ ...connMenu, x, y });
+  }, [connMenu]);
+  useEffect(() => {
+    if (!connMenu) return undefined;
+    const close = () => setConnMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConnMenu(null);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [connMenu]);
+  const handleConnectionsCellClick = useCallback(
+    (station: Station, pos: { x: number; y: number }) => {
+      setConnMenu({ ...pos, station });
+    },
+    []
+  );
+  const selectLinkedStation = useCallback(
+    (ref: StationRef) => {
+      setConnMenu(null);
+      setHoveredStation(null);
+      setSource('data-table');
+      setSelection({ type: 'station', stationRef: ref });
+    },
+    [setSelection, setHoveredStation]
+  );
+
   const stationColumns = useMemo(
     () =>
       buildStationColumns({
@@ -1115,8 +1173,9 @@ export default function DataTable({ sections }: DataTableProps) {
         precision,
         geometryReadOnly,
         onGpsCellClick: handleGpsCellClick,
+        onConnectionsCellClick: handleConnectionsCellClick,
       }),
-    [t, precision, geometryReadOnly, handleGpsCellClick]
+    [t, precision, geometryReadOnly, handleGpsCellClick, handleConnectionsCellClick]
   );
 
   // Gutter shows the station's ID pill (the old index column); double-click
@@ -1219,14 +1278,14 @@ export default function DataTable({ sections }: DataTableProps) {
     if (!headerMenu) return [];
     const key = headerMenu.colKey;
     if (tableView === 'stations') {
-      const entry = STATION_MENU_COLS.find((c) => c.key === key);
+      const entry = STATION_MENU_COLS.find((c) => c.keys.includes(key));
       const name = entry
         ? t(`dataTable.stationColumnsMenu.${entry.nameKey}`)
         : stationColumns.find((c) => c.key === key)?.header ?? key;
       return [
         {
           label: t('dataTable.headerMenu.hide', { name }),
-          onClick: () => hideStationCols([key]),
+          onClick: () => hideStationCols(entry ? entry.keys : [key]),
         },
       ];
     }
@@ -1329,6 +1388,9 @@ export default function DataTable({ sections }: DataTableProps) {
         <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
           <span className="font-medium">{t('dataTable.title')}</span>
           <div className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-1">
+            <span className="invisible" aria-hidden="true">
+              <ChevronDownIcon size={12} />
+            </span>
             {rawTableSelection !== '' && <RawTablePill name={rawTableSelection} />}
             <SubHeaderPickerMenu
               testId="data-table-raw-table-menu"
@@ -1367,6 +1429,9 @@ export default function DataTable({ sections }: DataTableProps) {
         )}
         {selectedSection && (
           <div className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-1">
+            <span className="invisible" aria-hidden="true">
+              <ChevronDownIcon size={12} />
+            </span>
             <button
               className="cursor-pointer"
               onClick={handleSectionPillClick}
@@ -1385,6 +1450,7 @@ export default function DataTable({ sections }: DataTableProps) {
               options={sections.map((s) => ({
                 value: String(s.id),
                 label: s.name ?? t('sections.defaultName', { id: s.id }),
+                dot: s.color,
               }))}
               onPick={(value) => {
                 const id = Number(value);
@@ -1463,8 +1529,8 @@ export default function DataTable({ sections }: DataTableProps) {
                   {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
                 </>
               ) : (
-                STATION_MENU_COLS.map(({ key, nameKey }) =>
-                  colCheckRow([key], t(`dataTable.stationColumnsMenu.${nameKey}`))
+                STATION_MENU_COLS.map(({ keys, nameKey }) =>
+                  colCheckRow(keys, t(`dataTable.stationColumnsMenu.${nameKey}`))
                 )
               )}
             </div>
@@ -1560,6 +1626,55 @@ export default function DataTable({ sections }: DataTableProps) {
             <div className="flex items-center justify-center h-full text-text-secondary">
               {t('dataTable.selectSection')}
             </div>
+          )}
+        </div>
+      )}
+      {connMenu && (
+        <div
+          ref={connMenuRef}
+          data-dropdown-open
+          className="fixed z-50 w-56 rounded border border-border bg-panel p-2 text-xs shadow-lg"
+          style={{ left: connMenu.x, top: connMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          data-testid="data-table-conn-menu"
+        >
+          {connMenu.station.merged_with.length > 0 && (
+            <>
+              <div className="px-1 pb-1 text-text-secondary">{t('dataTable.connMenu.merged')}</div>
+              <ul className="space-y-0.5 pb-1">
+                {connMenu.station.merged_with.map((ref) => (
+                  <li key={`m-${ref.section_id}-${ref.station_index}`}>
+                    <DetailLink
+                      type="station"
+                      target={{ sectionId: ref.section_id, position: ref.station_index }}
+                      displayText={formatStationId(ref.section_id, ref.station_index)}
+                      onSelect={() => selectLinkedStation(ref)}
+                      onHoverStart={() => setHoveredStation(ref)}
+                      onHoverEnd={() => setHoveredStation(null)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {(connMenu.station.closures_with?.length ?? 0) > 0 && (
+            <>
+              <div className="px-1 pb-1 text-text-secondary">{t('dataTable.connMenu.closures')}</div>
+              <ul className="space-y-0.5">
+                {connMenu.station.closures_with.map((c) => (
+                  <li key={`c-${String(c.closure_id)}-${c.station_ref.section_id}-${c.station_ref.station_index}`}>
+                    <DetailLink
+                      type="station"
+                      target={{ sectionId: c.station_ref.section_id, position: c.station_ref.station_index }}
+                      displayText={formatStationId(c.station_ref.section_id, c.station_ref.station_index)}
+                      onSelect={() => selectLinkedStation(c.station_ref)}
+                      onHoverStart={() => setHoveredStation(c.station_ref)}
+                      onHoverEnd={() => setHoveredStation(null)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
       )}

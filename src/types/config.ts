@@ -201,7 +201,7 @@ export const defaultConfig: Config = {
     data_table_azimuth_mode: 'avg',
     data_table_inclination_mode: 'off',
     data_table_station_column_order: [],
-    data_table_station_hidden_columns: [],
+    data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
   },
   cache: {
     tile_cache_enabled: true,

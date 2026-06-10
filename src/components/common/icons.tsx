@@ -376,6 +376,16 @@ export function AlertCircleIcon(props: IconProps) {
   );
 }
 
+export function DatabaseIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+      <path d="M3 12a9 3 0 0 0 18 0" />
+    </BaseIcon24>
+  );
+}
+
 export function EyeIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>

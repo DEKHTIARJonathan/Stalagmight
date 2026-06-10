@@ -1279,17 +1279,23 @@
       "x": "X",
       "y": "Y",
       "depth": "Depth",
+      "lat": "Lat",
+      "long": "Long",
       "zeroDatum": "GPS",
       "connections": "Conn",
       "comment": "Comment"
     },
     "stationColumnsMenu": {
-      "x": "X",
-      "y": "Y",
+      "coordsMeters": "Coordinates (m)",
+      "coordsGps": "Coordinates (GPS)",
       "depth": "Depth",
       "zeroDatum": "Zero datum (GPS)",
       "connections": "Connections",
       "comment": "Comment"
+    },
+    "connMenu": {
+      "merged": "Merged with",
+      "closures": "Closures with"
     },
     "stationGps": {
       "edit": "Set or edit this station's zero datum"
@@ -1303,7 +1309,8 @@
     },
     "tableSelect": {
       "sections": "Sections",
-      "rawData": "Raw data"
+      "rawData": "Raw data",
+      "readOnly": "(read-only)"
     },
     "rawData": {
       "asOfLastSave": "As of last save",

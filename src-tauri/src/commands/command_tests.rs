@@ -178,7 +178,10 @@ fn test_get_config_defaults_panels() {
     assert_eq!(cfg.panels.detail_panel_width, 300);
     assert_eq!(cfg.panels.data_table_height, 200);
     assert!(cfg.panels.data_table_station_column_order.is_empty());
-    assert!(cfg.panels.data_table_station_hidden_columns.is_empty());
+    assert_eq!(
+        cfg.panels.data_table_station_hidden_columns,
+        vec!["_x", "_y", "_lat", "_long"]
+    );
 }
 
 #[test]

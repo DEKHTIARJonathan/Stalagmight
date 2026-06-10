@@ -99,7 +99,7 @@ async function openTablePicker(page: Page): Promise<Locator> {
 /** Pick a view in the fullscreen toolbar picker ('Sections' | 'Raw data'). */
 async function pickView(page: Page, optionName: string): Promise<void> {
   const listbox = await openTablePicker(page);
-  await listbox.getByRole('option', { name: optionName, exact: true }).click();
+  await listbox.getByRole('option', { name: optionName }).click();
   await expect(listbox).not.toBeVisible();
 }
 
@@ -195,8 +195,9 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('toolbar-save-button')).toBeEnabled();
     await expect(page.getByTestId('toolbar-undo-button')).toBeVisible();
     await expect(page.getByTestId('toolbar-redo-button')).toBeVisible();
-    await expect(page.getByTestId('toolbar-import-button')).toBeDisabled();
-    await expect(page.getByTestId('toolbar-export-button')).toBeDisabled();
+    await expect(page.getByTestId('toolbar-import-button')).toHaveCount(0);
+    await expect(page.getByTestId('toolbar-export-button')).toHaveCount(0);
+    await expect(page.getByTestId('toolbar-file-controls').getByTestId('toolbar-map-view-button')).toBeVisible();
 
     // Exiting restores the normal toolbar.
     await page.keyboard.press('Escape');
@@ -207,6 +208,7 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('toolbar-map-view-button')).toHaveCount(0);
     await expect(page.getByTestId('toolbar-import-button')).toBeEnabled();
     await expect(page.getByTestId('toolbar-export-button')).toBeEnabled();
+    await expect(page.getByTestId('toolbar-map-view-button')).toHaveCount(0);
   });
 
   test('blocks tool and import/export shortcuts but keeps save/undo alive', async ({ page }) => {
@@ -260,12 +262,13 @@ test.describe('Data table fullscreen mode', () => {
     // The toolbar picker offers just the two views; tables are chosen in the
     // sub-header.
     const listbox = await openTablePicker(page);
-    await expect(listbox.getByRole('option')).toHaveText(['Sections', 'Raw data']);
+    // (the gap between label and qualifier is flex spacing, not a text space)
+    await expect(listbox.getByRole('option')).toHaveText(['Sections', 'Raw data(read-only)']);
 
     // Entering raw mode auto-selects a table; the sub-header menu lists them
     // all and switches to the shots table. No Shots|Stations toggle in raw
     // mode; the read-only grid shows the saved rows.
-    await listbox.getByRole('option', { name: 'Raw data', exact: true }).click();
+    await listbox.getByRole('option', { name: 'Raw data' }).click();
     await expect(page.getByTestId('data-table-raw-name')).not.toHaveText('');
     await page.getByTestId('data-table-raw-table-menu').click();
     const tableList = page.getByTestId('data-table-raw-table-menu-list');
@@ -296,7 +299,7 @@ test.describe('Data table fullscreen mode', () => {
     // shows until a save clears it (the page refetches on dirty → clean).
     await fillCell(page, 0, 'length', '42');
     await expect.poll(() => getIsDirty(page)).toBe(true);
-    await pickView(page, 'Raw data');
+    await pickView(page, 'Raw data');  // matches despite the (read-only) suffix
     await pickRawTable(page, 'shots');
     await expect(page.getByTestId('data-table-raw-dirty-hint')).toHaveText('As of last save');
     await page.keyboard.press('Control+s');

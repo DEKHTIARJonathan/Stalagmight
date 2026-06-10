@@ -2384,7 +2384,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
-                data_table_station_hidden_columns: [],
+                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
                 ...mockDataTableView,
               },
               cache: {
@@ -2604,7 +2604,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
-                data_table_station_hidden_columns: [],
+                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
                 ...mockDataTableView,
               },
               cache: {

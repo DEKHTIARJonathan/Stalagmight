@@ -306,9 +306,18 @@ pub struct PanelsConfig {
     /// Stations-table column order (grid column keys; empty = declaration order)
     #[serde(default)]
     pub data_table_station_column_order: Vec<String>,
-    /// Stations-table hidden column keys
-    #[serde(default)]
+    /// Stations-table hidden column keys (both coordinate pairs start hidden)
+    #[serde(default = "default_station_hidden_columns")]
     pub data_table_station_hidden_columns: Vec<String>,
+}
+
+fn default_station_hidden_columns() -> Vec<String> {
+    vec![
+        "_x".to_string(),
+        "_y".to_string(),
+        "_lat".to_string(),
+        "_long".to_string(),
+    ]
 }
 
 fn default_data_table_hidden_columns() -> Vec<String> {

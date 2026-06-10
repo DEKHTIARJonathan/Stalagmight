@@ -42,6 +42,9 @@ export interface GridColumn<Row> {
 
   /** Coercion hint used by the default parser and for type-to-edit gating. */
   kind?: 'text' | 'number' | 'number-nullable';
+  /** Open a larger multi-line editor (comments etc.) instead of the
+   *  cell-sized one. */
+  multiline?: boolean;
   /** Parse a raw typed/pasted string into the value to commit. Return
    *  `undefined` to SKIP the write (e.g. a non-finite number, or an empty string
    *  into a non-nullable numeric — never silently write 0). Defaults to a

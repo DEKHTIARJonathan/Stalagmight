@@ -10,6 +10,7 @@ import {
   ShrinkIcon,
 } from '../common/icons';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import TableSelectDropdown from './TableSelectDropdown';
@@ -132,6 +133,7 @@ export default function Toolbar({
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const openDialog = useUIStore((s) => s.openDialog);
   const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
+  const syntacticLevel = useUIStore((s) => s.syntacticLevel);
   // The closure-adjusted view is read-only: geometry-mutating tools are disabled
   // there (edits are made in the measured view).
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
@@ -155,26 +157,47 @@ export default function Toolbar({
         <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
         </Button>
-        {/* Import/Export stay visible but inert while the table is fullscreen
-            (placement-mode visual: dimmed + grayscale). */}
-        <Button
-          onClick={() => { setSource('toolbar'); onImport(); }}
-          disabled={placementModeActive || geometryReadOnly || dataTableFullScreen}
-          size="sm"
-          className={dataTableFullScreen ? 'opacity-45 grayscale' : ''}
-          data-testid="toolbar-import-button"
-        >
-          {t('common.actions.import')}
-        </Button>
-        <Button
-          onClick={() => { setSource('toolbar'); openDialog('export'); }}
-          disabled={placementModeActive || dataTableFullScreen}
-          size="sm"
-          className={dataTableFullScreen ? 'opacity-45 grayscale' : ''}
-          data-testid="toolbar-export-button"
-        >
-          {t('common.actions.export')}
-        </Button>
+        {dataTableFullScreen ? (
+          /* Import/Export make way for the way back to the map; the icon takes
+             the pan-tool accent when toolbar highlighting is on. */
+          <Button
+            onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
+            size="sm"
+            icon={
+              <span
+                style={
+                  syntacticLevelAtLeast(syntacticLevel, 'toolbar_only')
+                    ? ({ color: toolAccentVar('pan') } as CSSProperties)
+                    : undefined
+                }
+              >
+                <ShrinkIcon size={14} />
+              </span>
+            }
+            data-testid="toolbar-map-view-button"
+          >
+            {t('dataTable.fullScreen.exit')}
+          </Button>
+        ) : (
+          <>
+            <Button
+              onClick={() => { setSource('toolbar'); onImport(); }}
+              disabled={placementModeActive || geometryReadOnly}
+              size="sm"
+              data-testid="toolbar-import-button"
+            >
+              {t('common.actions.import')}
+            </Button>
+            <Button
+              onClick={() => { setSource('toolbar'); openDialog('export'); }}
+              disabled={placementModeActive}
+              size="sm"
+              data-testid="toolbar-export-button"
+            >
+              {t('common.actions.export')}
+            </Button>
+          </>
+        )}
         <div className="w-px h-6 bg-border mx-2" />
         <UndoHistoryDropdown
           mode="undo"
@@ -238,17 +261,7 @@ export default function Toolbar({
           the table picker and a "Map view" shrink button instead. */}
       <div className="flex items-center gap-2">
         {dataTableFullScreen ? (
-          <>
-            <TableSelectDropdown />
-            <Button
-              onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
-              size="sm"
-              icon={<ShrinkIcon size={14} />}
-              data-testid="toolbar-map-view-button"
-            >
-              {t('dataTable.fullScreen.exit')}
-            </Button>
-          </>
+          <TableSelectDropdown />
         ) : (
           <>
             <div
