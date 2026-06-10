@@ -128,19 +128,23 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
   // Keyed on the full `selection` (not just the owning section id): selecting
   // another shot of the SAME section (e.g. clicking rows in the data table)
   // must re-reveal the section row even though its id didn't change.
-  const prevSelectedSectionIdRef = useRef<SectionId | null>(null);
+  const prevSelectionRef = useRef<typeof selection>(null);
   useEffect(() => {
-    const selectionChanged = prevSelectedSectionIdRef.current !== selectedSectionId;
-    prevSelectedSectionIdRef.current = selectedSectionId;
+    // `sections` edits also re-run this effect; only a fresh setSelection call
+    // (every call stores a new object, even for the same target) is a
+    // user-driven selection event.
+    const selectionEvent = prevSelectionRef.current !== selection;
+    prevSelectionRef.current = selection;
     if (selectedSectionId === null) return;
     const idx = sections.findIndex((s) => s.id === selectedSectionId);
     if (idx < 0) return;
     optionRefs.current[idx]?.scrollIntoView({ block: 'nearest' });
-    // A *new* selection becomes the panel's anchor. If it was made during an
-    // active external hover (e.g. hover a shot on the map, then click to select
-    // it), drop the pre-hover restore so un-hovering lands on the selection
-    // rather than snapping back to where the list was before the hover.
-    if (selectionChanged) {
+    // EVERY selection event re-anchors the panel here — including re-selecting
+    // the already-selected section. If it happened during an active external
+    // hover (hover a shot, then click to select it), drop the pre-hover restore
+    // so un-hovering stays on the selection rather than snapping back to where
+    // the list was before the hover.
+    if (selectionEvent) {
       preHoverScrollTopRef.current = null;
     }
   }, [selection, selectedSectionId, sections]);
