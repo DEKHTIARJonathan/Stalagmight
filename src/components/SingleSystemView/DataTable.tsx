@@ -22,6 +22,13 @@ interface DataTableProps {
   sections: Section[];
 }
 
+/** Column keys per angle family and mode (the Avg column and the In+Out pair
+ *  swap into each other's slot when the mode changes). */
+const ANGLE_FAMILY_KEYS = {
+  azimuth: { avg: [AZIMUTH_AVG_KEY], inout: ['azimuth_in', 'azimuth_out'] },
+  inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'] },
+} as const;
+
 export default function DataTable({ sections }: DataTableProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
@@ -627,6 +634,7 @@ export default function DataTable({ sections }: DataTableProps) {
     });
   }, []);
 
+
   useEffect(() => {
     if (!colMenuOpen) return undefined;
     const close = () => setColMenuOpen(false);
@@ -656,6 +664,30 @@ export default function DataTable({ sections }: DataTableProps) {
     return () => ro.disconnect();
   }, [dataTableOpen]);
   const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
+
+  // Switch an angle family's mode, putting the newly shown columns in the slot
+  // of the ones they replace (Avg ↔ In+Out swap in place). Transitions through
+  // Off keep every slot — hidden columns remember their position in the order.
+  const changeAngleMode = useCallback(
+    (family: 'azimuth' | 'inclination', next: 'avg' | 'inout' | 'off') => {
+      const current = family === 'azimuth' ? azimuthMode : inclinationMode;
+      if (next === current) return;
+      if (current !== 'off' && next !== 'off') {
+        const prevKeys: readonly string[] = ANGLE_FAMILY_KEYS[family][current];
+        const nextKeys: readonly string[] = ANGLE_FAMILY_KEYS[family][next];
+        setShotColumnOrder((prev) => {
+          const base = prev.length ? [...prev] : shotColumns.map((c) => c.key);
+          for (const c of shotColumns) if (!base.includes(c.key)) base.push(c.key);
+          const without = base.filter((k) => !nextKeys.includes(k));
+          const anchor = without.indexOf(prevKeys[0]!);
+          without.splice(anchor < 0 ? without.length : anchor, 0, ...nextKeys);
+          return without;
+        });
+      }
+      (family === 'azimuth' ? setAzimuthMode : setInclinationMode)(next);
+    },
+    [azimuthMode, inclinationMode, shotColumns]
+  );
 
   // Rows of the column-visibility menu: a checkbox per column (or group — the
   // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
@@ -774,8 +806,8 @@ export default function DataTable({ sections }: DataTableProps) {
             >
               {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
               {colCheckRow(['length'], t('dataTable.columnsMenu.length'))}
-              {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, setAzimuthMode, 'col-azimuth')}
-              {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, setInclinationMode, 'col-inclination')}
+              {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth')}
+              {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, (m) => changeAngleMode('inclination', m), 'col-inclination')}
               {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'))}
               {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'))}
               {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}

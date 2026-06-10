@@ -168,21 +168,24 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   } = props;
 
   // --- Visible columns: order then hide ------------------------------------
+  // The full order (hidden included) is kept too: reorders must preserve a
+  // hidden column's slot so it reappears where it was when re-shown.
+  const orderedKeys = useMemo(() => {
+    const keys = columns.map((c) => c.key);
+    if (!columnOrder || columnOrder.length === 0) return keys;
+    const known = new Set(keys);
+    const ordered = columnOrder.filter((k) => known.has(k));
+    for (const k of keys) if (!ordered.includes(k)) ordered.push(k);
+    return ordered;
+  }, [columns, columnOrder]);
   const visibleColumns = useMemo(() => {
     const byKey = new Map(columns.map((c) => [c.key, c]));
-    const ordered: GridColumn<Row>[] = [];
-    if (columnOrder && columnOrder.length) {
-      for (const key of columnOrder) {
-        const c = byKey.get(key);
-        if (c) ordered.push(c);
-      }
-      for (const c of columns) if (!columnOrder.includes(c.key)) ordered.push(c);
-    } else {
-      ordered.push(...columns);
-    }
     const hidden = new Set(hiddenColumns ?? []);
-    return ordered.filter((c) => !hidden.has(c.key));
-  }, [columns, columnOrder, hiddenColumns]);
+    return orderedKeys
+      .filter((k) => !hidden.has(k))
+      .map((k) => byKey.get(k))
+      .filter((c): c is GridColumn<Row> => c !== undefined);
+  }, [columns, orderedKeys, hiddenColumns]);
 
   const [colWidthOverrides, setColWidthOverrides] = useState<Record<string, number>>({});
   const colKeys = useMemo(() => visibleColumns.map((c) => c.key), [visibleColumns]);
@@ -1500,20 +1503,20 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [hiddenColumns, onHiddenColumnsChange],
   );
   // Move the selected column block [fromC0..fromC1] to insertion index `dropIdx`
-  // (a boundary index among visible columns), preserving hidden columns and
-  // keeping the moved block selected.
+  // (a boundary index among visible columns), preserving each hidden column's
+  // slot in the full order and keeping the moved block selected.
   const reorderColumns = useCallback(
     (fromC0: number, fromC1: number, dropIdx: number) => {
       if (!onColumnOrderChange) return;
       const block = colKeys.slice(fromC0, fromC1 + 1);
-      const rest = colKeys.filter((_, i) => i < fromC0 || i > fromC1);
-      let insertAt = dropIdx;
-      if (dropIdx > fromC1) insertAt = dropIdx - block.length;
-      else if (dropIdx > fromC0) insertAt = fromC0; // inside the block → no-op
-      insertAt = clamp(insertAt, 0, rest.length);
+      const blockSet = new Set(block);
+      const rest = orderedKeys.filter((k) => !blockSet.has(k));
+      // The visible column the block lands before; past the last visible
+      // column (or only hidden ones after) → append at the very end.
+      const anchorKey = colKeys.slice(dropIdx).find((k) => !blockSet.has(k));
+      const insertAt = anchorKey !== undefined ? rest.indexOf(anchorKey) : rest.length;
       const next = [...rest.slice(0, insertAt), ...block, ...rest.slice(insertAt)];
-      const hidden = (hiddenColumns ?? []).filter((k) => !next.includes(k));
-      onColumnOrderChange([...next, ...hidden]);
+      onColumnOrderChange(next);
       const ak = block[0];
       const fk = block[block.length - 1];
       if (ak !== undefined && fk !== undefined && rowCount > 0) {
@@ -1524,7 +1527,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         });
       }
     },
-    [colKeys, hiddenColumns, onColumnOrderChange, rowCount],
+    [colKeys, orderedKeys, onColumnOrderChange, rowCount],
   );
 
   // Scroll an externally-requested row into view (e.g. a map selection).
