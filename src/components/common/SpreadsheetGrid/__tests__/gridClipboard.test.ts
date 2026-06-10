@@ -11,26 +11,48 @@ describe('parseLocaleNumber', () => {
   it('parses plain en-US numbers', () => {
     expect(parseLocaleNumber('1.5', 'en-US')).toBe(1.5);
     expect(parseLocaleNumber('1,234.5', 'en-US')).toBe(1234.5);
+    expect(parseLocaleNumber('1,234', 'en-US')).toBe(1234);
     expect(parseLocaleNumber('-42', 'en-US')).toBe(-42);
   });
 
   it('parses comma-decimal locales (the parseFloat bug)', () => {
     // The bug this fixes: parseFloat("1,5") === 1.
     expect(parseLocaleNumber('1,5', 'de-DE')).toBe(1.5);
+    expect(parseLocaleNumber('1234,5', 'de-DE')).toBe(1234.5);
     expect(parseLocaleNumber('1.234,5', 'de-DE')).toBe(1234.5);
+    expect(parseLocaleNumber('-3,5', 'de-DE')).toBe(-3.5);
   });
 
-  it('dot-fallback: a plain "1.5" typed in a comma-decimal locale still parses', () => {
-    // "1.5" in de strips the dot as grouping → 15 is NOT what a user means when
-    // they paste a dot-decimal; but the documented rule parses per locale first.
-    // We at least guarantee a finite result, never NaN.
-    expect(Number.isFinite(parseLocaleNumber('1.5', 'de-DE') as number)).toBe(true);
+  it('strips group separators only for valid groups of three', () => {
+    expect(parseLocaleNumber('1.234', 'de-DE')).toBe(1234);
+    expect(parseLocaleNumber('1.234.567,89', 'de-DE')).toBe(1234567.89);
+  });
+
+  it('dot-fallback: a plain "1.5" typed in a comma-decimal locale parses as 1.5', () => {
+    // The dot is NOT grouping here — "1.5" must never become 15.
+    expect(parseLocaleNumber('1.5', 'de-DE')).toBe(1.5);
+    // Too many fraction digits for a group → also the dot-fallback.
+    expect(parseLocaleNumber('1.2345', 'de-DE')).toBe(1.2345);
+  });
+
+  it('rejects comma in en-US unless it is valid grouping (never 15)', () => {
+    expect(parseLocaleNumber('1,5', 'en-US')).toBeUndefined();
+    expect(parseLocaleNumber('12,34', 'en-US')).toBeUndefined();
+  });
+
+  it('accepts space-like group separators (fr-FR)', () => {
+    expect(parseLocaleNumber('1\u202F234,5', 'fr-FR')).toBe(1234.5); // narrow NBSP
+    expect(parseLocaleNumber('1\u00A0234,5', 'fr-FR')).toBe(1234.5); // NBSP
+    expect(parseLocaleNumber('1 234,5', 'fr-FR')).toBe(1234.5); // regular space
+    expect(parseLocaleNumber('1,5', 'fr-FR')).toBe(1.5);
   });
 
   it('returns undefined for empty / non-numeric (callers must skip, never write 0)', () => {
     expect(parseLocaleNumber('', 'en-US')).toBeUndefined();
     expect(parseLocaleNumber('   ', 'en-US')).toBeUndefined();
     expect(parseLocaleNumber('abc', 'en-US')).toBeUndefined();
+    expect(parseLocaleNumber('', 'de-DE')).toBeUndefined();
+    expect(parseLocaleNumber('abc', 'de-DE')).toBeUndefined();
   });
 
   it('trims surrounding whitespace', () => {
