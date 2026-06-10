@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import './SpreadsheetGrid.css';
@@ -93,6 +94,9 @@ export interface SpreadsheetGridProps<Row> {
   hoveredRow?: number | null;
   /** Extra class for a row element (e.g. a frozen-row tint). */
   rowClassName?: (row: Row, rowIndex: number) => string | undefined;
+  /** Label for the row-number gutter (default: 1-based row index). E.g. a
+   *  domain id like "5:3" so rows match what the rest of the app calls them. */
+  rowLabel?: (row: Row, rowIndex: number) => ReactNode;
 
   maximized?: boolean;
   onToggleMaximize?: () => void;
@@ -143,6 +147,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     selectedRow,
     hoveredRow,
     rowClassName,
+    rowLabel,
     maximized = false,
     onToggleMaximize,
     className = '',
@@ -1120,13 +1125,23 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         rowDrag.current = { mode: 'select', anchorRow, fromR0: 0, fromR1: 0 };
         setInteracting(true);
         selectRowRange(anchorRow, rowIdx);
+        // A plain gutter click moves the active cell to this row — notify the
+        // host like any other active-cell move (a Shift-extend keeps it put).
+        const firstKey = colKeys[0];
+        if (!e.shiftKey && firstKey !== undefined) onActiveCellChange?.(rowIdx, firstKey);
       }
     },
-    [rect, colCount, onMoveRows, selection.anchor.row, selectRowRange],
+    [rect, colCount, onMoveRows, selection.anchor.row, selectRowRange, colKeys, onActiveCellChange],
   );
 
   const onGutterMouseEnter = useCallback(
     (rowIdx: number) => {
+      // The gutter is part of the row — host hover effects (map highlight)
+      // should track it just like the cells do.
+      if (hoverRowRef.current !== rowIdx) {
+        hoverRowRef.current = rowIdx;
+        onRowHoverRef.current?.(rowIdx);
+      }
       if (rowDrag.current?.mode === 'select') selectRowRange(rowDrag.current.anchorRow, rowIdx);
     },
     [selectRowRange],
@@ -1742,7 +1757,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                     onMouseDown={(e) => onGutterMouseDown(rowIdx, e)}
                     onMouseEnter={() => onGutterMouseEnter(rowIdx)}
                   >
-                    {rowIdx + 1}
+                    {rowLabel ? rowLabel(row, rowIdx) : rowIdx + 1}
                   </div>
                   {visibleColumns.map((col, c) => {
                     const inSel = isInRect(rect, rowIdx, c);

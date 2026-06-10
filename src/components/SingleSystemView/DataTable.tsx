@@ -586,6 +586,17 @@ export default function DataTable({ sections }: DataTableProps) {
     return idx >= 0 ? idx : null;
   }, [scrollToKey, selectedSection]);
 
+  // Gutter shows the app's shot ID (matches the map/detail panel labels).
+  const shotRowLabel = useCallback(
+    (_shot: Shot, rowIndex: number) =>
+      selectedSectionId !== null ? formatShotId(selectedSectionId, rowIndex + 1) : rowIndex + 1,
+    [selectedSectionId]
+  );
+
+  // Column order is view state (drag a selected column header to move it);
+  // session-local for now, not persisted in config. Empty = declaration order.
+  const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
+
   // Grid height inside the panel body (panel header ≈ 49, grid toolbar ≈ 30,
   // status bar ≈ 24 sit outside the scroll area).
   const gridHeight = Math.max(120, dataTableHeight - 110);
@@ -672,6 +683,9 @@ export default function DataTable({ sections }: DataTableProps) {
                 selectedRow={shotScrollToRow}
                 hoveredRow={shotHoveredRow}
                 rowClassName={shotRowClassName}
+                rowLabel={shotRowLabel}
+                columnOrder={shotColumnOrder}
+                onColumnOrderChange={setShotColumnOrder}
               />
             ) : (
               <EditableTable<StationRow>
