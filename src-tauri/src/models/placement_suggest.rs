@@ -3,7 +3,7 @@ use ts_rs::TS;
 
 use crate::config::PlacementSuggestionConfig;
 
-use super::{SectionId, Shot, ShotData};
+use super::{horizontal_length_from_slope, SectionId, Shot, ShotData};
 
 /// Direction of match between import and existing shots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -298,6 +298,8 @@ struct SuggestionConfig {
     single_shot_max_length_error_fraction: f64,
     /// Stricter one-shot length error floor (meters).
     single_shot_max_length_error_floor: f64,
+    /// Minimum vertical separation allowed where placed traces cross (meters).
+    min_crossing_depth_clearance: f64,
 }
 
 impl Default for SuggestionConfig {
@@ -334,6 +336,7 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             single_shot_max_depth_error: 0.25,
             single_shot_max_length_error_fraction: 0.075,
             single_shot_max_length_error_floor: 0.50,
+            min_crossing_depth_clearance: 4.0,
         }
     }
 }
@@ -345,6 +348,23 @@ struct MatchShot {
     length: f64,
     depth_in: f64,
     depth_out: f64,
+}
+
+#[derive(Clone, Copy)]
+struct TracePoint {
+    x: f64,
+    y: f64,
+    depth: f64,
+}
+
+impl TracePoint {
+    fn translated(self, dx: f64, dy: f64) -> Self {
+        Self {
+            x: self.x + dx,
+            y: self.y + dy,
+            depth: self.depth,
+        }
+    }
 }
 
 impl MatchShot {
@@ -414,6 +434,114 @@ fn max_sequence_length_error(existing_length: f64, matched_count: usize, config:
 fn max_single_shot_length_error(existing_length: f64, config: &SuggestionConfig) -> f64 {
     (config.single_shot_max_length_error_fraction * existing_length)
         .max(config.single_shot_max_length_error_floor)
+}
+
+fn station_depths_from_match_shots(shots: &[MatchShot]) -> Vec<f64> {
+    let mut depths = Vec::with_capacity(shots.len() + 1);
+    for station_idx in 0..=shots.len() {
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        if station_idx > 0 {
+            sum += shots[station_idx - 1].depth_out;
+            count += 1.0;
+        }
+        if station_idx < shots.len() {
+            sum += shots[station_idx].depth_in;
+            count += 1.0;
+        }
+        depths.push(if count > 0.0 { sum / count } else { 0.0 });
+    }
+    depths
+}
+
+fn section_trace_points(shots: &[MatchShot]) -> Vec<TracePoint> {
+    let depths = station_depths_from_match_shots(shots);
+    let mut points = Vec::with_capacity(shots.len() + 1);
+    let (mut x, mut y) = (0.0_f64, 0.0_f64);
+    points.push(TracePoint { x, y, depth: depths[0] });
+    for (idx, shot) in shots.iter().enumerate() {
+        let azimuth_rad = shot.avg_azimuth.to_radians();
+        let horizontal = horizontal_length_from_slope(shot.length, shot.depth_out - shot.depth_in);
+        x += horizontal * azimuth_rad.sin();
+        y += horizontal * azimuth_rad.cos();
+        points.push(TracePoint { x, y, depth: depths[idx + 1] });
+    }
+    points
+}
+
+fn segment_intersection_params(
+    a0: TracePoint,
+    a1: TracePoint,
+    b0: TracePoint,
+    b1: TracePoint,
+) -> Option<(f64, f64)> {
+    const EPS: f64 = 1e-9;
+    const ENDPOINT_EPS: f64 = 1e-6;
+
+    let ax = a1.x - a0.x;
+    let ay = a1.y - a0.y;
+    let bx = b1.x - b0.x;
+    let by = b1.y - b0.y;
+    let denom = ax * by - ay * bx;
+    if denom.abs() < EPS {
+        return None;
+    }
+
+    let cx = b0.x - a0.x;
+    let cy = b0.y - a0.y;
+    let t = (cx * by - cy * bx) / denom;
+    let u = (cx * ay - cy * ax) / denom;
+
+    if t > ENDPOINT_EPS && t < 1.0 - ENDPOINT_EPS && u > ENDPOINT_EPS && u < 1.0 - ENDPOINT_EPS {
+        Some((t, u))
+    } else {
+        None
+    }
+}
+
+fn interpolate_depth(a: TracePoint, b: TracePoint, t: f64) -> f64 {
+    a.depth + (b.depth - a.depth) * t
+}
+
+fn placement_crossing_clearance_ok(
+    import_trace: &[TracePoint],
+    existing_trace: &[TracePoint],
+    import_station_index: usize,
+    existing_station_index: usize,
+    config: &SuggestionConfig,
+) -> bool {
+    if import_station_index >= import_trace.len() || existing_station_index >= existing_trace.len() {
+        return false;
+    }
+
+    let dx = existing_trace[existing_station_index].x - import_trace[import_station_index].x;
+    let dy = existing_trace[existing_station_index].y - import_trace[import_station_index].y;
+    let placed_import: Vec<TracePoint> = import_trace
+        .iter()
+        .map(|point| point.translated(dx, dy))
+        .collect();
+
+    for import_idx in 0..placed_import.len().saturating_sub(1) {
+        let import_a = placed_import[import_idx];
+        let import_b = placed_import[import_idx + 1];
+        for existing_idx in 0..existing_trace.len().saturating_sub(1) {
+            let existing_a = existing_trace[existing_idx];
+            let existing_b = existing_trace[existing_idx + 1];
+            let Some((import_t, existing_t)) =
+                segment_intersection_params(import_a, import_b, existing_a, existing_b)
+            else {
+                continue;
+            };
+
+            let import_depth = interpolate_depth(import_a, import_b, import_t);
+            let existing_depth = interpolate_depth(existing_a, existing_b, existing_t);
+            if (import_depth - existing_depth).abs() < config.min_crossing_depth_clearance {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 /// Compute score comparing two shots in a given direction.
@@ -951,6 +1079,7 @@ pub fn suggest_placements(
         .iter()
         .map(MatchShot::from_shot_data)
         .collect();
+    let import_trace = section_trace_points(&import_match_shots);
 
     // Build import match shots for station N (last N shots, reversed)
     let import_from_n: Vec<MatchShot> = import_shots[import_shots.len().saturating_sub(max_ref)..]
@@ -970,6 +1099,7 @@ pub fn suggest_placements(
 
         let existing_match_shots: Vec<MatchShot> =
             existing.shots.iter().map(MatchShot::from_shot).collect();
+        let existing_trace = section_trace_points(&existing_match_shots);
 
         // Try from both leaves of the import section
         let leaf_configs: &[(&[MatchShot], usize)] = &[
@@ -1035,6 +1165,15 @@ pub fn suggest_placements(
                         else {
                             continue;
                         };
+                        if !placement_crossing_clearance_ok(
+                            &import_trace,
+                            &existing_trace,
+                            merge_import_station,
+                            merge_existing_station,
+                            config,
+                        ) {
+                            continue;
+                        }
                         let context_multiplier = station_context_multiplier(
                             &import_match_shots,
                             &existing_match_shots,
@@ -1049,7 +1188,9 @@ pub fn suggest_placements(
                             best_context = Some((context_multiplier, import_offset));
                         }
                     }
-                    let (context_multiplier, preferred_offset) = best_context.unwrap_or((1.0, suggestion.preferred_merge_offset));
+                    let Some((context_multiplier, preferred_offset)) = best_context else {
+                        continue;
+                    };
                     suggestion.preferred_merge_offset = preferred_offset;
                     suggestion.score *= context_multiplier;
 
@@ -1454,6 +1595,46 @@ mod tests {
         assert!(multiplier < 1.0, "unsupported interior match should be penalized, got {multiplier}");
     }
 
+    #[test]
+    fn crossing_clearance_rejects_shallow_crossings() {
+        let config = SuggestionConfig::default();
+        let import_trace = vec![
+            TracePoint { x: 0.0, y: 0.0, depth: 10.0 },
+            TracePoint { x: 5.0, y: -5.0, depth: 10.0 },
+            TracePoint { x: 5.0, y: 5.0, depth: 10.0 },
+        ];
+        let existing_trace = vec![
+            TracePoint { x: 0.0, y: 0.0, depth: 11.0 },
+            TracePoint { x: 10.0, y: 0.0, depth: 11.0 },
+            TracePoint { x: 10.0, y: 10.0, depth: 11.0 },
+        ];
+
+        assert!(
+            !placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &config),
+            "interior line crossing with 1m vertical clearance should be rejected",
+        );
+    }
+
+    #[test]
+    fn crossing_clearance_allows_deep_crossings() {
+        let config = SuggestionConfig::default();
+        let import_trace = vec![
+            TracePoint { x: 0.0, y: 0.0, depth: 16.0 },
+            TracePoint { x: 5.0, y: -5.0, depth: 16.0 },
+            TracePoint { x: 5.0, y: 5.0, depth: 16.0 },
+        ];
+        let existing_trace = vec![
+            TracePoint { x: 0.0, y: 0.0, depth: 11.0 },
+            TracePoint { x: 10.0, y: 0.0, depth: 11.0 },
+            TracePoint { x: 10.0, y: 10.0, depth: 11.0 },
+        ];
+
+        assert!(
+            placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &config),
+            "interior line crossing with 5m vertical clearance should be allowed",
+        );
+    }
+
     // ========================================================================
     // suggest_placements integration tests
     // ========================================================================
@@ -1523,8 +1704,8 @@ mod tests {
         // Reference shots at the END of the import section
         let import_shots = vec![
             // New shots first
-            make_shot_data(130.0, 135.0, 8.0, 4.5, 7.0),
-            make_shot_data(300.0, 305.0, 6.0, 7.0, 9.0),
+            make_shot_data(130.0, 135.0, 8.0, 20.0, 22.0),
+            make_shot_data(300.0, 305.0, 6.0, 22.0, 23.0),
             // Then reference shots matching existing section (forward)
             make_shot_data(88.0, 92.0, 5.0, 3.0, 4.0),
             make_shot_data(43.0, 47.0, 3.0, 4.0, 4.5),
