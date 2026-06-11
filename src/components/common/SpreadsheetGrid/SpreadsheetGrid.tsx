@@ -292,6 +292,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // precision (the clipboard TSV is display-formatted). Used only when the
   // clipboard text still matches `text`.
   const copyStash = useRef<{ text: string; values: unknown[][]; colKeys: string[] } | null>(null);
+  // Provenance for `copyStash`: true while the OS clipboard is still OUR last
+  // copy/cut. Set when we copy; cleared on window blur — an external app can only
+  // overwrite the clipboard while it has focus, so a blur means a later text
+  // match may be coincidental and must NOT be treated as an internal paste (which
+  // would paste hidden raw precision or, worse, clear a pending cut source). The
+  // stash stays usable via the explicit `fromStash` paste path (WebKitGTK
+  // fallback), which is internal by construction regardless of focus.
+  const clipboardOwned = useRef(false);
   const [fillPreview, setFillPreview] = useState<Rect | null>(null);
   const [interacting, setInteracting] = useState(false);
   const dragging = useRef(false);
@@ -302,6 +310,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const autoScrollRAF = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  // A blur means another app may have replaced the OS clipboard, so our copy is
+  // no longer guaranteed to be on it — drop the stash's "internal" provenance.
+  useEffect(() => {
+    const onBlur = () => {
+      clipboardOwned.current = false;
+    };
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, []);
+
   // Track the scroller's inner width so `grow` columns fill the container.
   useEffect(() => {
     const el = scrollRef.current;
@@ -719,6 +737,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       values.push(line);
     }
     copyStash.current = { text, values, colKeys: colKeys.slice(rect.c0, rect.c1 + 1) };
+    clipboardOwned.current = true; // we now own the OS clipboard (until a blur)
     setCopiedRect(rect); // marching-ants until paste / Esc / edit
     setCutRect(null);
     try {
@@ -764,14 +783,21 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   );
 
   const pasteText = useCallback(
-    (text: string) => {
+    (text: string, fromStash = false) => {
       if (!text) return;
       const clip = parseTSV(text);
       const { targets, clipped } = placePaste(clip, rect, rowCount, colCount);
-      // Clipboard text matching our own last copy → source the stashed RAW
-      // values (full fidelity); external data re-parses through each column.
+      // Treat the paste as INTERNAL (use stashed RAW values for full fidelity,
+      // and complete a pending cut) only when the source is our own stash:
+      // either the caller read it directly (`fromStash`, the WebKitGTK fallback),
+      // or the OS clipboard text still matches AND we still own it (no blur since
+      // the copy). Text equality alone is not enough — an external app could have
+      // copied identical text. External data re-parses through each column.
       const stash = copyStash.current;
-      const internal = stash !== null && stash.text === text ? stash : null;
+      const internal =
+        stash !== null && stash.text === text && (fromStash || clipboardOwned.current)
+          ? stash
+          : null;
       const ch = clip.length;
       const cw = clip.reduce((m, r) => Math.max(m, r.length), 0);
       const single = ch === 1 && cw === 1;
@@ -805,6 +831,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         }
       }
       const written = edits.length;
+      // Required cut-source cells that can't take an empty value: marked missing
+      // (Delete semantics) and reported to a provisional host, applied after the
+      // edits below.
+      const cutMissing: string[] = [];
+      const cutClearedMissing: { row: number; colKey: string }[] = [];
       // Pasting our own CUT range completes the move: clear the clearable cut-
       // source cells the destination doesn't cover, in the SAME batch (one undo).
       if (internal && cutRect) {
@@ -826,13 +857,24 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             const col = colAt(c);
             if (!col || !cellEditable(r, col)) continue;
             const cleared = parseForColumn(col, '', r);
-            if (cleared === undefined) continue;
+            if (cleared === undefined) {
+              // A required source (number → no empty value): completing the move
+              // can't write a blank, so mark it missing like Delete instead of
+              // leaving the moved value behind as a duplicate (and tell a
+              // provisional host to drop it).
+              const k = missKey(r, col.key);
+              if (k !== null) cutMissing.push(k);
+              cutClearedMissing.push({ row: r, colKey: col.key });
+              continue;
+            }
             edits.push({ row: r, colKey: col.key, value: cleared });
           }
         }
         copyStash.current = null; // a cut pastes once
       }
       applyEdits(edits);
+      if (cutMissing.length) markMissing(cutMissing);
+      if (onClearMissing) for (const m of cutClearedMissing) onClearMissing(m.row, m.colKey);
       setCopiedRect(null);
       setCutRect(null);
       // Surface what the paste couldn't fully apply (out-of-bounds vs read-only/
@@ -841,7 +883,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         onPasteReport?.({ written, clipped, skipped: targets.length - written });
       }
     },
-    [rect, rowCount, colCount, colAt, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport],
+    [rect, rowCount, colCount, colAt, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport, markMissing, missKey, onClearMissing],
   );
 
   // Context-menu paste: a synthetic (untrusted) `paste` event can't carry
@@ -850,13 +892,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // in-grid copy/paste still works. When the clipboard IS readable, its text
   // wins — pasteText only uses the stash values when the texts match.
   const doPaste = useCallback(async () => {
-    let text: string;
     try {
-      text = await navigator.clipboard.readText();
+      pasteText(await navigator.clipboard.readText());
     } catch {
-      text = copyStash.current?.text ?? '';
+      // Clipboard read denied (WebKitGTK): fall back to our own stash, which is
+      // internal by construction.
+      pasteText(copyStash.current?.text ?? '', true);
     }
-    pasteText(text);
   }, [pasteText]);
 
   // Keyboard Ctrl/Cmd+V plumbing. The native `paste` event on the container is
@@ -890,13 +932,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       // event racing (or trailing) the fallback can't double-apply.
       suppressNativePasteUntil.current = Date.now() + 400;
       void (async () => {
-        let text: string;
         try {
-          text = await navigator.clipboard.readText();
+          const text = await navigator.clipboard.readText();
+          if (text) pasteTextRef.current(text);
         } catch {
-          text = copyStash.current?.text ?? '';
+          // Read denied: the stash is internal by construction (`fromStash`).
+          const text = copyStash.current?.text ?? '';
+          if (text) pasteTextRef.current(text, true);
         }
-        if (text) pasteTextRef.current(text);
       })();
     }, 150);
   }, []);
@@ -1091,7 +1134,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       // `paste` to non-editable elements.
       if (ctrl && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); void doCopy(); return; }
       if (ctrl && (e.key === 'x' || e.key === 'X')) { e.preventDefault(); void doCut(); return; }
-      if (ctrl && (e.key === 'v' || e.key === 'V')) { schedulePasteFallback(); return; }
+      // Paste is grid-owned like copy/cut, but it must NOT preventDefault (the
+      // native `paste` event is the primary path). Stop propagation so a global
+      // shortcut rebound to Ctrl/Cmd+V doesn't also fire — the browser still
+      // dispatches the separate paste event.
+      if (ctrl && (e.key === 'v' || e.key === 'V')) { e.stopPropagation(); schedulePasteFallback(); return; }
       if (ctrl && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); doFill(true); return; }
       if (ctrl && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); doFill(false); return; }
       if (ctrl && (e.key === 'a' || e.key === 'A')) {
