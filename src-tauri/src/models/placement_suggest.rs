@@ -282,6 +282,12 @@ struct SuggestionConfig {
     max_length_error_fraction: f64,
     /// Length error floor for dynamic cutoff (meters).
     max_length_error_floor: f64,
+    /// Base length error fraction for one-shot overlaps.
+    sequence_length_error_base_fraction: f64,
+    /// Additional length error fraction allowed for each extra matched shot.
+    sequence_length_error_step_fraction: f64,
+    /// Maximum length error fraction allowed while exploring longer runs.
+    sequence_length_error_max_fraction: f64,
     /// Minimum unpenalized score required for one-shot suggestions.
     single_shot_min_raw_score: f64,
     /// Stricter one-shot azimuth cutoff (degrees).
@@ -320,6 +326,9 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             max_depth_error: c.max_depth_error,
             max_length_error_fraction: c.max_length_error_fraction.min(0.03),
             max_length_error_floor: c.max_length_error_floor.min(0.40),
+            sequence_length_error_base_fraction: 0.03,
+            sequence_length_error_step_fraction: 0.02,
+            sequence_length_error_max_fraction: 0.11,
             single_shot_min_raw_score: 0.95,
             single_shot_max_azimuth_error: 8.0,
             single_shot_max_depth_error: 0.25,
@@ -391,6 +400,17 @@ fn max_length_error(existing_length: f64, config: &SuggestionConfig) -> f64 {
     (config.max_length_error_fraction * existing_length).max(config.max_length_error_floor)
 }
 
+fn sequence_length_error_fraction(matched_count: usize, config: &SuggestionConfig) -> f64 {
+    let extra = matched_count.saturating_sub(1) as f64;
+    (config.sequence_length_error_base_fraction + config.sequence_length_error_step_fraction * extra)
+        .min(config.sequence_length_error_max_fraction)
+}
+
+fn max_sequence_length_error(existing_length: f64, matched_count: usize, config: &SuggestionConfig) -> f64 {
+    (sequence_length_error_fraction(matched_count, config) * existing_length)
+        .max(config.max_length_error_floor)
+}
+
 fn max_single_shot_length_error(existing_length: f64, config: &SuggestionConfig) -> f64 {
     (config.single_shot_max_length_error_fraction * existing_length)
         .max(config.single_shot_max_length_error_floor)
@@ -435,6 +455,61 @@ fn compute_shot_score(
         + config.length_weight * len_score
         + config.depth_in_weight * depth_in_score
         + config.depth_out_weight * depth_out_score
+}
+
+fn compute_sequence_shot_score(
+    import: &MatchShot,
+    existing: &MatchShot,
+    direction: MatchDirection,
+    matched_count: usize,
+    config: &SuggestionConfig,
+) -> f64 {
+    let (existing_az, existing_depth_in, existing_depth_out) = match direction {
+        MatchDirection::Forward => (existing.avg_azimuth, existing.depth_in, existing.depth_out),
+        MatchDirection::Reverse => (
+            (existing.avg_azimuth + 180.0) % 360.0,
+            existing.depth_out,
+            existing.depth_in,
+        ),
+    };
+
+    let az_error = angular_difference(import.avg_azimuth, existing_az);
+    let len_error = (import.length - existing.length).abs();
+    let depth_in_error = (import.depth_in - existing_depth_in).abs();
+    let depth_out_error = (import.depth_out - existing_depth_out).abs();
+
+    if az_error > config.max_azimuth_error_full
+        || depth_in_error > config.max_depth_error
+        || depth_out_error > config.max_depth_error
+        || len_error > max_sequence_length_error(existing.length, matched_count, config)
+    {
+        return 0.0;
+    }
+
+    let az_score = gaussian(az_error, config.azimuth_sigma);
+    let len_score = gaussian(len_error, config.length_sigma);
+    let depth_in_score = gaussian(depth_in_error, config.depth_sigma);
+    let depth_out_score = gaussian(depth_out_error, config.depth_sigma);
+
+    config.azimuth_weight * az_score
+        + config.length_weight * len_score
+        + config.depth_in_weight * depth_in_score
+        + config.depth_out_weight * depth_out_score
+}
+
+fn compute_exploratory_shot_score(
+    import: &MatchShot,
+    existing: &MatchShot,
+    direction: MatchDirection,
+    config: &SuggestionConfig,
+) -> f64 {
+    compute_sequence_shot_score(
+        import,
+        existing,
+        direction,
+        config.max_reference_shots.max(1),
+        config,
+    )
 }
 
 fn compute_single_shot_score(
@@ -719,6 +794,46 @@ fn merge_station_pair_for_offsets(
     }
 }
 
+fn sequence_match_passes_final_cutoffs(
+    import_shots: &[MatchShot],
+    existing_oriented: &[MatchShot],
+    cell: DpCell,
+    config: &SuggestionConfig,
+) -> bool {
+    if cell.import_count == 0
+        || cell.existing_count == 0
+        || cell.import_count != cell.existing_count
+        || cell.import_count > import_shots.len()
+        || cell.existing_count > existing_oriented.len()
+    {
+        return false;
+    }
+
+    if cell.import_count == 1 {
+        return compute_single_shot_score(
+            &import_shots[0],
+            &existing_oriented[0],
+            MatchDirection::Forward,
+            config,
+        ) >= config.min_shot_score;
+    }
+
+    for idx in 0..cell.import_count {
+        let score = compute_sequence_shot_score(
+            &import_shots[idx],
+            &existing_oriented[idx],
+            MatchDirection::Forward,
+            cell.import_count,
+            config,
+        );
+        if score < config.min_shot_score {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Try matching a sequence of import shots against existing shots starting at `start_idx`.
 fn try_match_sequence(
     import_shots: &[MatchShot],
@@ -750,7 +865,7 @@ fn try_match_sequence(
             }
             let import_shot = &import_shots[i];
             let existing_shot = &existing_oriented[j];
-            let score = compute_shot_score(import_shot, existing_shot, MatchDirection::Forward, config);
+            let score = compute_exploratory_shot_score(import_shot, existing_shot, MatchDirection::Forward, config);
             if score < config.min_shot_score {
                 continue;
             }
@@ -771,42 +886,30 @@ fn try_match_sequence(
         }
     }
 
-    let mut best: Option<DpCell> = None;
+    let mut candidates: Vec<DpCell> = Vec::new();
     for row in dp.iter().skip(1) {
         for cell in row.iter().flatten() {
-            let replace = best
-                .map(|old| {
-                    cell_final_score(*cell, config) > cell_final_score(old, config)
-                        || ((cell_final_score(*cell, config) - cell_final_score(old, config)).abs() < 1e-9
-                            && cell.import_count > old.import_count)
-                })
-                .unwrap_or(true);
-            if replace {
-                best = Some(*cell);
-            }
+            candidates.push(*cell);
         }
     }
 
-    let best = match best {
-        Some(cell) if cell.import_count > 0 && cell.weight_sum > 0.0 => cell,
-        _ => return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false },
-    };
+    candidates.sort_by(|a, b| {
+        cell_final_score(*b, config)
+            .partial_cmp(&cell_final_score(*a, config))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.import_count.cmp(&a.import_count))
+    });
 
-    if best.import_count == 0 || best.weight_sum == 0.0 {
+    let Some(best) = candidates
+        .into_iter()
+        .find(|cell| {
+            cell.import_count > 0
+                && cell.weight_sum > 0.0
+                && sequence_match_passes_final_cutoffs(import_shots, &existing_oriented, *cell, config)
+        })
+    else {
         return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
-    }
-
-    if best.import_count == 1 {
-        let strict_score = compute_single_shot_score(
-            &import_shots[0],
-            &existing_oriented[0],
-            MatchDirection::Forward,
-            config,
-        );
-        if strict_score == 0.0 {
-            return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
-        }
-    }
+    };
 
     SequenceMatch {
         score: cell_final_score(best, config),
@@ -1584,6 +1687,44 @@ mod tests {
             suggestions.is_empty(),
             "AA2-style length mismatch should not be a valid candidate: {suggestions:?}",
         );
+    }
+
+    #[test]
+    fn length_tolerance_scales_with_matched_shot_count() {
+        let config = SuggestionConfig::default();
+        let existing = vec![
+            MatchShot { avg_azimuth: 90.0, length: 20.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 20.0, depth_in: 4.0, depth_out: 5.0 },
+            MatchShot { avg_azimuth: 120.0, length: 20.0, depth_in: 5.0, depth_out: 6.0 },
+        ];
+
+        let single_import = vec![
+            MatchShot { length: 20.9, ..existing[0] },
+        ];
+        let single = try_match_sequence(&single_import, &existing, 0, MatchDirection::Forward, &config);
+        assert_eq!(single.matched_count, 0, "single-shot match should keep the strict 3% length gate");
+
+        let two_import = vec![
+            MatchShot { length: 20.9, ..existing[0] },
+            MatchShot { length: 20.9, ..existing[1] },
+        ];
+        let two = try_match_sequence(&two_import, &existing, 0, MatchDirection::Forward, &config);
+        assert_eq!(two.matched_count, 2, "two-shot match should allow a 5%-class length error");
+
+        let too_loose_for_two = vec![
+            MatchShot { length: 21.2, ..existing[0] },
+            MatchShot { length: 21.2, ..existing[1] },
+        ];
+        let rejected_two = try_match_sequence(&too_loose_for_two, &existing, 0, MatchDirection::Forward, &config);
+        assert_eq!(rejected_two.matched_count, 0, "two-shot match should still reject a 7%-class length error");
+
+        let three_import = vec![
+            MatchShot { length: 21.2, ..existing[0] },
+            MatchShot { length: 21.2, ..existing[1] },
+            MatchShot { length: 21.2, ..existing[2] },
+        ];
+        let three = try_match_sequence(&three_import, &existing, 0, MatchDirection::Forward, &config);
+        assert_eq!(three.matched_count, 3, "three-shot match should allow a 7%-class length error");
     }
 
     // ========================================================================
