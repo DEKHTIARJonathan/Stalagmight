@@ -325,9 +325,9 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             short_shot_threshold: c.short_shot_threshold,
             single_shot_penalty: c.single_shot_penalty,
             max_azimuth_error_full: c.max_azimuth_error_full,
-            max_depth_error: c.max_depth_error.min(0.30),
-            max_length_error_fraction: c.max_length_error_fraction.min(0.03),
-            max_length_error_floor: c.max_length_error_floor.min(0.40),
+            max_depth_error: c.max_depth_error,
+            max_length_error_fraction: c.max_length_error_fraction,
+            max_length_error_floor: c.max_length_error_floor,
             sequence_length_error_base_fraction: 0.03,
             sequence_length_error_step_fraction: 0.02,
             sequence_length_error_max_fraction: 0.11,
@@ -2081,6 +2081,25 @@ mod tests {
         let import_fail = MatchShot { depth_in: 3.31, ..base };
         let score = compute_shot_score(&import_fail, &base, MatchDirection::Forward, &config);
         assert!(score == 0.0, "0.31m depth error should be hard-rejected, got {score}");
+    }
+
+    #[test]
+    fn explicit_placement_tolerances_are_honored() {
+        let mut ps_config = PlacementSuggestionConfig::default();
+        ps_config.max_depth_error = 1.0;
+        ps_config.max_length_error_fraction = 0.15;
+        ps_config.max_length_error_floor = 2.0;
+        let config = SuggestionConfig::from(&ps_config);
+
+        let base = MatchShot { avg_azimuth: 90.0, length: 10.0, depth_in: 3.0, depth_out: 4.0 };
+
+        let depth_loose = MatchShot { depth_in: 3.8, ..base };
+        let score = compute_shot_score(&depth_loose, &base, MatchDirection::Forward, &config);
+        assert!(score > 0.0, "explicit 1.0m depth tolerance should be honored, got {score}");
+
+        let length_loose = MatchShot { length: 11.4, ..base };
+        let score = compute_shot_score(&length_loose, &base, MatchDirection::Forward, &config);
+        assert!(score > 0.0, "explicit 15% length tolerance should be honored, got {score}");
     }
 
     #[test]

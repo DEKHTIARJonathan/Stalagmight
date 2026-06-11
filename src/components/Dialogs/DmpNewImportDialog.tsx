@@ -120,6 +120,7 @@ export interface SavedManualPlacingState {
   segmentSkipCounts: Array<[string, number]>;
   sectionEdits: Array<[number, SectionEditState]>;
   confirmedOverlaps?: Array<[number, ConfirmedOverlapInfo]>;
+  existingShotUpdates?: ExistingShotUpdateLocal[];
   earlyImported?: Array<[number, number]>;
   /** DMP indices of a segment just placed that needs immediate import on dialog restore. */
   pendingSegmentImport?: number[];
@@ -268,9 +269,26 @@ function matchesConfirmed(s: CrossSectionSuggestion, info: ConfirmedOverlapInfo)
  * Mutates `sectionEdits` in-place.
  */
 interface ExistingShotUpdateLocal {
+  importSectionIndex: number;
   section_id: number;
   shot_id: number;
   updates: Record<string, number | null>;
+}
+
+function backendExistingShotUpdatesForSections(
+  updates: ExistingShotUpdateLocal[],
+  sectionIndices: Set<number>,
+): Array<Omit<ExistingShotUpdateLocal, 'importSectionIndex'>> {
+  return updates
+    .filter((update) => sectionIndices.has(update.importSectionIndex))
+    .map(({ importSectionIndex: _importSectionIndex, ...update }) => update);
+}
+
+function removeExistingShotUpdatesForSections(
+  updates: ExistingShotUpdateLocal[],
+  sectionIndices: Set<number>,
+): ExistingShotUpdateLocal[] {
+  return updates.filter((update) => !sectionIndices.has(update.importSectionIndex));
 }
 
 function applyAllOverlapTreatments(
@@ -575,6 +593,7 @@ function applyAllOverlapTreatments(
               );
             }
             existingShotUpdates.push({
+              importSectionIndex,
               section_id: existingSectionId,
               shot_id: existingShot.id,
               updates,
@@ -1195,6 +1214,9 @@ export default function DmpNewImportDialog({
   );
   const confirmedOverlapsRef = useRef<Map<number, ConfirmedOverlapInfo>>(
     saved ? new Map(saved.confirmedOverlaps ?? []) : new Map()
+  );
+  const existingShotUpdatesRef = useRef<ExistingShotUpdateLocal[]>(
+    saved?.existingShotUpdates ?? []
   );
   const nextTempIdRef = useRef(1);
 
@@ -2073,6 +2095,7 @@ export default function DmpNewImportDialog({
             dmpFile,
             overlapMode,
           );
+          existingShotUpdatesRef.current = existingShotUpdates;
         }
 
         // 2. Redirect connections targeting deleted overlap zones
@@ -2101,11 +2124,16 @@ export default function DmpNewImportDialog({
 
         // 4. Import reachable sections immediately
         if (configs.length > 0) {
+          const emittedSet = new Set(emittedDmpIndices);
+          const earlyExistingShotUpdates = backendExistingShotUpdatesForSections(
+            existingShotUpdatesRef.current,
+            emittedSet,
+          );
           const result = await invokeIpc<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
-            existingShotUpdates: existingShotUpdates.length > 0 ? existingShotUpdates : null,
+            existingShotUpdates: earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
           }, { purpose: 'import reachable sections (early import)' });
 
           if (!result.success) {
@@ -2127,6 +2155,10 @@ export default function DmpNewImportDialog({
               earlyImportedRef.current.set(emittedDmpIndices[i]!, sectionId);
             }
           }
+          existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+            existingShotUpdatesRef.current,
+            emittedSet,
+          );
         }
       } catch (e) {
         console.error('[earlyImport] Error during early import:', e);
@@ -2332,11 +2364,15 @@ export default function DmpNewImportDialog({
         }
 
         if (segmentConfigs.length > 0) {
+          const pendingExistingShotUpdates = backendExistingShotUpdatesForSections(
+            existingShotUpdatesRef.current,
+            pendingSet,
+          );
           const result = await invokeIpc<CommandResult>('import_sections', {
             sections: segmentConfigs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
-            existingShotUpdates: null,
+            existingShotUpdates: pendingExistingShotUpdates.length > 0 ? pendingExistingShotUpdates : null,
           }, { purpose: 'import segment sections' });
 
           if (result.success) {
@@ -2352,6 +2388,10 @@ export default function DmpNewImportDialog({
                 earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
               }
             }
+            existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+              existingShotUpdatesRef.current,
+              pendingSet,
+            );
           }
         }
       } catch (e) {
@@ -2395,7 +2435,8 @@ export default function DmpNewImportDialog({
       try {
         const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
         let configs: BackendImportSectionConfig[];
-        ({ configs, unreachable } = buildBatchImport(
+        let emittedDmpIndices: number[];
+        ({ configs, unreachable, emittedDmpIndices } = buildBatchImport(
           connectionsRef.current,
           zeroDatumIdx,
           dmpFile,
@@ -2407,11 +2448,16 @@ export default function DmpNewImportDialog({
         ));
 
         if (configs.length > 0) {
+          const emittedSet = new Set(emittedDmpIndices);
+          const lateExistingShotUpdates = backendExistingShotUpdatesForSections(
+            existingShotUpdatesRef.current,
+            emittedSet,
+          );
           const result = await invokeIpc<CommandResult>('import_sections', {
             sections: configs,
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
-            existingShotUpdates: null,  // Already sent in early import
+            existingShotUpdates: lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
           }, { purpose: 'import remaining sections (late import)' });
 
           if (!result.success) {
@@ -2424,6 +2470,10 @@ export default function DmpNewImportDialog({
           }
 
           await refreshProjectState();
+          existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+            existingShotUpdatesRef.current,
+            emittedSet,
+          );
         }
       } catch (e) {
         console.error('[lateImport] Error:', e);
@@ -3217,11 +3267,16 @@ export default function DmpNewImportDialog({
         return true;
       }
 
+      const pendingSetForUpdates = new Set(segmentDmpIndices);
+      const segmentExistingShotUpdates = backendExistingShotUpdatesForSections(
+        existingShotUpdatesRef.current,
+        pendingSetForUpdates,
+      );
       const result = await invokeIpc<CommandResult>('import_sections', {
         sections: segmentConfigs,
         fileHash: selectionConfig.fileHash ?? null,
         sectionHashes: selectionConfig.sectionHashes ?? null,
-        existingShotUpdates: null,
+        existingShotUpdates: segmentExistingShotUpdates.length > 0 ? segmentExistingShotUpdates : null,
       }, { purpose: 'import placed segment sections' });
 
       if (!result.success) {
@@ -3241,6 +3296,10 @@ export default function DmpNewImportDialog({
           earlyImportedRef.current.set(segmentDmpIndices[i]!, sectionId);
         }
       }
+      existingShotUpdatesRef.current = removeExistingShotUpdatesForSections(
+        existingShotUpdatesRef.current,
+        pendingSetForUpdates,
+      );
 
       return true;
     },
@@ -3274,6 +3333,7 @@ export default function DmpNewImportDialog({
       segmentSkipCounts: Array.from(segmentSkipCountRef.current.entries()),
       sectionEdits: Array.from(sectionEditsRef.current.entries()),
       confirmedOverlaps: Array.from(confirmedOverlapsRef.current.entries()),
+      existingShotUpdates: [...existingShotUpdatesRef.current],
       earlyImported: Array.from(earlyImportedRef.current.entries()),
       discardedIndices: Array.from(discardedIndicesRef.current),
     });
