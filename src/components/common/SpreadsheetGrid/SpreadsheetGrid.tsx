@@ -1096,6 +1096,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (ctrl && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); doFill(false); return; }
       if (ctrl && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault();
+        // The grid owns Ctrl/Cmd+A — without this the host's global select-all
+        // (e.g. select-all-stations) fires on the same press (mirrors Delete).
+        e.stopPropagation();
         // Two-stage (Google Sheets): first Ctrl+A selects the contiguous data
         // region around the active cell, the second expands to the whole grid.
         rowSelectIntent.current = false;
@@ -1187,6 +1190,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             const col = colAt(colIdx);
             if (col && cellEditable(row, col)) {
               e.preventDefault();
+              // The grid consumed this key to open the editor — keep it from
+              // also triggering a host shortcut bound to that character (e.g. a
+              // reserved `?` overlay), mirroring Delete / Ctrl+A above.
+              e.stopPropagation();
               beginEdit(row, colIdx, e.key);
             }
           }

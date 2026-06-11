@@ -325,6 +325,14 @@ export function useKeyboardShortcuts() {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      // Honor a key already consumed by a focused component. This window-level
+      // handler runs after React's bubble phase, so a grid-owned shortcut (the
+      // docked data-table grid's Ctrl/Cmd+A select-all, type-to-edit `?`, etc.)
+      // has already called preventDefault; without this it would ALSO fire the
+      // matching global shortcut (e.g. select-all-stations, switching the table
+      // to Stations). Mirrors the existing defaultPrevented guard in the Escape
+      // branch, generalized to every reserved key.
+      if (event.defaultPrevented) return;
       const { activeDialog } = useUIStore.getState();
       if (activeDialog && event.key !== 'Escape') {
         // Allow ? to toggle the keyboard shortcuts overlay closed
