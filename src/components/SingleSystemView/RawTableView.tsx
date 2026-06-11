@@ -36,7 +36,15 @@ export default function RawTableView({ tableName, height }: RawTableViewProps) {
   // newer one) must never clobber the latest page.
   const requestIdRef = useRef(0);
 
-  useEffect(() => setPage(0), [tableName]);
+  // Switching tables: reset to page 0 AND drop the previous table's rows so the
+  // loading state shows instead of the old columns/rows until the new fetch
+  // resolves (the grid remounts on `key={tableName}` but would still get stale
+  // `data.rows`).
+  useEffect(() => {
+    setPage(0);
+    setData(null);
+    setError(null);
+  }, [tableName]);
 
   const fetchPage = useCallback((table: string, pageToLoad: number) => {
     const requestId = ++requestIdRef.current;

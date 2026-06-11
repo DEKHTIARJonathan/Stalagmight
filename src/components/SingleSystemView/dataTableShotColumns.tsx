@@ -280,6 +280,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       key: 'comment',
       header: t('dataTable.columns.comment'),
       width: 240,
+      grow: true, // absorb leftover width so the grid fills the panel
       kind: 'text',
       multiline: true,
       getValue: (r) => r.comment ?? '',

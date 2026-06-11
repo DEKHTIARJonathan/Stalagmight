@@ -81,20 +81,23 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       format: (v) => (v ? 'true' : 'false'),
       // The clickable dot follows the shots view's J/R pattern: the set state
       // renders a dot, the unset one a hover affordance; either opens the
-      // Edit Station dialog (add-zero-datum or edit mode).
+      // Edit Station dialog (add-zero-datum or edit mode). Disabled in the
+      // closure-adjusted (read-only) view — the dialog can set/remove the zero
+      // datum, which must not mutate geometry while viewing the adjusted network
+      // (same gate as the shot reference toggle and the station comment edit).
       render: (station): ReactNode => (
         <span
-          className="flex cursor-pointer items-center justify-center"
+          className={`flex items-center justify-center ${geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
           onClick={(e) => {
             e.stopPropagation();
-            ctx.onGpsCellClick(station);
+            if (!geometryReadOnly) ctx.onGpsCellClick(station);
           }}
-          title={t('dataTable.stationGps.edit')}
+          title={geometryReadOnly ? undefined : t('dataTable.stationGps.edit')}
           data-testid={`station-gps-${station.station_ref.section_id}-${station.station_ref.station_index}`}
         >
           {station.is_zero_datum ? (
             <DotIcon size={20} />
-          ) : (
+          ) : geometryReadOnly ? null : (
             <span className="opacity-0 hover:opacity-30">
               <DotIcon size={20} />
             </span>
@@ -142,6 +145,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       key: 'comment',
       header: t('dataTable.stationColumns.comment'),
       width: 240,
+      grow: true, // absorb leftover width so the grid fills the panel
       kind: 'text',
       multiline: true,
       getValue: (r) => r.comment ?? '',

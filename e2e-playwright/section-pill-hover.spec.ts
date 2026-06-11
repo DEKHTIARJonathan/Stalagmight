@@ -4,11 +4,9 @@
  * The condensed DataTable header shows the current section as a pill
  * (`data-table-section-pill`). Hovering the pill highlights the section on the
  * map via `hoveredSectionId` in uiStore; leaving the pill (or unmounting the
- * DataTable) clears the highlight. Clicking the pill selects the section
- * app-wide (uiStore selection of type 'section').
- *
- * This replaces the old section-dropdown hover tests: the header dropdown is
- * gone, the table now follows the app-wide selection.
+ * DataTable) clears the highlight. Clicking the whole pill opens the section
+ * picker dropdown (the chevron lives inside the pill); picking a section selects
+ * it app-wide (uiStore selection of type 'section').
  */
 
 import { test, expect, Page, Locator } from './fixtures/coverage';
@@ -191,27 +189,26 @@ test.describe('section pill hover highlighting', () => {
     expect(clearedId).toBeNull();
   });
 
-  test('clicking the pill selects the section app-wide', async ({ page }) => {
-    // Start from a different selection so the click is observable
-    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
-    await selectSectionViaStore(page, betaId);
+  test('clicking the pill opens the section picker; picking selects app-wide', async ({ page }) => {
     const pill = getSectionPill(page);
-    await expect(pill).toContainText('Beta Tunnel');
+    await expect(pill).toContainText('Alpha Passage');
 
-    // Clear the selection (the pill keeps showing the table's section)
-    await page.evaluate(() => {
-      const stores = (window as unknown as {
-        __E2E_TEST__?: {
-          uiStore: { getState: () => { setSelection: (sel: unknown) => void } };
-        };
-      }).__E2E_TEST__;
-      stores?.uiStore.getState().setSelection(null);
-    });
-    await expect(pill).toContainText('Beta Tunnel');
-
+    // Clicking the whole pill opens the dropdown (the chevron is inside it).
     await pill.click();
+    const list = page.getByTestId('data-table-section-menu-list');
+    await expect(list).toBeVisible();
+    await expect(list.getByRole('button')).toHaveText([
+      'Alpha Passage',
+      'Beta Tunnel',
+      'Gamma Gallery',
+    ]);
 
-    // The pill click selects the shown section app-wide
+    // Picking a section selects it app-wide and updates the pill.
+    const betaId = await getSectionIdByName(page, 'Beta Tunnel');
+    await list.getByRole('button', { name: 'Beta Tunnel' }).click();
+    await expect(list).not.toBeVisible();
+    await expect(pill).toContainText('Beta Tunnel');
+
     await expect.poll(async () =>
       page.evaluate(() => {
         const stores = (window as unknown as {

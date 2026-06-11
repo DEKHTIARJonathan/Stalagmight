@@ -241,11 +241,29 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   }, [columns, orderedKeys, hiddenColumns]);
 
   const [colWidthOverrides, setColWidthOverrides] = useState<Record<string, number>>({});
+  // The scroller's inner width, tracked so `grow` columns can absorb the
+  // leftover space and the grid fills its container (no empty right gutter).
+  const [availWidth, setAvailWidth] = useState(0);
   const colKeys = useMemo(() => visibleColumns.map((c) => c.key), [visibleColumns]);
-  const widths = useMemo(
-    () => visibleColumns.map((c) => colWidthOverrides[c.key] ?? c.width ?? DEFAULT_COL_WIDTH),
-    [visibleColumns, colWidthOverrides],
-  );
+  const widths = useMemo(() => {
+    const base = visibleColumns.map((c) => colWidthOverrides[c.key] ?? c.width ?? DEFAULT_COL_WIDTH);
+    // Distribute leftover width across grow columns the user hasn't pinned by
+    // resizing (a manual override is a deliberate fixed width). `width` is the
+    // floor, so a grow column never shrinks below its declared size.
+    const growIdx = visibleColumns
+      .map((c, i) => (c.grow && colWidthOverrides[c.key] === undefined ? i : -1))
+      .filter((i) => i >= 0);
+    if (growIdx.length === 0 || availWidth <= 0) return base;
+    const leftover = availWidth - gutterWidth - base.reduce((sum, w) => sum + w, 0);
+    if (leftover <= 0) return base;
+    const add = Math.floor(leftover / growIdx.length);
+    const rem = leftover - add * growIdx.length;
+    const out = base.slice();
+    growIdx.forEach((i, n) => {
+      out[i] = (out[i] ?? 0) + add + (n < rem ? 1 : 0);
+    });
+    return out;
+  }, [visibleColumns, colWidthOverrides, availWidth, gutterWidth]);
   const offsets = useMemo(() => columnOffsets(widths), [widths]);
   const totalWidth = gutterWidth + (offsets[offsets.length - 1] ?? 0);
   const colIndexOf = useCallback((key: string) => colKeys.indexOf(key), [colKeys]);
@@ -284,6 +302,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const autoScrollRAF = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  // Track the scroller's inner width so `grow` columns fill the container.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const update = () => setAvailWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const [scrolled, setScrolled] = useState(false);
   const [grabbing, setGrabbing] = useState(false); // closed-hand cursor during a move drag
   const [invalidCell, setInvalidCell] = useState<CellCoord | null>(null); // rejected-edit flash

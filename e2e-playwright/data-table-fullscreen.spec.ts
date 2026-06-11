@@ -182,24 +182,26 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('toolbar-data-table-title')).toHaveText('Data table');
     await expect(page.getByTestId('toolbar-active-tool')).toHaveCount(0);
 
-    // Map tools and the display menu are gone; the picker, the Map view
-    // shrink button and the debug button take their place.
+    // Map tools and the display menu are gone; only the table picker (and the
+    // debug button) remain on the right.
     await expect(page.getByTestId('toolbar-tools-group')).toHaveCount(0);
     await expect(page.getByTestId('display-menu-button')).toHaveCount(0);
     await expect(page.getByTestId('table-select-dropdown')).toBeVisible();
-    await expect(page.getByTestId('toolbar-map-view-button')).toBeVisible();
     await expect(page.getByTestId('toolbar-debug-button')).toBeVisible();
 
-    // Close/Save/Undo/Redo stay; Import/Export are visible but inert.
-    await expect(page.getByTestId('back-button')).toBeEnabled();
+    // The project-close button is replaced by the "Back to Map" button in the
+    // left slot; Save/Undo/Redo stay; Import/Export are gone.
+    await expect(page.getByTestId('back-button')).toHaveCount(0);
     await expect(page.getByTestId('toolbar-save-button')).toBeEnabled();
     await expect(page.getByTestId('toolbar-undo-button')).toBeVisible();
     await expect(page.getByTestId('toolbar-redo-button')).toBeVisible();
     await expect(page.getByTestId('toolbar-import-button')).toHaveCount(0);
     await expect(page.getByTestId('toolbar-export-button')).toHaveCount(0);
-    // The map-view button lives on the right, next to the table picker.
-    await expect(page.getByTestId('toolbar-map-view-button')).toBeVisible();
-    await expect(page.getByTestId('toolbar-file-controls').getByTestId('toolbar-map-view-button')).toHaveCount(0);
+    // The "Back to Map" button now lives on the left, in place of Close.
+    await expect(page.getByTestId('toolbar-map-view-button')).toHaveText('Back to Map');
+    await expect(
+      page.getByTestId('toolbar-file-controls').getByTestId('toolbar-map-view-button'),
+    ).toBeVisible();
 
     // Exiting restores the normal toolbar.
     await page.keyboard.press('Escape');

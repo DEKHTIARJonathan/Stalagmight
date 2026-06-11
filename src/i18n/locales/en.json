@@ -1305,7 +1305,7 @@
     },
     "fullScreen": {
       "enter": "Full screen",
-      "exit": "Map view"
+      "exit": "Back to Map"
     },
     "tableSelect": {
       "sections": "Sections",

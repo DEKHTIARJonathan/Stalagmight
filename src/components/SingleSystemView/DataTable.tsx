@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
@@ -74,26 +74,48 @@ const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
   { keys: ['comment'], nameKey: 'comment' },
 ];
 
-/** Both coordinate pairs start hidden; the eye menu re-enables them. */
+/** Coordinate columns hidden by default (matches the backend serde default),
+ *  used only as the pre-config-load initial state — once the persisted config
+ *  arrives it is authoritative (an empty list there means "show all"). */
 const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
 
-/** Chevron trigger + small picker menu used in the sub-header next to the
- *  section / raw-table pill. Closes on outside click and Escape (and declares
- *  data-dropdown-open so the global Escape guard yields to it). */
+/** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
+ *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.
+ *  Closes on outside click and Escape (and declares data-dropdown-open so the
+ *  global Escape guard yields to it). The list anchors centered under the pill. */
 function SubHeaderPickerMenu({
-  testId,
+  triggerTestId,
+  listTestId,
   title,
   options,
   onPick,
   onHoverOption,
+  onHoverTrigger,
+  renderTrigger,
 }: {
-  testId: string;
+  triggerTestId?: string;
+  listTestId: string;
   title: string;
   options: { value: string; label: string; disabled?: boolean; dot?: string }[];
   onPick: (value: string) => void;
   onHoverOption?: (value: string | null) => void;
+  onHoverTrigger?: (over: boolean) => void;
+  renderTrigger: (state: { open: boolean }) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // Flip the list above the pill when there is more room there than below — the
+  // data-table sub-header sits low in the window (above the status bar), so a
+  // downward list would otherwise be clipped.
+  const [up, setUp] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const toggle = () => {
+    const willOpen = !open;
+    if (willOpen) {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (r) setUp(r.top > window.innerHeight - r.bottom);
+    }
+    setOpen(willOpen);
+  };
   useEffect(() => {
     if (!open) return undefined;
     const close = () => setOpen(false);
@@ -108,22 +130,26 @@ function SubHeaderPickerMenu({
     };
   }, [open]);
   return (
-    // No positioning here: the list anchors to the centered GROUP wrapper
-    // (pill + chevron), so it opens centered under the whole pair.
-    <div onMouseDown={(e) => e.stopPropagation()}>
+    <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
       <button
-        onClick={() => setOpen((v) => !v)}
-        className={open ? 'text-text' : 'text-text-secondary hover:text-text'}
+        ref={triggerRef}
+        type="button"
+        onClick={toggle}
+        onMouseEnter={onHoverTrigger ? () => onHoverTrigger(true) : undefined}
+        onMouseLeave={onHoverTrigger ? () => onHoverTrigger(false) : undefined}
+        className="flex cursor-pointer items-center"
         title={title}
-        data-testid={testId}
+        data-testid={triggerTestId}
       >
-        <ChevronDownIcon size={12} />
+        {renderTrigger({ open })}
       </button>
       {open && (
         <div
           data-dropdown-open
-          className="absolute left-1/2 top-full z-50 mt-1 max-h-64 w-52 -translate-x-1/2 overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg"
-          data-testid={`${testId}-list`}
+          className={`absolute left-1/2 z-50 max-h-64 w-52 -translate-x-1/2 overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg ${
+            up ? 'bottom-full mb-1' : 'top-full mt-1'
+          }`}
+          data-testid={listTestId}
           onMouseLeave={() => onHoverOption?.(null)}
         >
           {options.map((o) => (
@@ -154,14 +180,25 @@ function SubHeaderPickerMenu({
   );
 }
 
+/** The chevron that sits INSIDE the sub-header pill, dim until the menu opens. */
+function PillChevron({ open, testId }: { open: boolean; testId: string }) {
+  return (
+    <span className={`ml-0.5 ${open ? 'text-text' : 'text-text-secondary'}`} data-testid={testId}>
+      <ChevronDownIcon size={12} />
+    </span>
+  );
+}
+
 /** Raw-table name pill: neutral gray sibling of the section EntityBlob, with
- *  the same syntactic-level gate (plain text below 'full'). */
-function RawTablePill({ name }: { name: string }) {
+ *  the same syntactic-level gate (plain text below 'full'). `trailing` (the
+ *  picker chevron) renders inside the pill. */
+function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }) {
   const level = useUIStore((s) => s.syntacticLevel);
   if (!syntacticLevelAtLeast(level, 'full')) {
     return (
-      <span className="font-medium" data-testid="data-table-raw-name">
+      <span className="inline-flex items-center font-medium" data-testid="data-table-raw-name">
         {name}
+        {trailing}
       </span>
     );
   }
@@ -172,6 +209,7 @@ function RawTablePill({ name }: { name: string }) {
       data-testid="data-table-raw-name"
     >
       {name}
+      {trailing}
     </span>
   );
 }
@@ -426,12 +464,6 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Clicking the header's section pill selects the section app-wide (map/panels
   // follow), mirroring the section pills elsewhere in the app.
-  const handleSectionPillClick = useCallback(() => {
-    if (selectedSectionId === null) return;
-    setSource('data-table');
-    setSelection({ type: 'section', sectionId: selectedSectionId });
-  }, [selectedSectionId, setSelection]);
-
   // Track last hovered section ID for ref-based cleanup (matches SectionsPanel pattern)
   const lastHoveredSectionIdRef = useRef<number | null>(null);
 
@@ -602,11 +634,11 @@ export default function DataTable({ sections }: DataTableProps) {
     setInclinationMode(inclination);
     setHiddenShotCols(new Set(panelsConfig.data_table_shot_hidden_columns));
     setShotColumnOrder(panelsConfig.data_table_shot_column_order);
-    // An empty station list means "never customized" (configs saved before the
-    // coordinate columns existed) — those get the hidden-coordinates defaults.
-    const stationHidden = panelsConfig.data_table_station_hidden_columns.length
-      ? panelsConfig.data_table_station_hidden_columns
-      : STATION_DEFAULT_HIDDEN;
+    // The persisted list is authoritative: the backend fills a missing/legacy
+    // config with the coordinate-column defaults (serde default), so an EMPTY
+    // array genuinely means the user unhid every station column ("show all") —
+    // it must not be re-defaulted, or that preference could never persist.
+    const stationHidden = panelsConfig.data_table_station_hidden_columns;
     setHiddenStationCols(new Set(stationHidden));
     setStationColumnOrder(panelsConfig.data_table_station_column_order);
     lastSavedViewRef.current = JSON.stringify([
@@ -1192,6 +1224,23 @@ export default function DataTable({ sections }: DataTableProps) {
     [setSelection, setHoveredStation]
   );
 
+  // The section a connected station belongs to: its name (falling back to
+  // "Section N") for the pill, and a click that navigates to that section.
+  const getSectionName = useCallback(
+    (sectionId: number) =>
+      sections.find((s) => s.id === sectionId)?.name ?? t('sections.defaultName', { id: sectionId }),
+    [sections, t]
+  );
+  const selectLinkedSection = useCallback(
+    (sectionId: number) => {
+      setConnMenu(null);
+      setHoveredSectionId(null);
+      setSource('data-table');
+      setSelection({ type: 'section', sectionId });
+    },
+    [setSelection, setHoveredSectionId]
+  );
+
   // Same anchor rule as the map (MapCanvas): the first zero datum's GPS.
   const project = useProjectStore((s) => s.project);
   const stationGpsOrigin = useMemo(() => {
@@ -1423,13 +1472,10 @@ export default function DataTable({ sections }: DataTableProps) {
            (the viewer shows last-saved state, so flag pending edits). */
         <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
           <span className="font-medium">{t('dataTable.title')}</span>
-          <div className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-1">
-            <span className="invisible" aria-hidden="true">
-              <ChevronDownIcon size={12} />
-            </span>
-            {rawTableSelection !== '' && <RawTablePill name={rawTableSelection} />}
+          <div className="absolute left-1/2 z-40 -translate-x-1/2">
             <SubHeaderPickerMenu
-              testId="data-table-raw-table-menu"
+              triggerTestId="data-table-raw-table-pill"
+              listTestId="data-table-raw-table-menu-list"
               title={t('dataTable.rawTableMenu')}
               options={
                 Array.isArray(rawTables)
@@ -1446,6 +1492,14 @@ export default function DataTable({ sections }: DataTableProps) {
                     ]
               }
               onPick={setRawTableSelection}
+              renderTrigger={({ open }) => {
+                const chevron = <PillChevron open={open} testId="data-table-raw-table-menu" />;
+                return rawTableSelection !== '' ? (
+                  <RawTablePill name={rawTableSelection} trailing={chevron} />
+                ) : (
+                  chevron
+                );
+              }}
             />
           </div>
           {isDirty && (
@@ -1464,24 +1518,10 @@ export default function DataTable({ sections }: DataTableProps) {
           </span>
         )}
         {selectedSection && (
-          <div className="absolute left-1/2 z-40 flex -translate-x-1/2 items-center gap-1">
-            <span className="invisible" aria-hidden="true">
-              <ChevronDownIcon size={12} />
-            </span>
-            <button
-              className="cursor-pointer"
-              onClick={handleSectionPillClick}
-              onMouseEnter={() => handleSectionHover(String(selectedSection.id))}
-              onMouseLeave={() => handleSectionHover(null)}
-              title={t('dataTable.selectSectionPill')}
-              data-testid="data-table-section-pill"
-            >
-              <EntityBlob entity="section">
-                {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
-              </EntityBlob>
-            </button>
+          <div className="absolute left-1/2 z-40 -translate-x-1/2">
             <SubHeaderPickerMenu
-              testId="data-table-section-menu"
+              triggerTestId="data-table-section-pill"
+              listTestId="data-table-section-menu-list"
               title={t('dataTable.sectionMenu')}
               options={sections.map((s) => ({
                 value: String(s.id),
@@ -1495,6 +1535,13 @@ export default function DataTable({ sections }: DataTableProps) {
                 setSelection({ type: 'section', sectionId: id });
               }}
               onHoverOption={handleSectionHover}
+              onHoverTrigger={(over) => handleSectionHover(over ? String(selectedSection.id) : null)}
+              renderTrigger={({ open }) => (
+                <EntityBlob entity="section">
+                  {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
+                  <PillChevron open={open} testId="data-table-section-menu" />
+                </EntityBlob>
+              )}
             />
           </div>
         )}
@@ -1670,7 +1717,7 @@ export default function DataTable({ sections }: DataTableProps) {
         <div
           ref={connMenuRef}
           data-dropdown-open
-          className="fixed z-50 w-56 rounded border border-border bg-panel p-2 text-xs shadow-lg"
+          className="fixed z-50 min-w-56 max-w-md w-max overflow-hidden rounded border border-border bg-panel p-2 text-xs shadow-lg"
           style={{ left: connMenu.x, top: connMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
           data-testid="data-table-conn-menu"
@@ -1680,7 +1727,20 @@ export default function DataTable({ sections }: DataTableProps) {
               <div className="px-1 pb-1 text-text-secondary">{t('dataTable.connMenu.merged')}</div>
               <ul className="space-y-0.5 pb-1">
                 {connMenu.station.merged_with.map((ref) => (
-                  <li key={`m-${ref.section_id}-${ref.station_index}`}>
+                  <li
+                    key={`m-${ref.section_id}-${ref.station_index}`}
+                    className="flex items-center gap-1.5"
+                  >
+                    <DetailLink
+                      type="section"
+                      target={{ sectionId: ref.section_id }}
+                      displayText={getSectionName(ref.section_id)}
+                      pillLabel={getSectionName(ref.section_id)}
+                      testId={`conn-merged-section-${ref.section_id}-${ref.station_index}-link`}
+                      onSelect={() => selectLinkedSection(ref.section_id)}
+                      onHoverStart={() => setHoveredSectionId(ref.section_id)}
+                      onHoverEnd={() => setHoveredSectionId(null)}
+                    />
                     <DetailLink
                       type="station"
                       target={{ sectionId: ref.section_id, position: ref.station_index }}
@@ -1699,7 +1759,20 @@ export default function DataTable({ sections }: DataTableProps) {
               <div className="px-1 pb-1 text-text-secondary">{t('dataTable.connMenu.closures')}</div>
               <ul className="space-y-0.5">
                 {connMenu.station.closures_with.map((c) => (
-                  <li key={`c-${String(c.closure_id)}-${c.station_ref.section_id}-${c.station_ref.station_index}`}>
+                  <li
+                    key={`c-${String(c.closure_id)}-${c.station_ref.section_id}-${c.station_ref.station_index}`}
+                    className="flex items-center gap-1.5"
+                  >
+                    <DetailLink
+                      type="section"
+                      target={{ sectionId: c.station_ref.section_id }}
+                      displayText={getSectionName(c.station_ref.section_id)}
+                      pillLabel={getSectionName(c.station_ref.section_id)}
+                      testId={`conn-closure-section-${String(c.closure_id)}-${c.station_ref.section_id}-${c.station_ref.station_index}-link`}
+                      onSelect={() => selectLinkedSection(c.station_ref.section_id)}
+                      onHoverStart={() => setHoveredSectionId(c.station_ref.section_id)}
+                      onHoverEnd={() => setHoveredSectionId(null)}
+                    />
                     <DetailLink
                       type="station"
                       target={{ sectionId: c.station_ref.section_id, position: c.station_ref.station_index }}

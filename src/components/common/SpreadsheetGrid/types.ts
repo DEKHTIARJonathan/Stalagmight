@@ -24,6 +24,11 @@ export interface GridColumn<Row> {
   /** Width in px (default {@link DEFAULT_COL_WIDTH}). Fixed widths keep the
    *  selection-overlay geometry exact. */
   width?: number;
+  /** Let this column absorb leftover horizontal space so the grid fills its
+   *  container instead of leaving an empty gutter on the right (e.g. a comment
+   *  column). {@link width} is its minimum; extra space is split across all grow
+   *  columns. A manual resize pins the column and opts it out of growing. */
+  grow?: boolean;
   align?: 'left' | 'center' | 'right';
 
   /** Read the cell's logical value from a row. */

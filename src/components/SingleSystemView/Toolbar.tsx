@@ -27,9 +27,9 @@ interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   placementModeActive: boolean;
-  /** Reduced variant while the data table is fullscreen: Close/Save/Undo/Redo
-   *  stay, Import/Export gray out, tools give way to the table picker and a
-   *  "Map view" shrink button. */
+  /** Reduced variant while the data table is fullscreen: the project-close
+   *  button becomes the "Back to Map" button, Save/Undo/Redo stay, Import/Export
+   *  drop out, and the map tools give way to the table picker. */
   dataTableFullScreen: boolean;
 }
 
@@ -142,14 +142,34 @@ export default function Toolbar({
         className={`flex items-center gap-2 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
         data-testid="toolbar-file-controls"
       >
-        <Button
-          onClick={onBack}
-          disabled={placementModeActive}
-          size="sm"
-          data-testid="back-button"
-        >
-          {t('common.actions.close')}
-        </Button>
+        {/* Fullscreen table mode has no project-close affordance here; the
+            left slot becomes the "Back to Map" button (the relocated, relabeled
+            shrink button), keeping the same pan-accent + sh-tool wash. */}
+        {dataTableFullScreen ? (
+          <Button
+            icon={
+              <span style={{ color: 'var(--o)' } as CSSProperties}>
+                <ShrinkIcon size={16} />
+              </span>
+            }
+            onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
+            size="sm"
+            className="sh-tool"
+            style={{ '--o': toolAccentVar('pan') } as CSSProperties}
+            data-testid="toolbar-map-view-button"
+          >
+            {t('dataTable.fullScreen.exit')}
+          </Button>
+        ) : (
+          <Button
+            onClick={onBack}
+            disabled={placementModeActive}
+            size="sm"
+            data-testid="back-button"
+          >
+            {t('common.actions.close')}
+          </Button>
+        )}
         <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
         </Button>
@@ -239,28 +259,12 @@ export default function Toolbar({
       )}
 
       {/* Right section - tools and display menu; while the table is fullscreen,
-          the table picker and a "Map view" shrink button instead. */}
+          just the table picker (the "Back to Map" button lives on the left). */}
       <div className="flex items-center gap-2">
         {dataTableFullScreen ? (
-          <>
-            <TableSelectDropdown />
-            {/* Tool-button treatment: the pan-accent icon AND the sh-tool
-                background wash, like the map toolbar's tool buttons. */}
-            <Button
-              icon={
-                <span style={{ color: 'var(--o)' } as CSSProperties}>
-                  <ShrinkIcon size={16} />
-                </span>
-              }
-              onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
-              size="sm"
-              className="sh-tool"
-              style={{ '--o': toolAccentVar('pan') } as CSSProperties}
-              data-testid="toolbar-map-view-button"
-            >
-              {t('dataTable.fullScreen.exit')}
-            </Button>
-          </>
+          /* The "Back to Map" shrink button now lives on the left (in place of
+             the project-close button); only the table picker stays on the right. */
+          <TableSelectDropdown />
         ) : (
           <>
             <div
