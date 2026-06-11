@@ -142,16 +142,46 @@ function addEdge(graph: Graph, a: string, b: string, weight: number) {
   graph.get(b)!.push({ to: a, weight });
 }
 
-function suggestionToConnection(s: CrossSectionSuggestion): VirtualConnection {
+function defaultMergePair(s: CrossSectionSuggestion, sections: DmpSection[]) {
+  const section = sections[s.importSectionIndex];
+  const importShotCount = section ? standardShots(section).length : 0;
+  const maxOffset = s.isPartial ? s.matchedShots - 1 : s.matchedShots;
+
+  for (let k = maxOffset; k >= 0; k--) {
+    const importStationIndex = s.importStationIndex === 0 ? k : s.importStationIndex - k;
+    const existingStationIndex = s.direction === 'forward'
+      ? s.existingStationIndex + k
+      : s.existingStationIndex - k;
+
+    if (importStationIndex < 0 || importStationIndex > importShotCount) continue;
+    if (existingStationIndex < 0) continue;
+
+    if (s.targetType === 'importing' && s.targetImportIndex != null) {
+      const target = sections[s.targetImportIndex];
+      const targetShotCount = target ? standardShots(target).length : 0;
+      if (existingStationIndex > targetShotCount) continue;
+    }
+
+    return { importStationIndex, existingStationIndex };
+  }
+
+  return {
+    importStationIndex: s.importStationIndex,
+    existingStationIndex: s.existingStationIndex,
+  };
+}
+
+function suggestionToConnection(s: CrossSectionSuggestion, sections: DmpSection[]): VirtualConnection {
+  const merge = defaultMergePair(s, sections);
   return {
     importSectionIndex: s.importSectionIndex,
-    importStationIndex: s.importStationIndex,
+    importStationIndex: merge.importStationIndex,
     targetType: s.targetType,
     ...(s.targetType === 'existing' && s.existingSectionId != null
-      ? { existingSectionId: s.existingSectionId, existingStationIndex: s.existingStationIndex }
+      ? { existingSectionId: s.existingSectionId, existingStationIndex: merge.existingStationIndex }
       : {}),
     ...(s.targetType === 'importing' && s.targetImportIndex != null
-      ? { targetImportIndex: s.targetImportIndex, targetImportStationIndex: s.existingStationIndex }
+      ? { targetImportIndex: s.targetImportIndex, targetImportStationIndex: merge.existingStationIndex }
       : {}),
   };
 }
@@ -343,7 +373,7 @@ export function rerankSuggestionsByTemporalPlan(
         if (state.placed.has(candidate.importSectionIndex)) continue;
         if (hasDirectCycle(state.connections, candidate)) continue;
 
-        const connection = suggestionToConnection(candidate);
+        const connection = suggestionToConnection(candidate, sections);
         if (fixedKeys.has(connectionKey(connection))) continue;
 
         const connections = [...state.connections, connection];
@@ -387,7 +417,7 @@ export function rerankSuggestionsByTemporalPlan(
     const evalResult = evaluateConnections(
       sections,
       temporalPairs,
-      [...fixedConnections, suggestionToConnection(suggestion)],
+      [...fixedConnections, suggestionToConnection(suggestion, sections)],
       existingDistances,
     );
     if (evalResult.hardRejected) {
@@ -414,6 +444,7 @@ export function rerankSuggestionsByTemporalPlan(
 export function collectExistingAnchorsForTemporalRerank(
   suggestions: CrossSectionSuggestion[],
   connections: VirtualConnection[],
+  sections: DmpSection[] = [],
 ): StationRef[] {
   const byKey = new Map<string, StationRef>();
   const add = (ref: StationRef) => {
@@ -422,7 +453,10 @@ export function collectExistingAnchorsForTemporalRerank(
 
   for (const s of suggestions) {
     if (s.targetType === 'existing' && s.existingSectionId != null) {
-      add({ section_id: s.existingSectionId, station_index: s.existingStationIndex });
+      add({
+        section_id: s.existingSectionId,
+        station_index: defaultMergePair(s, sections).existingStationIndex,
+      });
     }
   }
   for (const c of connections) {

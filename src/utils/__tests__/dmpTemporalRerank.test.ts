@@ -141,6 +141,8 @@ describe('rerankSuggestionsByTemporalPlan', () => {
       targetImportIndex: 0,
       importStationIndex: 0,
       existingStationIndex: 0,
+      matchedShots: 1,
+      isPartial: true,
       score: 2,
     });
 
@@ -156,6 +158,8 @@ describe('rerankSuggestionsByTemporalPlan', () => {
       targetImportIndex: 0,
       importStationIndex: 0,
       existingStationIndex: 0,
+      matchedShots: 1,
+      isPartial: true,
       score: 2,
     });
     const good = suggestion({
@@ -163,6 +167,8 @@ describe('rerankSuggestionsByTemporalPlan', () => {
       targetImportIndex: 0,
       importStationIndex: 0,
       existingStationIndex: 2,
+      matchedShots: 1,
+      isPartial: true,
       score: 1,
     });
 
@@ -185,6 +191,8 @@ describe('rerankSuggestionsByTemporalPlan', () => {
       targetImportIndex: 1,
       importStationIndex: 0,
       existingStationIndex: 2,
+      matchedShots: 1,
+      isPartial: true,
       score: 1,
     });
     const badNext = suggestion({
@@ -192,6 +200,8 @@ describe('rerankSuggestionsByTemporalPlan', () => {
       targetImportIndex: 0,
       importStationIndex: 0,
       existingStationIndex: 0,
+      matchedShots: 1,
+      isPartial: true,
       score: 2,
     });
 
@@ -199,5 +209,26 @@ describe('rerankSuggestionsByTemporalPlan', () => {
 
     expect(result.suggestions[0]).toBe(goodNext);
     expect(result.suggestions).not.toContain(badNext);
+  });
+
+  it('evaluates candidates at the default merge station, not the raw backend anchor', () => {
+    const localSections = [
+      makeSection('A', '2026-06-11T10:00:00', [makeShot(100, 10, 0), makeShot(100, 10, 5)]),
+      makeSection('B', '2026-06-11T10:10:00', [makeShot(100, 10, 10), makeShot(100, 10, 15)]),
+    ];
+    const candidate = suggestion({
+      importSectionIndex: 1,
+      targetImportIndex: 0,
+      importStationIndex: 0,
+      existingStationIndex: 2,
+      matchedShots: 2,
+      direction: 'reverse',
+      score: 2,
+    });
+
+    const result = rerankSuggestionsByTemporalPlan([candidate], localSections, []);
+
+    expect(result.suggestions).toEqual([]);
+    expect(result.rejectedCount).toBeGreaterThan(0);
   });
 });

@@ -345,7 +345,6 @@ impl MatchShot {
 /// matching surveys with different station density (markers / slight kiss-offs).
 struct CompositeShot {
     shot: MatchShot,
-    shot_count: usize,
     bend_penalty: f64,
 }
 
@@ -422,11 +421,10 @@ fn composite_shot(shots: &[MatchShot]) -> Option<CompositeShot> {
     Some(CompositeShot {
         shot: MatchShot {
             avg_azimuth: chord_azimuth,
-            length: path_length,
+            length: chord_length,
             depth_in: first.depth_in,
             depth_out: last.depth_out,
         },
-        shot_count: shots.len(),
         bend_penalty,
     })
 }
@@ -617,12 +615,65 @@ fn oriented_existing_shots(
 }
 
 fn run_weight(composite: &CompositeShot, config: &SuggestionConfig) -> f64 {
-    let weight = if composite.shot.length < config.short_shot_threshold {
+    if composite.shot.length < config.short_shot_threshold {
         composite.shot.length / config.short_shot_threshold
     } else {
         1.0
+    }
+}
+
+fn cell_final_score(cell: DpCell, config: &SuggestionConfig) -> f64 {
+    if cell.import_count == 0 || cell.weight_sum <= 0.0 {
+        return 0.0;
+    }
+    let raw_score = cell.score_sum / cell.weight_sum;
+    let match_bonus = 1.0 + 0.15 * cell.weight_sum.ln();
+    let single_penalty = if cell.import_count == 1 { config.single_shot_penalty } else { 1.0 };
+    raw_score * match_bonus.max(1.0) * single_penalty
+}
+
+fn single_front_overlap_key(suggestion: &PlacementSuggestion) -> Option<(usize, usize)> {
+    if suggestion.import_station_index != 0
+        || suggestion.matched_shots != 1
+    {
+        return None;
+    }
+
+    let existing_shot_index = match suggestion.direction {
+        MatchDirection::Forward => suggestion.existing_station_index,
+        MatchDirection::Reverse => suggestion.existing_station_index.checked_sub(1)?,
     };
-    weight * composite.shot_count as f64
+
+    Some((0, existing_shot_index))
+}
+
+fn suppress_equivalent_single_front_reverses(suggestions: &mut Vec<PlacementSuggestion>) {
+    const SCORE_EPSILON: f64 = 0.02;
+
+    let forward_keys: Vec<(SectionId, (usize, usize), f64)> = suggestions
+        .iter()
+        .filter(|suggestion| suggestion.direction == MatchDirection::Forward)
+        .filter_map(|suggestion| {
+            single_front_overlap_key(suggestion)
+                .map(|key| (suggestion.existing_section_id, key, suggestion.score))
+        })
+        .collect();
+
+    suggestions.retain(|candidate| {
+        if candidate.direction != MatchDirection::Reverse {
+            return true;
+        }
+
+        let Some(key) = single_front_overlap_key(candidate) else {
+            return true;
+        };
+
+        !forward_keys.iter().any(|(section_id, other_key, other_score)| {
+            *section_id == candidate.existing_section_id
+                && *other_key == key
+                && *other_score + SCORE_EPSILON >= candidate.score
+        })
+    });
 }
 
 fn score_composite_runs(
@@ -691,10 +742,7 @@ fn try_match_sequence(
                     };
                     let target = &mut dp[i + import_len][j + existing_len];
                     let replace = target
-                        .map(|old| {
-                            (next.score_sum / next.weight_sum)
-                                > (old.score_sum / old.weight_sum)
-                        })
+                        .map(|old| cell_final_score(next, config) > cell_final_score(old, config))
                         .unwrap_or(true);
                     if replace {
                         *target = Some(next);
@@ -709,9 +757,9 @@ fn try_match_sequence(
         for cell in row.iter().flatten() {
             let replace = best
                 .map(|old| {
-                    cell.import_count > old.import_count
-                        || (cell.import_count == old.import_count
-                            && (cell.score_sum / cell.weight_sum) > (old.score_sum / old.weight_sum))
+                    cell_final_score(*cell, config) > cell_final_score(old, config)
+                        || ((cell_final_score(*cell, config) - cell_final_score(old, config)).abs() < 1e-9
+                            && cell.import_count > old.import_count)
                 })
                 .unwrap_or(true);
             if replace {
@@ -774,13 +822,8 @@ fn try_match_sequence(
         return SequenceMatch { score: 0.0, matched_count: 0, is_partial: false };
     }
 
-    let raw_score = best.score_sum / best.weight_sum;
-    let match_bonus = 1.0 + 0.15 * best.weight_sum.ln();
-    let single_penalty = if best.import_count == 1 { config.single_shot_penalty } else { 1.0 };
-    let final_score = raw_score * match_bonus.max(1.0) * single_penalty;
-
     SequenceMatch {
-        score: final_score,
+        score: cell_final_score(best, config),
         matched_count: best.import_count,
         is_partial: best.is_partial,
     }
@@ -914,6 +957,8 @@ pub fn suggest_placements(
             }
         }
     }
+
+    suppress_equivalent_single_front_reverses(&mut suggestions);
 
     // Sort by score descending
     suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -1619,5 +1664,38 @@ mod tests {
             })
             .count();
         assert!(count <= 1, "should not have duplicate suggestions");
+    }
+
+    #[test]
+    fn equivalent_single_front_reverse_is_suppressed() {
+        let forward = PlacementSuggestion {
+            existing_section_id: 1,
+            existing_station_index: 10,
+            import_station_index: 0,
+            score: 0.580,
+            matched_shots: 1,
+            direction: MatchDirection::Forward,
+            is_partial: false,
+            confidence: SuggestionConfidence::Low,
+            existing_section_name: "AA1".to_string(),
+        };
+        let reverse = PlacementSuggestion {
+            existing_section_id: 1,
+            existing_station_index: 11,
+            import_station_index: 0,
+            score: 0.581,
+            matched_shots: 1,
+            direction: MatchDirection::Reverse,
+            is_partial: true,
+            confidence: SuggestionConfidence::Low,
+            existing_section_name: "AA1".to_string(),
+        };
+        let mut suggestions = vec![reverse, forward.clone()];
+
+        suppress_equivalent_single_front_reverses(&mut suggestions);
+
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].direction, MatchDirection::Forward);
+        assert_eq!(suggestions[0].existing_station_index, forward.existing_station_index);
     }
 }

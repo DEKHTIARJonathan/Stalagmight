@@ -1920,7 +1920,7 @@ export default function DmpNewImportDialog({
   }, [dmpFile.sections]);
 
   const ensureTemporalDistances = useCallback(async (pool: CrossSectionSuggestion[]) => {
-    const anchors = collectExistingAnchorsForTemporalRerank(pool, connectionsRef.current);
+    const anchors = collectExistingAnchorsForTemporalRerank(pool, connectionsRef.current, dmpFile.sections);
     const missing = anchors.filter((ref) => {
       const key = `${ref.section_id}:${ref.station_index}`;
       return !temporalDistanceFetchedOriginsRef.current.has(key);
