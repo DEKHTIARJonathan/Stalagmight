@@ -548,9 +548,13 @@ fn placement_crossing_clearance_ok(
     true
 }
 
-fn matched_shot_pairs_for_suggestion(suggestion: &PlacementSuggestion) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::with_capacity(suggestion.matched_shots);
-    for offset in 0..suggestion.matched_shots {
+fn ignored_crossing_pairs_for_suggestion(
+    suggestion: &PlacementSuggestion,
+    import_shot_count: usize,
+    existing_shot_count: usize,
+) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::with_capacity(suggestion.matched_shots + 1);
+    for offset in 0..=suggestion.matched_shots {
         let Some(import_idx) = (if suggestion.import_station_index == 0 {
             Some(offset)
         } else {
@@ -564,6 +568,9 @@ fn matched_shot_pairs_for_suggestion(suggestion: &PlacementSuggestion) -> Vec<(u
         }) else {
             continue;
         };
+        if import_idx >= import_shot_count || existing_idx >= existing_shot_count {
+            continue;
+        }
         pairs.push((import_idx, existing_idx));
     }
     pairs
@@ -1178,7 +1185,11 @@ pub fn suggest_placements(
                     };
 
                     let mut best_context: Option<(f64, usize)> = None;
-                    let ignored_crossing_pairs = matched_shot_pairs_for_suggestion(&suggestion);
+                    let ignored_crossing_pairs = ignored_crossing_pairs_for_suggestion(
+                        &suggestion,
+                        import_match_shots.len(),
+                        existing_match_shots.len(),
+                    );
                     for (import_offset, existing_offset) in merge_offset_pairs(&suggestion) {
                         let Some((merge_import_station, merge_existing_station)) =
                             merge_station_pair_for_offsets(
@@ -1667,6 +1678,37 @@ mod tests {
         assert!(
             placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &[], &config),
             "interior line crossing with 5m vertical clearance should be allowed",
+        );
+    }
+
+    #[test]
+    fn crossing_ignore_pairs_include_aligned_shots_and_one_continuation() {
+        let forward = PlacementSuggestion {
+            existing_section_id: 1,
+            existing_station_index: 10,
+            import_station_index: 0,
+            score: 1.0,
+            matched_shots: 2,
+            existing_matched_shots: 2,
+            preferred_merge_offset: 2,
+            direction: MatchDirection::Forward,
+            is_partial: false,
+            confidence: SuggestionConfidence::High,
+            existing_section_name: "target".to_string(),
+        };
+        assert_eq!(
+            ignored_crossing_pairs_for_suggestion(&forward, 5, 20),
+            vec![(0, 10), (1, 11), (2, 12)],
+        );
+
+        let reverse = PlacementSuggestion {
+            existing_station_index: 10,
+            direction: MatchDirection::Reverse,
+            ..forward
+        };
+        assert_eq!(
+            ignored_crossing_pairs_for_suggestion(&reverse, 5, 20),
+            vec![(0, 9), (1, 8), (2, 7)],
         );
     }
 
