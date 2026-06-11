@@ -5,7 +5,7 @@ import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
 import type { DmpFile, DmpShot, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
-import type { Project, Station, ShotData } from '../../types/project';
+import type { DistanceField, Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { DmpSection } from '../../types/commands';
@@ -50,6 +50,11 @@ import {
   type SectionEditState,
   type ConfirmedOverlapInfo,
 } from '../../utils/batchImportHelpers';
+import {
+  collectExistingAnchorsForTemporalRerank,
+  distanceMapFromField,
+  rerankSuggestionsByTemporalPlan,
+} from '../../utils/dmpTemporalRerank';
 
 interface DmpNewImportDialogProps {
   dmpFile: DmpFile;
@@ -1162,6 +1167,8 @@ export default function DmpNewImportDialog({
   const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
   // Keep full pool (unfiltered) so buildBatchImport can find existing-target anchors
   const fullPoolRef = useRef<CrossSectionSuggestion[]>([]);
+  const temporalDistanceCacheRef = useRef<Map<string, number>>(new Map());
+  const temporalDistanceFetchedOriginsRef = useRef<Set<string>>(new Set());
 
   // ─── Manual placing phase state ────────────────────────────────────────────
   const [segmentQueue, setSegmentQueue] = useState<number[][]>(saved?.segmentQueue ?? []);
@@ -1912,7 +1919,35 @@ export default function DmpNewImportDialog({
     return options[options.length - 1]?.offset ?? 0;
   }, [dmpFile.sections]);
 
-  const pickFromPool = useCallback(() => {
+  const ensureTemporalDistances = useCallback(async (pool: CrossSectionSuggestion[]) => {
+    const anchors = collectExistingAnchorsForTemporalRerank(pool, connectionsRef.current);
+    const missing = anchors.filter((ref) => {
+      const key = `${ref.section_id}:${ref.station_index}`;
+      return !temporalDistanceFetchedOriginsRef.current.has(key);
+    });
+
+    await Promise.all(missing.map(async (origin) => {
+      const key = `${origin.section_id}:${origin.station_index}`;
+      try {
+        const field = await invokeIpc<DistanceField>(
+          'get_station_distances_from',
+          { from: origin },
+          { purpose: 'temporal DMP placement rerank', fields: { origin: key } },
+        );
+        const distances = distanceMapFromField(origin, field);
+        for (const [distanceKey, distance] of distances) {
+          temporalDistanceCacheRef.current.set(distanceKey, distance);
+        }
+        temporalDistanceFetchedOriginsRef.current.add(key);
+      } catch (e) {
+        if (import.meta.env.DEV) {
+          console.warn('[dmp-temporal-rerank] distance fetch failed', origin, e);
+        }
+      }
+    }));
+  }, []);
+
+  const pickFromPool = useCallback(async () => {
     const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
     const skipped = skippedIndicesRef.current;
 
@@ -1942,18 +1977,31 @@ export default function DmpNewImportDialog({
 
     if (pool.length === 0) return false;
 
-    const top = pool[0]!;
+    await ensureTemporalDistances(pool);
+    const reranked = rerankSuggestionsByTemporalPlan(
+      pool,
+      dmpFile.sections,
+      connectionsRef.current,
+      temporalDistanceCacheRef.current,
+    );
+    suggestionPoolRef.current = reranked.suggestions;
+    if (import.meta.env.DEV && reranked.rejectedCount > 0) {
+      console.warn(`[dmp-temporal-rerank] rejected ${reranked.rejectedCount} impossible candidate(s)`);
+    }
+    if (reranked.suggestions.length === 0) return false;
+
+    const top = reranked.suggestions[0]!;
     // Set default merge option immediately to avoid a one-render race where
     // confirm can read the previous suggestion's offset.
     setSelectedMergeOffset(computeDefaultMergeOffset(top));
     setCurrentSuggestion(top);
     setAlternatives(
-      pool
+      reranked.suggestions
         .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
         .slice(0, 4)
     );
     return true;
-  }, [computeDefaultMergeOffset]);
+  }, [computeDefaultMergeOffset, dmpFile.sections, ensureTemporalDistances]);
 
   // Transition from suggesting phase: import reachable sections immediately (early import),
   // then enter manual_placing for unreachable segments, or complete if none.
@@ -2172,7 +2220,7 @@ export default function DmpNewImportDialog({
 
       setIsCalculating(false);
 
-      if (!pickFromPool()) {
+      if (!(await pickFromPool())) {
         // No suggestions at all — check for unreachable sections
         transitionToPlacingOrManual();
         return;
@@ -2529,7 +2577,7 @@ export default function DmpNewImportDialog({
 
   // Confirm handler — records a virtual connection + overlap info (instant, no backend call).
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
-  const handleConfirm = useCallback(() => {
+  const handleConfirm = useCallback(async () => {
     if (!currentSuggestion) return;
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;
@@ -2601,7 +2649,7 @@ export default function DmpNewImportDialog({
       }
 
       // Pick next from pool
-      if (!pickFromPool()) {
+      if (!(await pickFromPool())) {
         // Pool exhausted — check for unreachable sections
         transitionToPlacingOrManual();
         return;
@@ -2615,7 +2663,7 @@ export default function DmpNewImportDialog({
   }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual]);
 
   // Skip handler (suggesting phase)
-  const handleSkip = useCallback(() => {
+  const handleSkip = useCallback(async () => {
     if (!currentSuggestion) return;
     if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
     suggestionActionInFlightRef.current = true;
@@ -2653,7 +2701,7 @@ export default function DmpNewImportDialog({
         return;
       }
 
-      if (!pickFromPool()) {
+      if (!(await pickFromPool())) {
         transitionToPlacingOrManual();
         return;
       }
