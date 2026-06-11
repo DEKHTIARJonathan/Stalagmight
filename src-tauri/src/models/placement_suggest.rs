@@ -282,6 +282,16 @@ struct SuggestionConfig {
     max_length_error_fraction: f64,
     /// Length error floor for dynamic cutoff (meters).
     max_length_error_floor: f64,
+    /// Minimum unpenalized score required for one-shot suggestions.
+    single_shot_min_raw_score: f64,
+    /// Stricter one-shot azimuth cutoff (degrees).
+    single_shot_max_azimuth_error: f64,
+    /// Stricter one-shot depth cutoff per measurement point (meters).
+    single_shot_max_depth_error: f64,
+    /// Stricter one-shot length error fraction.
+    single_shot_max_length_error_fraction: f64,
+    /// Stricter one-shot length error floor (meters).
+    single_shot_max_length_error_floor: f64,
 }
 
 impl Default for SuggestionConfig {
@@ -310,6 +320,11 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             max_depth_error: c.max_depth_error,
             max_length_error_fraction: c.max_length_error_fraction,
             max_length_error_floor: c.max_length_error_floor,
+            single_shot_min_raw_score: 0.95,
+            single_shot_max_azimuth_error: 8.0,
+            single_shot_max_depth_error: 0.25,
+            single_shot_max_length_error_fraction: 0.075,
+            single_shot_max_length_error_floor: 0.50,
         }
     }
 }
@@ -376,6 +391,11 @@ fn max_length_error(existing_length: f64, config: &SuggestionConfig) -> f64 {
     (config.max_length_error_fraction * existing_length).max(config.max_length_error_floor)
 }
 
+fn max_single_shot_length_error(existing_length: f64, config: &SuggestionConfig) -> f64 {
+    (config.single_shot_max_length_error_fraction * existing_length)
+        .max(config.single_shot_max_length_error_floor)
+}
+
 /// Compute score comparing two shots in a given direction.
 fn compute_shot_score(
     import: &MatchShot,
@@ -415,6 +435,38 @@ fn compute_shot_score(
         + config.length_weight * len_score
         + config.depth_in_weight * depth_in_score
         + config.depth_out_weight * depth_out_score
+}
+
+fn compute_single_shot_score(
+    import: &MatchShot,
+    existing: &MatchShot,
+    direction: MatchDirection,
+    config: &SuggestionConfig,
+) -> f64 {
+    let (existing_az, existing_depth_in, existing_depth_out) = match direction {
+        MatchDirection::Forward => (existing.avg_azimuth, existing.depth_in, existing.depth_out),
+        MatchDirection::Reverse => (
+            (existing.avg_azimuth + 180.0) % 360.0,
+            existing.depth_out,
+            existing.depth_in,
+        ),
+    };
+
+    let az_error = angular_difference(import.avg_azimuth, existing_az);
+    let len_error = (import.length - existing.length).abs();
+    let depth_in_error = (import.depth_in - existing_depth_in).abs();
+    let depth_out_error = (import.depth_out - existing_depth_out).abs();
+
+    if az_error > config.single_shot_max_azimuth_error
+        || depth_in_error > config.single_shot_max_depth_error
+        || depth_out_error > config.single_shot_max_depth_error
+        || len_error > max_single_shot_length_error(existing.length, config)
+    {
+        return 0.0;
+    }
+
+    let score = compute_shot_score(import, existing, direction, config);
+    if score >= config.single_shot_min_raw_score { score } else { 0.0 }
 }
 
 /// Result of trying to match a sequence of import shots against existing shots.
@@ -742,6 +794,18 @@ fn try_match_sequence(
 
     if best.import_count == 0 || best.weight_sum == 0.0 {
         return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
+    }
+
+    if best.import_count == 1 {
+        let strict_score = compute_single_shot_score(
+            &import_shots[0],
+            &existing_oriented[0],
+            MatchDirection::Forward,
+            config,
+        );
+        if strict_score == 0.0 {
+            return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
+        }
     }
 
     SequenceMatch {
@@ -1177,6 +1241,45 @@ mod tests {
             config.single_shot_penalty,
             result.score,
         );
+    }
+
+    #[test]
+    fn single_shot_match_requires_strict_fit() {
+        let config = SuggestionConfig::default();
+        let import = vec![
+            MatchShot { avg_azimuth: 99.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+        ];
+        let existing = vec![
+            MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+
+        assert!(
+            compute_shot_score(&import[0], &existing[0], MatchDirection::Forward, &config)
+                >= config.min_shot_score,
+            "fixture should remain inside normal shot tolerances",
+        );
+
+        let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
+
+        assert_eq!(result.matched_count, 0, "loose one-shot matches should be rejected");
+    }
+
+    #[test]
+    fn multi_shot_match_uses_normal_first_shot_tolerance() {
+        let config = SuggestionConfig::default();
+        let import = vec![
+            MatchShot { avg_azimuth: 99.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+        let existing = vec![
+            MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+
+        let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
+
+        assert_eq!(result.matched_count, 2, "multi-shot matches should keep normal shot tolerances");
     }
 
     #[test]
