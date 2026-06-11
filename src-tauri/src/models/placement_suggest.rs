@@ -331,9 +331,9 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             sequence_length_error_base_fraction: 0.03,
             sequence_length_error_step_fraction: 0.02,
             sequence_length_error_max_fraction: 0.11,
-            single_shot_min_raw_score: 0.95,
+            single_shot_min_raw_score: 0.85,
             single_shot_max_azimuth_error: 8.0,
-            single_shot_max_depth_error: 0.25,
+            single_shot_max_depth_error: 0.30,
             single_shot_max_length_error_fraction: 0.075,
             single_shot_max_length_error_floor: 0.50,
             min_crossing_depth_clearance: 4.0,
@@ -508,6 +508,7 @@ fn placement_crossing_clearance_ok(
     existing_trace: &[TracePoint],
     import_station_index: usize,
     existing_station_index: usize,
+    ignored_pairs: &[(usize, usize)],
     config: &SuggestionConfig,
 ) -> bool {
     if import_station_index >= import_trace.len() || existing_station_index >= existing_trace.len() {
@@ -525,6 +526,9 @@ fn placement_crossing_clearance_ok(
         let import_a = placed_import[import_idx];
         let import_b = placed_import[import_idx + 1];
         for existing_idx in 0..existing_trace.len().saturating_sub(1) {
+            if ignored_pairs.contains(&(import_idx, existing_idx)) {
+                continue;
+            }
             let existing_a = existing_trace[existing_idx];
             let existing_b = existing_trace[existing_idx + 1];
             let Some((import_t, existing_t)) =
@@ -542,6 +546,27 @@ fn placement_crossing_clearance_ok(
     }
 
     true
+}
+
+fn matched_shot_pairs_for_suggestion(suggestion: &PlacementSuggestion) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::with_capacity(suggestion.matched_shots);
+    for offset in 0..suggestion.matched_shots {
+        let Some(import_idx) = (if suggestion.import_station_index == 0 {
+            Some(offset)
+        } else {
+            suggestion.import_station_index.checked_sub(offset + 1)
+        }) else {
+            continue;
+        };
+        let Some(existing_idx) = (match suggestion.direction {
+            MatchDirection::Forward => suggestion.existing_station_index.checked_add(offset),
+            MatchDirection::Reverse => suggestion.existing_station_index.checked_sub(offset + 1),
+        }) else {
+            continue;
+        };
+        pairs.push((import_idx, existing_idx));
+    }
+    pairs
 }
 
 /// Compute score comparing two shots in a given direction.
@@ -1153,6 +1178,7 @@ pub fn suggest_placements(
                     };
 
                     let mut best_context: Option<(f64, usize)> = None;
+                    let ignored_crossing_pairs = matched_shot_pairs_for_suggestion(&suggestion);
                     for (import_offset, existing_offset) in merge_offset_pairs(&suggestion) {
                         let Some((merge_import_station, merge_existing_station)) =
                             merge_station_pair_for_offsets(
@@ -1170,6 +1196,7 @@ pub fn suggest_placements(
                             &existing_trace,
                             merge_import_station,
                             merge_existing_station,
+                            &ignored_crossing_pairs,
                             config,
                         ) {
                             continue;
@@ -1181,8 +1208,16 @@ pub fn suggest_placements(
                             merge_existing_station,
                             config,
                         );
+                        let context_multiplier = if suggestion.matched_shots == 1 {
+                            context_multiplier.max(1.0)
+                        } else {
+                            context_multiplier
+                        };
                         if best_context
-                            .map(|(best, _)| context_multiplier > best)
+                            .map(|(best, best_offset)| {
+                                context_multiplier > best
+                                    || ((context_multiplier - best).abs() < 1e-9 && import_offset > best_offset)
+                            })
                             .unwrap_or(true)
                         {
                             best_context = Some((context_multiplier, import_offset));
@@ -1610,7 +1645,7 @@ mod tests {
         ];
 
         assert!(
-            !placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &config),
+            !placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &[], &config),
             "interior line crossing with 1m vertical clearance should be rejected",
         );
     }
@@ -1630,7 +1665,7 @@ mod tests {
         ];
 
         assert!(
-            placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &config),
+            placement_crossing_clearance_ok(&import_trace, &existing_trace, 0, 0, &[], &config),
             "interior line crossing with 5m vertical clearance should be allowed",
         );
     }
@@ -1827,6 +1862,54 @@ mod tests {
         // A single matching shot should still produce a suggestion, but penalized
         assert!(!suggestions.is_empty(), "single shot should still match");
         assert!(suggestions[0].score < 0.7, "single shot should be penalized, got {}", suggestions[0].score);
+    }
+
+    #[test]
+    fn single_adjacent_shot_can_support_station_alignment() {
+        let import_shots = vec![
+            // The shot behind station 1 matches the target shot behind station 16.
+            make_shot_data(41.8, 45.8, 3.77, 18.30, 17.91),
+        ];
+        let mut existing_shots = Vec::new();
+        for idx in 0..15 {
+            existing_shots.push(make_shot(idx, 200.0, 205.0, 0.0, 50.0, 50.0));
+        }
+        existing_shots.push(make_shot(15, 41.0, 45.0, 3.74, 18.02, 18.04));
+
+        let config = SuggestionConfig::default();
+        let import_match = MatchShot::from_shot_data(&import_shots[0]);
+        let existing_match = MatchShot::from_shot(&existing_shots[15]);
+        let single_score = compute_single_shot_score(
+            &import_match,
+            &existing_match,
+            MatchDirection::Forward,
+            &config,
+        );
+        assert!(single_score > 0.0, "fixture shot should pass the one-shot scorer");
+        let import_trace = section_trace_points(&[import_match]);
+        let existing_match_shots: Vec<MatchShot> = existing_shots.iter().map(MatchShot::from_shot).collect();
+        let existing_trace = section_trace_points(&existing_match_shots);
+        assert!(
+            placement_crossing_clearance_ok(&import_trace, &existing_trace, 1, 16, &[(0, 15)], &config),
+            "fixture placement should pass crossing clearance",
+        );
+
+        let suggestions = suggest_placements(
+            &import_shots,
+            &[make_section(1, "AC3", existing_shots)],
+            &PlacementSuggestionConfig::default(),
+        );
+
+        let station_alignment = suggestions.iter().find(|suggestion| {
+            suggestion.import_station_index == 0
+                && suggestion.existing_station_index == 15
+                && suggestion.preferred_merge_offset == 1
+        });
+        assert!(
+            station_alignment.is_some(),
+            "one adjacent matched shot should be enough to offer the supported station offset; got {:?}",
+            suggestions.iter().map(|s| (s.import_station_index, s.existing_station_index, s.preferred_merge_offset, s.matched_shots, s.score)).collect::<Vec<_>>(),
+        );
     }
 
     #[test]
