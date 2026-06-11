@@ -310,14 +310,24 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const autoScrollRAF = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  // A blur means another app may have replaced the OS clipboard, so our copy is
-  // no longer guaranteed to be on it — drop the stash's "internal" provenance.
+  // Drop the stash's "internal" provenance whenever the OS clipboard may no
+  // longer hold our range copy: a window blur (another app took focus and could
+  // have copied), OR any copy/cut event in this document — the grid's own range
+  // copy/cut preventDefault, so they never dispatch these native events; one
+  // firing therefore means some OTHER source (a textarea/dialog, the cell editor,
+  // a page text selection) just overwrote the clipboard.
   useEffect(() => {
-    const onBlur = () => {
+    const drop = () => {
       clipboardOwned.current = false;
     };
-    window.addEventListener('blur', onBlur);
-    return () => window.removeEventListener('blur', onBlur);
+    window.addEventListener('blur', drop);
+    document.addEventListener('copy', drop);
+    document.addEventListener('cut', drop);
+    return () => {
+      window.removeEventListener('blur', drop);
+      document.removeEventListener('copy', drop);
+      document.removeEventListener('cut', drop);
+    };
   }, []);
 
   // Track the scroller's inner width so `grow` columns fill the container.
@@ -1576,6 +1586,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       // rejected by validate / type mismatch keeps its source intact), and which
       // the destination doesn't overwrite.
       const inDst = (r: number, c: number) => r >= dst.r0 && r <= dst.r1 && c >= dst.c0 && c <= dst.c1;
+      const moveMissing: string[] = [];
+      const moveClearedMissing: { row: number; colKey: string }[] = [];
       for (let r = src.r0; r <= src.r1; r++) {
         for (let c = src.c0; c <= src.c1; c++) {
           if (inDst(r, c)) continue;
@@ -1584,11 +1596,21 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           if (!moved.has(`${r}:${col.key}`)) continue;
           if (written.has(`${r}:${col.key}`)) continue;
           const cleared = parseForColumn(col, '', r);
-          if (cleared === undefined) continue;
+          if (cleared === undefined) {
+            // Required source (number → no empty value): mark it missing like
+            // Delete instead of leaving the moved value behind as a duplicate
+            // (and tell a provisional host to drop it), as the cut path does.
+            const k = missKey(r, col.key);
+            if (k !== null) moveMissing.push(k);
+            moveClearedMissing.push({ row: r, colKey: col.key });
+            continue;
+          }
           edits.push({ row: r, colKey: col.key, value: cleared });
         }
       }
       applyEdits(edits);
+      if (moveMissing.length) markMissing(moveMissing);
+      if (onClearMissing) for (const m of moveClearedMissing) onClearMissing(m.row, m.colKey);
       const ak = colKeys[dst.c0];
       const fk = colKeys[dst.c1];
       if (ak !== undefined && fk !== undefined) {
@@ -1599,7 +1621,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         });
       }
     },
-    [colAt, rows, cellEditable, transferValue, parseForColumn, applyEdits, colKeys],
+    [colAt, rows, cellEditable, transferValue, parseForColumn, applyEdits, colKeys, markMissing, missKey, onClearMissing],
   );
 
   const onMoveBorderDown = useCallback(

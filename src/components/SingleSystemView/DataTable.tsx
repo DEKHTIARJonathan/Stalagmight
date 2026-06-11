@@ -1287,22 +1287,25 @@ export default function DataTable({ sections }: DataTableProps) {
   // panel's resize drag and its open/close height transition.
   const [rawTables, setRawTables] = useState<string[] | 'unavailable' | null>(null);
   const lastRawTableRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!dataTableFullScreen) return undefined;
-    let cancelled = false;
+  const fetchRawTableNames = useCallback(() => {
     invokeIpc<string[]>('get_raw_table_names', undefined, {
       purpose: 'list raw sqlite tables for the data viewer',
     })
-      .then((names) => {
-        if (!cancelled) setRawTables(Array.isArray(names) ? names : 'unavailable');
-      })
-      .catch(() => {
-        if (!cancelled) setRawTables('unavailable');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dataTableFullScreen]);
+      .then((names) => setRawTables(Array.isArray(names) ? names : 'unavailable'))
+      .catch(() => setRawTables('unavailable'));
+  }, []);
+  useEffect(() => {
+    if (dataTableFullScreen) fetchRawTableNames();
+  }, [dataTableFullScreen, fetchRawTableNames]);
+  // Re-list after a save (dirty → clean): the first save of a never-saved
+  // project creates the database, so a list that came back "unavailable" must
+  // refresh rather than stay stuck until the user exits and re-enters fullscreen.
+  const prevDirtyRawRef = useRef(isDirty);
+  useEffect(() => {
+    const wasDirty = prevDirtyRawRef.current;
+    prevDirtyRawRef.current = isDirty;
+    if (dataTableFullScreen && wasDirty && !isDirty) fetchRawTableNames();
+  }, [isDirty, dataTableFullScreen, fetchRawTableNames]);
   useEffect(() => {
     if (rawTableSelection) lastRawTableRef.current = rawTableSelection;
     // '' = raw mode entered from the toolbar picker with no table chosen yet.
