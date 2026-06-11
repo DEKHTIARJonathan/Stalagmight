@@ -318,8 +318,8 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             single_shot_penalty: c.single_shot_penalty,
             max_azimuth_error_full: c.max_azimuth_error_full,
             max_depth_error: c.max_depth_error,
-            max_length_error_fraction: c.max_length_error_fraction,
-            max_length_error_floor: c.max_length_error_floor,
+            max_length_error_fraction: c.max_length_error_fraction.min(0.03),
+            max_length_error_floor: c.max_length_error_floor.min(0.40),
             single_shot_min_raw_score: 0.95,
             single_shot_max_azimuth_error: 8.0,
             single_shot_max_depth_error: 0.25,
@@ -386,7 +386,7 @@ fn gaussian(error: f64, sigma: f64) -> f64 {
     (-((error / sigma).powi(2))).exp()
 }
 
-/// Dynamic length cutoff: 5% of existing length, floored at 0.6m.
+/// Dynamic length cutoff: 3% of existing length, floored at 0.4m.
 fn max_length_error(existing_length: f64, config: &SuggestionConfig) -> f64 {
     (config.max_length_error_fraction * existing_length).max(config.max_length_error_floor)
 }
@@ -1565,6 +1565,27 @@ mod tests {
         assert_eq!(best.matched_shots, 1);
     }
 
+    #[test]
+    fn multi_shot_length_mismatch_is_rejected_even_when_azimuths_match() {
+        let import_shots = vec![
+            make_shot_data(275.3, 285.2, 0.95, 21.40, 21.20),
+            make_shot_data(263.6, 262.7, 3.02, 21.17, 21.63),
+        ];
+        let existing = vec![
+            make_section(1, "AA1", vec![
+                make_shot(0, 300.0, 291.1, 2.23, 21.43, 21.70),
+                make_shot(1, 269.9, 271.3, 4.47, 21.67, 21.49),
+            ]),
+        ];
+
+        let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
+
+        assert!(
+            suggestions.is_empty(),
+            "AA2-style length mismatch should not be a valid candidate: {suggestions:?}",
+        );
+    }
+
     // ========================================================================
     // Hard cutoff boundary tests
     // ========================================================================
@@ -1590,13 +1611,13 @@ mod tests {
         let config = SuggestionConfig::default();
         let existing = MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 };
 
-        let import_pass = MatchShot { length: 6.99, ..existing };
+        let import_pass = MatchShot { length: 5.39, ..existing };
         let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "1.99m length error should pass cutoff, got {score}");
+        assert!(score > 0.0, "0.39m length error should pass cutoff, got {score}");
 
-        let import_fail = MatchShot { length: 7.01, ..existing };
+        let import_fail = MatchShot { length: 5.41, ..existing };
         let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "2.01m length error should be hard-rejected, got {score}");
+        assert!(score == 0.0, "0.41m length error should be hard-rejected, got {score}");
     }
 
     #[test]
@@ -1618,35 +1639,35 @@ mod tests {
     #[test]
     fn length_cutoff_uses_floor_for_short_shots() {
         let config = SuggestionConfig::default();
-        // Short existing shot (2.0m): 15% = 0.3m, but floor is 2.0m
+        // Short existing shot (2.0m): 3% = 0.06m, but floor is 0.4m
         let existing = MatchShot { avg_azimuth: 90.0, length: 2.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 1.99m error — under the 2.0m floor
-        let import_pass = MatchShot { length: 3.99, ..existing };
+        // 0.39m error — under the 0.4m floor
+        let import_pass = MatchShot { length: 2.39, ..existing };
         let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "1.99m length error should pass floor cutoff, got {score}");
+        assert!(score > 0.0, "0.39m length error should pass floor cutoff, got {score}");
 
-        // 2.01m error — over the 2.0m floor
-        let import_fail = MatchShot { length: 4.01, ..existing };
+        // 0.41m error — over the 0.4m floor
+        let import_fail = MatchShot { length: 2.41, ..existing };
         let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "2.01m length error should be hard-rejected by floor, got {score}");
+        assert!(score == 0.0, "0.41m length error should be hard-rejected by floor, got {score}");
     }
 
     #[test]
     fn length_cutoff_scales_for_long_shots() {
         let config = SuggestionConfig::default();
-        // Long existing shot (20.0m): 15% = 3.0m > 2.0m floor
+        // Long existing shot (20.0m): 3% = 0.6m > 0.4m floor
         let existing = MatchShot { avg_azimuth: 90.0, length: 20.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 2.99m error — under the 3.0m (15%) cutoff
-        let import_pass = MatchShot { length: 22.99, ..existing };
+        // 0.59m error — under the 0.6m (3%) cutoff
+        let import_pass = MatchShot { length: 20.59, ..existing };
         let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "2.99m length error should pass 15% cutoff for 20m shot, got {score}");
+        assert!(score > 0.0, "0.59m length error should pass 3% cutoff for 20m shot, got {score}");
 
-        // 3.01m error — over the 3.0m (15%) cutoff
-        let import_fail = MatchShot { length: 23.01, ..existing };
+        // 0.61m error — over the 0.6m (3%) cutoff
+        let import_fail = MatchShot { length: 20.61, ..existing };
         let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "3.01m length error should be hard-rejected by 15% cutoff, got {score}");
+        assert!(score == 0.0, "0.61m length error should be hard-rejected by 3% cutoff, got {score}");
     }
 
     #[test]

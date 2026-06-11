@@ -1093,8 +1093,8 @@ pub fn default_ps_single_shot_penalty() -> f64 { 0.6 }
 pub fn default_ps_max_azimuth_error_full() -> f64 { 25.0 }
 pub fn default_ps_max_azimuth_error_partial() -> f64 { 35.0 }
 pub fn default_ps_max_depth_error() -> f64 { 0.50 }
-pub fn default_ps_max_length_error_fraction() -> f64 { 0.15 }
-pub fn default_ps_max_length_error_floor() -> f64 { 2.0 }
+pub fn default_ps_max_length_error_fraction() -> f64 { 0.03 }
+pub fn default_ps_max_length_error_floor() -> f64 { 0.4 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ExportConfig {
