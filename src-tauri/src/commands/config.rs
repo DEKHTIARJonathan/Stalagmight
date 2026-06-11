@@ -46,6 +46,67 @@ pub fn update_panel_sizes(
     )
 }
 
+/// Update the data-table view state (shot/station column order and
+/// visibility, angle display modes) in configuration (efficient partial update)
+#[tauri::command]
+pub fn update_data_table_view(
+    state: State<AppState>,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    azimuth_mode: Option<String>,
+    inclination_mode: Option<String>,
+    station_column_order: Option<Vec<String>>,
+    station_hidden_columns: Option<Vec<String>>,
+) -> Result<(), String> {
+    update_data_table_view_impl(
+        state.inner(),
+        column_order,
+        hidden_columns,
+        azimuth_mode,
+        inclination_mode,
+        station_column_order,
+        station_hidden_columns,
+    )
+}
+
+pub(crate) fn update_data_table_view_impl(
+    state: &AppState,
+    column_order: Option<Vec<String>>,
+    hidden_columns: Option<Vec<String>>,
+    azimuth_mode: Option<String>,
+    inclination_mode: Option<String>,
+    station_column_order: Option<Vec<String>>,
+    station_hidden_columns: Option<Vec<String>>,
+) -> Result<(), String> {
+    const MODES: [&str; 3] = ["avg", "inout", "off"];
+    let mut config = state.get_config();
+    if let Some(order) = column_order {
+        config.panels.data_table_shot_column_order = order;
+    }
+    if let Some(hidden) = hidden_columns {
+        config.panels.data_table_shot_hidden_columns = hidden;
+    }
+    if let Some(mode) = azimuth_mode {
+        if !MODES.contains(&mode.as_str()) {
+            return Err(format!("Invalid azimuth mode '{mode}'"));
+        }
+        config.panels.data_table_azimuth_mode = mode;
+    }
+    if let Some(mode) = inclination_mode {
+        if !MODES.contains(&mode.as_str()) {
+            return Err(format!("Invalid inclination mode '{mode}'"));
+        }
+        config.panels.data_table_inclination_mode = mode;
+    }
+    if let Some(order) = station_column_order {
+        config.panels.data_table_station_column_order = order;
+    }
+    if let Some(hidden) = station_hidden_columns {
+        config.panels.data_table_station_hidden_columns = hidden;
+    }
+    state.update_config(config).map_err(|e| e.to_string())
+}
+
 pub(crate) fn update_panel_sizes_impl(
     state: &AppState,
     sections_panel_width: Option<u32>,

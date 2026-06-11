@@ -1,0 +1,362 @@
+/* SpreadsheetGrid theming: Google-Sheets layout and typography, colored from
+   the app's theme tokens (the --cc-* custom properties defined per
+   [data-theme] in src/index.css), so the grid follows whichever theme the
+   host app is using. The descendant selectors below intentionally override
+   Tailwind utility classes used inside the grid markup. */
+.sg-grid {
+  /* Internal palette, derived from the app theme. --sg-blue / --sg-blue-fill
+     keep their historical names because the TSX references them inline. */
+  --sg-blue: var(--cc-accent);
+  --sg-blue-fill: color-mix(in srgb, var(--cc-accent) 12%, transparent);
+  --sg-line: color-mix(in srgb, var(--cc-border) 60%, var(--cc-panel)); /* cell gridlines */
+  --sg-line-strong: var(--cc-border); /* header / gutter lines */
+  --sg-header-bg: color-mix(in srgb, var(--cc-panel) 92%, var(--cc-text-primary));
+  --sg-header-text: var(--cc-text-secondary);
+  --sg-header-sel-bg: color-mix(in srgb, var(--cc-accent) 22%, var(--cc-panel));
+  --sg-header-active-bg: color-mix(in srgb, var(--cc-accent) 38%, var(--cc-panel));
+  background: var(--cc-panel);
+  color: var(--cc-text-primary);
+  font-family: Arial, Roboto, 'Helvetica Neue', sans-serif;
+}
+
+/* Subtle gridlines + 13px cells. */
+.sg-grid .sg-cell {
+  border-color: var(--sg-line);
+  font-size: 13px;
+}
+/* Header bar, headers, gutter, corner. */
+.sg-grid .sg-header-bar,
+.sg-grid .sg-header,
+.sg-grid .sg-gutter,
+.sg-grid .sg-corner {
+  background: var(--sg-header-bg);
+}
+.sg-grid .sg-header,
+.sg-grid .sg-corner {
+  color: var(--sg-header-text);
+  border-color: var(--sg-line-strong);
+  font-weight: 400;
+  font-size: 13px;
+}
+.sg-grid .sg-gutter {
+  color: var(--sg-header-text);
+  border-color: var(--sg-line-strong);
+}
+.sg-grid textarea {
+  background: var(--cc-input-bg);
+  color: var(--cc-text-primary);
+}
+
+/* Suppress native text selection across the whole grid so click-drag selects
+   cells instead of highlighting text. */
+.sg-grid,
+.sg-grid * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* …except the active cell's editor, which needs real text editing/selection. */
+.sg-grid textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Cell-cursor (the thick plus) like a spreadsheet. */
+.sg-cell {
+  cursor: cell;
+  transition: background-color 90ms ease-out;
+}
+/* Plain-text cell content clips with an ellipsis (tooltip carries the full value). */
+.sg-cell-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Frozen rows (host-locked) carry a warning tint. */
+.sg-row-frozen .sg-cell {
+  background: color-mix(in srgb, var(--cc-warning) 14%, var(--cc-panel));
+}
+/* Externally-hovered row (e.g. the shot hovered on the map) — faint accent
+   tint. Selection visuals render in overlays above the cells, so this never
+   masks them. Declared after the frozen tint so hover wins on frozen rows. */
+.sg-row-hover .sg-cell {
+  background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-panel));
+}
+/* A cell that cannot be edited while the grid as a whole can (read-only
+   column, frozen geometry, read-only mode): visibly recessed — darker
+   background, dimmed text, not-allowed cursor. Declared after the row tints
+   so the recess survives frozen/hover backgrounds. */
+.sg-grid .sg-cell-locked {
+  background: color-mix(in srgb, var(--cc-background) 60%, var(--cc-panel));
+  color: var(--cc-text-secondary);
+  cursor: not-allowed;
+}
+
+/* A required cell the user emptied: the model keeps its value, the cell shows
+   blank with an error tint until a replacement value is committed. */
+.sg-grid .sg-cell-missing {
+  background: color-mix(in srgb, var(--cc-error) 14%, var(--cc-panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cc-error) 60%, transparent);
+}
+
+/* The phantom "new shot" draft row at the end of the table. */
+.sg-row-draft .sg-cell {
+  background: color-mix(in srgb, var(--cc-text-primary) 3%, var(--cc-panel));
+}
+
+/* The selection rectangle glides when moved by keyboard; the glide is disabled
+   mid-drag (.sg-no-anim) so it tracks the pointer 1:1. */
+.sg-selection-overlay {
+  transition: top 70ms ease-out, left 70ms ease-out, width 70ms ease-out,
+    height 70ms ease-out;
+}
+.sg-no-anim {
+  transition: none !important;
+}
+
+/* Fill handle (drag to copy-fill), bottom-right of the selection. */
+.sg-fill-handle {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  background: var(--sg-blue);
+  border: 1px solid var(--cc-panel);
+  cursor: crosshair;
+  pointer-events: auto;
+  transition: transform 80ms ease-out;
+}
+.sg-fill-handle:hover {
+  transform: scale(1.3);
+}
+
+/* Marching-ants animated dashed border for a copied range. */
+@keyframes sg-ants {
+  to {
+    background-position: 8px 0, -8px 100%, 0 -8px, 100% 8px;
+  }
+}
+.sg-marching-ants {
+  background-image: linear-gradient(90deg, var(--sg-blue) 50%, transparent 0),
+    linear-gradient(90deg, var(--sg-blue) 50%, transparent 0),
+    linear-gradient(0deg, var(--sg-blue) 50%, transparent 0),
+    linear-gradient(0deg, var(--sg-blue) 50%, transparent 0);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: sg-ants 0.6s linear infinite;
+}
+
+/* Cut range: same geometry as the copy marquee, but warning-colored so a
+   pending cut reads differently from a copy. */
+.sg-cut-marquee {
+  background-image: linear-gradient(90deg, var(--cc-warning) 50%, transparent 0),
+    linear-gradient(90deg, var(--cc-warning) 50%, transparent 0),
+    linear-gradient(0deg, var(--cc-warning) 50%, transparent 0),
+    linear-gradient(0deg, var(--cc-warning) 50%, transparent 0);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: sg-ants 0.6s linear infinite;
+}
+
+/* Fill-drag preview border. */
+.sg-fill-preview {
+  border: 1px dashed var(--sg-blue);
+  box-sizing: border-box;
+}
+
+/* Cell editor — fills the active cell, sits above the selection overlay. */
+.sg-grid .sg-editor {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 5px 7px; /* horizontal ~matches the cell's px-2; vertical centers a line */
+  border: 2px solid var(--cc-focus-ring);
+  background: var(--cc-input-bg);
+  color: var(--cc-text-primary);
+  font: 13px/1.35 Arial, Roboto, sans-serif;
+  resize: none;
+  outline: none;
+  overflow: hidden;
+}
+
+/* Grabbable edges of the selection for cut-and-drop move (open-hand cursor). */
+.sg-move-edge {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+}
+.sg-move-edge:active {
+  cursor: grabbing;
+}
+/* While a move drag is in progress, force the closed-hand cursor everywhere. */
+.sg-grid.sg-grabbing,
+.sg-grid.sg-grabbing * {
+  cursor: grabbing !important;
+}
+/* Rejected-edit flash: an error-colored ring that pulses briefly over the cell/editor. */
+@keyframes sg-invalid-pulse {
+  0% { background: color-mix(in srgb, var(--cc-error) 22%, transparent); }
+  100% { background: transparent; }
+}
+.sg-invalid-flash {
+  border: 2px solid var(--cc-error);
+  box-sizing: border-box;
+  pointer-events: none;
+  animation: sg-invalid-pulse 0.9s ease-out;
+}
+
+/* Destination outline while moving cells. */
+.sg-move-target {
+  border: 2px solid var(--sg-blue);
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--cc-accent) 6%, transparent);
+}
+
+/* Column-move drop indicator (thick line between columns). */
+.sg-drop-line {
+  background: var(--sg-blue);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cc-accent) 25%, transparent);
+}
+
+/* Floating ghost of the column(s) being moved. */
+.sg-col-ghost {
+  pointer-events: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: Arial, Roboto, sans-serif;
+  color: var(--cc-accent-on);
+  background: color-mix(in srgb, var(--cc-accent) 92%, transparent);
+  border-radius: 3px;
+  box-shadow: 0 4px 14px var(--cc-overlay);
+}
+
+/* Header cell of a selected column gets a tinted underline (like GS). */
+.sg-header {
+  transition: background-color 90ms ease-out, box-shadow 90ms ease-out;
+}
+.sg-grid .sg-header-selected {
+  background-color: var(--sg-header-sel-bg);
+  color: var(--sg-blue);
+  box-shadow: inset 0 -2px 0 0 var(--sg-blue);
+}
+.sg-grid .sg-header:hover {
+  background-color: var(--cc-hover);
+}
+
+/* Drag-to-resize affordance on a header's right edge. */
+.sg-col-resize {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.sg-col-resize:hover {
+  background-color: var(--sg-blue);
+}
+
+/* Sticky-header drop shadow once the body is scrolled. */
+.sg-header-bar {
+  transition: box-shadow 120ms ease-out;
+}
+.sg-header-bar.sg-scrolled {
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--cc-overlay) 35%, transparent);
+}
+
+/* Frozen row-number gutter. */
+.sg-gutter {
+  cursor: pointer;
+  font-size: 11px;
+  user-select: none;
+  transition: box-shadow 90ms ease-out;
+}
+.sg-grid .sg-gutter:hover {
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--cc-text-primary) 8%, transparent);
+}
+/* Layered insets keep the gutter opaque while tinting + marking it. */
+.sg-grid .sg-gutter-selected {
+  box-shadow: inset 0 0 0 999px var(--sg-header-sel-bg), inset -2px 0 0 0 var(--sg-blue);
+  color: var(--sg-blue);
+}
+
+/* Right-click context menu. */
+.sg-context-menu {
+  min-width: 160px;
+  padding: 4px 0;
+  background: var(--cc-panel);
+  color: var(--cc-text-primary);
+  border: 1px solid var(--cc-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 10px var(--cc-overlay);
+}
+.sg-context-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  padding: 5px 14px;
+  text-align: left;
+  font-size: 12px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.sg-context-menu button:hover {
+  background: var(--cc-accent);
+  color: var(--cc-accent-on);
+}
+.sg-context-menu .sg-shortcut {
+  font-size: 11px;
+  opacity: 0.55;
+}
+.sg-context-menu button:hover .sg-shortcut {
+  opacity: 0.85;
+}
+.sg-context-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--cc-border);
+}
+
+/* Column show/hide dropdown. */
+.sg-grid .sg-colmenu {
+  background: var(--cc-panel);
+  color: var(--cc-text-primary);
+  border-color: var(--cc-border);
+}
+.sg-grid .sg-colmenu label:hover {
+  background-color: var(--cc-hover);
+}
+
+/* Toolbar buttons (Columns / Maximize). */
+.sg-grid .sg-toolbar button:hover {
+  background-color: var(--cc-hover);
+}
+
+/* Name box: active-cell reference / selection size (top-left, like GS). */
+.sg-grid .sg-namebox {
+  min-width: 96px;
+  padding-left: 4px;
+  font-size: 12px;
+  color: var(--sg-header-text);
+  white-space: nowrap;
+}
+
+/* Stronger tint on the ACTIVE cell's header / row-number than the rest of a
+   range selection (Google-Sheets cross-highlight emphasis). */
+.sg-grid .sg-header-active {
+  background-color: var(--sg-header-active-bg);
+}
+.sg-grid .sg-gutter-active {
+  box-shadow: inset 0 0 0 999px var(--sg-header-active-bg), inset -2px 0 0 0 var(--sg-blue);
+  color: var(--sg-blue);
+  font-weight: 600;
+}

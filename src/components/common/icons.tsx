@@ -376,6 +376,16 @@ export function AlertCircleIcon(props: IconProps) {
   );
 }
 
+export function DatabaseIcon(props: IconProps) {
+  return (
+    <BaseIcon24 {...props}>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+      <path d="M3 12a9 3 0 0 0 18 0" />
+    </BaseIcon24>
+  );
+}
+
 export function EyeIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
@@ -494,6 +504,30 @@ export function MoveDiagonalIcon(props: IconProps) {
       <line x1="5" y1="15" x2="15" y2="5" />
       <polyline points="11 5 15 5 15 9" />
       <polyline points="9 15 5 15 5 11" />
+    </BaseIcon>
+  );
+}
+
+// Fullscreen enter/exit pair (data-table fullscreen mode): two diagonal arrows
+// pointing out of (Expand) or into (Shrink) the corners.
+export function ExpandIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <line x1="11" y1="9" x2="16" y2="4" />
+      <polyline points="12 4 16 4 16 8" />
+      <line x1="9" y1="11" x2="4" y2="16" />
+      <polyline points="8 16 4 16 4 12" />
+    </BaseIcon>
+  );
+}
+
+export function ShrinkIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <line x1="16" y1="4" x2="11" y2="9" />
+      <polyline points="11 5 11 9 15 9" />
+      <line x1="4" y1="16" x2="9" y2="11" />
+      <polyline points="9 15 9 11 5 11" />
     </BaseIcon>
   );
 }

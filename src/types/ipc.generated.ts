@@ -106,6 +106,7 @@ export * from './ipc/MemoryStats';
 export * from './ipc/BackupInfo';
 export * from './ipc/RepairResult';
 export * from './ipc/SalvagedData';
+export * from './ipc/RawTableData';
 export * from './ipc/Config';
 export * from './ipc/GeneralConfig';
 export * from './ipc/UnitsConfig';

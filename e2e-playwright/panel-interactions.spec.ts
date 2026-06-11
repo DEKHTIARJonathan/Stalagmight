@@ -115,16 +115,21 @@ test.describe('Panel Interactions', () => {
     await waitForMapIdle(page);
 
     // Data table should now be visible
-    // Look for "Data Table" text and section selector dropdown
+    // Look for the condensed header: section pill + view toggle
     await expect(dataTable).toBeVisible({ timeout: 3000 });
 
-    // Section selector should be visible when data table is open
-    const sectionSelector = page.getByTestId('data-table-section-select');
-    await expect(sectionSelector).toBeVisible({ timeout: 2000 });
+    // Header section pill should show the auto-selected first section
+    const sectionPill = page.getByTestId('data-table-section-pill');
+    await expect(sectionPill).toBeVisible({ timeout: 2000 });
+    await expect(sectionPill).toContainText('Main Passage');
 
-    // Table rows should be visible
-    const tableBody = dataTable.locator('tbody');
-    await expect(tableBody).toBeVisible({ timeout: 2000 });
+    // View toggle (shots/stations radio group) should be visible
+    await expect(page.getByTestId('data-table-view-select')).toBeVisible({ timeout: 2000 });
+    await expect(page.getByTestId('data-table-view-shots')).toHaveAttribute('aria-checked', 'true');
+
+    // Grid rows should be visible
+    const firstRow = dataTable.locator('[data-testid^="grid-row-"]').first();
+    await expect(firstRow).toBeVisible({ timeout: 2000 });
 
     // Toggle closed with Ctrl+3
     await page.keyboard.press('Control+3');
@@ -252,6 +257,28 @@ test.describe('Panel Interactions', () => {
     await expect(page.getByTestId('map-canvas')).toBeVisible();
   });
 
+  test('section picker in the data-table sub-header switches sections', async ({ page }) => {
+    await createProjectWithSections(page);
+    await page.keyboard.press('Control+3');
+    await waitForMapIdle(page);
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('Main Passage');
+
+    await page.getByTestId('data-table-section-menu').click();
+    const list = page.getByTestId('data-table-section-menu-list');
+    await expect(list.getByRole('button')).toHaveText(['Main Passage', 'Side Tunnel']);
+    await list.getByRole('button', { name: 'Side Tunnel' }).click();
+    await expect(list).not.toBeVisible();
+
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('Side Tunnel');
+    // The pick selects the section app-wide, like the old dropdown did.
+    const selection = await page.evaluate(
+      () => (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { selection: unknown } } } })
+        .__E2E_TEST__.uiStore.getState().selection
+    );
+    expect(selection).toMatchObject({ type: 'section' });
+  });
+
   test('should handle panel overflow with scrolling', async ({ page }) => {
     // Create a project with sections
     await createProjectWithSections(page);
@@ -278,39 +305,43 @@ test.describe('Panel Interactions', () => {
     await page.keyboard.press('Control+3');
     await waitForMapIdle(page);
 
-    // Select a section with shots in the data table (custom Select component - portaled listbox)
-    const sectionSelector = page.getByTestId('data-table-section-select');
-    if (await sectionSelector.isVisible()) {
-      const selectorTrigger = sectionSelector.locator('button').first();
-      await selectorTrigger.click();
-      // Wait for aria-controls to be set, then locate the portaled listbox (avoids matching sections panel listbox)
-      await expect(selectorTrigger).toHaveAttribute('aria-controls', /.+/);
-      const selectorListboxId = await selectorTrigger.getAttribute('aria-controls');
-      await page.locator(`[id="${selectorListboxId}"]`).locator('[role="option"]:has-text("Main Passage")').click();
-      await waitForMapIdle(page);
-    }
+    // Drive the table to a section with shots via the app-wide selection
+    // (the table follows external selection; its header no longer has a section dropdown)
+    await page.evaluate(() => {
+      const e2e = (window as any).__E2E_TEST__;
+      const section = e2e.projectStore
+        .getState()
+        .project?.sections?.find((s: any) => s.name === 'Main Passage');
+      if (!section) throw new Error('Main Passage section not found');
+      e2e.uiStore.getState().setSelection({ type: 'section', sectionId: section.id });
+    });
+    // Header pill reflects the externally-selected section
+    await expect(page.getByTestId('data-table-section-pill')).toContainText('Main Passage');
+    await waitForMapIdle(page);
 
     // The data table should show shots with scrollable content if there are many
     const tableContainer = page.getByTestId('data-table');
 
     if (await tableContainer.isVisible()) {
-      // Check that the table has rows
-      const tableRows = tableContainer.locator('tbody tr');
-      const rowCount = await tableRows.count();
+      // Check that the grid has rows
+      const gridRows = tableContainer.locator('[data-testid^="grid-row-"]');
+      const rowCount = await gridRows.count();
       expect(rowCount).toBeGreaterThan(0);
 
-      // If there are enough rows to scroll, we can test scroll behavior
-      if (rowCount > 5) {
+      // The shots grid scrolls inside its own container (not the panel element)
+      const gridScroller = tableContainer.locator('[data-testid="spreadsheet-grid"] > div[tabindex="0"]');
+      const canScroll = await gridScroller.evaluate((el) => el.scrollHeight > el.clientHeight);
+      if (canScroll) {
         // Get scroll position
-        const scrollTop = await tableContainer.evaluate((el) => el.scrollTop);
+        const scrollTop = await gridScroller.evaluate((el) => el.scrollTop);
 
         // Scroll down
-        await tableContainer.evaluate((el) => el.scrollBy(0, 100));
+        await gridScroller.evaluate((el) => el.scrollBy(0, 100));
         await waitForMapIdle(page);
 
         // Check that scroll position changed
-        const newScrollTop = await tableContainer.evaluate((el) => el.scrollTop);
-        expect(newScrollTop).toBeGreaterThanOrEqual(scrollTop);
+        const newScrollTop = await gridScroller.evaluate((el) => el.scrollTop);
+        expect(newScrollTop).toBeGreaterThan(scrollTop);
       }
     }
 

@@ -1204,6 +1204,11 @@
       "idShort": "ID",
       "length": "Len ({{unit}})",
       "azimuthShort": "Az",
+      "azimuthInShort": "Az In",
+      "azimuthOutShort": "Az Out",
+      "inclinationShort": "Incl",
+      "pitchInShort": "Incl In",
+      "pitchOutShort": "Incl Out",
       "depthIn": "Depth In",
       "depthOut": "Depth Out",
       "leftShort": "L",
@@ -1211,14 +1216,62 @@
       "upShort": "U",
       "downShort": "D",
       "referenceShort": "J/R",
-      "comment": "Comment"
+      "comment": "Comment",
+      "sectionIdShort": "Sec ID",
+      "shotIdShort": "Shot ID"
+    },
+    "headerMenu": {
+      "hide": "Hide {{name}}",
+      "showInOut": "Show In+Out instead",
+      "showAverage": "Show average instead"
+    },
+    "columnsMenu": {
+      "button": "Choose visible columns",
+      "warnings": "Warnings",
+      "length": "Length",
+      "azimuth": "Azimuth",
+      "inclination": "Inclination",
+      "avg": "Avg",
+      "inOut": "In+Out",
+      "off": "Off",
+      "depthIn": "Depth in",
+      "depthOut": "Depth out",
+      "lrud": "LRUD",
+      "reference": "Jump/Reference",
+      "comment": "Comment",
+      "sectionId": "Section ID",
+      "shotId": "Shot ID"
     },
     "viewShots": "Shots",
     "viewStations": "Stations",
     "empty": "No shots in this section.",
     "stationsEmpty": "No stations in this section.",
     "frozen": "Geometry locked — part of adjusted network",
+    "pasteReport": {
+      "written_one": "Pasted {{count}} cell",
+      "written_other": "Pasted {{count}} cells",
+      "clipped_one": "{{count}} outside the table was dropped",
+      "clipped_other": "{{count}} outside the table were dropped",
+      "skipped_one": "{{count}} skipped (read-only or invalid)",
+      "skipped_other": "{{count}} skipped (read-only or invalid)"
+    },
+    "validation": {
+      "nonPositiveLength": "Length must be greater than 0",
+      "azimuthRange": "Azimuth must be between 0 and 360",
+      "pitchRange": "Inclination must be between -90 and 90",
+      "negativeLrud": "Passage dimension cannot be negative"
+    },
     "selectSection": "Select a section to view shots.",
+    "selectSectionPill": "Select this section on the map",
+    "sectionMenu": "Choose section",
+    "rawTableMenu": "Choose table",
+    "multiDeleteUnsupported": "Deleting multiple shots at once isn't supported yet — delete one shot at a time.",
+    "removeDraft_one": "Remove draft row",
+    "removeDraft_other": "Remove {{count}} draft rows",
+    "shotNoun_one": "shot",
+    "shotNoun_other": "shots",
+    "stationNoun_one": "station",
+    "stationNoun_other": "stations",
     "shotCount": "{{countFormatted}} shots",
     "stationCount": "{{countFormatted}} stations",
     "stationColumns": {
@@ -1226,12 +1279,71 @@
       "x": "X",
       "y": "Y",
       "depth": "Depth",
+      "lat": "Lat",
+      "long": "Long",
       "zeroDatum": "GPS",
       "connections": "Conn",
       "comment": "Comment"
     },
+    "stationColumnsMenu": {
+      "coordsMeters": "Coordinates (m)",
+      "coordsGps": "Coordinates (GPS)",
+      "depth": "Depth",
+      "zeroDatum": "Zero datum (GPS)",
+      "connections": "Connections",
+      "comment": "Comment"
+    },
+    "connMenu": {
+      "merged": "Merged with",
+      "closures": "Closures with"
+    },
+    "stationGps": {
+      "edit": "Set or edit this station's zero datum"
+    },
     "announcement": {
       "shotSelected": "Selected shot {{shotId}}."
+    },
+    "fullScreen": {
+      "enter": "Full screen",
+      "exit": "Back to Map"
+    },
+    "tableSelect": {
+      "sections": "Sections",
+      "rawData": "Raw data",
+      "readOnly": "(read-only)"
+    },
+    "rawData": {
+      "asOfLastSave": "As of last save",
+      "loading": "Loading…",
+      "unavailable": "Save the project to browse raw data",
+      "pager": "Rows {{from}}–{{to}} of {{total}}"
+    }
+  },
+  "grid": {
+    "contextMenu": {
+      "copy": "Copy{{suffix}}",
+      "cut": "Cut{{suffix}}",
+      "paste": "Paste",
+      "clear": "Clear{{suffix}}",
+      "fillDown": "Fill down",
+      "insertAbove": "Insert {{rows}} before",
+      "insertBelow": "Insert {{rows}} after",
+      "deleteRows": "Delete {{rows}}"
+    },
+    "rowNoun_one": "row",
+    "rowNoun_other": "rows",
+    "columnNoun_one": "column",
+    "columnNoun_other": "columns",
+    "columnsButton": "Columns",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "editCellAria": "Edit {{column}} row {{row}}",
+    "shortcuts": {
+      "copy": "Ctrl+C",
+      "cut": "Ctrl+X",
+      "paste": "Ctrl+V",
+      "clear": "Del",
+      "fillDown": "Ctrl+D"
     }
   },
   "detailPanel": {

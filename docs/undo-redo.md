@@ -82,6 +82,7 @@ Undo and redo stacks are serialized to the SQLite database synchronously on proj
 - Serialization failures are logged but don't block the save
 - Deserialization failures skip invalid entries and load whatever is valid
 - On project close, stacks are cleared from memory (DB retains persisted entries)
+- Files written before schema v7 get their persisted stacks dropped on open: pre-v7 builds serialized untouched nullable `ShotUpdates` fields as explicit `null`s, which the v7 `double_option` semantics would replay as "clear the field" (see `UNDO_FORMAT_SAFE_VERSION` / `drop_legacy_undo_history` in `persistence/sqlite.rs`)
 
 ## Lock Ordering
 

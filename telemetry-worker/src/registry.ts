@@ -375,4 +375,9 @@ export const EVENT_NAMES: readonly string[] = [
   'command.get_adjusted_stations',
   // Per-station along-cave distance query backing the distance-gradient overlay.
   'command.get_station_distances_from',
+  // Data-table spreadsheet editing: persisted view config + raw-table browsing
+  // (fullscreen data table).
+  'command.update_data_table_view',
+  'command.get_raw_table_names',
+  'command.get_raw_table',
 ];

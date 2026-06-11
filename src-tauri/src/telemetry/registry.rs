@@ -377,6 +377,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_adjusted_stations",
     // Per-station along-cave distance query backing the distance-gradient overlay.
     "command.get_station_distances_from",
+    // Data-table spreadsheet editing: persisted view config + raw-table browsing
+    // (fullscreen data table).
+    "command.update_data_table_view",
+    "command.get_raw_table_names",
+    "command.get_raw_table",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -515,7 +520,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 318);
+        assert_eq!(EVENT_NAMES.len(), 321);
     }
 
     #[test]

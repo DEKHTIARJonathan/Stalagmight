@@ -1,23 +1,217 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { type Section, type Shot, type ShotUpdates, type Station } from '../../types/project';
+import { type Section, type Shot, type ShotData, type Station, type StationRef } from '../../types/project';
 import { useProjectStore } from '../../store/projectStore';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
-import { EditableTable } from '../common/Table';
-import { Select, type SelectOption } from '../common/Select';
+import { SpreadsheetGrid, type GridLabels } from '../common/SpreadsheetGrid';
 import { EntityBlob } from '../common/EntityBlob';
-import { AlertCircleIcon, AlertTriangleIcon, ChevronDownIcon, DotIcon, LinkIcon, LockIcon } from '../common/icons';
+import { ChevronDownIcon, ExpandIcon, EyeIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
-import { circularMeanDegrees, normalizeAngle } from '../../utils/angles';
-import { formatShotId } from '../../utils/formatters';
-import { formatFixed, formatNumber } from '../../i18n/format';
+import { formatShotId, formatStationId } from '../../utils/formatters';
+import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import { invokeIpc } from '../../utils/ipc';
+import { buildShotColumns } from './dataTableShotColumns';
+import { buildStationColumns } from './dataTableStationColumns';
+import RawTableView from './RawTableView';
+import { DetailLink } from '../common/DetailLink';
+import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
+import {
+  type RowEntry,
+  type ShotDraft,
+  endDraft,
+  interleaveRows,
+  pruneDrafts,
+  insertDraftsAt,
+  materializeDraft,
+  draftMissing,
+  completeDraftData,
+  commitAnchorArgs,
+} from './dataTableDrafts';
+import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface DataTableProps {
   sections: Section[];
+}
+
+/** Column keys per angle family and mode (the Avg column and the In+Out pair
+ *  swap into each other's slot when the mode changes). */
+/** Header right-click hide targets: the clicked column's display name and the
+ *  key group it hides with (L/R/U/D hide together as LRUD). */
+const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = {
+  _warnings: { nameKey: 'warnings', keys: ['_warnings'] },
+  length: { nameKey: 'length', keys: ['length'] },
+  depth_in: { nameKey: 'depthIn', keys: ['depth_in'] },
+  depth_out: { nameKey: 'depthOut', keys: ['depth_out'] },
+  left: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  right: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  up: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  down: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
+  is_reference: { nameKey: 'reference', keys: ['is_reference'] },
+  comment: { nameKey: 'comment', keys: ['comment'] },
+  section_id: { nameKey: 'sectionId', keys: ['section_id'] },
+  shot_id: { nameKey: 'shotId', keys: ['shot_id'] },
+};
+
+const ANGLE_FAMILY_KEYS = {
+  azimuth: { avg: [AZIMUTH_AVG_KEY], inout: ['azimuth_in', 'azimuth_out'] },
+  inclination: { avg: [PITCH_AVG_KEY], inout: ['pitch_in', 'pitch_out'] },
+} as const;
+
+/** Stations-view column groups in the eye menu / header hide entries (plain
+ *  hide — no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
+ *  as the GPS pair. The index pill lives in the gutter, so it never hides. */
+const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
+  { keys: ['_x', '_y'], nameKey: 'coordsMeters' },
+  { keys: ['_lat', '_long'], nameKey: 'coordsGps' },
+  { keys: ['_depth'], nameKey: 'depth' },
+  { keys: ['_zeroDatum'], nameKey: 'zeroDatum' },
+  { keys: ['_connections'], nameKey: 'connections' },
+  { keys: ['comment'], nameKey: 'comment' },
+];
+
+/** Coordinate columns hidden by default (matches the backend serde default),
+ *  used only as the pre-config-load initial state — once the persisted config
+ *  arrives it is authoritative (an empty list there means "show all"). */
+const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
+
+/** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
+ *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.
+ *  Closes on outside click and Escape (and declares data-dropdown-open so the
+ *  global Escape guard yields to it). The list anchors centered under the pill. */
+function SubHeaderPickerMenu({
+  triggerTestId,
+  listTestId,
+  title,
+  options,
+  onPick,
+  onHoverOption,
+  onHoverTrigger,
+  renderTrigger,
+}: {
+  triggerTestId?: string;
+  listTestId: string;
+  title: string;
+  options: { value: string; label: string; disabled?: boolean; dot?: string }[];
+  onPick: (value: string) => void;
+  onHoverOption?: (value: string | null) => void;
+  onHoverTrigger?: (over: boolean) => void;
+  renderTrigger: (state: { open: boolean }) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  // Flip the list above the pill when there is more room there than below — the
+  // data-table sub-header sits low in the window (above the status bar), so a
+  // downward list would otherwise be clipped.
+  const [up, setUp] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const toggle = () => {
+    const willOpen = !open;
+    if (willOpen) {
+      const r = triggerRef.current?.getBoundingClientRect();
+      if (r) setUp(r.top > window.innerHeight - r.bottom);
+    }
+    setOpen(willOpen);
+  };
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggle}
+        onMouseEnter={onHoverTrigger ? () => onHoverTrigger(true) : undefined}
+        onMouseLeave={onHoverTrigger ? () => onHoverTrigger(false) : undefined}
+        className="flex cursor-pointer items-center"
+        title={title}
+        data-testid={triggerTestId}
+      >
+        {renderTrigger({ open })}
+      </button>
+      {open && (
+        <div
+          data-dropdown-open
+          className={`absolute left-1/2 z-50 max-h-64 w-52 -translate-x-1/2 overflow-auto rounded border border-border bg-panel p-1 text-xs shadow-lg ${
+            up ? 'bottom-full mb-1' : 'top-full mt-1'
+          }`}
+          data-testid={listTestId}
+          onMouseLeave={() => onHoverOption?.(null)}
+        >
+          {options.map((o) => (
+            <button
+              key={o.value}
+              disabled={o.disabled}
+              className="flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left hover:bg-accent-10 disabled:opacity-50"
+              onMouseEnter={() => onHoverOption?.(o.value)}
+              onClick={() => {
+                onHoverOption?.(null);
+                setOpen(false);
+                onPick(o.value);
+              }}
+            >
+              {o.dot !== undefined && (
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: o.dot }}
+                  aria-hidden="true"
+                />
+              )}
+              <span className="truncate">{o.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The chevron that sits INSIDE the sub-header pill, dim until the menu opens. */
+function PillChevron({ open, testId }: { open: boolean; testId: string }) {
+  return (
+    <span className={`ml-0.5 ${open ? 'text-text' : 'text-text-secondary'}`} data-testid={testId}>
+      <ChevronDownIcon size={12} />
+    </span>
+  );
+}
+
+/** Raw-table name pill: neutral gray sibling of the section EntityBlob, with
+ *  the same syntactic-level gate (plain text below 'full'). `trailing` (the
+ *  picker chevron) renders inside the pill. */
+function RawTablePill({ name, trailing }: { name: string; trailing?: ReactNode }) {
+  const level = useUIStore((s) => s.syntacticLevel);
+  if (!syntacticLevelAtLeast(level, 'full')) {
+    return (
+      <span className="inline-flex items-center font-medium" data-testid="data-table-raw-name">
+        {name}
+        {trailing}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="sh-pill inline-flex items-center gap-1 align-middle rounded-full px-2 py-0.5 text-xs leading-none text-text-primary tabular-nums"
+      style={{ '--o': 'var(--cc-text-secondary)' } as CSSProperties}
+      data-testid="data-table-raw-name"
+    >
+      {name}
+      {trailing}
+    </span>
+  );
 }
 
 export default function DataTable({ sections }: DataTableProps) {
@@ -35,9 +229,9 @@ export default function DataTable({ sections }: DataTableProps) {
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, warnings, isShotFrozen, stations, updateStationComment } = useProjectStore();
+  const { updateShot, warnings, isShotFrozen, updateStationComment, executeBatch, createShot, isDirty } = useProjectStore();
   // Coordinate columns follow the active geometry (adjusted in the read-only
-  // closure-adjusted view); `stations` stays measured for counts/editing.
+  // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
   // Closure-adjusted view is read-only: cell editing and the reference toggle are disabled.
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
@@ -48,14 +242,18 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredShot,
     triggerPanToShot,
     dataTableOpen,
-    toggleDataTable,
     dataTableHeight,
+    dataTableFullScreen,
+    rawTableSelection,
+    setRawTableSelection,
+    enterDataTableFullScreen,
     announceSelection,
     setHoveredSectionId,
     openDialog,
     triggerCenterOnStation,
     setHoveredStation,
     hoveredStation,
+    showToast,
   } = useUIStore(useShallow((s) => ({
     selection: s.selection,
     setSelection: s.setSelection,
@@ -63,14 +261,18 @@ export default function DataTable({ sections }: DataTableProps) {
     hoveredShot: s.hoveredShot,
     triggerPanToShot: s.triggerPanToShot,
     dataTableOpen: s.dataTableOpen,
-    toggleDataTable: s.toggleDataTable,
     dataTableHeight: s.dataTableHeight,
+    dataTableFullScreen: s.dataTableFullScreen,
+    rawTableSelection: s.rawTableSelection,
+    setRawTableSelection: s.setRawTableSelection,
+    enterDataTableFullScreen: s.enterDataTableFullScreen,
     announceSelection: s.announceSelection,
     setHoveredSectionId: s.setHoveredSectionId,
     openDialog: s.openDialog,
     triggerCenterOnStation: s.triggerCenterOnStation,
     setHoveredStation: s.setHoveredStation,
     hoveredStation: s.hoveredStation,
+    showToast: s.showToast,
   })));
 
   // Create a map of shot warnings for quick lookup
@@ -89,15 +291,6 @@ export default function DataTable({ sections }: DataTableProps) {
   const getShotWarnings = (sectionId: number, shotId: number): ProjectWarning[] => {
     return shotWarningsMap.get(`${sectionId}:${shotId}`) ?? [];
   };
-
-  // Convert sections to SelectOption format
-  const sectionOptions: SelectOption[] = useMemo(() =>
-    sections.map((section) => ({
-      value: String(section.id),
-      label: section.name ?? t('sections.defaultName', { id: section.id }),
-    })),
-    [sections, t]
-  );
 
   // Update selected section when sections change (e.g., first load or section deleted)
   useEffect(() => {
@@ -140,9 +333,18 @@ export default function DataTable({ sections }: DataTableProps) {
         selection.stationRef?.section_id !== prevSelection.stationRef?.section_id ||
         selection.stationRef?.station_index !== prevSelection.stationRef?.station_index);
 
+    const referenceChanged = selection !== prevSelection;
     prevSelectionRef.current = selection;
 
-    if (!selectionChanged) return;
+    if (!selectionChanged) {
+      // A table-internal re-dispatch of the SAME selection (e.g. keyboard
+      // column moves re-selecting the active shot) still consumed its event —
+      // a stale flag here would swallow the next genuinely external selection.
+      if (referenceChanged && internalSelectionRef.current) {
+        internalSelectionRef.current = false;
+      }
+      return;
+    }
 
     // Skip scroll/view-switch for selections made from within the table
     if (internalSelectionRef.current) {
@@ -257,133 +459,11 @@ export default function DataTable({ sections }: DataTableProps) {
     prevAnnouncedSelectionRef.current = { sectionId: selection.sectionId, shotId: selection.shotId };
   }, [selection, sections, announceSelection, t]);
 
-  const GEOMETRY_COLUMNS = ['length', '_azimuth_avg', 'depth_in', 'depth_out'];
+  // Shot cell-editing, selection, pan, hover and context-menu are now handled by
+  // SpreadsheetGrid via the onShot* handlers defined below.
 
-  const handleCellEdit = async (
-    shot: Shot,
-    key: string,
-    value: unknown,
-    index: number
-  ) => {
-    if (!selectedSection || geometryReadOnly) return;
-
-    // When entering cell edit mode, set selection to this shot
-    internalSelectionRef.current = true;
-    setSource('data-table');
-    setSelection({
-      type: 'shot',
-      sectionId: selectedSection.id,
-      shotId: shot.id,
-    });
-
-    // Block geometry edits on frozen shots
-    if (GEOMETRY_COLUMNS.includes(key) && isShotFrozen(selectedSection.id, index)) {
-      return;
-    }
-
-    // Handle virtual azimuth column with delta-offset behavior
-    if (key === '_azimuth_avg') {
-      // Guard against invalid input - must be a finite number
-      const newValue = typeof value === 'number' ? value : parseFloat(String(value));
-      if (!Number.isFinite(newValue)) {
-        // Invalid input - ignore the edit
-        return;
-      }
-      const currentMean = circularMeanDegrees(shot.azimuth_in, shot.azimuth_out);
-      const delta = newValue - currentMean;
-      const newIn = normalizeAngle(shot.azimuth_in + delta);
-      const newOut = normalizeAngle(shot.azimuth_out + delta);
-      await updateShot(selectedSection.id, shot.id, {
-        azimuth_in: newIn,
-        azimuth_out: newOut,
-      });
-      return;
-    }
-
-    await updateShot(selectedSection.id, shot.id, { [key]: value } as ShotUpdates);
-  };
-
-  // Row click selects the shot
-  const handleRowClick = useCallback(
-    (shot: Shot, _index: number) => {
-      if (selectedSection) {
-        internalSelectionRef.current = true;
-        setSource('data-table');
-        setSelection({
-          type: 'shot',
-          sectionId: selectedSection.id,
-          shotId: shot.id,
-        });
-      }
-    },
-    [selectedSection, setSelection]
-  );
-
-  // Row double-click pans map to shot midpoint
-  const handleRowDoubleClick = useCallback(
-    (shot: Shot, _index: number) => {
-      if (selectedSection) {
-        setSource('data-table');
-        triggerPanToShot(selectedSection.id, shot.id);
-      }
-    },
-    [selectedSection, triggerPanToShot]
-  );
-
-  // Row hover highlights shot on map
-  const handleRowHover = useCallback(
-    (shot: Shot | null, _index: number | null) => {
-      if (shot && selectedSection) {
-        setHoveredShot({ sectionId: selectedSection.id, shotId: shot.id });
-      } else {
-        setHoveredShot(null);
-      }
-    },
-    [selectedSection, setHoveredShot]
-  );
-
-  // Row right-click opens context menu
-  const handleRowContextMenu = useCallback(
-    (shot: Shot, index: number, event: React.MouseEvent) => {
-      event.preventDefault();
-      if (!selectedSection) return;
-
-      setSource('data-table');
-
-      const totalShots = selectedSection.shots.length;
-      const isFirst = index === 0;
-      const isLast = index === totalShots - 1;
-
-      openDialog('context-menu', {
-        target: {
-          type: 'datatable-shot',
-          sectionId: selectedSection.id,
-          shotId: shot.id,
-          isFirst,
-          isLast,
-          totalShots,
-          sectionName: selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id }),
-        },
-        position: { x: event.clientX, y: event.clientY },
-      });
-    },
-    [selectedSection, openDialog, t]
-  );
-
-  // Section dropdown manual change - select the new section
-  // Note: Select component with controlled value doesn't call onChange when value changes
-  // programmatically, only on user interaction, so no feedback loop prevention needed
-  const handleSectionChange = useCallback(
-    (value: string) => {
-      const newSectionId = Number(value);
-      // Manual dropdown change - select the section and clear any shot selection
-      setSelectedSectionId(newSectionId);
-      setSource('data-table');
-      setSelection({ type: 'section', sectionId: newSectionId });
-    },
-    [setSelection]
-  );
-
+  // Clicking the header's section pill selects the section app-wide (map/panels
+  // follow), mirroring the section pills elsewhere in the app.
   // Track last hovered section ID for ref-based cleanup (matches SectionsPanel pattern)
   const lastHoveredSectionIdRef = useRef<number | null>(null);
 
@@ -418,487 +498,1215 @@ export default function DataTable({ sections }: DataTableProps) {
     };
   }, []);
 
-  // Derive the highlighted shot ID for the table
-  // - For shot selection: use the shot ID directly
-  // - For station selection: compute the corresponding shot ID
-  // - For section selection or no selection: no highlight
-  const highlightedShotId = useMemo((): number | null => {
-    if (!selection || selection.sectionId !== selectedSectionId) {
-      // For station selection, check stationRef.section_id instead
-      if (selection?.type === 'station' && selection.stationRef?.section_id === selectedSectionId) {
-        const { station_index } = selection.stationRef;
-        const section = sections.find((s) => s.id === selectedSectionId);
-        if (section) {
-          const shotIndex = station_index >= 1 ? station_index - 1 : 0;
-          if (shotIndex >= 0 && shotIndex < section.shots.length) {
-            return section.shots[shotIndex]?.id ?? null;
-          }
-        }
-      }
-      return null;
-    }
-
-    if (selection.type === 'shot' && selection.shotId !== undefined) {
-      return selection.shotId;
-    }
-
-    // Section selection - no row highlight
-    return null;
-  }, [selection, selectedSectionId, sections]);
-
   // --- Station view data ---
 
-  type StationRow = Station & { id: number };
-
-  const sectionStations = useMemo((): StationRow[] => {
+  const sectionStations = useMemo((): Station[] => {
     if (tableView !== 'stations' || selectedSectionId === null) return [];
     // X/Y/Z columns follow the active geometry so they match the map; the row
     // refs/comments are unchanged, so comment editing still targets measured data.
-    return activeStations
-      .filter((s) => s.station_ref.section_id === selectedSectionId)
-      .map((s) => ({ ...s, id: s.station_ref.station_index }));
+    return activeStations.filter((s) => s.station_ref.section_id === selectedSectionId);
   }, [activeStations, selectedSectionId, tableView]);
 
-  const highlightedStationIndex = useMemo((): number | null => {
-    if (tableView !== 'stations') return null;
-    if (!selection || selection.type !== 'station') return null;
-    if (selection.stationRef?.section_id !== selectedSectionId) return null;
-    return selection.stationRef.station_index;
-  }, [selection, selectedSectionId, tableView]);
+  const handleViewChange = useCallback((value: 'shots' | 'stations') => {
+    setTableView(value);
+  }, []);
 
-  const stationColumns = useMemo(() => [
-    {
-      key: 'id',
-      header: t('dataTable.stationColumns.index'),
-      width: '60px',
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">
-          <EntityBlob entity="station" className="relative -top-0.5">{row.station_ref.section_id}.{row.station_ref.station_index}</EntityBlob>
-        </span>,
-    },
-    {
-      key: '_x',
-      header: t('dataTable.stationColumns.x'),
-      width: '90px',
-      align: 'right' as const,
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.x, undefined, precision.coordinates)}</span>,
-    },
-    {
-      key: '_y',
-      header: t('dataTable.stationColumns.y'),
-      width: '90px',
-      align: 'right' as const,
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.y, undefined, precision.coordinates)}</span>,
-    },
-    {
-      key: '_depth',
-      header: t('dataTable.stationColumns.depth'),
-      width: '90px',
-      align: 'right' as const,
-      render: (row: StationRow) =>
-        <span className="px-2 py-1 inline-block">{formatFixed(row.coordinates.z, undefined, precision.depth)}</span>,
-    },
-    {
-      key: '_zeroDatum',
-      header: t('dataTable.stationColumns.zeroDatum'),
-      width: '40px',
-      align: 'center' as const,
-      render: (row: StationRow) =>
-        row.is_zero_datum
-          ? <span className="px-2 py-1 flex items-center justify-center"><DotIcon size={20} /></span>
-          : '',
-    },
-    {
-      key: '_connections',
-      header: t('dataTable.stationColumns.connections'),
-      width: '60px',
-      align: 'center' as const,
-      render: (row: StationRow) => {
-        const mergeCount = row.merged_with?.length ?? 0;
-        const closureCount = row.closures_with?.length ?? 0;
-        const total = mergeCount + closureCount;
-        if (total === 0) return '';
-        const tooltipParts: string[] = [];
-        if (mergeCount > 0) {
-          tooltipParts.push(`Merges: ${row.merged_with.map((m) => `${m.section_id}.${m.station_index}`).join(', ')}`);
-        }
-        if (closureCount > 0) {
-          tooltipParts.push(`Closures: ${closureCount}`);
-        }
-        return (
-          <span className="px-2 py-1 inline-flex items-center justify-center gap-1" title={tooltipParts.join('\n')}>
-            <LinkIcon size={12} />{total}
-          </span>
-        );
-      },
-    },
-    {
-      key: 'comment',
-      header: t('dataTable.stationColumns.comment'),
-      inputMode: 'textarea' as const,
-    },
-  ], [t, precision.coordinates, precision.depth]);
 
-  // Station interaction handlers
-  const handleStationRowClick = useCallback(
-    (row: StationRow, _index: number) => {
+  // --- Shots view (SpreadsheetGrid) ----------------------------------------
+  // The effective number locale (never the 'locale'/'system' sentinel) so the
+  // grid parses numbers with the same separators it displays them in.
+  const numberLocale = getNumberFormatLocale();
+
+  const selectShotRow = useCallback(
+    (shot: Shot) => {
+      if (!selectedSection) return;
       internalSelectionRef.current = true;
       setSource('data-table');
-      setSelection({ type: 'station', stationRef: row.station_ref });
+      setSelection({ type: 'shot', sectionId: selectedSection.id, shotId: shot.id });
     },
-    [setSelection]
+    [selectedSection, setSelection]
   );
 
-  const handleStationRowDoubleClick = useCallback(
-    (row: StationRow, _index: number) => {
-      setSource('data-table');
-      triggerCenterOnStation(row.station_ref);
+  // Single edit → one update_shot (one undo). Values are already coerced by the
+  // column; the virtual azimuth-average expands to in/out via buildShotUpdates.
+  // Column order: drag a selected column header to move it. Empty =
+  // declaration order. Persisted with the rest of the view state below.
+  const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
+
+  // Column visibility. Azimuth/inclination are tri-state —
+  // the average column, the in/out leg pair, or neither; the raw ID columns
+  // start hidden; L/R/U/D toggle as one LRUD group.
+  const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
+  const [inclinationMode, setInclinationMode] = useState<'avg' | 'inout' | 'off'>('off');
+  const [hiddenShotCols, setHiddenShotCols] = useState<ReadonlySet<string>>(
+    () => new Set(['section_id', 'shot_id'])
+  );
+  // The stations view keeps its own order/visibility (no angle modes there);
+  // persisted alongside the shot view state below.
+  const [stationColumnOrder, setStationColumnOrder] = useState<string[]>([]);
+  const [hiddenStationCols, setHiddenStationCols] = useState<ReadonlySet<string>>(
+    () => new Set(STATION_DEFAULT_HIDDEN)
+  );
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  // Right-click on a column header: hide it / switch the angle family's mode.
+  const [headerMenu, setHeaderMenu] = useState<{ x: number; y: number; colKey: string } | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  // Flip the menu above/left of the cursor when it would cross a viewport edge.
+  useLayoutEffect(() => {
+    const el = headerMenuRef.current;
+    if (!el || !headerMenu) return;
+    const r = el.getBoundingClientRect();
+    let { x, y } = headerMenu;
+    if (y + r.height > window.innerHeight) y = Math.max(4, y - r.height);
+    if (x + r.width > window.innerWidth) x = Math.max(4, x - r.width);
+    if (x !== headerMenu.x || y !== headerMenu.y) setHeaderMenu({ ...headerMenu, x, y });
+  }, [headerMenu]);
+  useEffect(() => {
+    if (!headerMenu) return undefined;
+    const close = () => setHeaderMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHeaderMenu(null);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [headerMenu]);
+  // Open the dropdown toward the larger free space — the data table sits at
+  // the bottom of the window, so this usually means upward.
+  const [colMenuUp, setColMenuUp] = useState(false);
+
+  const shotHiddenColumns = useMemo(() => {
+    const hidden = [...hiddenShotCols];
+    if (azimuthMode !== 'avg') hidden.push(AZIMUTH_AVG_KEY);
+    if (azimuthMode !== 'inout') hidden.push('azimuth_in', 'azimuth_out');
+    if (inclinationMode !== 'avg') hidden.push(PITCH_AVG_KEY);
+    if (inclinationMode !== 'inout') hidden.push('pitch_in', 'pitch_out');
+    return hidden;
+  }, [hiddenShotCols, azimuthMode, inclinationMode]);
+
+  // Toggle a column (or a whole group, e.g. LRUD): visible iff none of its
+  // keys are hidden, so a mixed group resolves to "show all" first.
+  const toggleShotCols = useCallback((keys: string[]) => {
+    setHiddenShotCols((prev) => {
+      const next = new Set(prev);
+      const visible = keys.every((k) => !prev.has(k));
+      for (const k of keys) {
+        if (visible) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+  const toggleStationCols = useCallback((keys: string[]) => {
+    setHiddenStationCols((prev) => {
+      const next = new Set(prev);
+      const visible = keys.every((k) => !prev.has(k));
+      for (const k of keys) {
+        if (visible) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+
+  const stationHiddenColumns = useMemo(() => [...hiddenStationCols], [hiddenStationCols]);
+
+
+  // Persist the view state (order, visibility, angle modes) in the app config.
+  // Init once when the config arrives; later changes save debounced. The
+  // snapshot guard keeps the init itself (and no-op renders) from re-saving.
+  const panelsConfig = useProjectStore((s) => s.config?.panels);
+  const lastSavedViewRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastSavedViewRef.current !== null || !panelsConfig) return;
+    const isMode = (m: string): m is 'avg' | 'inout' | 'off' =>
+      m === 'avg' || m === 'inout' || m === 'off';
+    const azimuth = isMode(panelsConfig.data_table_azimuth_mode)
+      ? panelsConfig.data_table_azimuth_mode
+      : 'avg';
+    const inclination = isMode(panelsConfig.data_table_inclination_mode)
+      ? panelsConfig.data_table_inclination_mode
+      : 'off';
+    setAzimuthMode(azimuth);
+    setInclinationMode(inclination);
+    setHiddenShotCols(new Set(panelsConfig.data_table_shot_hidden_columns));
+    setShotColumnOrder(panelsConfig.data_table_shot_column_order);
+    // The persisted list is authoritative: the backend fills a missing/legacy
+    // config with the coordinate-column defaults (serde default), so an EMPTY
+    // array genuinely means the user unhid every station column ("show all") —
+    // it must not be re-defaulted, or that preference could never persist.
+    const stationHidden = panelsConfig.data_table_station_hidden_columns;
+    setHiddenStationCols(new Set(stationHidden));
+    setStationColumnOrder(panelsConfig.data_table_station_column_order);
+    lastSavedViewRef.current = JSON.stringify([
+      panelsConfig.data_table_shot_column_order,
+      panelsConfig.data_table_shot_hidden_columns,
+      azimuth,
+      inclination,
+      panelsConfig.data_table_station_column_order,
+      stationHidden,
+    ]);
+  }, [panelsConfig]);
+  useEffect(() => {
+    if (lastSavedViewRef.current === null) return undefined;
+    const hidden = [...hiddenShotCols].sort();
+    const stationHidden = [...hiddenStationCols].sort();
+    const snapshot = JSON.stringify([
+      shotColumnOrder,
+      hidden,
+      azimuthMode,
+      inclinationMode,
+      stationColumnOrder,
+      stationHidden,
+    ]);
+    if (snapshot === lastSavedViewRef.current) return undefined;
+    const timer = setTimeout(() => {
+      lastSavedViewRef.current = snapshot;
+      void invokeIpc(
+        'update_data_table_view',
+        {
+          columnOrder: shotColumnOrder,
+          hiddenColumns: hidden,
+          azimuthMode,
+          inclinationMode,
+          stationColumnOrder,
+          stationHiddenColumns: stationHidden,
+        },
+        { purpose: 'persist data-table view state' }
+      )
+        // Re-sync the in-memory config: a remount re-seeds from it, so a stale
+        // copy would silently revert what was just saved to disk.
+        .then(() => useProjectStore.getState().loadConfig())
+        .catch((e) => console.error('Failed to save data-table view state:', e));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode, stationColumnOrder, hiddenStationCols]);
+
+  useEffect(() => {
+    if (!colMenuOpen) return undefined;
+    const close = () => setColMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setColMenuOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [colMenuOpen]);
+
+  // --- Draft "new shot" rows --------------------------------------------------
+  // The grid always shows one empty editable row at the end (the end draft);
+  // "Insert shot above/below" adds more drafts anchored to a neighbouring shot.
+  // A draft's values live here until length, both depths and an azimuth are
+  // present, then it commits as a real shot via create_shot at its anchor (a
+  // missing azimuth leg duplicates the other; inclination stays optional).
+  const [drafts, setDrafts] = useState<ShotDraft[]>(() => [endDraft()]);
+  // Draft keys come from a monotonic counter and are NEVER reused (incl. the
+  // end draft, which gets a fresh key on every reset): the grid keys per-cell
+  // state (missing-cell marks) by row identity, and a reused key would leak a
+  // stale mark onto an unrelated later draft.
+  const draftKeyRef = useRef(-2);
+  useEffect(() => {
+    setDrafts([endDraft()]);
+    draftKeyRef.current = -2;
+  }, [selectedSectionId]);
+  // Drop drafts whose anchor shot was deleted (the end draft always survives).
+  useEffect(() => {
+    if (!selectedSection) return;
+    setDrafts((prev) => pruneDrafts(prev, selectedSection.shots));
+  }, [selectedSection]);
+
+  // The grid's row list: shots interleaved with draft rows (drafts hidden in
+  // the read-only closure-adjusted view). EVERY grid row index maps through
+  // here — never into the shots array directly.
+  const rowEntries = useMemo(
+    (): RowEntry[] =>
+      selectedSection ? interleaveRows(selectedSection.shots, geometryReadOnly ? [] : drafts) : [],
+    [selectedSection, geometryReadOnly, drafts]
+  );
+  const shotIndexAt = useCallback(
+    (gridRowIndex: number): number | null => {
+      const entry = rowEntries[gridRowIndex];
+      return entry?.kind === 'shot' ? entry.shotIndex : null;
     },
+    [rowEntries]
+  );
+
+  const applyDraftEdit = useCallback((key: number, colKey: string, value: unknown) => {
+    setDrafts((prev) =>
+      prev.map((draft) => {
+        if (draft.key !== key) return draft;
+        const d: Record<string, unknown> = { ...draft.data };
+        // `undefined` means "drop the field" (a required cell cleared back to
+        // missing) — delete the key so completeDraftData/draftMissing treat it
+        // as absent and a stale value can't survive into the committed shot. A
+        // `null` (cleared optional, e.g. inclination) is kept as an explicit
+        // clear. The avg columns fan out to both legs.
+        const put = (k: string) => {
+          if (value === undefined) delete d[k];
+          else d[k] = value;
+        };
+        if (colKey === AZIMUTH_AVG_KEY) {
+          put('azimuth_in');
+          put('azimuth_out');
+        } else if (colKey === PITCH_AVG_KEY) {
+          put('pitch_in');
+          put('pitch_out');
+        } else {
+          put(colKey);
+        }
+        return { ...draft, data: d as Partial<ShotData> };
+      })
+    );
+  }, []);
+
+  // A required cell cleared to "missing" on a draft row: drop the field so a
+  // later auto-commit can't resurrect the value the user just blanked. Edits on
+  // real shots keep their model value (nothing to do here).
+  const onShotClearMissing = useCallback(
+    (rowIndex: number, colKey: string) => {
+      if (geometryReadOnly) return;
+      const entry = rowEntries[rowIndex];
+      if (entry?.kind === 'draft') applyDraftEdit(entry.draft.key, colKey, undefined);
+    },
+    [geometryReadOnly, rowEntries, applyDraftEdit]
+  );
+
+  // Discard the draft rows in a grid-row range; the end draft resets to empty
+  // instead of disappearing (it is always present).
+  const discardDraftRows = useCallback(
+    (fromRow: number, toRow: number) => {
+      const keys = new Set<number>();
+      for (const entry of rowEntries.slice(fromRow, toRow + 1)) {
+        if (entry.kind === 'draft') keys.add(entry.draft.key);
+      }
+      if (keys.size === 0) return;
+      setDrafts((prev) =>
+        prev.flatMap((d) =>
+          keys.has(d.key) ? (d.anchor === 'end' ? [endDraft(draftKeyRef.current--)] : []) : [d]
+        )
+      );
+    },
+    [rowEntries]
+  );
+
+  // Each draft's still-missing required fields: visible columns tint their
+  // draft cell red; hidden ones tint the columns (eye) button and their
+  // dropdown row instead, until shown or filled. Inserted drafts surface them
+  // immediately; the end draft only once it has ANY value.
+  const draftMissingByKey = useMemo(() => {
+    const map = new Map<number, ReturnType<typeof draftMissing>>();
+    for (const d of drafts) map.set(d.key, draftMissing(d, hiddenShotCols, azimuthMode));
+    return map;
+  }, [drafts, hiddenShotCols, azimuthMode]);
+  const draftHiddenProblems = useMemo(() => {
+    const union = new Set<string>();
+    for (const m of draftMissingByKey.values()) for (const k of m.hiddenProblems) union.add(k);
+    return union;
+  }, [draftMissingByKey]);
+
+  const shotCellClassName = useCallback(
+    (shot: Shot, _rowIndex: number, colKey: string) =>
+      shot.id < 0 && draftMissingByKey.get(shot.id)?.cells.has(colKey) ? 'sg-cell-missing' : undefined,
+    [draftMissingByKey]
+  );
+
+  // Commit a draft once its required fields are present — one at a time; the
+  // refresh after create_shot re-runs the effect for the next complete one.
+  const draftCommitting = useRef(false);
+  useEffect(() => {
+    if (!selectedSection || draftCommitting.current) return;
+    for (const draft of drafts) {
+      const data = completeDraftData(draft);
+      if (data === null) continue;
+      const { afterShotId, beforeShotId } = commitAnchorArgs(draft, selectedSection.shots);
+      draftCommitting.current = true;
+      setSource('data-table');
+      void createShot(selectedSection.id, data, afterShotId, beforeShotId)
+        .then(() =>
+          setDrafts((prev) =>
+            prev.flatMap((d) =>
+              d.key === draft.key ? (d.anchor === 'end' ? [endDraft(draftKeyRef.current--)] : []) : [d]
+            )
+          )
+        )
+        .finally(() => {
+          draftCommitting.current = false;
+        });
+      return;
+    }
+  }, [drafts, selectedSection, createShot]);
+
+
+  const onShotEdit = useCallback(
+    (rowIndex: number, colKey: string, value: unknown) => {
+      if (!selectedSection || geometryReadOnly) return;
+      const entry = rowEntries[rowIndex];
+      if (!entry) return;
+      if (entry.kind === 'draft') {
+        applyDraftEdit(entry.draft.key, colKey, value);
+        return;
+      }
+      selectShotRow(entry.shot);
+      const updates = buildShotUpdates(entry.shot, [{ colKey, value }]);
+      if (Object.keys(updates).length > 0) void updateShot(selectedSection.id, entry.shot.id, updates);
+    },
+    [selectedSection, geometryReadOnly, rowEntries, selectShotRow, updateShot, applyDraftEdit]
+  );
+
+  // Multi-cell paste/fill → one execute_batch (one undo).
+  const onShotBatchEdit = useCallback(
+    (edits: CellEdit[]) => {
+      if (!selectedSection || geometryReadOnly) return;
+      setSource('data-table');
+      // Edits landing on draft rows (paste/fill into them) feed the drafts;
+      // the rest are remapped to shots-array indices and commit as one batch.
+      const shotEdits: CellEdit[] = [];
+      for (const e of edits) {
+        const entry = rowEntries[e.row];
+        if (!entry) continue;
+        if (entry.kind === 'draft') applyDraftEdit(entry.draft.key, e.colKey, e.value);
+        else shotEdits.push({ ...e, row: entry.shotIndex });
+      }
+      const commands = buildShotUpdateBatch(shotEdits, selectedSection.shots, selectedSection.id);
+      if (commands.length > 0) void executeBatch(commands);
+    },
+    [selectedSection, geometryReadOnly, rowEntries, executeBatch, applyDraftEdit]
+  );
+
+  const onShotActiveCellChange = useCallback(
+    (rowIndex: number) => {
+      const entry = rowEntries[rowIndex];
+      if (entry?.kind === 'shot') selectShotRow(entry.shot);
+    },
+    [rowEntries, selectShotRow]
+  );
+
+  const onShotRowHover = useCallback(
+    (rowIndex: number | null) => {
+      if (rowIndex === null || !selectedSection) {
+        setHoveredShot(null);
+        return;
+      }
+      const entry = rowEntries[rowIndex];
+      setHoveredShot(
+        entry?.kind === 'shot' ? { sectionId: selectedSection.id, shotId: entry.shot.id } : null
+      );
+    },
+    [rowEntries, selectedSection, setHoveredShot]
+  );
+
+  // Map → grid hover tint (the reverse of onShotRowHover; purely visual, so the
+  // pair can't feed back into each other).
+  const shotHoveredRow = useMemo(() => {
+    if (hoveredShot?.sectionId !== selectedSectionId) return null;
+    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === hoveredShot.shotId);
+    return idx >= 0 ? idx : null;
+  }, [hoveredShot, rowEntries, selectedSectionId]);
+
+  const shotRowClassName = useCallback(
+    (shot: Shot, rowIndex: number) => {
+      if (shot.id < 0) return 'sg-row-draft';
+      const shotIndex = shotIndexAt(rowIndex);
+      return selectedSectionId !== null && shotIndex !== null && isShotFrozen(selectedSectionId, shotIndex)
+        ? 'sg-row-frozen'
+        : undefined;
+    },
+    [selectedSectionId, isShotFrozen, shotIndexAt]
+  );
+
+  // "Insert N shots above/below" → blank draft rows anchored at the boundary;
+  // they commit (and turn real) once filled.
+  const onShotInsertRows = useCallback(
+    (beforeIndex: number, count: number) => {
+      if (!selectedSection || geometryReadOnly) return;
+      const next = insertDraftsAt(selectedSection.shots, drafts, beforeIndex, count, () => draftKeyRef.current--);
+      if (next) setDrafts(next);
+    },
+    [selectedSection, geometryReadOnly, drafts]
+  );
+
+  // "Remove draft row" appears when the selection covers draft rows only —
+  // discarding a draft never asks for confirmation (nothing is stored yet).
+  const shotExtraMenuItems = useCallback(
+    ({ fromRow, toRow }: { fromRow: number; toRow: number }) => {
+      if (geometryReadOnly) return [];
+      const entries = rowEntries.slice(fromRow, toRow + 1);
+      if (entries.length === 0 || entries.some((e) => e.kind !== 'draft')) return [];
+      return [
+        {
+          label: t('dataTable.removeDraft', { count: entries.length }),
+          onClick: () => discardDraftRows(fromRow, toRow),
+        },
+      ];
+    },
+    [rowEntries, geometryReadOnly, t, discardDraftRows]
+  );
+
+  // Surface partially-applied pastes (only the non-zero parts).
+  const onShotPasteReport = useCallback(
+    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
+      const parts: string[] = [];
+      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
+      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
+      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
+      if (parts.length > 0) showToast(parts.join(' · '), 'data-table-paste');
+    },
+    [t, showToast]
+  );
+
+  // Delete on a gutter-selected range (or the context menu's "Delete rows"):
+  // draft rows in the range are discarded outright (the end draft resets, no
+  // confirm — nothing is stored yet); a single real shot routes to the
+  // existing shot-delete confirm dialog (it owns the split/last-shot
+  // handling); multi-shot delete has no safe backend flow yet.
+  const onShotDeleteRows = useCallback(
+    (fromRow: number, toRow: number) => {
+      if (!selectedSection || geometryReadOnly) return;
+      setSource('data-table');
+      const shotsInRange = rowEntries
+        .slice(fromRow, toRow + 1)
+        .flatMap((e) => (e.kind === 'shot' ? [e.shot] : []));
+      discardDraftRows(fromRow, toRow);
+      if (shotsInRange.length === 0) return;
+      if (shotsInRange.length > 1) {
+        showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete');
+        return;
+      }
+      openDialog('confirm-delete', {
+        type: 'shot',
+        sectionId: selectedSection.id,
+        shotId: shotsInRange[0]!.id,
+      });
+    },
+    [selectedSection, geometryReadOnly, rowEntries, discardDraftRows, showToast, t, openDialog]
+  );
+
+  const handleToggleReference = useCallback(
+    (shot: Shot) => {
+      if (!selectedSection || geometryReadOnly) return;
+      if (shot.id < 0) {
+        // A draft row — its id is the draft key.
+        applyDraftEdit(shot.id, 'is_reference', !shot.is_reference);
+        return;
+      }
+      void updateShot(selectedSection.id, shot.id, { is_reference: !shot.is_reference });
+    },
+    [selectedSection, geometryReadOnly, updateShot, applyDraftEdit]
+  );
+
+  const handlePanToShot = useCallback(
+    (shot: Shot) => {
+      if (selectedSection) {
+        setSource('data-table');
+        triggerPanToShot(selectedSection.id, shot.id);
+      }
+    },
+    [selectedSection, triggerPanToShot]
+  );
+
+  const shotColumns = useMemo(
+    () =>
+      buildShotColumns({
+        t,
+        precision,
+        sectionId: selectedSectionId,
+        geometryReadOnly,
+        isShotFrozen,
+        getShotWarnings,
+        shotIndexAt,
+        onToggleReference: handleToggleReference,
+      }),
+    // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
+    // warnings change so frozen/warning icons stay current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, shotIndexAt, handleToggleReference]
+  );
+
+  // Localized grid chrome; rowNoun makes the context menus speak in shots
+  // (or stations), not rows.
+  const makeGridLabels = useCallback(
+    (rowNounKey: 'dataTable.shotNoun' | 'dataTable.stationNoun'): GridLabels => ({
+      copy: (suffix) => t('grid.contextMenu.copy', { suffix }),
+      cut: (suffix) => t('grid.contextMenu.cut', { suffix }),
+      clear: (suffix) => t('grid.contextMenu.clear', { suffix }),
+      paste: t('grid.contextMenu.paste'),
+      fillDown: t('grid.contextMenu.fillDown'),
+      insertAbove: (rows) => t('grid.contextMenu.insertAbove', { rows }),
+      insertBelow: (rows) => t('grid.contextMenu.insertBelow', { rows }),
+      deleteRows: (rows) => t('grid.contextMenu.deleteRows', { rows }),
+      rowNoun: (count) => t(rowNounKey, { count }),
+      columnNoun: (count) => t('grid.columnNoun', { count }),
+      columnsButton: t('grid.columnsButton'),
+      maximize: t('grid.maximize'),
+      restore: t('grid.restore'),
+      editCellAria: (column, row) => t('grid.editCellAria', { column, row }),
+      shortcutCopy: t('grid.shortcuts.copy'),
+      shortcutCut: t('grid.shortcuts.cut'),
+      shortcutPaste: t('grid.shortcuts.paste'),
+      shortcutClear: t('grid.shortcuts.clear'),
+      shortcutFillDown: t('grid.shortcuts.fillDown'),
+    }),
+    [t]
+  );
+  const gridLabels = useMemo(() => makeGridLabels('dataTable.shotNoun'), [makeGridLabels]);
+  const stationGridLabels = useMemo(() => makeGridLabels('dataTable.stationNoun'), [makeGridLabels]);
+
+  // Rows handed to the grid, materializing each draft as a Shot-shaped row
+  // whose id is the (negative) draft key.
+  const gridShotRows = useMemo(
+    () => rowEntries.map((e) => (e.kind === 'shot' ? e.shot : materializeDraft(e.draft))),
+    [rowEntries]
+  );
+
+  const shotScrollToRow = useMemo(() => {
+    if (scrollToKey === null) return null;
+    const idx = rowEntries.findIndex((e) => e.kind === 'shot' && e.shot.id === scrollToKey);
+    return idx >= 0 ? idx : null;
+  }, [scrollToKey, rowEntries]);
+
+  // The grid's name-box content, lifted into the condensed panel header:
+  // "<column> <row>" for a single cell, "3R × 2C" for a range.
+  const [gridSel, setGridSel] = useState<{
+    rows: number;
+    cols: number;
+    activeRow: number;
+    activeColKey: string;
+  } | null>(null);
+  const selectionIndicator = useMemo(() => {
+    if (!gridSel || !dataTableOpen || tableView !== 'shots' || !selectedSection) return null;
+    if (gridSel.rows > 1 || gridSel.cols > 1) return `${gridSel.rows}R × ${gridSel.cols}C`;
+    const header = shotColumns.find((c) => c.key === gridSel.activeColKey)?.header ?? gridSel.activeColKey;
+    return `${header} ${gridSel.activeRow + 1}`;
+  }, [gridSel, dataTableOpen, tableView, selectedSection, shotColumns]);
+
+  // Gutter shows the shot's ID pill (replaces the old ID column); double-click
+  // pans the map to the shot, as it did on the column's pill.
+  const shotRowLabel = useCallback(
+    (shot: Shot, rowIndex: number) => {
+      // Draft rows earn their pill only once they become real shots.
+      if (shot.id < 0) return <span className="opacity-50">+</span>;
+      const shotIndex = shotIndexAt(rowIndex);
+      return selectedSectionId !== null && shotIndex !== null ? (
+        <span onDoubleClick={() => handlePanToShot(shot)}>
+          <EntityBlob entity="shot">{formatShotId(selectedSectionId, shotIndex + 1)}</EntityBlob>
+        </span>
+      ) : (
+        rowIndex + 1
+      );
+    },
+    [selectedSectionId, handlePanToShot, shotIndexAt]
+  );
+
+  // --- Stations view (SpreadsheetGrid) --------------------------------------
+  // Stations are derived from shots, so only the comment is editable — a
+  // single edit per commit (set_station_comment has no batch form, so the
+  // grid gets no onBatchEdit).
+  const onStationEdit = useCallback(
+    (rowIndex: number, colKey: string, value: unknown) => {
+      if (geometryReadOnly || colKey !== 'comment') return;
+      const station = sectionStations[rowIndex];
+      if (!station) return;
+      setSource('data-table');
+      const comment = typeof value === 'string' && value.trim() !== '' ? value : null;
+      void updateStationComment(station.station_ref, comment);
+    },
+    [geometryReadOnly, sectionStations, updateStationComment]
+  );
+
+  const onStationActiveCellChange = useCallback(
+    (rowIndex: number) => {
+      const station = sectionStations[rowIndex];
+      if (!station) return;
+      internalSelectionRef.current = true;
+      setSource('data-table');
+      setSelection({ type: 'station', stationRef: station.station_ref });
+    },
+    [sectionStations, setSelection]
+  );
+
+  const onStationRowHover = useCallback(
+    (rowIndex: number | null) => {
+      const station = rowIndex !== null ? sectionStations[rowIndex] : undefined;
+      setHoveredStation(station ? station.station_ref : null);
+    },
+    [sectionStations, setHoveredStation]
+  );
+
+  // Map → grid hover tint (mirrors shotHoveredRow).
+  const stationHoveredRow = useMemo(() => {
+    if (hoveredStation?.section_id !== selectedSectionId) return null;
+    const idx = sectionStations.findIndex(
+      (s) => s.station_ref.station_index === hoveredStation.station_index
+    );
+    return idx >= 0 ? idx : null;
+  }, [hoveredStation, sectionStations, selectedSectionId]);
+
+  const stationScrollToRow = useMemo(() => {
+    if (stationScrollToKey === null) return null;
+    const idx = sectionStations.findIndex(
+      (s) => s.station_ref.station_index === stationScrollToKey
+    );
+    return idx >= 0 ? idx : null;
+  }, [stationScrollToKey, sectionStations]);
+
+  // GPS (zero-datum) cell click: a station that already is — or is merged
+  // with — a zero datum opens the dialog in plain edit mode; the rest open in
+  // add-zero-datum mode with the GPS input enabled and focused.
+  const handleGpsCellClick = useCallback(
+    (station: Station) => {
+      setSource('data-table');
+      const mergedWithDatum = station.merged_with.some((ref) =>
+        activeStations.some(
+          (s) =>
+            s.station_ref.section_id === ref.section_id &&
+            s.station_ref.station_index === ref.station_index &&
+            s.is_zero_datum
+        )
+      );
+      if (station.is_zero_datum || mergedWithDatum) {
+        openDialog('edit-station', { stationRef: station.station_ref });
+      } else {
+        openDialog('edit-station', {
+          stationRef: station.station_ref,
+          forceEnableZeroDatum: true,
+          focusGpsInput: true,
+        });
+      }
+    },
+    [activeStations, openDialog]
+  );
+
+  // Merged/closure picker opened from a connections cell: lists the linked
+  // stations as Detail-panel-style links (click selects, hover highlights).
+  const [connMenu, setConnMenu] = useState<{ x: number; y: number; station: Station } | null>(null);
+  const connMenuRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = connMenuRef.current;
+    if (!el || !connMenu) return;
+    const r = el.getBoundingClientRect();
+    let { x, y } = connMenu;
+    if (y + r.height > window.innerHeight) y = Math.max(4, y - r.height);
+    if (x + r.width > window.innerWidth) x = Math.max(4, x - r.width);
+    if (x !== connMenu.x || y !== connMenu.y) setConnMenu({ ...connMenu, x, y });
+  }, [connMenu]);
+  useEffect(() => {
+    if (!connMenu) return undefined;
+    const close = () => setConnMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConnMenu(null);
+    };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [connMenu]);
+  const handleConnectionsCellClick = useCallback(
+    (station: Station, pos: { x: number; y: number }) => {
+      setConnMenu({ ...pos, station });
+    },
+    []
+  );
+  const selectLinkedStation = useCallback(
+    (ref: StationRef) => {
+      setConnMenu(null);
+      setHoveredStation(null);
+      setSource('data-table');
+      setSelection({ type: 'station', stationRef: ref });
+    },
+    [setSelection, setHoveredStation]
+  );
+
+  // The section a connected station belongs to: its name (falling back to
+  // "Section N") for the pill, and a click that navigates to that section.
+  const getSectionName = useCallback(
+    (sectionId: number) =>
+      sections.find((s) => s.id === sectionId)?.name ?? t('sections.defaultName', { id: sectionId }),
+    [sections, t]
+  );
+  const selectLinkedSection = useCallback(
+    (sectionId: number) => {
+      setConnMenu(null);
+      setHoveredSectionId(null);
+      setSource('data-table');
+      setSelection({ type: 'section', sectionId });
+    },
+    [setSelection, setHoveredSectionId]
+  );
+
+  // Same anchor rule as the map (MapCanvas): the first zero datum's GPS.
+  const project = useProjectStore((s) => s.project);
+  const stationGpsOrigin = useMemo(() => {
+    const zeroDatum = project?.zero_datums?.[0];
+    return zeroDatum?.gps
+      ? { latitude: zeroDatum.gps.latitude, longitude: zeroDatum.gps.longitude }
+      : null;
+  }, [project?.zero_datums]);
+
+  const stationColumns = useMemo(
+    () =>
+      buildStationColumns({
+        t,
+        precision,
+        geometryReadOnly,
+        gpsOrigin: stationGpsOrigin,
+        onGpsCellClick: handleGpsCellClick,
+        onConnectionsCellClick: handleConnectionsCellClick,
+      }),
+    [t, precision, geometryReadOnly, stationGpsOrigin, handleGpsCellClick, handleConnectionsCellClick]
+  );
+
+  // Gutter shows the station's ID pill (the old index column); double-click
+  // centers the map on the station, as the row double-click used to.
+  const stationRowLabel = useCallback(
+    (station: Station) => (
+      <span
+        onDoubleClick={() => {
+          setSource('data-table');
+          triggerCenterOnStation(station.station_ref);
+        }}
+      >
+        <EntityBlob entity="station">
+          {formatStationId(station.station_ref.section_id, station.station_ref.station_index)}
+        </EntityBlob>
+      </span>
+    ),
     [triggerCenterOnStation]
   );
 
-  const handleStationRowHover = useCallback(
-    (row: StationRow | null, _index: number | null) => {
-      if (row) {
-        setHoveredStation(row.station_ref);
-      } else {
-        setHoveredStation(null);
-      }
-    },
-    [setHoveredStation]
-  );
+  // The grid must fit the panel body EXACTLY: taller and the wrapper clips it
+  // (occluded horizontal scrollbar) or grows a second scrollbar. Measure the
+  // body instead of hand-summing chrome heights; the observer also tracks the
+  // panel's resize drag and its open/close height transition.
+  const [rawTables, setRawTables] = useState<string[] | 'unavailable' | null>(null);
+  const lastRawTableRef = useRef<string | null>(null);
+  const fetchRawTableNames = useCallback(() => {
+    invokeIpc<string[]>('get_raw_table_names', undefined, {
+      purpose: 'list raw sqlite tables for the data viewer',
+    })
+      .then((names) => setRawTables(Array.isArray(names) ? names : 'unavailable'))
+      .catch(() => setRawTables('unavailable'));
+  }, []);
+  useEffect(() => {
+    if (dataTableFullScreen) fetchRawTableNames();
+  }, [dataTableFullScreen, fetchRawTableNames]);
+  // Re-list after a save (dirty → clean): the first save of a never-saved
+  // project creates the database, so a list that came back "unavailable" must
+  // refresh rather than stay stuck until the user exits and re-enters fullscreen.
+  const prevDirtyRawRef = useRef(isDirty);
+  useEffect(() => {
+    const wasDirty = prevDirtyRawRef.current;
+    prevDirtyRawRef.current = isDirty;
+    if (dataTableFullScreen && wasDirty && !isDirty) fetchRawTableNames();
+  }, [isDirty, dataTableFullScreen, fetchRawTableNames]);
+  useEffect(() => {
+    if (rawTableSelection) lastRawTableRef.current = rawTableSelection;
+    // '' = raw mode entered from the toolbar picker with no table chosen yet.
+    if (rawTableSelection === '' && Array.isArray(rawTables) && rawTables.length > 0) {
+      const last = lastRawTableRef.current;
+      setRawTableSelection(last !== null && rawTables.includes(last) ? last : rawTables[0]!);
+    }
+  }, [rawTableSelection, rawTables, setRawTableSelection]);
 
-  const handleStationCellEdit = useCallback(
-    async (row: StationRow, key: string, value: unknown) => {
-      if (geometryReadOnly || key !== 'comment') return;
-      const comment = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
-      await updateStationComment(row.station_ref, comment);
-    },
-    [updateStationComment, geometryReadOnly]
-  );
+  const gridBodyRef = useRef<HTMLDivElement | null>(null);
+  const [gridBodyHeight, setGridBodyHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const el = gridBodyRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(() => setGridBodyHeight(el.clientHeight));
+    ro.observe(el);
+    setGridBodyHeight(el.clientHeight);
+    return () => ro.disconnect();
+  }, [dataTableOpen]);
+  const gridHeight = gridBodyHeight ?? Math.max(120, dataTableHeight - 28);
 
-  // View toggle options
-  const viewOptions: SelectOption[] = useMemo(() => [
-    { value: 'shots', label: t('dataTable.viewShots') },
-    { value: 'stations', label: t('dataTable.viewStations') },
-  ], [t]);
-
-  const handleViewChange = useCallback((value: string) => {
-    setTableView(value as 'shots' | 'stations');
+  // Unconditional hide (header right-click) — unlike the menu checkbox toggle.
+  const hideShotCols = useCallback((keys: string[]) => {
+    setHiddenShotCols((prev) => new Set([...prev, ...keys]));
+  }, []);
+  const hideStationCols = useCallback((keys: string[]) => {
+    setHiddenStationCols((prev) => new Set([...prev, ...keys]));
   }, []);
 
-  const columns = [
-    {
-      key: '_warnings',
-      header: t('dataTable.columns.warningsShort'),
-      width: '30px',
-      align: 'center' as const,
-      render: (shot: Shot, index: number) => {
-        if (selectedSectionId === null) return null;
-        const frozen = isShotFrozen(selectedSectionId, index);
-        const shotWarnings = getShotWarnings(selectedSectionId, shot.id).filter((w) => !w.isResolved);
-        if (shotWarnings.length === 0 && !frozen) return null;
-        const hasError = shotWarnings.some((w) => w.severity === 'error');
-        const tooltipText = [
-          ...(frozen ? [t('dataTable.frozen')] : []),
-          ...shotWarnings.map((w) => w.message),
-        ].join('\n');
-        return (
-          <span
-            data-testid={frozen ? `frozen-${selectedSectionId}-${shot.id}` : `warning-${selectedSectionId}-${shot.id}`}
-            className={hasError ? 'text-error' : frozen && shotWarnings.length === 0 ? 'text-text-secondary' : 'text-warning'}
-            title={tooltipText}
+  // Switch an angle family's mode, putting the newly shown columns in the slot
+  // of the ones they replace (Avg ↔ In+Out swap in place). Transitions through
+  // Off keep every slot — hidden columns remember their position in the order.
+  const changeAngleMode = useCallback(
+    (family: 'azimuth' | 'inclination', next: 'avg' | 'inout' | 'off') => {
+      const current = family === 'azimuth' ? azimuthMode : inclinationMode;
+      if (next === current) return;
+      if (current !== 'off' && next !== 'off') {
+        const prevKeys: readonly string[] = ANGLE_FAMILY_KEYS[family][current];
+        const nextKeys: readonly string[] = ANGLE_FAMILY_KEYS[family][next];
+        setShotColumnOrder((prev) => {
+          const base = prev.length ? [...prev] : shotColumns.map((c) => c.key);
+          for (const c of shotColumns) if (!base.includes(c.key)) base.push(c.key);
+          const without = base.filter((k) => !nextKeys.includes(k));
+          const anchor = without.indexOf(prevKeys[0]!);
+          without.splice(anchor < 0 ? without.length : anchor, 0, ...nextKeys);
+          return without;
+        });
+      }
+      (family === 'azimuth' ? setAzimuthMode : setInclinationMode)(next);
+    },
+    [azimuthMode, inclinationMode, shotColumns]
+  );
+
+  // Items of the header right-click menu: angle-family columns get a mode
+  // switch and Off; everything else gets a plain hide. Station columns only
+  // ever hide (no angle modes there).
+  const headerMenuItems = useMemo(() => {
+    if (!headerMenu) return [];
+    const key = headerMenu.colKey;
+    if (tableView === 'stations') {
+      const entry = STATION_MENU_COLS.find((c) => c.keys.includes(key));
+      const name = entry
+        ? t(`dataTable.stationColumnsMenu.${entry.nameKey}`)
+        : stationColumns.find((c) => c.key === key)?.header ?? key;
+      return [
+        {
+          label: t('dataTable.headerMenu.hide', { name }),
+          onClick: () => hideStationCols(entry ? entry.keys : [key]),
+        },
+      ];
+    }
+    const family = (['azimuth', 'inclination'] as const).find((f) => {
+      const fam = ANGLE_FAMILY_KEYS[f];
+      return (fam.avg as readonly string[]).includes(key) || (fam.inout as readonly string[]).includes(key);
+    });
+    const items: { label: string; onClick: () => void }[] = [];
+    if (family) {
+      const onAvg = (ANGLE_FAMILY_KEYS[family].avg as readonly string[]).includes(key);
+      items.push({
+        label: onAvg ? t('dataTable.headerMenu.showInOut') : t('dataTable.headerMenu.showAverage'),
+        onClick: () => changeAngleMode(family, onAvg ? 'inout' : 'avg'),
+      });
+      items.push({
+        label: t('dataTable.headerMenu.hide', { name: t(`dataTable.columnsMenu.${family}`) }),
+        onClick: () => changeAngleMode(family, 'off'),
+      });
+    } else {
+      const group = HEADER_HIDE_GROUPS[key] ?? { nameKey: null, keys: [key] };
+      const name = group.nameKey
+        ? t(`dataTable.columnsMenu.${group.nameKey}`)
+        : shotColumns.find((c) => c.key === key)?.header ?? key;
+      items.push({
+        label: t('dataTable.headerMenu.hide', { name }),
+        onClick: () => hideShotCols(group.keys),
+      });
+    }
+    return items;
+  }, [headerMenu, tableView, t, changeAngleMode, hideShotCols, shotColumns, stationColumns, hideStationCols]);
+
+  // Rows of the column-visibility menu: a checkbox per column (or group — the
+  // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
+  // the azimuth and inclination column families. The menu serves whichever
+  // view is active, so the checkboxes read/write that view's hidden set.
+  const menuHiddenCols = tableView === 'shots' ? hiddenShotCols : hiddenStationCols;
+  const menuToggleCols = tableView === 'shots' ? toggleShotCols : toggleStationCols;
+  const colCheckRow = (keys: string[], label: string, className = '', problem = false) => (
+    <label
+      key={keys[0]}
+      className={`flex cursor-pointer items-center gap-2 rounded px-2 py-0.5 hover:bg-accent-10 ${
+        problem ? 'text-error' : ''
+      } ${className}`}
+    >
+      <input
+        type="checkbox"
+        checked={keys.every((k) => !menuHiddenCols.has(k))}
+        onChange={() => menuToggleCols(keys)}
+        data-testid={`col-vis-${keys[0]}`}
+      />
+      {label}
+    </label>
+  );
+  const angleModeRow = (
+    label: string,
+    mode: 'avg' | 'inout' | 'off',
+    setMode: (m: 'avg' | 'inout' | 'off') => void,
+    testId: string,
+    problem = false,
+  ) => (
+    <div className="flex items-center justify-between gap-2 px-2 py-0.5">
+      <span className={problem ? 'text-error' : undefined}>{label}</span>
+      <span className="flex overflow-hidden rounded border border-border">
+        {(['avg', 'inout', 'off'] as const).map((m) => (
+          <button
+            key={m}
+            className={`px-1.5 py-0.5 ${
+              mode === m ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
+            }`}
+            onClick={() => setMode(m)}
+            data-testid={`${testId}-${m}`}
           >
-            {frozen && shotWarnings.length === 0
-              ? <LockIcon size={13} />
-              : hasError ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />}
-          </span>
-        );
-      },
-    },
-    {
-      key: 'id',
-      header: t('dataTable.columns.idShort'),
-      width: '60px',
-      render: (_shot: Shot, index: number) =>
-        selectedSectionId !== null
-          ? <EntityBlob entity="shot" className="relative -top-0.5">{formatShotId(selectedSectionId, index + 1)}</EntityBlob>
-          : '',
-    },
-    {
-      key: 'length',
-      header: t('dataTable.columns.length', { unit: t('common.units.meters') }),
-      width: '100px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.01',
-    },
-    {
-      key: '_azimuth_avg',
-      header: t('dataTable.columns.azimuthShort'),
-      width: '70px',
-      align: 'right' as const,
-      getValue: (shot: Shot) =>
-        circularMeanDegrees(shot.azimuth_in, shot.azimuth_out),
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.azimuth)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'depth_in',
-      header: t('dataTable.columns.depthIn'),
-      width: '80px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.depth)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'depth_out',
-      header: t('dataTable.columns.depthOut'),
-      width: '95px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.depth)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'left',
-      header: t('dataTable.columns.leftShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'right',
-      header: t('dataTable.columns.rightShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'up',
-      header: t('dataTable.columns.upShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'down',
-      header: t('dataTable.columns.downShort'),
-      width: '50px',
-      align: 'right' as const,
-      formatValue: (value: unknown) =>
-        typeof value === 'number' && Number.isFinite(value)
-          ? formatFixed(value, undefined, precision.length)
-          : '',
-      inputType: 'number' as const,
-      inputStep: '0.1',
-    },
-    {
-      key: 'is_reference',
-      header: t('dataTable.columns.referenceShort'),
-      width: '40px',
-      align: 'center' as const,
-      render: (shot: Shot) => (
-        <span
-          className={`px-2 py-1 flex items-center justify-center ${geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (geometryReadOnly) return;
-            if (selectedSectionId !== null) {
-              updateShot(selectedSectionId, shot.id, { is_reference: !shot.is_reference });
-            }
-          }}
-          title={shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
-        >
-          {shot.is_reference ? <DotIcon size={20} /> : <span className="opacity-0 hover:opacity-30"><DotIcon size={20} /></span>}
-        </span>
-      ),
-    },
-    { key: 'comment', header: t('dataTable.columns.comment'), inputMode: 'textarea' as const },
-  ];
-
-  const editableColumns = [
-    'length',
-    '_azimuth_avg',
-    'depth_in',
-    'depth_out',
-    'left',
-    'right',
-    'up',
-    'down',
-    'comment',
-  ];
-
-  const isRowEditable = useCallback(
-    (shot: Shot, _index: number) => {
-      if (selectedSectionId === null) return true;
-      const index = selectedSection?.shots.indexOf(shot) ?? -1;
-      return index < 0 || !isShotFrozen(selectedSectionId, index);
-    },
-    [selectedSectionId, selectedSection, isShotFrozen]
+            {m === 'avg'
+              ? t('dataTable.columnsMenu.avg')
+              : m === 'inout'
+                ? t('dataTable.columnsMenu.inOut')
+                : t('dataTable.columnsMenu.off')}
+          </button>
+        ))}
+      </span>
+    </div>
   );
 
   return (
     <div
       className="flex flex-col bg-panel border-t border-border transition-all duration-300 ease-in-out"
       style={{
-        height: dataTableOpen ? `${dataTableHeight}px` : '40px',
+        // Fullscreen mode fills the fixed overlay wrapper; the existing
+        // gridBody ResizeObserver handles the resulting grid height.
+        height: dataTableFullScreen ? '100%' : dataTableOpen ? `${dataTableHeight}px` : '40px',
         minHeight: '40px',
       }}
       data-testid="data-table"
       data-open={dataTableOpen ? 'true' : 'false'}
+      data-fullscreen={dataTableFullScreen ? 'true' : 'false'}
     >
-      {/* Header with section selector and collapse toggle */}
-      <div className="flex items-center gap-4 px-4 py-2 border-b border-border shrink-0">
-        <button
-          onClick={toggleDataTable}
-          className="text-text-secondary hover:text-text transition-transform duration-200"
-          style={{ transform: dataTableOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-          title={dataTableOpen ? t('dataTable.toggle.collapse') : t('dataTable.toggle.expand')}
-          data-testid="data-table-toggle"
-        >
-          <ChevronDownIcon size={14} />
-        </button>
-        <span className="text-sm font-medium">{t('dataTable.title')}</span>
-        {dataTableOpen && (
-          <>
-            <span className="text-text-secondary">|</span>
-            <Select
-              value={tableView}
-              onChange={handleViewChange}
-              options={viewOptions}
-              className="min-w-[100px]"
-              data-testid="data-table-view-select"
+      {rawTableSelection !== null ? (
+        /* Raw-data sub-header: title | raw table name | "as of last save" hint
+           (the viewer shows last-saved state, so flag pending edits). */
+        <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
+          <span className="font-medium">{t('dataTable.title')}</span>
+          <div className="absolute left-1/2 z-40 -translate-x-1/2">
+            <SubHeaderPickerMenu
+              triggerTestId="data-table-raw-table-pill"
+              listTestId="data-table-raw-table-menu-list"
+              title={t('dataTable.rawTableMenu')}
+              options={
+                Array.isArray(rawTables)
+                  ? rawTables.map((name) => ({ value: name, label: name }))
+                  : [
+                      {
+                        value: '',
+                        label:
+                          rawTables === 'unavailable'
+                            ? t('dataTable.rawData.unavailable')
+                            : t('dataTable.rawData.loading'),
+                        disabled: true,
+                      },
+                    ]
+              }
+              onPick={setRawTableSelection}
+              renderTrigger={({ open }) => {
+                const chevron = <PillChevron open={open} testId="data-table-raw-table-menu" />;
+                return rawTableSelection !== '' ? (
+                  <RawTablePill name={rawTableSelection} trailing={chevron} />
+                ) : (
+                  chevron
+                );
+              }}
             />
-            <span className="text-text-secondary">|</span>
-            <label className="text-sm text-text-secondary">{t('common.labels.section')}:</label>
-            <Select
-              value={String(selectedSectionId ?? '')}
-              onChange={handleSectionChange}
-              options={sectionOptions}
-              onOptionHover={handleSectionHover}
-              className="min-w-[220px] w-64"
-              data-testid="data-table-section-select"
-            />
-          </>
-        )}
-        {!dataTableOpen && selectedSection && (
-          <span className="text-sm text-text-secondary ml-auto">
-            {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}{' '}
-            ({tableView === 'stations'
-              ? t('dataTable.stationCount', {
-                  countFormatted: formatNumber(
-                    stations.filter((s) => s.station_ref.section_id === selectedSectionId).length
-                  ),
-                })
-              : t('dataTable.shotCount', {
-                  count: selectedSection.shots.length,
-                  countFormatted: formatNumber(selectedSection.shots.length),
-                })
-            })
+          </div>
+          {isDirty && (
+            <span className="ml-auto text-text-secondary" data-testid="data-table-raw-dirty-hint">
+              {t('dataTable.rawData.asOfLastSave')}
+            </span>
+          )}
+        </div>
+      ) : (
+      /* Condensed header: title + selection indicator | section pill | view toggle + collapse */
+      <div className="relative flex items-center gap-3 px-3 py-1 border-b border-border shrink-0 text-xs">
+        <span className="font-medium">{t('dataTable.title')}</span>
+        {selectionIndicator && (
+          <span className="text-text-secondary tabular-nums" data-testid="data-table-selection-indicator">
+            {selectionIndicator}
           </span>
         )}
+        {selectedSection && (
+          <div className="absolute left-1/2 z-40 -translate-x-1/2">
+            <SubHeaderPickerMenu
+              triggerTestId="data-table-section-pill"
+              listTestId="data-table-section-menu-list"
+              title={t('dataTable.sectionMenu')}
+              options={sections.map((s) => ({
+                value: String(s.id),
+                label: s.name ?? t('sections.defaultName', { id: s.id }),
+                dot: s.color,
+              }))}
+              onPick={(value) => {
+                const id = Number(value);
+                setSelectedSectionId(id);
+                setSource('data-table');
+                setSelection({ type: 'section', sectionId: id });
+              }}
+              onHoverOption={handleSectionHover}
+              onHoverTrigger={(over) => handleSectionHover(over ? String(selectedSection.id) : null)}
+              renderTrigger={({ open }) => (
+                <EntityBlob entity="section">
+                  {selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id })}
+                  <PillChevron open={open} testId="data-table-section-menu" />
+                </EntityBlob>
+              )}
+            />
+          </div>
+        )}
+        <div
+          className="ml-auto flex items-center rounded border border-border overflow-hidden"
+          role="radiogroup"
+          aria-label={t('dataTable.title')}
+          data-testid="data-table-view-select"
+        >
+          {(['shots', 'stations'] as const).map((view) => (
+            <button
+              key={view}
+              role="radio"
+              aria-checked={tableView === view}
+              className={`px-2 py-0.5 ${
+                tableView === view ? 'bg-accent-20 text-text' : 'text-text-secondary hover:bg-accent-10'
+              }`}
+              onClick={() => handleViewChange(view)}
+              data-testid={`data-table-view-${view}`}
+            >
+              {view === 'shots' ? t('dataTable.viewShots') : t('dataTable.viewStations')}
+            </button>
+          ))}
+        </div>
+        {/* Column-visibility menu; inside clicks must not reach the window
+            mousedown listener that closes it. */}
+        <div className="relative" onMouseDown={(e) => e.stopPropagation()}>
+          <button
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setColMenuUp(r.top > window.innerHeight - r.bottom);
+              setColMenuOpen((v) => !v);
+            }}
+            className={
+              tableView === 'shots' && draftHiddenProblems.size > 0
+                ? 'text-error'
+                : colMenuOpen
+                  ? 'text-text'
+                  : 'text-text-secondary hover:text-text'
+            }
+            title={t('dataTable.columnsMenu.button')}
+            data-testid="data-table-columns-menu"
+          >
+            <EyeIcon size={14} />
+          </button>
+          {colMenuOpen && (
+            <div
+              className={`absolute right-0 z-50 w-56 rounded border border-border bg-panel p-1 shadow-lg ${
+                colMenuUp ? 'bottom-full mb-1' : 'top-full mt-1'
+              }`}
+              data-dropdown-open
+              data-testid="data-table-columns-dropdown"
+            >
+              {tableView === 'shots' ? (
+                <>
+                  {colCheckRow(['_warnings'], t('dataTable.columnsMenu.warnings'))}
+                  {colCheckRow(['section_id'], t('dataTable.columnsMenu.sectionId'))}
+                  {colCheckRow(['shot_id'], t('dataTable.columnsMenu.shotId'))}
+                  {colCheckRow(['length'], t('dataTable.columnsMenu.length'), '', draftHiddenProblems.has('length'))}
+                  {angleModeRow(t('dataTable.columnsMenu.azimuth'), azimuthMode, (m) => changeAngleMode('azimuth', m), 'col-azimuth', draftHiddenProblems.has('azimuth'))}
+                  {angleModeRow(t('dataTable.columnsMenu.inclination'), inclinationMode, (m) => changeAngleMode('inclination', m), 'col-inclination')}
+                  <div className="flex">
+                    {colCheckRow(['depth_in'], t('dataTable.columnsMenu.depthIn'), 'flex-1', draftHiddenProblems.has('depthIn'))}
+                    {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1', draftHiddenProblems.has('depthOut'))}
+                  </div>
+                  {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
+                  {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
+                  {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
+                </>
+              ) : (
+                STATION_MENU_COLS.map(({ keys, nameKey }) =>
+                  colCheckRow(keys, t(`dataTable.stationColumnsMenu.${nameKey}`))
+                )
+              )}
+            </div>
+          )}
+        </div>
+        {!dataTableFullScreen && (
+          <button
+            onClick={enterDataTableFullScreen}
+            className="text-text-secondary hover:text-text"
+            title={t('dataTable.fullScreen.enter')}
+            data-testid="data-table-expand-button"
+          >
+            <ExpandIcon size={14} />
+          </button>
+        )}
       </div>
+      )}
 
-      {/* Table - only render when open for performance */}
+      {/* Table - only render when open for performance. Both grids scroll
+          internally and are sized to this body exactly, so the wrapper must
+          never scroll alongside them (double scrollbars). */}
       {dataTableOpen && (
-        <div className="flex-1 overflow-auto">
-          {selectedSection ? (
-            tableView === 'shots' ? (
-              <EditableTable<Shot>
-                columns={columns}
-                data={selectedSection.shots}
-                keyField="id"
-                onCellEdit={handleCellEdit}
-                editableColumns={geometryReadOnly ? [] : editableColumns}
-                isRowEditable={isRowEditable}
-                selectedKey={highlightedShotId}
-                hoveredKey={
-                  hoveredShot?.sectionId === selectedSectionId
-                    ? hoveredShot.shotId
-                    : null
-                }
-                scrollToKey={scrollToKey}
-                onRowClick={handleRowClick}
-                onRowDoubleClick={handleRowDoubleClick}
-                onRowContextMenu={handleRowContextMenu}
-                onRowHover={handleRowHover}
-                emptyMessage={t('dataTable.empty')}
-                rowClassName={(shot: Shot, isSelected, isHovered) => {
-                  const index = selectedSection?.shots.indexOf(shot) ?? -1;
-                  const frozen = selectedSectionId !== null && index >= 0 && isShotFrozen(selectedSectionId, index);
-                  const classes: string[] = [];
-                  if (isSelected) {
-                    classes.push('bg-accent-20');
-                  } else if (isHovered) {
-                    classes.push('bg-accent-10');
-                  } else if (frozen) {
-                    classes.push('bg-warning-5');
-                  }
-                  classes.push('cursor-pointer');
-                  return classes.join(' ');
-                }}
-              />
+        <div ref={gridBodyRef} className="flex-1 overflow-hidden">
+          {rawTableSelection !== null ? (
+            rawTableSelection === '' ? (
+              <div className="flex items-center justify-center h-full text-text-secondary">
+                {rawTables === 'unavailable'
+                  ? t('dataTable.rawData.unavailable')
+                  : t('dataTable.rawData.loading')}
+              </div>
             ) : (
-              <EditableTable<StationRow>
+              <RawTableView tableName={rawTableSelection} height={gridHeight} />
+            )
+          ) : selectedSection ? (
+            tableView === 'shots' ? (
+              <SpreadsheetGrid<Shot>
+                key={selectedSectionId ?? 'none'}
+                columns={shotColumns}
+                rows={gridShotRows}
+                rowKey={(s) => s.id}
+                locale={numberLocale}
+                height={gridHeight}
+                onEdit={onShotEdit}
+                onBatchEdit={onShotBatchEdit}
+                onClearMissing={onShotClearMissing}
+                onActiveCellChange={onShotActiveCellChange}
+                onRowHover={onShotRowHover}
+                onPasteReport={onShotPasteReport}
+                selectedRow={shotScrollToRow}
+                hoveredRow={shotHoveredRow}
+                rowClassName={shotRowClassName}
+                cellClassName={shotCellClassName}
+                rowLabel={shotRowLabel}
+                labels={gridLabels}
+                gutterWidth={72}
+                showToolbar={false}
+                onSelectionChange={setGridSel}
+                onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
+                {...(geometryReadOnly ? {} : { onInsertRows: onShotInsertRows })}
+                onDeleteRows={onShotDeleteRows}
+                extraContextMenuItems={shotExtraMenuItems}
+                hiddenColumns={shotHiddenColumns}
+                columnOrder={shotColumnOrder}
+                onColumnOrderChange={setShotColumnOrder}
+              />
+            ) : sectionStations.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-text-secondary">
+                {t('dataTable.stationsEmpty')}
+              </div>
+            ) : (
+              <SpreadsheetGrid<Station>
+                key={`stations-${selectedSectionId ?? 'none'}`}
                 columns={stationColumns}
-                data={sectionStations}
-                keyField="id"
-                onCellEdit={handleStationCellEdit}
-                editableColumns={geometryReadOnly ? [] : ['comment']}
-                selectedKey={highlightedStationIndex}
-                hoveredKey={
-                  hoveredStation?.section_id === selectedSectionId
-                    ? hoveredStation.station_index
-                    : null
-                }
-                scrollToKey={stationScrollToKey}
-                onRowClick={handleStationRowClick}
-                onRowDoubleClick={handleStationRowDoubleClick}
-                onRowHover={handleStationRowHover}
-                emptyMessage={t('dataTable.stationsEmpty')}
-                rowClassName={(_row: StationRow, isSelected, isHovered) => {
-                  const classes: string[] = [];
-                  if (isSelected) {
-                    classes.push('bg-accent-20');
-                  } else if (isHovered) {
-                    classes.push('bg-accent-10');
-                  }
-                  classes.push('cursor-pointer');
-                  return classes.join(' ');
-                }}
+                rows={sectionStations}
+                rowKey={(s) => s.station_ref.station_index}
+                locale={numberLocale}
+                height={gridHeight}
+                onEdit={onStationEdit}
+                onActiveCellChange={onStationActiveCellChange}
+                onRowHover={onStationRowHover}
+                selectedRow={stationScrollToRow}
+                hoveredRow={stationHoveredRow}
+                rowLabel={stationRowLabel}
+                labels={stationGridLabels}
+                gutterWidth={72}
+                showToolbar={false}
+                onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
+                hiddenColumns={stationHiddenColumns}
+                columnOrder={stationColumnOrder}
+                onColumnOrderChange={setStationColumnOrder}
               />
             )
           ) : (
@@ -906,6 +1714,104 @@ export default function DataTable({ sections }: DataTableProps) {
               {t('dataTable.selectSection')}
             </div>
           )}
+        </div>
+      )}
+      {connMenu && (
+        <div
+          ref={connMenuRef}
+          data-dropdown-open
+          className="fixed z-50 min-w-56 max-w-md w-max overflow-hidden rounded border border-border bg-panel p-2 text-xs shadow-lg"
+          style={{ left: connMenu.x, top: connMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          data-testid="data-table-conn-menu"
+        >
+          {connMenu.station.merged_with.length > 0 && (
+            <>
+              <div className="px-1 pb-1 text-text-secondary">{t('dataTable.connMenu.merged')}</div>
+              <ul className="space-y-0.5 pb-1">
+                {connMenu.station.merged_with.map((ref) => (
+                  <li
+                    key={`m-${ref.section_id}-${ref.station_index}`}
+                    className="flex items-center gap-1.5"
+                  >
+                    <DetailLink
+                      type="section"
+                      target={{ sectionId: ref.section_id }}
+                      displayText={getSectionName(ref.section_id)}
+                      pillLabel={getSectionName(ref.section_id)}
+                      testId={`conn-merged-section-${ref.section_id}-${ref.station_index}-link`}
+                      onSelect={() => selectLinkedSection(ref.section_id)}
+                      onHoverStart={() => setHoveredSectionId(ref.section_id)}
+                      onHoverEnd={() => setHoveredSectionId(null)}
+                    />
+                    <DetailLink
+                      type="station"
+                      target={{ sectionId: ref.section_id, position: ref.station_index }}
+                      displayText={formatStationId(ref.section_id, ref.station_index)}
+                      onSelect={() => selectLinkedStation(ref)}
+                      onHoverStart={() => setHoveredStation(ref)}
+                      onHoverEnd={() => setHoveredStation(null)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {(connMenu.station.closures_with?.length ?? 0) > 0 && (
+            <>
+              <div className="px-1 pb-1 text-text-secondary">{t('dataTable.connMenu.closures')}</div>
+              <ul className="space-y-0.5">
+                {connMenu.station.closures_with.map((c) => (
+                  <li
+                    key={`c-${String(c.closure_id)}-${c.station_ref.section_id}-${c.station_ref.station_index}`}
+                    className="flex items-center gap-1.5"
+                  >
+                    <DetailLink
+                      type="section"
+                      target={{ sectionId: c.station_ref.section_id }}
+                      displayText={getSectionName(c.station_ref.section_id)}
+                      pillLabel={getSectionName(c.station_ref.section_id)}
+                      testId={`conn-closure-section-${String(c.closure_id)}-${c.station_ref.section_id}-${c.station_ref.station_index}-link`}
+                      onSelect={() => selectLinkedSection(c.station_ref.section_id)}
+                      onHoverStart={() => setHoveredSectionId(c.station_ref.section_id)}
+                      onHoverEnd={() => setHoveredSectionId(null)}
+                    />
+                    <DetailLink
+                      type="station"
+                      target={{ sectionId: c.station_ref.section_id, position: c.station_ref.station_index }}
+                      displayText={formatStationId(c.station_ref.section_id, c.station_ref.station_index)}
+                      onSelect={() => selectLinkedStation(c.station_ref)}
+                      onHoverStart={() => setHoveredStation(c.station_ref)}
+                      onHoverEnd={() => setHoveredStation(null)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+      {headerMenu && (
+        <div
+          ref={headerMenuRef}
+          className="fixed z-50 w-44 rounded border border-border bg-panel p-1 text-xs shadow-lg"
+          style={{ left: headerMenu.x, top: headerMenu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          data-dropdown-open
+          data-testid="data-table-header-menu"
+        >
+          {headerMenuItems.map((item) => (
+            <button
+              key={item.label}
+              className="block w-full rounded px-2 py-0.5 text-left hover:bg-accent-10"
+              onClick={() => {
+                item.onClick();
+                setHeaderMenu(null);
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
       )}
     </div>

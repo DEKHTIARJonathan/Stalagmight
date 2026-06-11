@@ -302,6 +302,156 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     }
 }
 
+/// Shot with every nullable field populated — the fields a replayed legacy
+/// (pre-v7) undo entry would silently clear under the v7 `double_option`
+/// null-means-clear semantics.
+fn shot_with_nullable_fields() -> ShotData {
+    ShotData {
+        pitch_in: Some(5.0),
+        pitch_out: Some(-5.0),
+        left: Some(1.5),
+        right: Some(2.5),
+        up: Some(0.5),
+        down: Some(3.5),
+        comment: Some("original".to_string()),
+        marker_index: Some(2),
+        temperature: Some(14.5),
+        ..test_shot_data(2.0)
+    }
+}
+
+#[test]
+fn test_open_project_drops_legacy_null_style_undo_history() {
+    // open_project records the path in recent projects (stored in the global
+    // config), so isolate the config from the real file.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("legacy_undo.stalx");
+
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot_with_nullable_fields()],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    let saved = db.load_project().unwrap();
+    let section_id = saved.sections[0].id;
+    let shot_id = saved.sections[0].shots[0].id;
+
+    // Persist undo/redo entries exactly as a pre-v7 build wrote them: every
+    // untouched nullable field serialized as an explicit null, in both the
+    // command payload and the PreviousValues snapshot.
+    let legacy_command = format!(
+        r#"{{"type":"update_shot","section_id":{section_id},"shot_id":{shot_id},"updates":{{"azimuth_in":null,"azimuth_out":null,"length":4.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}}}}"#
+    );
+    let legacy_values = r#"{"azimuth_in":null,"azimuth_out":null,"length":2.0,"depth_in":null,"depth_out":null,"pitch_in":null,"pitch_out":null,"left":null,"right":null,"up":null,"down":null,"comment":null,"is_reference":null,"marker_index":null,"temperature":null}"#;
+    let legacy_undo_data = format!(
+        r#"{{"PreviousValues":{{"section_id":{section_id},"shot_id":{shot_id},"values_json":{}}}}}"#,
+        serde_json::to_string(legacy_values).unwrap()
+    );
+    db.save_undo_stack_with_timestamps(vec![(
+        legacy_command.clone(),
+        legacy_undo_data.clone(),
+        None,
+    )])
+    .unwrap();
+    db.save_redo_stack_with_timestamps(vec![(legacy_command, legacy_undo_data, None)])
+        .unwrap();
+    drop(db);
+
+    // Rewind the version stamp so the file looks exactly like one written by
+    // a pre-v7 build (Database::open stamped the current schema version).
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute("PRAGMA user_version = 6", []).unwrap();
+    drop(conn);
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path).success);
+
+    // The legacy stacks are dropped wholesale — nothing to undo or redo, so
+    // nothing can replay the explicit nulls and clear fields.
+    {
+        let undo_stack = state.undo_stack.lock().unwrap();
+        assert_eq!(undo_stack.len(), 0, "legacy undo entries must be dropped");
+        assert_eq!(undo_stack.redo_len(), 0, "legacy redo entries must be dropped");
+    }
+
+    // The shot's nullable fields are intact.
+    let project = state.get_project_state().unwrap();
+    let shot = &project.sections[0].shots[0];
+    assert_eq!(shot.pitch_in, Some(5.0));
+    assert_eq!(shot.left, Some(1.5));
+    assert_eq!(shot.comment.as_deref(), Some("original"));
+    assert_eq!(shot.marker_index, Some(2));
+    assert_eq!(shot.temperature, Some(14.5));
+}
+
+#[test]
+fn test_undo_after_reload_restores_exactly_the_edited_field() {
+    // open_project/save_project record the path in recent projects (stored in
+    // the global config), so isolate the config from the real file.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("new_format_undo.stalx");
+
+    let mut project = Project::new("New Format".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![shot_with_nullable_fields()],
+        ..Default::default()
+    });
+
+    let mut db = Database::open(&path).unwrap();
+    db.save_project(&project).unwrap();
+    drop(db);
+
+    // Session 1: open, edit ONLY the comment, save (persists the undo stack
+    // in the new format).
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path.clone()).success);
+    let (section_id, shot_id) = {
+        let project = state.get_project_state().unwrap();
+        (project.sections[0].id, project.sections[0].shots[0].id)
+    };
+    let result = state.execute(Command::UpdateShot {
+        section_id,
+        shot_id,
+        updates: ShotUpdates {
+            comment: Some(Some("edited".to_string())),
+            ..Default::default()
+        },
+    });
+    assert!(result.success);
+    assert!(state.save_project(Some(path.clone()), false).success);
+
+    // Session 2: fresh app instance, reload, undo.
+    let state2 = AppState::new().unwrap();
+    assert!(state2.open_project(path).success);
+    {
+        let stack = state2.undo_stack.lock().unwrap();
+        assert!(stack.can_undo(), "new-format undo history must survive reload");
+    }
+    let project = state2.get_project_state().unwrap();
+    assert_eq!(project.sections[0].shots[0].comment.as_deref(), Some("edited"));
+
+    assert!(state2.undo().success);
+
+    let project = state2.get_project_state().unwrap();
+    let shot = &project.sections[0].shots[0];
+    // Exactly the edited field is restored...
+    assert_eq!(shot.comment.as_deref(), Some("original"));
+    // ...and the untouched nullable fields were NOT cleared by the undo.
+    assert_eq!(shot.pitch_in, Some(5.0));
+    assert_eq!(shot.pitch_out, Some(-5.0));
+    assert_eq!(shot.left, Some(1.5));
+    assert_eq!(shot.right, Some(2.5));
+    assert_eq!(shot.up, Some(0.5));
+    assert_eq!(shot.down, Some(3.5));
+    assert_eq!(shot.marker_index, Some(2));
+    assert_eq!(shot.temperature, Some(14.5));
+}
+
 #[test]
 fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     let temp_dir = TempDir::new().unwrap();
@@ -732,6 +882,101 @@ fn update_shot_reconciles_datum_less_merge() {
     assert!(
         state.get_project_state().unwrap().check_merge_alignment().is_empty(),
         "a shot edit must reconcile the datum-less merge, not leave it drifted"
+    );
+}
+
+#[test]
+fn metadata_only_update_shot_does_not_heal_drift() {
+    // The converse of update_shot_reconciles_datum_less_merge: a comment/LRUD/
+    // reference-only UpdateShot touches no geometry, so it must NOT run the
+    // reconcile epilogue. Reconciling would silently re-align an already-drifted
+    // project as a side effect of a metadata edit whose undo only restores the
+    // metadata — the asymmetric-undo hazard that keeps SetStationComment INERT.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Drift".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![test_shot_data(5.0)], ..Default::default() })
+        .id;
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project.resolve_offsets();
+    assert!(project.check_merge_alignment().is_empty(), "starts aligned");
+
+    // Introduce drift WITHOUT reconciling: lengthen a shot upstream of the merge
+    // directly in the model, so A:2 moves out of alignment with B:0.
+    let shot0 = project.get_section(a).unwrap().shots[0].id;
+    project.get_section_mut(a).unwrap().shots[0].length = 9.0;
+    assert!(
+        !project.check_merge_alignment().is_empty(),
+        "drift is present before the metadata edit"
+    );
+    state.set_project_for_tests(project);
+
+    // A comment-only edit must leave the drift untouched.
+    let updates = ShotUpdates { comment: Some(Some("note".to_string())), ..Default::default() };
+    let result = state.execute(Command::UpdateShot { section_id: a, shot_id: shot0, updates });
+    assert!(result.success, "{:?}", result.error);
+    assert!(
+        !state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a metadata-only shot edit must not reconcile (heal) a drifted merge"
+    );
+
+    // Sanity-check the gate isn't simply always-off: a geometry edit DOES heal it.
+    let updates = ShotUpdates { length: Some(7.0), ..Default::default() };
+    assert!(
+        state.execute(Command::UpdateShot { section_id: a, shot_id: shot0, updates }).success
+    );
+    assert!(
+        state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a geometry edit must reconcile the drift"
+    );
+}
+
+#[test]
+fn metadata_only_update_shot_batch_does_not_heal_drift() {
+    // execute_batch gates its reconcile epilogue the same way execute() does: a
+    // batch of metadata-only UpdateShots (a multi-cell comment paste) must not
+    // heal a drifted merge as a side effect.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("DriftBatch".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![test_shot_data(5.0)], ..Default::default() })
+        .id;
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project.resolve_offsets();
+    assert!(project.check_merge_alignment().is_empty(), "starts aligned");
+
+    let shot0 = project.get_section(a).unwrap().shots[0].id;
+    let shot1 = project.get_section(a).unwrap().shots[1].id;
+    project.get_section_mut(a).unwrap().shots[0].length = 9.0;
+    assert!(!project.check_merge_alignment().is_empty(), "drift present before the batch");
+    state.set_project_for_tests(project);
+
+    // Multi-cell comment paste → one batch of two comment-only UpdateShots.
+    let mk = |shot_id| Command::UpdateShot {
+        section_id: a,
+        shot_id,
+        updates: ShotUpdates {
+            comment: Some(Some("note".to_string())),
+            ..Default::default()
+        },
+    };
+    let result = state.execute(Command::Batch { commands: vec![mk(shot0), mk(shot1)] });
+    assert!(result.success, "{:?}", result.error);
+    assert!(
+        !state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a metadata-only batch must not reconcile (heal) a drifted merge"
     );
 }
 

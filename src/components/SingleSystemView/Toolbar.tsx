@@ -4,13 +4,14 @@ import { useUIStore, type ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button, IconButton } from '../common/Button';
 import {
-  ArrowLeftIcon,
   BugIcon,
   ChevronDownIcon,
+  ShrinkIcon,
 } from '../common/icons';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
+import TableSelectDropdown from './TableSelectDropdown';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, type ToolGroupDef } from '../../utils/toolGroups';
 import { isMutatingTool } from '../../utils/toolUtils';
@@ -26,6 +27,10 @@ interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   placementModeActive: boolean;
+  /** Reduced variant while the data table is fullscreen: the project-close
+   *  button becomes the "Back to Map" button, Save/Undo/Redo stay, Import/Export
+   *  drop out, and the map tools give way to the table picker. */
+  dataTableFullScreen: boolean;
 }
 
 /** Tool metadata for standalone tools */
@@ -119,40 +124,75 @@ export default function Toolbar({
   canUndo,
   canRedo,
   placementModeActive,
+  dataTableFullScreen,
 }: ToolbarProps) {
   const { t } = useTranslation();
   const activeTool = useUIStore((s) => s.activeTool);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
   const openDialog = useUIStore((s) => s.openDialog);
+  const exitDataTableFullScreen = useUIStore((s) => s.exitDataTableFullScreen);
   // The closure-adjusted view is read-only: geometry-mutating tools are disabled
   // there (edits are made in the measured view).
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
 
   return (
-    <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
+    <header className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
       {/* Left section */}
       <div
         className={`flex items-center gap-2 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
         data-testid="toolbar-file-controls"
       >
-        <Button
-          onClick={onBack}
-          disabled={placementModeActive}
-          size="sm"
-          icon={<ArrowLeftIcon size={14} />}
-          data-testid="back-button"
-        >
-          {t('common.actions.close')}
-        </Button>
+        {/* Fullscreen table mode has no project-close affordance here; the
+            left slot becomes the "Back to Map" button (the relocated, relabeled
+            shrink button), keeping the same pan-accent + sh-tool wash. */}
+        {dataTableFullScreen ? (
+          <Button
+            icon={
+              <span style={{ color: 'var(--o)' } as CSSProperties}>
+                <ShrinkIcon size={16} />
+              </span>
+            }
+            onClick={() => { setSource('toolbar'); exitDataTableFullScreen(); }}
+            size="sm"
+            className="sh-tool"
+            style={{ '--o': toolAccentVar('pan') } as CSSProperties}
+            data-testid="toolbar-map-view-button"
+          >
+            {t('dataTable.fullScreen.exit')}
+          </Button>
+        ) : (
+          <Button
+            onClick={onBack}
+            disabled={placementModeActive}
+            size="sm"
+            data-testid="back-button"
+          >
+            {t('common.actions.close')}
+          </Button>
+        )}
         <Button onClick={() => { setSource('toolbar'); onSave(); }} disabled={placementModeActive} size="sm" data-testid="toolbar-save-button">
           {t('common.actions.save')}
         </Button>
-        <Button onClick={() => { setSource('toolbar'); onImport(); }} disabled={placementModeActive || geometryReadOnly} size="sm" data-testid="toolbar-import-button">
-          {t('common.actions.import')}
-        </Button>
-        <Button onClick={() => { setSource('toolbar'); openDialog('export'); }} disabled={placementModeActive} size="sm" data-testid="toolbar-export-button">
-          {t('common.actions.export')}
-        </Button>
+        {!dataTableFullScreen && (
+          <>
+            <Button
+              onClick={() => { setSource('toolbar'); onImport(); }}
+              disabled={placementModeActive || geometryReadOnly}
+              size="sm"
+              data-testid="toolbar-import-button"
+            >
+              {t('common.actions.import')}
+            </Button>
+            <Button
+              onClick={() => { setSource('toolbar'); openDialog('export'); }}
+              disabled={placementModeActive}
+              size="sm"
+              data-testid="toolbar-export-button"
+            >
+              {t('common.actions.export')}
+            </Button>
+          </>
+        )}
         <div className="w-px h-6 bg-border mx-2" />
         <UndoHistoryDropdown
           mode="undo"
@@ -188,59 +228,81 @@ export default function Toolbar({
 
       {/* Center - the active tool's name + duotone icon, tinted with its color
           (#51). The project name/file path live in the Project Stats panel; the
-          focused section (if any) is shown in the status bar. */}
-      <div
-        className="flex items-center gap-1.5"
-        data-testid="toolbar-active-tool"
-        style={{ '--o': toolAccentVar(activeTool) } as CSSProperties}
-      >
-        <ToolGlyph tool={activeTool} size={18} />
-        <span
-          className="font-medium"
-          /* Mix with the theme text color so the tool-tinted label stays legible
-             on light/cave toolbars (raw --o can be too pale on a light panel). */
-          style={{ color: 'color-mix(in oklab, var(--o) 80%, var(--cc-text-primary))' }}
-        >
-          {t(TOOL_LABEL_KEYS[activeTool])}
-        </span>
-      </div>
-
-      {/* Right section - tools and display menu */}
-      <div className="flex items-center gap-2">
+          focused section (if any) is shown in the status bar. Fullscreen table
+          mode has no active map tool, so it shows the table's title instead. */}
+      {dataTableFullScreen ? (
+        /* Absolutely centered: justify-between would drift the title by the
+           side blocks' width difference, visibly off against the centered
+           sub-header pill below. */
         <div
-          className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
-          data-testid="toolbar-tools-group"
+          className="absolute left-1/2 -translate-x-1/2 font-medium"
+          data-testid="toolbar-data-table-title"
         >
-          {TOOLBAR_ITEMS.map((item, index) => {
-            if (item.kind === 'separator') {
-              return <div key={`sep-${index}`} className="w-px h-6 bg-border mx-1" />;
-            }
-            if (item.kind === 'standalone') {
-              return (
-                <ToolButton
-                  key={item.id}
-                  tool={item.id}
-                  active={activeTool === item.id}
-                  onClick={() => setActiveTool(item.id)}
-                  disabled={placementModeActive || (geometryReadOnly && isMutatingTool(item.id))}
-                />
-              );
-            }
-            // group
-            const group = TOOL_GROUPS.find((g) => g.id === item.groupId);
-            if (!group) return null;
-            return (
-              <ToolGroupButton
-                key={group.id}
-                group={group}
-                activeTool={activeTool}
-                onActivateTool={setActiveTool}
-                disabled={placementModeActive || (geometryReadOnly && group.tools.every(isMutatingTool))}
-              />
-            );
-          })}
+          {t('dataTable.title')}
         </div>
-        <DisplayMenu />
+      ) : (
+        <div
+          className="flex items-center gap-1.5"
+          data-testid="toolbar-active-tool"
+          style={{ '--o': toolAccentVar(activeTool) } as CSSProperties}
+        >
+          <ToolGlyph tool={activeTool} size={18} />
+          <span
+            className="font-medium"
+            /* Mix with the theme text color so the tool-tinted label stays legible
+               on light/cave toolbars (raw --o can be too pale on a light panel). */
+            style={{ color: 'color-mix(in oklab, var(--o) 80%, var(--cc-text-primary))' }}
+          >
+            {t(TOOL_LABEL_KEYS[activeTool])}
+          </span>
+        </div>
+      )}
+
+      {/* Right section - tools and display menu; while the table is fullscreen,
+          just the table picker (the "Back to Map" button lives on the left). */}
+      <div className="flex items-center gap-2">
+        {dataTableFullScreen ? (
+          /* The "Back to Map" shrink button now lives on the left (in place of
+             the project-close button); only the table picker stays on the right. */
+          <TableSelectDropdown />
+        ) : (
+          <>
+            <div
+              className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+              data-testid="toolbar-tools-group"
+            >
+              {TOOLBAR_ITEMS.map((item, index) => {
+                if (item.kind === 'separator') {
+                  return <div key={`sep-${index}`} className="w-px h-6 bg-border mx-1" />;
+                }
+                if (item.kind === 'standalone') {
+                  return (
+                    <ToolButton
+                      key={item.id}
+                      tool={item.id}
+                      active={activeTool === item.id}
+                      onClick={() => setActiveTool(item.id)}
+                      disabled={placementModeActive || (geometryReadOnly && isMutatingTool(item.id))}
+                    />
+                  );
+                }
+                // group
+                const group = TOOL_GROUPS.find((g) => g.id === item.groupId);
+                if (!group) return null;
+                return (
+                  <ToolGroupButton
+                    key={group.id}
+                    group={group}
+                    activeTool={activeTool}
+                    onActivateTool={setActiveTool}
+                    disabled={placementModeActive || (geometryReadOnly && group.tools.every(isMutatingTool))}
+                  />
+                );
+              })}
+            </div>
+            <DisplayMenu />
+          </>
+        )}
         <IconButton
           icon={<BugIcon />}
           onClick={() => { setSource('toolbar'); openDialog('debug'); }}

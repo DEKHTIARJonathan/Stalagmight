@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
 /// Unique identifier for a shot within a section
@@ -127,7 +127,24 @@ pub struct ShotData {
     pub temperature: Option<f64>,
 }
 
+/// Deserialize an `Option<Option<T>>` field so JSON `null` means "clear":
+/// absent → `None` (no update), `null` → `Some(None)`, value → `Some(Some(v))`.
+/// With plain `#[serde(default)]`, `null` folds into the outer `None` and a
+/// clear sent by the frontend becomes a silent no-op.
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
+}
+
 /// Partial updates to a shot
+///
+/// Nullable fields use `double_option` + `skip_serializing_if` so the JSON
+/// round-trip is lossless: absent ↔ outer `None`, `null` ↔ `Some(None)`.
+/// Undo relies on this — previous values are stored as serialized `ShotUpdates`
+/// (`values_json`), so an un-set field must serialize as absent, not `null`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotUpdates {
     #[serde(default)]
@@ -145,34 +162,34 @@ pub struct ShotUpdates {
     #[serde(default)]
     #[ts(optional)]
     pub depth_out: Option<f64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pitch_in: Option<Option<f64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pitch_out: Option<Option<f64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub left: Option<Option<f64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub right: Option<Option<f64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub up: Option<Option<f64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub down: Option<Option<f64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub comment: Option<Option<String>>,
     #[serde(default, alias = "is_virtual")]
     #[ts(optional)]
     pub is_reference: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub marker_index: Option<Option<u32>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub temperature: Option<Option<f64>>,
 }
@@ -349,9 +366,9 @@ impl Shot {
             self.down = *v;
         }
         if let Some(v) = &updates.comment {
-            // Normalize empty string → None (clear comment).
-            // JSON `null` for Option<Option<String>> deserializes as outer None (= no update),
-            // so the frontend sends "" to signal "clear", which arrives as Some(Some("")).
+            // Normalize empty string → None (clear comment). JSON `null` now
+            // arrives as Some(None) (see `double_option`), but older callers
+            // (EditShotDialog) send "" to signal "clear" — both must work.
             self.comment = match v {
                 Some(s) if s.is_empty() => None,
                 _ => v.clone(),
@@ -549,6 +566,55 @@ mod tests {
         };
         shot.apply_updates(&updates);
         assert_eq!(shot.comment.as_deref(), Some("note"));
+    }
+
+    #[test]
+    fn shot_updates_json_null_deserializes_as_clear() {
+        let updates: ShotUpdates =
+            serde_json::from_value(serde_json::json!({ "left": null })).unwrap();
+        assert_eq!(updates.left, Some(None), "null should mean clear");
+        assert_eq!(updates.right, None, "absent field should mean no update");
+
+        let updates: ShotUpdates = serde_json::from_value(serde_json::json!({
+            "comment": null,
+            "marker_index": null,
+            "temperature": 4.5,
+        }))
+        .unwrap();
+        assert_eq!(updates.comment, Some(None));
+        assert_eq!(updates.marker_index, Some(None));
+        assert_eq!(updates.temperature, Some(Some(4.5)));
+        assert_eq!(updates.pitch_in, None);
+    }
+
+    #[test]
+    fn shot_updates_serde_round_trip_preserves_clear_vs_absent() {
+        // Undo stores previous values as serialized ShotUpdates (values_json);
+        // a clear must survive the round-trip and an un-set field must not
+        // come back as a clear.
+        let updates = ShotUpdates {
+            left: Some(None),
+            comment: Some(Some("note".to_string())),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&updates).unwrap();
+        let back: ShotUpdates = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.left, Some(None));
+        assert_eq!(back.comment, Some(Some("note".to_string())));
+        assert_eq!(back.right, None);
+        assert_eq!(back.temperature, None);
+    }
+
+    #[test]
+    fn apply_updates_json_null_clears_nullable_fields() {
+        let mut shot = Shot::new(1, base_shot_data());
+        let updates: ShotUpdates =
+            serde_json::from_value(serde_json::json!({ "left": null, "comment": null }))
+                .unwrap();
+        shot.apply_updates(&updates);
+        assert!(shot.left.is_none(), "null should clear left");
+        assert!(shot.comment.is_none(), "null should clear comment");
+        assert_eq!(shot.right, Some(0.6), "absent fields stay untouched");
     }
 
     #[test]

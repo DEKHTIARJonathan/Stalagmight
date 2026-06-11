@@ -1210,10 +1210,14 @@ pub fn run() {
             commands::config::update_config,
             commands::config::reload_config,
             commands::config::update_panel_sizes,
+            commands::config::update_data_table_view,
             // Display settings (per-project)
             commands::config::load_display_settings,
             commands::config::save_display_setting,
             commands::config::get_display_setting,
+            // Raw table browsing (data table fullscreen)
+            commands::raw_data::get_raw_table_names,
+            commands::raw_data::get_raw_table,
             // Validation
             commands::validation::get_project_warnings,
             commands::validation::check_project_integrity,

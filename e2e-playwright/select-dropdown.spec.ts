@@ -1,41 +1,36 @@
+/**
+ * E2E tests for the generic Select component (portaled dropdown).
+ *
+ * Subject: the Number Format select in Settings > General
+ * (`select-number-format`, 4 options). The DataTable section dropdown that
+ * these tests previously used no longer exists — the table header was
+ * condensed and sections are now selected app-wide.
+ *
+ * Behaviors under test are the Select component's own: open/close, portal
+ * z-order, keyboard navigation, and the various close paths.
+ */
 import { test, expect, Page, Locator } from './fixtures/coverage';
-import {
-  setupMockedPage,
-  createProject,
-  seedProjectWithSections,
-  waitForMapIdle,
-  waitForNoDialogs,
-  type SectionSeed,
-} from './helpers/app';
+import { setupMockedPage } from './helpers/app';
 
-const sectionSeeds: SectionSeed[] = [
-  {
-    name: 'Main Passage',
-    direction: 'in',
-    shots: [
-      { azimuth_in: 45, azimuth_out: 225, length: 10.5, depth_in: -2, depth_out: -2.5, left: 1.5, right: 2.3, up: 3.0, down: 0.8 },
-      { azimuth_in: 90, azimuth_out: 270, length: 15.2, depth_in: -2.5, depth_out: -5.0, left: 0.5, right: 0.7, up: 1.2, down: 1.5 },
-    ],
-  },
-  {
-    name: 'Side Tunnel',
-    direction: 'out',
-    shots: [
-      { azimuth_in: 270, azimuth_out: 90, length: 5.0, depth_in: -3.0, depth_out: -4.0, left: 0, right: 0, up: 0, down: 0 },
-    ],
-  },
-];
-
-async function createProjectWithSections(page: Page): Promise<void> {
-  await createProject(page, 'Select Dropdown Test Project');
-  await seedProjectWithSections(page, sectionSeeds);
-  await waitForNoDialogs(page);
-  await waitForMapIdle(page);
+/** Open the Settings dialog from the GlobalView header. */
+async function openSettingsDialog(page: Page): Promise<void> {
+  const settingsButton = page.getByTestId('settings-button');
+  await expect(settingsButton).toBeVisible({ timeout: 5000 });
+  await settingsButton.click();
+  await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
 }
 
-async function openDataTable(page: Page): Promise<void> {
-  await page.keyboard.press('Control+3');
-  await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+/** Navigate to the General tab (hosts the number-format select). */
+async function navigateToGeneralTab(page: Page): Promise<void> {
+  const generalTab = page.getByTestId('settings-tab-general');
+  await expect(generalTab).toBeVisible();
+  await generalTab.click();
+  await expect(page.getByTestId('settings-panel-general')).toBeVisible({ timeout: 3000 });
+}
+
+/** Get the trigger button of the subject Select. */
+function getSelectTrigger(page: Page): Locator {
+  return page.getByTestId('select-number-format').locator('button').first();
 }
 
 async function pressUntilActiveDescendant(
@@ -61,8 +56,7 @@ async function pressUntilActiveDescendant(
 /**
  * Get the portaled Select listbox from a trigger button using aria-controls.
  * Waits for the attribute to be set (React state update) before reading it.
- * This avoids ambiguity with other listbox elements on the page
- * (e.g. the sections panel listbox).
+ * This avoids ambiguity with other listbox elements on the page.
  */
 async function getSelectListbox(page: Page, trigger: Locator): Promise<Locator> {
   // Wait for aria-controls to be set (React may need a render cycle after open)
@@ -75,17 +69,14 @@ async function getSelectListbox(page: Page, trigger: Locator): Promise<Locator> 
 test.describe('Select Dropdown (Portal)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
-    await createProjectWithSections(page);
+    await openSettingsDialog(page);
+    await navigateToGeneralTab(page);
   });
 
-  test('dropdown visible above sticky header (z-order proof)', async ({ page }) => {
-    // Open data table to get a sticky header context
-    await openDataTable(page);
-
-    // Open the section selector dropdown
-    const sectionSelect = page.getByTestId('data-table-section-select');
-    await expect(sectionSelect).toBeVisible();
-    const trigger = sectionSelect.locator('button').first();
+  test('dropdown options render topmost above dialog content (z-order proof)', async ({ page }) => {
+    // Open the number-format dropdown inside the settings dialog
+    const trigger = getSelectTrigger(page);
+    await expect(trigger).toBeVisible();
     await trigger.click();
 
     // Verify the listbox is visible via aria-controls
@@ -98,8 +89,9 @@ test.describe('Select Dropdown (Portal)', () => {
     const optionBox = await firstOption.boundingBox();
     expect(optionBox).not.toBeNull();
 
-    // Use elementFromPoint at the center of the option to verify it's the topmost element,
-    // not hidden behind a sticky header
+    // Use elementFromPoint at the center of the option to verify it's the topmost
+    // element, not hidden behind the dialog content (the listbox is portaled to
+    // document.body and must escape the dialog's stacking context)
     const isOptionTopmost = await page.evaluate(({ x, y }) => {
       const el = document.elementFromPoint(x, y);
       if (!el) return false;
@@ -113,12 +105,8 @@ test.describe('Select Dropdown (Portal)', () => {
   });
 
   test('dropdown closes on external scroll', async ({ page }) => {
-    // Open data table
-    await openDataTable(page);
-
-    // Open the section selector dropdown
-    const sectionSelect = page.getByTestId('data-table-section-select');
-    const trigger = sectionSelect.locator('button').first();
+    // Open the number-format dropdown
+    const trigger = getSelectTrigger(page);
     await trigger.click();
 
     const listbox = await getSelectListbox(page, trigger);
@@ -134,12 +122,8 @@ test.describe('Select Dropdown (Portal)', () => {
   });
 
   test('keyboard navigation works (ArrowDown/Up, Enter, Escape)', async ({ page }) => {
-    // Open data table
-    await openDataTable(page);
-
-    // Focus the section selector trigger
-    const sectionSelect = page.getByTestId('data-table-section-select');
-    const trigger = sectionSelect.locator('button').first();
+    // Focus the number-format select trigger
+    const trigger = getSelectTrigger(page);
     await trigger.focus();
     await expect(trigger).toBeFocused();
 
@@ -157,29 +141,30 @@ test.describe('Select Dropdown (Portal)', () => {
       throw new Error('Expected aria-activedescendant to be set on the trigger.');
     }
 
+    // Number format has 4 options: locale, period (1,234.56), comma, space
     const options = listbox.locator('[role="option"]');
-    await expect(options).toHaveCount(2);
-    const sideOption = options.nth(1);
-    const sideOptionId = await sideOption.getAttribute('id');
-    if (!sideOptionId) {
-      throw new Error('Expected Side Tunnel option to have an id for aria-activedescendant.');
+    await expect(options).toHaveCount(4);
+    const periodOption = options.nth(1);
+    const periodOptionId = await periodOption.getAttribute('id');
+    if (!periodOptionId) {
+      throw new Error('Expected the period-format option to have an id for aria-activedescendant.');
     }
 
-    // ArrowDown should move to Side Tunnel
-    await pressUntilActiveDescendant(page, trigger, 'ArrowDown', sideOptionId);
+    // ArrowDown should move to the period format option
+    await pressUntilActiveDescendant(page, trigger, 'ArrowDown', periodOptionId);
 
     // ArrowUp should return to initial item
     await pressUntilActiveDescendant(page, trigger, 'ArrowUp', initialActive);
 
-    // Move back to Side Tunnel and select with Enter
-    await pressUntilActiveDescendant(page, trigger, 'ArrowDown', sideOptionId);
+    // Move back to the period format option and select with Enter
+    await pressUntilActiveDescendant(page, trigger, 'ArrowDown', periodOptionId);
     await page.keyboard.press('Enter');
 
     // Dropdown should close after selection
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
 
     // Verify the selected value changed
-    await expect(trigger).toContainText('Side Tunnel');
+    await expect(trigger).toContainText('1,234.56');
 
     // Re-open and close with Escape
     await expect(trigger).toBeFocused();
@@ -189,15 +174,14 @@ test.describe('Select Dropdown (Portal)', () => {
     await page.keyboard.press('Escape');
     await expect(listbox).not.toBeVisible({ timeout: 2000 });
     await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    // Escape was consumed by the open dropdown — the settings dialog stays open
+    await expect(page.getByTestId('settings-dialog')).toBeVisible();
   });
 
   test('internal scroll does not close dropdown', async ({ page }) => {
-    // Open data table
-    await openDataTable(page);
-
-    // Open the section selector dropdown
-    const sectionSelect = page.getByTestId('data-table-section-select');
-    const trigger = sectionSelect.locator('button').first();
+    // Open the number-format dropdown
+    const trigger = getSelectTrigger(page);
     await trigger.click();
 
     const listbox = await getSelectListbox(page, trigger);
@@ -219,20 +203,16 @@ test.describe('Select Dropdown (Portal)', () => {
   });
 
   test('click outside closes dropdown', async ({ page }) => {
-    // Open data table
-    await openDataTable(page);
-
-    // Open the section selector dropdown
-    const sectionSelect = page.getByTestId('data-table-section-select');
-    const trigger = sectionSelect.locator('button').first();
+    // Open the number-format dropdown
+    const trigger = getSelectTrigger(page);
     await trigger.click();
 
     const listbox = await getSelectListbox(page, trigger);
     await expect(listbox).toBeVisible();
 
-    // Click elsewhere on the page (outside the dropdown and trigger)
-    // Use mousedown on a known element to avoid hitting the dropdown
-    await page.getByTestId('map-canvas').dispatchEvent('mousedown');
+    // Mousedown elsewhere on the page (outside the dropdown and trigger).
+    // Use dispatchEvent on the settings sidebar so no click side effects fire.
+    await page.getByTestId('settings-tab-general').dispatchEvent('mousedown');
 
     // Dropdown should close
     await expect(listbox).not.toBeVisible({ timeout: 2000 });

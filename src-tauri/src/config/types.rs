@@ -291,6 +291,45 @@ pub struct PanelsConfig {
     pub detail_panel_width: u32,
     /// Data table height in pixels
     pub data_table_height: u32,
+    /// Shots-table column order (grid column keys; empty = declaration order)
+    #[serde(default)]
+    pub data_table_shot_column_order: Vec<String>,
+    /// Shots-table hidden column keys
+    #[serde(default = "default_data_table_hidden_columns")]
+    pub data_table_shot_hidden_columns: Vec<String>,
+    /// Shots-table azimuth display: "avg" | "inout" | "off"
+    #[serde(default = "default_azimuth_mode")]
+    pub data_table_azimuth_mode: String,
+    /// Shots-table inclination display: "avg" | "inout" | "off"
+    #[serde(default = "default_inclination_mode")]
+    pub data_table_inclination_mode: String,
+    /// Stations-table column order (grid column keys; empty = declaration order)
+    #[serde(default)]
+    pub data_table_station_column_order: Vec<String>,
+    /// Stations-table hidden column keys (both coordinate pairs start hidden)
+    #[serde(default = "default_station_hidden_columns")]
+    pub data_table_station_hidden_columns: Vec<String>,
+}
+
+fn default_station_hidden_columns() -> Vec<String> {
+    vec![
+        "_x".to_string(),
+        "_y".to_string(),
+        "_lat".to_string(),
+        "_long".to_string(),
+    ]
+}
+
+fn default_data_table_hidden_columns() -> Vec<String> {
+    vec!["section_id".to_string(), "shot_id".to_string()]
+}
+
+fn default_azimuth_mode() -> String {
+    "avg".to_string()
+}
+
+fn default_inclination_mode() -> String {
+    "off".to_string()
 }
 
 /// Per-provider cache override

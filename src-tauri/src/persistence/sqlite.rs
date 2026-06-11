@@ -3,6 +3,7 @@ use chrono::{NaiveDate, Utc};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
@@ -15,7 +16,43 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
+
+/// Schema version at which persisted undo/redo payloads became safe to replay.
+///
+/// v7 changed the `ShotUpdates` JSON wire format: nullable fields now use a
+/// `double_option` deserializer where an explicit `null` means "clear the
+/// field" (`Some(None)`), while pre-v7 writers serialized every UNTOUCHED
+/// nullable field as an explicit `null`. Replaying a pre-v7 undo/redo entry
+/// under the new semantics would silently clear pitch/LRUD/comment/marker/
+/// temperature on the target shot. Legacy JSON cannot distinguish "untouched"
+/// from "restore-to-empty", so files below this version get their persisted
+/// undo/redo stacks dropped on open (see `drop_legacy_undo_history`).
+///
+/// Deliberately a separate constant from `SCHEMA_VERSION`: future schema bumps
+/// (v8+) must NOT re-drop undo history unless the undo payload format changes
+/// again, in which case bump this constant too.
+const UNDO_FORMAT_SAFE_VERSION: i32 = 7;
+
+/// Maximum number of rows a single raw-table page request may return.
+pub const MAX_RAW_PAGE_ROWS: u32 = 10_000;
+
+/// Render a blob value as a size placeholder, e.g. `<blob 4.2 KB>`.
+fn format_blob_placeholder(len: usize) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let len = len as f64;
+    if len < KB {
+        format!("<blob {len:.0} B>")
+    } else if len < MB {
+        format!("<blob {:.1} KB>", len / KB)
+    } else if len < GB {
+        format!("<blob {:.1} MB>", len / MB)
+    } else {
+        format!("<blob {:.1} GB>", len / GB)
+    }
+}
 
 fn compress_json(json: &str) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -56,16 +93,24 @@ impl Database {
         let db = Self { conn };
         db.enable_foreign_keys()?;
 
-        if let Ok(version) = db.get_user_version() {
-            if version > SCHEMA_VERSION {
-                tracing::warn!(
-                    current = version,
-                    expected = SCHEMA_VERSION,
-                    "Database schema version is newer than this app"
-                );
-            }
+        let prior_version = db.get_user_version().unwrap_or(0);
+        if prior_version > SCHEMA_VERSION {
+            tracing::warn!(
+                current = prior_version,
+                expected = SCHEMA_VERSION,
+                "Database schema version is newer than this app"
+            );
         }
         db.init_schema()?;
+        // `open` stamps the file with the current SCHEMA_VERSION below without
+        // running the full migration chain (init_schema is CREATE IF NOT
+        // EXISTS). Pre-v7 persisted undo/redo payloads are unsafe to replay
+        // (see UNDO_FORMAT_SAFE_VERSION), so drop them here BEFORE the stamp
+        // erases the evidence that this file predates the format change.
+        // No-op for freshly created files (empty tables).
+        if prior_version < UNDO_FORMAT_SAFE_VERSION {
+            db.drop_legacy_undo_history()?;
+        }
         db.set_user_version(SCHEMA_VERSION)?;
         tracing::debug!("Schema initialized");
 
@@ -535,6 +580,38 @@ impl Database {
         Ok(())
     }
 
+    /// Drop persisted undo/redo stacks written by pre-v7 builds (schema v6→v7).
+    ///
+    /// Pre-v7 builds serialized every untouched nullable `ShotUpdates` field as
+    /// an explicit `"left": null, "pitch_in": null, ...` inside the persisted
+    /// `command_json` / `undo_data_json` payloads. Under the v7 `double_option`
+    /// semantics an explicit `null` means "clear the field", so replaying such
+    /// an entry would silently wipe pitch/LRUD/comment/marker/temperature on
+    /// the target shot — an upgrade-path data loss. The legacy JSON is
+    /// ambiguous (null = "untouched" and "restore-to-empty" look identical),
+    /// so the only safe option is to drop the persisted stacks: they are
+    /// best-effort history (capped at ~20 entries), and losing them once at
+    /// upgrade is acceptable.
+    fn drop_legacy_undo_history(&self) -> Result<()> {
+        for table in ["undo_stack", "redo_stack"] {
+            if !self.table_exists(table)? {
+                continue;
+            }
+            let removed = self
+                .conn
+                .execute(&format!("DELETE FROM {table}"), [])?;
+            if removed > 0 {
+                tracing::info!(
+                    table,
+                    removed,
+                    purpose = "prevent legacy undo entries from clearing shot fields",
+                    "Dropped pre-v7 persisted undo history (explicit-null payloads are unsafe to replay)"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Enable foreign key enforcement on this connection.
     fn enable_foreign_keys(&self) -> Result<()> {
         self.conn.execute("PRAGMA foreign_keys = ON;", [])?;
@@ -972,6 +1049,9 @@ impl Database {
         }
         if current < 4 {
             Self::migrate_is_virtual_to_is_reference(&self.conn)?;
+        }
+        if current < UNDO_FORMAT_SAFE_VERSION {
+            self.drop_legacy_undo_history()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
@@ -2680,6 +2760,75 @@ impl Database {
     }
 
     // =========================================================================
+    // Raw table browsing (data table fullscreen)
+    // =========================================================================
+
+    /// List user table names in the database, excluding sqlite-internal tables.
+    pub fn list_raw_table_names(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        let mut names = Vec::new();
+        for row in rows {
+            names.push(row?);
+        }
+        Ok(names)
+    }
+
+    /// Read a page of rows from a raw table, with every value stringified
+    /// (NULL → `"NULL"`, blobs → a size placeholder like `<blob 4.2 KB>`).
+    ///
+    /// Injection guard: `table` must be an exact member of
+    /// [`Self::list_raw_table_names`]; the identifier is double-quoted and
+    /// LIMIT/OFFSET are bound parameters. `limit` is clamped to
+    /// [`MAX_RAW_PAGE_ROWS`].
+    pub fn read_raw_table(&self, table: &str, limit: u32, offset: u32) -> Result<RawTableData> {
+        let known = self.list_raw_table_names()?;
+        if !known.iter().any(|name| name == table) {
+            anyhow::bail!("Unknown table: {table}");
+        }
+        let limit = limit.min(MAX_RAW_PAGE_ROWS);
+        let ident = format!("\"{}\"", table.replace('"', "\"\""));
+
+        let total_rows: u32 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM {ident}"),
+            [],
+            |row| row.get(0),
+        )?;
+
+        let mut stmt = self
+            .conn
+            .prepare(&format!("SELECT * FROM {ident} LIMIT ?1 OFFSET ?2"))?;
+        let columns: Vec<String> = stmt.column_names().iter().map(|c| (*c).to_string()).collect();
+        let column_count = columns.len();
+        let mapped = stmt.query_map(params![limit, offset], |row| {
+            let mut values = Vec::with_capacity(column_count);
+            for i in 0..column_count {
+                values.push(match row.get_ref(i)? {
+                    ValueRef::Null => "NULL".to_string(),
+                    ValueRef::Integer(v) => v.to_string(),
+                    ValueRef::Real(v) => v.to_string(),
+                    ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
+                    ValueRef::Blob(b) => format_blob_placeholder(b.len()),
+                });
+            }
+            Ok(values)
+        })?;
+
+        let mut rows = Vec::new();
+        for row in mapped {
+            rows.push(row?);
+        }
+        Ok(RawTableData {
+            columns,
+            rows,
+            total_rows,
+        })
+    }
+
+    // =========================================================================
     // Recovery methods (SPEC 14.4)
     // =========================================================================
 
@@ -2902,6 +3051,15 @@ impl Database {
         let count: i64 = self.conn.query_row("SELECT COUNT(*) FROM station_merges", [], |row| row.get(0))?;
         Ok(count as usize)
     }
+}
+
+/// A stringified page of rows from a raw sqlite table.
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct RawTableData {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub total_rows: u32,
 }
 
 /// Information about a backup file.

@@ -7,6 +7,7 @@ pub mod import;
 pub mod logging;
 pub mod memory;
 pub mod project;
+pub mod raw_data;
 pub mod recovery;
 pub mod section;
 pub mod shot;

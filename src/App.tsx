@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useMemo } from 'react';
+import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
@@ -157,9 +157,13 @@ function App() {
     setDateFormatLocale(config?.general?.date_format ?? 'locale');
   }, [config?.general?.date_format]);
 
-  // Initialize panel sizes from config
+  // Initialize panel sizes from config ONCE at startup. Config reloads happen
+  // live (saving any panel/view preference re-fetches it); re-initializing on
+  // each would snap user-dragged panel sizes back to their persisted values.
+  const panelSizesInitialized = useRef(false);
   useEffect(() => {
-    if (config?.panels) {
+    if (config?.panels && !panelSizesInitialized.current) {
+      panelSizesInitialized.current = true;
       initPanelSizes(config.panels);
     }
   }, [config, initPanelSizes]);
