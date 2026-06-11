@@ -444,7 +444,7 @@ describe('computeMergeOptions', () => {
     expect(opts[1]).toEqual({ offset: 1, importStation: 1, existingStation: 0 });
   });
 
-  it('uses only endpoint merge options when target has an extra forward station', () => {
+  it('ignores target-side extra-shot metadata for forward merge options', () => {
     const suggestion = {
       importStationIndex: 0,
       existingStationIndex: 18,
@@ -458,11 +458,11 @@ describe('computeMergeOptions', () => {
 
     expect(opts).toEqual([
       { offset: 0, importStation: 0, existingStation: 18 },
-      { offset: 1, importStation: 1, existingStation: 20 },
+      { offset: 1, importStation: 1, existingStation: 19 },
     ]);
   });
 
-  it('uses only endpoint merge options when target has an extra reverse station', () => {
+  it('ignores target-side extra-shot metadata for reverse merge options', () => {
     const suggestion = {
       importStationIndex: 0,
       existingStationIndex: 20,
@@ -476,7 +476,7 @@ describe('computeMergeOptions', () => {
 
     expect(opts).toEqual([
       { offset: 0, importStation: 0, existingStation: 20 },
-      { offset: 1, importStation: 1, existingStation: 18 },
+      { offset: 1, importStation: 1, existingStation: 19 },
     ]);
   });
 });

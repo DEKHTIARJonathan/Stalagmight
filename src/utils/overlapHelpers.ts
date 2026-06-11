@@ -152,23 +152,8 @@ export function computeTargetShotIndex(
   params: OverlapParams,
 ): number {
   const { importStationIndex, matchedShots, existingStationIndex, direction } = params;
-  const existingMatchedShots = params.existingMatchedShots ?? matchedShots;
   const overlapStart = importStationIndex === 0 ? 0 : importStationIndex - matchedShots;
   const k = overlapId - overlapStart;
-
-  if (existingMatchedShots !== matchedShots) {
-    if (k <= 0) return direction === 'forward' ? existingStationIndex : existingStationIndex - 1;
-    if (k >= matchedShots - 1) {
-      return direction === 'forward'
-        ? existingStationIndex + existingMatchedShots - 1
-        : existingStationIndex - existingMatchedShots;
-    }
-    const ratio = k / Math.max(1, matchedShots - 1);
-    const targetOffset = Math.round(ratio * Math.max(0, existingMatchedShots - 1));
-    return direction === 'forward'
-      ? existingStationIndex + targetOffset
-      : existingStationIndex - 1 - targetOffset;
-  }
 
   if (importStationIndex === 0) {
     // Front
@@ -205,26 +190,22 @@ export function computeMergeOptions(
     direction,
     isPartial,
   } = suggestion;
-  const existingMatchedShots = suggestion.existingMatchedShots ?? matchedShots;
   const maxImportOffset = isPartial ? matchedShots - 1 : matchedShots;
-  const maxExistingOffset = isPartial ? existingMatchedShots - 1 : existingMatchedShots;
   const options: MergeOption[] = [];
-  const offsets = maxImportOffset === maxExistingOffset
-    ? Array.from({ length: maxImportOffset + 1 }, (_, k) => [k, k] as const)
-    : [[0, 0] as const, [maxImportOffset, maxExistingOffset] as const];
+  const offsets = Array.from({ length: maxImportOffset + 1 }, (_, k) => k);
 
-  for (const [importOffset, existingOffset] of offsets) {
-    const importStation = importStationIndex === 0 ? importOffset : importStationIndex - importOffset;
+  for (const offset of offsets) {
+    const importStation = importStationIndex === 0 ? offset : importStationIndex - offset;
     const existingStation = direction === 'forward'
-      ? existingStationIndex + existingOffset
-      : existingStationIndex - existingOffset;
+      ? existingStationIndex + offset
+      : existingStationIndex - offset;
 
     // Guard: stations must stay within valid ranges
     if (importStation < 0 || importStation > importShotCount) continue;
     if (existingStation < 0) continue;
 
     if (!options.some((o) => o.importStation === importStation && o.existingStation === existingStation)) {
-      options.push({ offset: importOffset, importStation, existingStation });
+      options.push({ offset, importStation, existingStation });
     }
   }
   return options;

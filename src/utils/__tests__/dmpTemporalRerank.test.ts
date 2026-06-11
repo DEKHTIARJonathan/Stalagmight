@@ -232,7 +232,7 @@ describe('rerankSuggestionsByTemporalPlan', () => {
     expect(result.rejectedCount).toBeGreaterThan(0);
   });
 
-  it('honors the preferred endpoint for candidates with target-side extra stations', () => {
+  it('honors the preferred one-to-one merge offset', () => {
     const localSections = [
       makeSection('A', '2026-06-11T10:00:00', [makeShot(10, 10, 0), makeShot(10, 10, 5)]),
       makeSection('B', '2026-06-11T10:15:00', [makeShot(100, 10, 15), makeShot(100, 10, 20)]),
@@ -243,7 +243,6 @@ describe('rerankSuggestionsByTemporalPlan', () => {
       importStationIndex: 0,
       existingStationIndex: 0,
       matchedShots: 1,
-      existingMatchedShots: 2,
       preferredMergeOffset: 0,
       score: 2,
     });

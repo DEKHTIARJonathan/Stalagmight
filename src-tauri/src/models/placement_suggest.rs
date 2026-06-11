@@ -270,16 +270,12 @@ struct SuggestionConfig {
     max_reference_shots: usize,
     /// Maximum number of suggestions to return.
     max_suggestions: usize,
-    /// Minimum partial shot length ratio.
-    min_partial_ratio: f64,
     /// Short shot threshold (meters) — shots below this get reduced weight.
     short_shot_threshold: f64,
     /// Penalty multiplier for single-shot matches (0.0–1.0).
     single_shot_penalty: f64,
     /// Hard cutoff: max azimuth error for full shots (degrees).
     max_azimuth_error_full: f64,
-    /// Hard cutoff: max azimuth error for partial shots (degrees).
-    max_azimuth_error_partial: f64,
     /// Hard cutoff: max depth error per measurement point (meters).
     max_depth_error: f64,
     /// Length error fraction for dynamic cutoff.
@@ -308,11 +304,9 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             min_aggregate_score: c.min_aggregate_score,
             max_reference_shots: c.max_reference_shots as usize,
             max_suggestions: c.max_suggestions as usize,
-            min_partial_ratio: c.min_partial_ratio,
             short_shot_threshold: c.short_shot_threshold,
             single_shot_penalty: c.single_shot_penalty,
             max_azimuth_error_full: c.max_azimuth_error_full,
-            max_azimuth_error_partial: c.max_azimuth_error_partial,
             max_depth_error: c.max_depth_error,
             max_length_error_fraction: c.max_length_error_fraction,
             max_length_error_floor: c.max_length_error_floor,
@@ -358,16 +352,6 @@ impl MatchShot {
         }
     }
 
-    fn depth_change(&self) -> f64 {
-        self.depth_out - self.depth_in
-    }
-}
-
-/// A run of one or more consecutive shots collapsed into a single chord for
-/// matching surveys with different station density (markers / slight kiss-offs).
-struct CompositeShot {
-    shot: MatchShot,
-    bend_penalty: f64,
 }
 
 /// Compute average azimuth from two readings, handling 360° wraparound.
@@ -385,70 +369,6 @@ fn angular_difference(a: f64, b: f64) -> f64 {
 /// Gaussian falloff: exp(-(error / sigma)^2).
 fn gaussian(error: f64, sigma: f64) -> f64 {
     (-((error / sigma).powi(2))).exp()
-}
-
-fn shot_vector(shot: &MatchShot) -> (f64, f64) {
-    let rad = shot.avg_azimuth.to_radians();
-    (shot.length * rad.sin(), shot.length * rad.cos())
-}
-
-fn composite_shot(shots: &[MatchShot]) -> Option<CompositeShot> {
-    let first = shots.first()?;
-    let last = shots.last()?;
-
-    let mut x = 0.0;
-    let mut y = 0.0;
-    let mut path_length = 0.0;
-    for shot in shots {
-        let (dx, dy) = shot_vector(shot);
-        x += dx;
-        y += dy;
-        path_length += shot.length;
-    }
-
-    let chord_length = (x * x + y * y).sqrt();
-    if chord_length <= f64::EPSILON {
-        return None;
-    }
-
-    let chord_azimuth = x.atan2(y).to_degrees().rem_euclid(360.0);
-    let mut max_az_error = 0.0_f64;
-    for shot in shots {
-        max_az_error = max_az_error.max(angular_difference(shot.avg_azimuth, chord_azimuth));
-    }
-
-    let relative_bend = if path_length > 0.0 {
-        (path_length - chord_length).max(0.0) / path_length
-    } else {
-        0.0
-    };
-
-    // Marker stations should be almost straight. Slight kiss-offs may bend, but
-    // cap both angular spread and path-vs-chord deviation so side passages do not
-    // collapse into one shot.
-    if shots.len() > 1 && (max_az_error > 20.0 || relative_bend > 0.08) {
-        return None;
-    }
-
-    let bend_penalty = if shots.len() <= 1 {
-        0.0
-    } else {
-        // Exact collinear marker splits get a small penalty; bent kiss-offs pay
-        // more, so clean 1:1 matches still win when available.
-        0.04 * (shots.len() - 1) as f64
-            + (max_az_error / 20.0).min(1.0) * 0.12
-            + (relative_bend / 0.08).min(1.0) * 0.12
-    };
-
-    Some(CompositeShot {
-        shot: MatchShot {
-            avg_azimuth: chord_azimuth,
-            length: chord_length,
-            depth_in: first.depth_in,
-            depth_out: last.depth_out,
-        },
-        bend_penalty,
-    })
 }
 
 /// Dynamic length cutoff: 5% of existing length, floored at 0.6m.
@@ -497,114 +417,6 @@ fn compute_shot_score(
         + config.depth_out_weight * depth_out_score
 }
 
-/// Try partial match: import shot covers only part of existing shot.
-/// Returns `Some((score, length_ratio))` if partial match detected,
-/// trying both same-direction and opposite-direction.
-fn try_partial_match(
-    import: &MatchShot,
-    existing: &MatchShot,
-    direction: MatchDirection,
-    config: &SuggestionConfig,
-) -> Option<(f64, f64)> {
-    // Determine the effective existing shot in the match direction
-    let (eff_length, eff_depth_in, eff_depth_out, eff_az) = match direction {
-        MatchDirection::Forward => (
-            existing.length,
-            existing.depth_in,
-            existing.depth_out,
-            existing.avg_azimuth,
-        ),
-        MatchDirection::Reverse => (
-            existing.length,
-            existing.depth_out,
-            existing.depth_in,
-            (existing.avg_azimuth + 180.0) % 360.0,
-        ),
-    };
-
-    if import.length >= eff_length {
-        return None;
-    }
-    let length_ratio = import.length / eff_length;
-    if length_ratio < config.min_partial_ratio {
-        return None;
-    }
-
-    // Try same-direction partial
-    let same_score = try_partial_one_direction(
-        import,
-        eff_az,
-        eff_length,
-        eff_depth_in,
-        eff_depth_out,
-        length_ratio,
-        config,
-    );
-
-    // Try opposite-direction partial (surveyor turned around partway)
-    let opp_import = import.reversed();
-    let opp_score = try_partial_one_direction(
-        &opp_import,
-        eff_az,
-        eff_length,
-        eff_depth_in,
-        eff_depth_out,
-        length_ratio,
-        config,
-    );
-
-    let best_score = same_score.max(opp_score);
-    if best_score >= config.min_shot_score {
-        Some((best_score, length_ratio))
-    } else {
-        None
-    }
-}
-
-/// Score a partial match in one direction (helper).
-fn try_partial_one_direction(
-    import: &MatchShot,
-    eff_az: f64,
-    _eff_length: f64,
-    eff_depth_in: f64,
-    eff_depth_out: f64,
-    length_ratio: f64,
-    config: &SuggestionConfig,
-) -> f64 {
-    let az_error = angular_difference(import.avg_azimuth, eff_az);
-
-    // Depth_in should match the start of the existing shot
-    let depth_in_error = (import.depth_in - eff_depth_in).abs();
-
-    // Depth proportionality check
-    let eff_dz = eff_depth_out - eff_depth_in;
-    let import_dz = import.depth_change();
-    let expected_dz = eff_dz * length_ratio;
-    let dz_error = (import_dz - expected_dz).abs();
-
-    // Hard cutoffs — relaxed azimuth threshold for partial matches,
-    // no length cutoff (surveyor's stopping point is arbitrary)
-    if az_error > config.max_azimuth_error_partial
-        || depth_in_error > config.max_depth_error
-        || dz_error > config.max_depth_error
-    {
-        return 0.0;
-    }
-
-    let az_score = gaussian(az_error, config.azimuth_sigma);
-    let depth_in_score = gaussian(depth_in_error, config.depth_sigma);
-    let dz_score = gaussian(dz_error, config.depth_sigma);
-
-    // Length doesn't carry signal for partial matches — the surveyor stopped at
-    // an arbitrary point, so length_ratio is definitional, not diagnostic.
-    let len_score = 1.0;
-
-    config.azimuth_weight * az_score
-        + config.length_weight * len_score
-        + config.depth_in_weight * depth_in_score
-        + config.depth_out_weight * dz_score
-}
-
 /// Result of trying to match a sequence of import shots against existing shots.
 struct SequenceMatch {
     score: f64,
@@ -619,7 +431,6 @@ struct DpCell {
     weight_sum: f64,
     import_count: usize,
     existing_count: usize,
-    is_partial: bool,
 }
 
 fn oriented_existing_shots(
@@ -637,9 +448,9 @@ fn oriented_existing_shots(
     }
 }
 
-fn run_weight(composite: &CompositeShot, config: &SuggestionConfig) -> f64 {
-    if composite.shot.length < config.short_shot_threshold {
-        composite.shot.length / config.short_shot_threshold
+fn shot_weight(shot: &MatchShot, config: &SuggestionConfig) -> f64 {
+    if shot.length < config.short_shot_threshold {
+        shot.length / config.short_shot_threshold
     } else {
         1.0
     }
@@ -668,6 +479,38 @@ fn single_front_overlap_key(suggestion: &PlacementSuggestion) -> Option<(usize, 
     };
 
     Some((0, existing_shot_index))
+}
+
+fn suggestion_endpoint_key(suggestion: &PlacementSuggestion) -> Option<(SectionId, usize, usize, usize, usize)> {
+    if suggestion.is_partial || suggestion.matched_shots != suggestion.existing_matched_shots {
+        return None;
+    }
+
+    let import_a = suggestion.import_station_index;
+    let import_b = if suggestion.import_station_index == 0 {
+        suggestion.matched_shots
+    } else {
+        suggestion.import_station_index.checked_sub(suggestion.matched_shots)?
+    };
+
+    let existing_b = match suggestion.direction {
+        MatchDirection::Forward => suggestion.existing_station_index.checked_add(suggestion.matched_shots)?,
+        MatchDirection::Reverse => suggestion.existing_station_index.checked_sub(suggestion.matched_shots)?,
+    };
+    let existing_a = suggestion.existing_station_index;
+
+    let (import_lo, import_hi) = if import_a <= import_b {
+        (import_a, import_b)
+    } else {
+        (import_b, import_a)
+    };
+    let (existing_lo, existing_hi) = if existing_a <= existing_b {
+        (existing_a, existing_b)
+    } else {
+        (existing_b, existing_a)
+    };
+
+    Some((suggestion.existing_section_id, import_lo, import_hi, existing_lo, existing_hi))
 }
 
 fn suppress_equivalent_single_front_reverses(suggestions: &mut Vec<PlacementSuggestion>) {
@@ -699,25 +542,39 @@ fn suppress_equivalent_single_front_reverses(suggestions: &mut Vec<PlacementSugg
     });
 }
 
-fn outward_runs(shots: &[MatchShot], station_index: usize) -> Vec<(bool, Vec<MatchShot>)> {
-    let mut runs = Vec::new();
-    let max_len = 3;
+fn suppress_duplicate_endpoint_pairs(suggestions: &mut Vec<PlacementSuggestion>) {
+    let mut kept: Vec<PlacementSuggestion> = Vec::with_capacity(suggestions.len());
 
-    for len in 1..=max_len {
-        if station_index >= len {
-            let run = shots[station_index - len..station_index]
-                .iter()
-                .rev()
-                .map(MatchShot::reversed)
-                .collect();
-            runs.push((false, run));
+    for suggestion in suggestions.drain(..) {
+        let Some(key) = suggestion_endpoint_key(&suggestion) else {
+            kept.push(suggestion);
+            continue;
+        };
+
+        if let Some(existing) = kept
+            .iter_mut()
+            .find(|candidate| suggestion_endpoint_key(candidate) == Some(key))
+        {
+            if suggestion.score > existing.score {
+                *existing = suggestion;
+            }
+        } else {
+            kept.push(suggestion);
         }
     }
 
-    for len in 1..=max_len {
-        if station_index + len <= shots.len() {
-            runs.push((true, shots[station_index..station_index + len].to_vec()));
-        }
+    *suggestions = kept;
+}
+
+fn outward_runs(shots: &[MatchShot], station_index: usize) -> Vec<(bool, Vec<MatchShot>)> {
+    let mut runs = Vec::new();
+
+    if station_index >= 1 {
+        runs.push((false, vec![shots[station_index - 1].reversed()]));
+    }
+
+    if station_index < shots.len() {
+        runs.push((true, vec![shots[station_index]]));
     }
 
     runs
@@ -740,20 +597,15 @@ fn station_context_multiplier(
         return 1.0;
     }
 
-    let mut scored: Vec<(f64, bool, bool, usize, usize)> = Vec::new();
+    let mut scored: Vec<(f64, bool, bool)> = Vec::new();
     for (import_forward, import_run) in &import_runs {
         for (existing_forward, existing_run) in &existing_runs {
-            if import_run.len() > 1 && existing_run.len() > 1 {
+            let (Some(import_shot), Some(existing_shot)) = (import_run.first(), existing_run.first()) else {
                 continue;
-            }
-            if let Some((score, _)) = score_composite_runs(import_run, existing_run, config) {
-                scored.push((
-                    score,
-                    *import_forward,
-                    *existing_forward,
-                    import_run.len(),
-                    existing_run.len(),
-                ));
+            };
+            let score = compute_shot_score(import_shot, existing_shot, MatchDirection::Forward, config);
+            if score >= config.min_shot_score {
+                scored.push((score, *import_forward, *existing_forward));
             }
         }
     }
@@ -764,8 +616,7 @@ fn station_context_multiplier(
 
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let best = scored[0];
-    let has_composite = best.3 > 1 || best.4 > 1;
-    let has_second_side = scored.iter().skip(1).any(|(_, import_forward, existing_forward, _, _)| {
+    let has_second_side = scored.iter().skip(1).any(|(_, import_forward, existing_forward)| {
         *import_forward != best.1 && *existing_forward != best.2
     });
 
@@ -774,8 +625,6 @@ fn station_context_multiplier(
 
     if has_second_side {
         1.18
-    } else if has_composite {
-        1.12
     } else if import_leaf || existing_leaf {
         1.0
     } else if best.0 >= 0.85 {
@@ -791,17 +640,7 @@ fn merge_offset_pairs(suggestion: &PlacementSuggestion) -> Vec<(usize, usize)> {
     } else {
         suggestion.matched_shots
     };
-    let existing_max_offset = if suggestion.is_partial {
-        suggestion.existing_matched_shots.saturating_sub(1)
-    } else {
-        suggestion.existing_matched_shots
-    };
-
-    if import_max_offset == existing_max_offset {
-        (0..=import_max_offset).map(|k| (k, k)).collect()
-    } else {
-        vec![(0, 0), (import_max_offset, existing_max_offset)]
-    }
+    (0..=import_max_offset).map(|k| (k, k)).collect()
 }
 
 fn merge_station_pair_for_offsets(
@@ -828,24 +667,6 @@ fn merge_station_pair_for_offsets(
     }
 }
 
-fn score_composite_runs(
-    import_run: &[MatchShot],
-    existing_run: &[MatchShot],
-    config: &SuggestionConfig,
-) -> Option<(f64, f64)> {
-    let import = composite_shot(import_run)?;
-    let existing = composite_shot(existing_run)?;
-    let score = compute_shot_score(&import.shot, &existing.shot, MatchDirection::Forward, config);
-    if score < config.min_shot_score {
-        return None;
-    }
-    let adjusted = (score - import.bend_penalty - existing.bend_penalty).max(0.0);
-    if adjusted < config.min_shot_score {
-        return None;
-    }
-    Some((adjusted, run_weight(&import, config)))
-}
-
 /// Try matching a sequence of import shots against existing shots starting at `start_idx`.
 fn try_match_sequence(
     import_shots: &[MatchShot],
@@ -867,39 +688,33 @@ fn try_match_sequence(
         weight_sum: 0.0,
         import_count: 0,
         existing_count: 0,
-        is_partial: false,
     });
 
     for i in 0..=n {
         for j in 0..=m {
             let Some(cell) = dp[i][j] else { continue };
-            for import_len in 1..=3 {
-                if i + import_len > n { continue; }
-                for existing_len in 1..=3 {
-                    if j + existing_len > m { continue; }
-                    if import_len > 1 && existing_len > 1 { continue; }
-                    let Some((score, weight)) = score_composite_runs(
-                        &import_shots[i..i + import_len],
-                        &existing_oriented[j..j + existing_len],
-                        config,
-                    ) else {
-                        continue;
-                    };
-                    let next = DpCell {
-                        score_sum: cell.score_sum + score * weight,
-                        weight_sum: cell.weight_sum + weight,
-                        import_count: cell.import_count + import_len,
-                        existing_count: cell.existing_count + existing_len,
-                        is_partial: cell.is_partial,
-                    };
-                    let target = &mut dp[i + import_len][j + existing_len];
-                    let replace = target
-                        .map(|old| cell_final_score(next, config) > cell_final_score(old, config))
-                        .unwrap_or(true);
-                    if replace {
-                        *target = Some(next);
-                    }
-                }
+            if i + 1 > n || j + 1 > m {
+                continue;
+            }
+            let import_shot = &import_shots[i];
+            let existing_shot = &existing_oriented[j];
+            let score = compute_shot_score(import_shot, existing_shot, MatchDirection::Forward, config);
+            if score < config.min_shot_score {
+                continue;
+            }
+            let weight = shot_weight(import_shot, config);
+            let next = DpCell {
+                score_sum: cell.score_sum + score * weight,
+                weight_sum: cell.weight_sum + weight,
+                import_count: cell.import_count + 1,
+                existing_count: cell.existing_count + 1,
+            };
+            let target = &mut dp[i + 1][j + 1];
+            let replace = target
+                .map(|old| cell_final_score(next, config) > cell_final_score(old, config))
+                .unwrap_or(true);
+            if replace {
+                *target = Some(next);
             }
         }
     }
@@ -920,55 +735,10 @@ fn try_match_sequence(
         }
     }
 
-    let mut best = match best {
+    let best = match best {
         Some(cell) if cell.import_count > 0 && cell.weight_sum > 0.0 => cell,
-        _ => {
-            // Preserve the existing partial-last-shot behavior as a fallback. It
-            // handles cases where the import stops partway through the target leg.
-            let existing_first = &existing_oriented[0];
-            if let Some((partial_score, length_ratio)) =
-                try_partial_match(&import_shots[0], existing_first, MatchDirection::Forward, config)
-            {
-                let weight = length_ratio
-                    * if import_shots[0].length < config.short_shot_threshold {
-                        import_shots[0].length / config.short_shot_threshold
-                    } else {
-                        1.0
-                    };
-                DpCell {
-                    score_sum: partial_score * weight,
-                    weight_sum: weight,
-                    import_count: 1,
-                    existing_count: 1,
-                    is_partial: true,
-                }
-            } else {
-                return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
-            }
-        }
+        _ => return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false },
     };
-
-    // If the best full/composite path did not consume all import reference shots,
-    // check whether the next unmatched import shot is a valid partial terminal leg.
-    if best.import_count < n && best.existing_count < existing_oriented.len() {
-        let import_shot = &import_shots[best.import_count];
-        let existing_shot = &existing_oriented[best.existing_count];
-        if let Some((partial_score, length_ratio)) =
-            try_partial_match(import_shot, existing_shot, MatchDirection::Forward, config)
-        {
-            let weight = length_ratio
-                * if import_shot.length < config.short_shot_threshold {
-                    import_shot.length / config.short_shot_threshold
-                } else {
-                    1.0
-                };
-            best.score_sum += partial_score * weight;
-            best.weight_sum += weight;
-            best.import_count += 1;
-            best.existing_count += 1;
-            best.is_partial = true;
-        }
-    }
 
     if best.import_count == 0 || best.weight_sum == 0.0 {
         return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
@@ -978,7 +748,7 @@ fn try_match_sequence(
         score: cell_final_score(best, config),
         matched_count: best.import_count,
         existing_matched_count: best.existing_count,
-        is_partial: best.is_partial,
+        is_partial: false,
     }
 }
 
@@ -1157,6 +927,7 @@ pub fn suggest_placements(
     }
 
     suppress_equivalent_single_front_reverses(&mut suggestions);
+    suppress_duplicate_endpoint_pairs(&mut suggestions);
 
     // Sort by score descending
     suggestions.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -1295,75 +1066,8 @@ mod tests {
         assert!(score > 0.9, "small azimuth error should still score high, got {score}");
     }
 
-    // ========================================================================
-    // Partial match tests
-    // ========================================================================
-
     #[test]
-    fn partial_match_shorter_import() {
-        let config = SuggestionConfig::default();
-        // Import shot covers half of the existing shot
-        let import = MatchShot {
-            avg_azimuth: 90.0,
-            length: 2.5,
-            depth_in: 3.0,
-            depth_out: 3.5, // half the depth change
-        };
-        let existing = MatchShot {
-            avg_azimuth: 90.0,
-            length: 5.0,
-            depth_in: 3.0,
-            depth_out: 4.0,
-        };
-        let result = try_partial_match(&import, &existing, MatchDirection::Forward, &config);
-        assert!(result.is_some(), "should detect partial match");
-        let (score, ratio) = result.unwrap();
-        assert!((ratio - 0.5).abs() < 1e-6, "ratio should be 0.5, got {ratio}");
-        assert!(score > 0.5, "partial match score should be reasonable, got {score}");
-    }
-
-    #[test]
-    fn partial_match_too_short() {
-        let config = SuggestionConfig::default();
-        // Import shot is only 10% of existing — below min_partial_ratio (15%)
-        let import = MatchShot {
-            avg_azimuth: 90.0,
-            length: 0.5,
-            depth_in: 3.0,
-            depth_out: 3.1,
-        };
-        let existing = MatchShot {
-            avg_azimuth: 90.0,
-            length: 5.0,
-            depth_in: 3.0,
-            depth_out: 4.0,
-        };
-        let result = try_partial_match(&import, &existing, MatchDirection::Forward, &config);
-        assert!(result.is_none(), "too-short partial should not match");
-    }
-
-    #[test]
-    fn partial_match_opposite_direction() {
-        let config = SuggestionConfig::default();
-        // Import shot is reversed (surveyor turned around partway)
-        let import = MatchShot {
-            avg_azimuth: 270.0, // 90 + 180
-            length: 2.5,
-            depth_in: 3.5,     // swapped
-            depth_out: 3.0,
-        };
-        let existing = MatchShot {
-            avg_azimuth: 90.0,
-            length: 5.0,
-            depth_in: 3.0,
-            depth_out: 4.0,
-        };
-        let result = try_partial_match(&import, &existing, MatchDirection::Forward, &config);
-        assert!(result.is_some(), "opposite-direction partial should match");
-    }
-
-    #[test]
-    fn no_partial_when_import_longer() {
+    fn length_deviation_is_hard_rejected() {
         let config = SuggestionConfig::default();
         let import = MatchShot {
             avg_azimuth: 90.0,
@@ -1377,8 +1081,8 @@ mod tests {
             depth_in: 3.0,
             depth_out: 4.0,
         };
-        let result = try_partial_match(&import, &existing, MatchDirection::Forward, &config);
-        assert!(result.is_none(), "import longer than existing should not be partial");
+        let score = compute_shot_score(&import, &existing, MatchDirection::Forward, &config);
+        assert_eq!(score, 0.0, "large length deviation should be hard-rejected");
     }
 
     // ========================================================================
@@ -1425,13 +1129,10 @@ mod tests {
     }
 
     #[test]
-    fn sequence_with_partial_last_shot() {
+    fn sequence_stops_before_length_deviation() {
         let config = SuggestionConfig::default();
         let import = vec![
             MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
-            // Partial: 20% the length of existing[1] (0.6m vs 3.0m).
-            // The large length error (2.4m / sigma=0.5) makes the full-match score
-            // drop below min_shot_score, triggering partial detection.
             MatchShot { avg_azimuth: 45.0, length: 0.6, depth_in: 4.0, depth_out: 4.1 },
         ];
         let existing = vec![
@@ -1439,8 +1140,8 @@ mod tests {
             MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
         ];
         let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
-        assert_eq!(result.matched_count, 2);
-        assert!(result.is_partial, "last shot should be partial");
+        assert_eq!(result.matched_count, 1);
+        assert!(!result.is_partial, "length-deviating shot should not become a partial match");
         assert!(result.score > config.min_aggregate_score, "score should be above minimum");
     }
 
@@ -1479,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn marker_station_split_matches_single_target_shot() {
+    fn marker_station_split_does_not_match_single_target_shot() {
         let config = SuggestionConfig::default();
         let import = vec![
             MatchShot { avg_azimuth: 90.0, length: 4.0, depth_in: 3.0, depth_out: 3.4 },
@@ -1493,12 +1194,11 @@ mod tests {
 
         let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
 
-        assert_eq!(result.matched_count, 3);
-        assert!(result.score > 0.8, "marker split should still align well, got {}", result.score);
+        assert_eq!(result.matched_count, 0, "split import shots must not collapse onto one target shot");
     }
 
     #[test]
-    fn slight_kissoff_split_matches_single_target_shot_with_penalty() {
+    fn slight_kissoff_split_does_not_match_single_target_shot() {
         let config = SuggestionConfig::default();
         let import = vec![
             MatchShot { avg_azimuth: 82.0, length: 5.0, depth_in: 3.0, depth_out: 3.45 },
@@ -1512,16 +1212,11 @@ mod tests {
 
         let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
 
-        assert_eq!(result.matched_count, 3);
-        assert!(
-            result.score > 0.65 && result.score < 1.2,
-            "slight kiss-off should match with a penalty, got {}",
-            result.score,
-        );
+        assert_eq!(result.matched_count, 0, "kiss-off splits must not collapse onto one target shot");
     }
 
     #[test]
-    fn station_context_boosts_extra_station_composite() {
+    fn station_context_does_not_boost_station_density_mismatch() {
         let config = SuggestionConfig::default();
         let import = vec![
             MatchShot { avg_azimuth: 90.0, length: 10.0, depth_in: 3.0, depth_out: 4.0 },
@@ -1533,7 +1228,7 @@ mod tests {
 
         let multiplier = station_context_multiplier(&import, &existing, 0, 0, &config);
 
-        assert!(multiplier > 1.0, "extra station composite should be boosted, got {multiplier}");
+        assert!(multiplier <= 1.0, "station-density mismatch should not boost 1:1 matches, got {multiplier}");
     }
 
     #[test]
@@ -1748,11 +1443,9 @@ mod tests {
     }
 
     #[test]
-    fn partial_match_in_integration() {
+    fn length_deviation_does_not_become_partial_in_integration() {
         let import_shots = vec![
             make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0),
-            // Partial: 20% length of existing shot 1 — large length error ensures
-            // full-match fails and partial detection kicks in
             make_shot_data(45.0, 45.0, 0.6, 4.0, 4.1),
         ];
         let existing = vec![
@@ -1765,8 +1458,8 @@ mod tests {
         let suggestions = suggest_placements(&import_shots, &existing, &PlacementSuggestionConfig::default());
         assert!(!suggestions.is_empty());
         let best = &suggestions[0];
-        assert!(best.is_partial, "should detect partial match");
-        assert_eq!(best.matched_shots, 2);
+        assert!(!best.is_partial, "partial matches should not be emitted");
+        assert_eq!(best.matched_shots, 1);
     }
 
     // ========================================================================
@@ -1790,35 +1483,17 @@ mod tests {
     }
 
     #[test]
-    fn partial_shot_azimuth_cutoff_boundary() {
+    fn full_shot_length_cutoff_boundary() {
         let config = SuggestionConfig::default();
-        let existing_az = 90.0;
-        let eff_length = 10.0;
-        let length_ratio = 0.5;
+        let existing = MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 34.9° — just under partial cutoff
-        let import_pass = MatchShot {
-            avg_azimuth: existing_az + 34.9,
-            length: eff_length * length_ratio,
-            depth_in: 3.0,
-            depth_out: 3.5,
-        };
-        let score = try_partial_one_direction(
-            &import_pass, existing_az, eff_length, 3.0, 4.0, length_ratio, &config,
-        );
-        assert!(score > 0.0, "34.9° partial azimuth error should pass cutoff, got {score}");
+        let import_pass = MatchShot { length: 6.99, ..existing };
+        let score = compute_shot_score(&import_pass, &existing, MatchDirection::Forward, &config);
+        assert!(score > 0.0, "1.99m length error should pass cutoff, got {score}");
 
-        // 35.1° — just over partial cutoff
-        let import_fail = MatchShot {
-            avg_azimuth: existing_az + 35.1,
-            length: eff_length * length_ratio,
-            depth_in: 3.0,
-            depth_out: 3.5,
-        };
-        let score = try_partial_one_direction(
-            &import_fail, existing_az, eff_length, 3.0, 4.0, length_ratio, &config,
-        );
-        assert!(score == 0.0, "35.1° partial azimuth error should be hard-rejected, got {score}");
+        let import_fail = MatchShot { length: 7.01, ..existing };
+        let score = compute_shot_score(&import_fail, &existing, MatchDirection::Forward, &config);
+        assert!(score == 0.0, "2.01m length error should be hard-rejected, got {score}");
     }
 
     #[test]
@@ -1932,5 +1607,42 @@ mod tests {
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].direction, MatchDirection::Forward);
         assert_eq!(suggestions[0].existing_station_index, forward.existing_station_index);
+    }
+
+    #[test]
+    fn duplicate_endpoint_pairs_keep_best_score() {
+        let forward = PlacementSuggestion {
+            existing_section_id: 1,
+            existing_station_index: 10,
+            import_station_index: 0,
+            score: 0.8,
+            matched_shots: 2,
+            existing_matched_shots: 2,
+            preferred_merge_offset: 2,
+            direction: MatchDirection::Forward,
+            is_partial: false,
+            confidence: SuggestionConfidence::Medium,
+            existing_section_name: "AA1".to_string(),
+        };
+        let reverse = PlacementSuggestion {
+            existing_section_id: 1,
+            existing_station_index: 12,
+            import_station_index: 0,
+            score: 0.9,
+            matched_shots: 2,
+            existing_matched_shots: 2,
+            preferred_merge_offset: 2,
+            direction: MatchDirection::Reverse,
+            is_partial: false,
+            confidence: SuggestionConfidence::High,
+            existing_section_name: "AA1".to_string(),
+        };
+        let mut suggestions = vec![forward, reverse.clone()];
+
+        suppress_duplicate_endpoint_pairs(&mut suggestions);
+
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].direction, MatchDirection::Reverse);
+        assert_eq!(suggestions[0].score, reverse.score);
     }
 }

@@ -212,19 +212,9 @@ export function redirectDeletedTargets(
         ? targetStation
         : overlap.importStationIndex - targetStation;
 
-      const maxImportOffset = overlap.matchedShots;
-      const maxExistingOffset = overlap.existingMatchedShots ?? overlap.matchedShots;
-      const existingOffset = maxImportOffset === maxExistingOffset
-        ? offset
-        : offset >= maxImportOffset
-          ? maxExistingOffset
-          : offset <= 0
-            ? 0
-            : Math.round((offset / Math.max(1, maxImportOffset)) * maxExistingOffset);
-
       const newStation = overlap.direction === 'forward'
-        ? overlap.existingStationIndex + existingOffset
-        : overlap.existingStationIndex - existingOffset;
+        ? overlap.existingStationIndex + offset
+        : overlap.existingStationIndex - offset;
 
       depth++;
 
