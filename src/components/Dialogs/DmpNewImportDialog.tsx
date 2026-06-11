@@ -195,12 +195,14 @@ function adjustConnectionsForEdits(
 function bfsReachable(
   seeds: Set<number>,
   adjacency: Map<number, Array<{ neighbor: number; connection: VirtualConnection }>>,
+  blocked: Set<number> = new Set(),
 ): number[] {
   const visited = new Set<number>();
   const queue: number[] = [];
   const order: number[] = [];
 
   for (const seed of seeds) {
+    if (blocked.has(seed)) continue;
     if (!visited.has(seed)) {
       visited.add(seed);
       queue.push(seed);
@@ -211,6 +213,7 @@ function bfsReachable(
     const node = queue.shift()!;
     order.push(node);
     for (const edge of adjacency.get(node) ?? []) {
+      if (blocked.has(edge.neighbor)) continue;
       if (!visited.has(edge.neighbor)) {
         visited.add(edge.neighbor);
         queue.push(edge.neighbor);
@@ -218,6 +221,29 @@ function bfsReachable(
     }
   }
   return order;
+}
+
+function collectImportConnectedComponents(
+  seeds: Set<number>,
+  adjacency: Map<number, Array<{ neighbor: number; connection: VirtualConnection }>>,
+): Set<number> {
+  const result = new Set<number>();
+  const queue = Array.from(seeds);
+
+  for (const seed of seeds) {
+    result.add(seed);
+  }
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    for (const edge of adjacency.get(node) ?? []) {
+      if (result.has(edge.neighbor)) continue;
+      result.add(edge.neighbor);
+      queue.push(edge.neighbor);
+    }
+  }
+
+  return result;
 }
 
 /** Check if a suggestion matches a confirmed overlap info by field comparison. */
@@ -699,10 +725,14 @@ function buildBatchImport(
   fullPool?: CrossSectionSuggestion[],
   directPlacements?: DirectPlacement[],
   alreadyImported?: Map<number, number>,
+  deferImportConnectedTo?: Set<number>,
 ): { configs: BackendImportSectionConfig[]; unreachable: number[]; emittedDmpIndices: number[] } {
   // Build adjacency + connections including any fallback anchors for disconnected components
   const allConnections = [...connections];
   const adjacency = buildAdjacency(allConnections);
+  const deferredImportSet = deferImportConnectedTo && deferImportConnectedTo.size > 0
+    ? collectImportConnectedComponents(deferImportConnectedTo, adjacency)
+    : new Set<number>();
 
   // Direct placement map: section index → ImportPlacement (for manual_placing phase)
   const directPlacementMap = new Map<number, ImportPlacement>();
@@ -716,17 +746,19 @@ function buildBatchImport(
   const anchored = new Set<number>();
   if (zeroDatumIndex != null) anchored.add(zeroDatumIndex);
   for (const c of allConnections) {
-    if (c.targetType === 'existing') {
+    if (c.targetType === 'existing' && !deferredImportSet.has(c.importSectionIndex)) {
       anchored.add(c.importSectionIndex);
     }
   }
   // Direct placements also anchor their sections
   for (const dp of directPlacements ?? []) {
-    anchored.add(dp.anchorSectionIndex);
+    if (!deferredImportSet.has(dp.anchorSectionIndex)) {
+      anchored.add(dp.anchorSectionIndex);
+    }
   }
 
   // BFS from anchored sections
-  let reachableOrder = bfsReachable(anchored, adjacency);
+  let reachableOrder = bfsReachable(anchored, adjacency, deferredImportSet);
   let reachableSet = new Set(reachableOrder);
 
   // Find disconnected components with confirmed connections but no anchor.
@@ -748,7 +780,7 @@ function buildBatchImport(
           const node = queue.shift()!;
           component.push(node);
           for (const edge of adjacency.get(node) ?? []) {
-            if (!visited.has(edge.neighbor) && !reachableSet.has(edge.neighbor)) {
+            if (!deferredImportSet.has(edge.neighbor) && !visited.has(edge.neighbor) && !reachableSet.has(edge.neighbor)) {
               visited.add(edge.neighbor);
               queue.push(edge.neighbor);
             }
@@ -759,7 +791,12 @@ function buildBatchImport(
         const componentSet = new Set(component);
         let bestExisting: CrossSectionSuggestion | null = null;
         for (const s of fullPool) {
-          if (s.targetType === 'existing' && s.existingSectionId != null && componentSet.has(s.importSectionIndex)) {
+          if (
+            s.targetType === 'existing' &&
+            s.existingSectionId != null &&
+            componentSet.has(s.importSectionIndex) &&
+            !deferredImportSet.has(s.importSectionIndex)
+          ) {
             if (!bestExisting || s.score > bestExisting.score) {
               bestExisting = s;
             }
@@ -784,7 +821,7 @@ function buildBatchImport(
       if (anchored.size > reachableSet.size) {
         // Rebuild adjacency with new connections
         const newAdjacency = buildAdjacency(allConnections);
-        reachableOrder = bfsReachable(anchored, newAdjacency);
+        reachableOrder = bfsReachable(anchored, newAdjacency, deferredImportSet);
         reachableSet = new Set(reachableOrder);
       }
     }
@@ -816,6 +853,9 @@ function buildBatchImport(
       if (idx === zeroDatumIndex) continue;
       // Skip sections already imported in a previous batch (early import)
       if (alreadyImported?.has(idx)) continue;
+      // Skipped sections and their import-to-import connected components are
+      // deferred from early import so manual placement can move the whole group.
+      if (deferredImportSet.has(idx)) continue;
 
       const section = dmpFile.sections[idx];
       if (!section) continue;
@@ -1046,7 +1086,7 @@ function buildBatchImport(
   // Unreachable = connected sections not in reachableSet + sections with no connection at all
   const allSelected = Array.from(selectionConfig.selectedIndices);
   const unreachable = allSelected.filter(
-    (idx) => idx !== zeroDatumIndex && !reachableSet.has(idx),
+    (idx) => idx !== zeroDatumIndex && (deferredImportSet.has(idx) || !reachableSet.has(idx)),
   );
 
   if (import.meta.env.DEV) {
@@ -1263,6 +1303,10 @@ export default function DmpNewImportDialog({
   connectionsRef.current = connections;
   const skippedIndicesRef = useRef(skippedIndices);
   skippedIndicesRef.current = skippedIndices;
+
+  const chooseSegmentAnchorSection = useCallback((segment: number[]): number => {
+    return segment.find((idx) => skippedIndicesRef.current.has(idx)) ?? segment[0]!;
+  }, []);
 
   const selectedIndices = useMemo(
     () => Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b),
@@ -2051,6 +2095,8 @@ export default function DmpNewImportDialog({
           sectionEditsRef.current,
           fullPoolRef.current,
           directPlacementsRef.current,
+          undefined,
+          skippedIndicesRef.current,
         ));
 
         // 4. Import reachable sections immediately
@@ -2099,7 +2145,7 @@ export default function DmpNewImportDialog({
 
           // Initialize anchor to first section's station 0
           const firstSegment = segments[0]!;
-          commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+          commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
           setSegmentPlacementMode('manual');
           setAutoStartManualPlacementPending(true);
 
@@ -2396,7 +2442,7 @@ export default function DmpNewImportDialog({
           segmentSkipCountRef.current = new Map();
 
           const firstSegment = segments[0]!;
-          commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+          commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
           const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
           setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
           setFromExistingSectionId(null);
@@ -2432,7 +2478,7 @@ export default function DmpNewImportDialog({
         segmentSkipCountRef.current = new Map();
 
         const firstSegment = segments[0]!;
-        commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+        commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
         const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
         setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
         setFromExistingSectionId(null);
@@ -2920,14 +2966,14 @@ export default function DmpNewImportDialog({
       }
       // Initialize anchor for next segment
       const firstSegment = next[0]!;
-      commitSegmentAnchor({ sectionIndex: firstSegment[0]!, stationIndex: 0 });
+      commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
       const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
       setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
       setFromExistingSectionId(null);
       setFromExistingStationIdx(0);
       return next;
     });
-  }, []);
+  }, [chooseSegmentAnchorSection, commitSegmentAnchor]);
 
   // Place segment handler
   const handleSegmentPlace = useCallback(() => {
@@ -3013,14 +3059,14 @@ export default function DmpNewImportDialog({
       const next = [...rest, first!];
       // Initialize anchor for next segment
       const nextSeg = next[0]!;
-      commitSegmentAnchor({ sectionIndex: nextSeg[0]!, stationIndex: 0 });
+      commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(nextSeg), stationIndex: 0 });
       const hasSuggestion = nextSeg.some(idx => skippedSuggestionsRef.current.has(idx));
       setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'origin');
       setFromExistingSectionId(null);
       setFromExistingStationIdx(0);
       return next;
     });
-  }, [currentSegment]);
+  }, [currentSegment, chooseSegmentAnchorSection, commitSegmentAnchor]);
 
   // Station click handler for segment preview
   const handleSegmentStationClick = useCallback((stationIndex: number, sectionIndex?: number) => {
@@ -3306,7 +3352,7 @@ export default function DmpNewImportDialog({
 
             if (nextQueue.length > 0) {
               const nextAnchor = {
-                sectionIndex: nextQueue[0]![0]!,
+                sectionIndex: chooseSegmentAnchorSection(nextQueue[0]!),
                 stationIndex: 0,
               };
               startSegmentPlacement(nextQueue, nextAnchor, nextDirectPlacements);
@@ -3344,6 +3390,7 @@ export default function DmpNewImportDialog({
     selectionConfig,
     zeroDatumConfig,
     importPlacedSegmentNow,
+    chooseSegmentAnchorSection,
     startPlacementMode,
     closeDialog,
     openDialog,
