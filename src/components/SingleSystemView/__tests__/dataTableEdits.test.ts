@@ -79,6 +79,14 @@ describe('buildShotUpdates', () => {
   it('skips a non-finite pitch average', () => {
     expect(buildShotUpdates(shot(), [{ colKey: PITCH_AVG_KEY, value: 'abc' }])).toEqual({});
   });
+
+  it('clears both pitch legs when the average cell is cleared (null)', () => {
+    // A cleared Avg cell must clear the inclination, not coerce null → 0.
+    const u = buildShotUpdates(shot({ pitch_in: 10, pitch_out: 30 }), [
+      { colKey: PITCH_AVG_KEY, value: null },
+    ]);
+    expect(u).toEqual({ pitch_in: null, pitch_out: null });
+  });
 });
 
 describe('buildShotUpdateBatch', () => {

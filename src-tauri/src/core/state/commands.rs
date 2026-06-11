@@ -183,6 +183,29 @@ impl AppState {
         }
     }
 
+    /// Whether a *specific* command instance warrants the geometry-reconcile
+    /// epilogue. Refines the per-variant [`CommandIntegrity::affects_geometry`]
+    /// flag with a per-instance check for [`Command::UpdateShot`]: the same
+    /// command carries both geometry edits (length/azimuth/depth/pitch — must
+    /// reconcile) and pure metadata edits (comment/LRUD/reference — must NOT).
+    /// Running the reconcile on a metadata-only edit would heal an already-drifted
+    /// project as a side effect, while its undo only restores the metadata — the
+    /// same asymmetric undo that keeps `SetStationComment` INERT (see
+    /// `command_integrity`). The variant flag stays `true` (it CAN move stations);
+    /// only the epilogue decision is instance-aware.
+    ///
+    /// A [`Command::Batch`] inherits the union of its members, so a metadata-only
+    /// batch (a multi-cell comment/LRUD paste) skips the reconcile at BOTH the
+    /// inner `execute_batch` epilogue and the outer `execute` epilogue that re-runs
+    /// it — otherwise the outer pass would heal the drift the inner pass left.
+    fn cmd_affects_geometry(cmd: &Command) -> bool {
+        match cmd {
+            Command::UpdateShot { updates, .. } => updates.touches_geometry(),
+            Command::Batch { commands } => commands.iter().any(Self::cmd_affects_geometry),
+            other => Self::command_integrity(other).affects_geometry,
+        }
+    }
+
     /// Convert any sole-bridge loop closures in the open project to merges.
     fn convert_orphan_closures_in_open_project(&self) {
         let mut guard = match self.project.lock() {
@@ -560,8 +583,10 @@ impl AppState {
 
         // Treat section offsets as derived: after any structural command,
         // reconcile geometry so no command path can leave merged stations
-        // drifted (a no-op when nothing moved; skipped during bulk import).
-        if result.success && integrity.affects_geometry {
+        // drifted (a no-op when nothing moved; skipped during bulk import). A
+        // metadata-only UpdateShot (comment/LRUD/reference) is excluded — see
+        // `cmd_affects_geometry` — so it can't silently heal drift with no undo.
+        if result.success && Self::cmd_affects_geometry(&cmd) {
             self.reconcile_geometry();
         }
 
@@ -2305,13 +2330,15 @@ impl AppState {
     /// Check if a command is allowed in a batch (whitelist for IPC safety).
     ///
     /// `UpdateShot` is permitted so the data-table grid can commit a multi-cell
-    /// edit (paste/fill) as a single undo unit: it is GEOMETRY_ONLY (keeps refs +
-    /// connectivity intact), self-validates length/finiteness/frozen-geometry, and
-    /// the batch epilogue's `reconcile_geometry()` correctly bakes in the moved
-    /// stations. `SetStationComment` is deliberately NOT allowed: it is INERT
-    /// metadata (see `command_integrity_profiles_are_stable`), so batching it would
-    /// run the reconcile epilogue and could silently heal a drifted project; comment
-    /// edits stay one-command-per-undo.
+    /// edit (paste/fill) as a single undo unit: it keeps refs + connectivity
+    /// intact, self-validates length/finiteness/frozen-geometry, and a geometry
+    /// edit has the moved stations baked in by the batch epilogue's
+    /// `reconcile_geometry()` — which the epilogue runs only when the batch
+    /// actually touches geometry (see `cmd_affects_geometry`), so a metadata-only
+    /// UpdateShot batch (comment/LRUD/reference) commits WITHOUT reconciling.
+    /// `SetStationComment` is still NOT allowed: as a whole it is INERT metadata
+    /// (see `command_integrity_profiles_are_stable`), so it would never carry the
+    /// geometry that justifies a batch; comment edits stay one-command-per-undo.
     fn is_batch_allowed(cmd: &Command) -> bool {
         matches!(
             cmd,
@@ -2390,13 +2417,24 @@ impl AppState {
 
         // Finalize structural side-effects BEFORE snapshotting for redo, mirroring
         // the per-command epilogue in execute(). A batch that strands a sole-bridge
-        // closure must have the closure→merge conversion (and the offset reconcile)
-        // baked into the after-snapshot; otherwise undo→redo restores the
-        // pre-conversion topology — redo only reconciles geometry, it does NOT
-        // re-run the conversion — and the merge is silently lost. Both calls are
-        // idempotent, so the outer epilogue in execute() re-running them is a no-op.
+        // closure must have the closure→merge conversion baked into the after-
+        // snapshot; otherwise undo→redo restores the pre-conversion topology — redo
+        // only reconciles geometry, it does NOT re-run the conversion — and the
+        // merge is silently lost. The conversion stays unconditional: a batched
+        // CreateLoopClosure can itself create the sole-bridge closure that needs it.
+        //
+        // The reconcile, however, is gated exactly as execute() gates its own (see
+        // cmd_affects_geometry): a batch that touches no geometry (a multi-cell
+        // paste/fill of comments / LRUD / reference flags — all metadata-only
+        // UpdateShots) must NOT reconcile, or it would heal an already-drifted
+        // project as a side effect of a metadata edit whose undo only restores the
+        // metadata (the asymmetric-undo hazard that keeps SetStationComment out of
+        // batches entirely). The outer execute() epilogue applies the same gate to
+        // the Batch command, so the two passes agree.
         self.convert_orphan_closures_in_open_project();
-        self.reconcile_geometry();
+        if commands.iter().any(Self::cmd_affects_geometry) {
+            self.reconcile_geometry();
+        }
 
         if push_undo {
             // Capture after-snapshot for redo support; failure means rollback
@@ -3133,9 +3171,11 @@ mod integrity_capability_tests {
     }
 
     /// The data-table grid commits multi-cell edits (paste/fill) as one batch →
-    /// one undo. `UpdateShot` must be batch-allowed (GEOMETRY_ONLY, reconciled by
-    /// the batch epilogue); `SetStationComment` must NOT be (INERT metadata —
-    /// batching it would run the reconcile epilogue and could heal drift silently).
+    /// one undo. `UpdateShot` must be batch-allowed (the batch epilogue reconciles
+    /// only when an edit in the batch actually touches geometry); `SetStationComment`
+    /// must NOT be (INERT metadata — it could never carry the geometry that
+    /// justifies a batch, and batching it once ran the reconcile epilogue and could
+    /// heal drift silently).
     #[test]
     fn update_shot_is_batch_allowed_but_station_comment_is_not() {
         assert!(AppState::is_batch_allowed(&Command::UpdateShot {

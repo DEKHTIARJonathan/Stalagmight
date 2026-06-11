@@ -202,7 +202,10 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       header: t('dataTable.columns.inclinationShort'),
       width: 70,
       align: 'right',
-      kind: 'number',
+      // Nullable: inclination is optional, so clearing the Avg cell must clear
+      // BOTH legs (number-nullable emits `null`, which buildShotUpdates routes to
+      // a clear) rather than being swallowed as a required-but-missing edit.
+      kind: 'number-nullable',
       // Mean of the present legs; a single present leg IS the mean, no legs → blank.
       getValue: (r) =>
         typeof r.pitch_in === 'number' && typeof r.pitch_out === 'number'

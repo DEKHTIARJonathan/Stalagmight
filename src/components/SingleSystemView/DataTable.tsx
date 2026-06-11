@@ -710,19 +710,40 @@ export default function DataTable({ sections }: DataTableProps) {
       prev.map((draft) => {
         if (draft.key !== key) return draft;
         const d: Record<string, unknown> = { ...draft.data };
+        // `undefined` means "drop the field" (a required cell cleared back to
+        // missing) — delete the key so completeDraftData/draftMissing treat it
+        // as absent and a stale value can't survive into the committed shot. A
+        // `null` (cleared optional, e.g. inclination) is kept as an explicit
+        // clear. The avg columns fan out to both legs.
+        const put = (k: string) => {
+          if (value === undefined) delete d[k];
+          else d[k] = value;
+        };
         if (colKey === AZIMUTH_AVG_KEY) {
-          d.azimuth_in = value;
-          d.azimuth_out = value;
+          put('azimuth_in');
+          put('azimuth_out');
         } else if (colKey === PITCH_AVG_KEY) {
-          d.pitch_in = value;
-          d.pitch_out = value;
+          put('pitch_in');
+          put('pitch_out');
         } else {
-          d[colKey] = value;
+          put(colKey);
         }
         return { ...draft, data: d as Partial<ShotData> };
       })
     );
   }, []);
+
+  // A required cell cleared to "missing" on a draft row: drop the field so a
+  // later auto-commit can't resurrect the value the user just blanked. Edits on
+  // real shots keep their model value (nothing to do here).
+  const onShotClearMissing = useCallback(
+    (rowIndex: number, colKey: string) => {
+      if (geometryReadOnly) return;
+      const entry = rowEntries[rowIndex];
+      if (entry?.kind === 'draft') applyDraftEdit(entry.draft.key, colKey, undefined);
+    },
+    [geometryReadOnly, rowEntries, applyDraftEdit]
+  );
 
   // Discard the draft rows in a grid-row range; the end draft resets to empty
   // instead of disappearing (it is always present).
@@ -1590,6 +1611,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 height={gridHeight}
                 onEdit={onShotEdit}
                 onBatchEdit={onShotBatchEdit}
+                onClearMissing={onShotClearMissing}
                 onActiveCellChange={onShotActiveCellChange}
                 onRowHover={onShotRowHover}
                 onPasteReport={onShotPasteReport}

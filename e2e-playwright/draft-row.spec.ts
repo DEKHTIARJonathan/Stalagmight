@@ -228,6 +228,42 @@ test.describe('Draft shot rows', () => {
     expect(await getCreateShotCalls(page)).toHaveLength(0);
   });
 
+  test('clearing a filled required draft cell drops it from the model (no stale commit)', async ({ page }) => {
+    // Regression: filling then clearing a required draft cell used to leave the
+    // value in the draft model — only the grid cell was shown as "missing" — so
+    // completing the OTHER required cells auto-committed a shot with the value the
+    // UI showed as blank. Clearing must drop the field so nothing resurrects it.
+    await fillCell(page, 3, 'length', '5');
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveText('5.0');
+
+    // Clear length (select + Delete): the cell goes missing immediately.
+    await page.getByTestId('grid-cell-3-length').click();
+    await page.keyboard.press('Delete');
+    await expect(page.getByTestId('grid-cell-3-length')).toHaveClass(/sg-cell-missing/);
+
+    // Fill the remaining required cells. The draft must stay incomplete — without
+    // the fix the stale 5 completes it and commits a shot here.
+    await fillCell(page, 3, '_azimuth_avg', '100');
+    await fillCell(page, 3, 'depth_in', '1');
+    await fillCell(page, 3, 'depth_out', '2');
+
+    // Re-enter a NEW length to complete and commit the draft. The created shot
+    // must carry 7, not the cleared-then-stale 5 (the race-free discriminator:
+    // with the bug, the commit already fired above with length 5 and this edit
+    // only updates that shot).
+    await fillCell(page, 3, 'length', '7');
+    await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
+
+    const createdLengths = await page.evaluate(
+      () =>
+        (((window as unknown as Record<string, unknown>).__MOCK_CREATE_SHOT_CALLS__ as
+          | Array<{ shot?: { length?: number } }>
+          | undefined) ?? []).map((c) => c?.shot?.length ?? null),
+    );
+    expect(createdLengths).toEqual([7]);
+    expect((await getShots(page)).map((s) => s.length)).toEqual([10, 20, 30, 7]);
+  });
+
   test('"Remove draft row" context-menu entry discards the draft', async ({ page }) => {
     // The entry is only offered on draft rows.
     await page.getByTestId('grid-gutter-1').click({ button: 'right' });

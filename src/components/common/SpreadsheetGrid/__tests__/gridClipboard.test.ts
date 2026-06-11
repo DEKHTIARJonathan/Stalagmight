@@ -114,4 +114,12 @@ describe('serializeRangeToTSV / parseTSV round-trip', () => {
   it('parses a single cell', () => {
     expect(parseTSV('solo')).toEqual([['solo']]);
   });
+
+  it('keeps quotes that appear mid-field in unquoted text (inch marks)', () => {
+    // A quote only opens a quoted field at the field start; elsewhere it is a
+    // literal, so a plainly-pasted comment keeps its inch marks / quotes.
+    expect(parseTSV('say "hi"\tplain')).toEqual([['say "hi"', 'plain']]);
+    expect(parseTSV('6" pipe')).toEqual([['6" pipe']]);
+    expect(parseTSV('a"b\tc"d')).toEqual([['a"b', 'c"d']]);
+  });
 });

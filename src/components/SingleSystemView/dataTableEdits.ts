@@ -22,9 +22,9 @@ export const PITCH_AVG_KEY = '_pitch_avg';
 /** Build a ShotUpdates patch for one shot from its edits. The azimuth-average
  *  column rotates both legs by (newMean - currentMean); the pitch-average column
  *  shifts both legs the same way when both are present, otherwise it sets the
- *  present leg (or both, when neither is) to the typed value. A non-finite new
- *  mean is skipped. All other column keys are real shot fields, assigned
- *  directly. */
+ *  present leg (or both, when neither is) to the typed value — and a `null`
+ *  (cleared Avg cell) clears both legs. A non-finite new mean is skipped. All
+ *  other column keys are real shot fields, assigned directly. */
 export function buildShotUpdates(
   shot: Shot,
   edits: { colKey: string; value: unknown }[],
@@ -38,6 +38,13 @@ export function buildShotUpdates(
       updates.azimuth_in = normalizeAngle(shot.azimuth_in + delta);
       updates.azimuth_out = normalizeAngle(shot.azimuth_out + delta);
     } else if (colKey === PITCH_AVG_KEY) {
+      // A cleared Avg cell (number-nullable → null) clears BOTH legs; without
+      // this, `Number(null)` is a finite 0 and the clear would zero the pitch.
+      if (value === null) {
+        updates.pitch_in = null;
+        updates.pitch_out = null;
+        continue;
+      }
       const newMean = typeof value === 'number' ? value : Number(value);
       if (!Number.isFinite(newMean)) continue;
       const pitchIn = shot.pitch_in;

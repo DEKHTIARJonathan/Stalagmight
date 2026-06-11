@@ -110,7 +110,10 @@ export function parseTSV(text: string): string[][] {
       i++;
       continue;
     }
-    if (ch === '"') {
+    // A quote only opens a quoted field at the FIELD START (nothing accumulated
+    // yet). A quote in the middle of an unquoted field is a literal character —
+    // pasting `say "hi"` must keep the inch marks, not strip them (RFC-4180).
+    if (ch === '"' && field === '') {
       inQuotes = true;
       i++;
       continue;

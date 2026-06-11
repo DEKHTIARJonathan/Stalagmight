@@ -886,6 +886,101 @@ fn update_shot_reconciles_datum_less_merge() {
 }
 
 #[test]
+fn metadata_only_update_shot_does_not_heal_drift() {
+    // The converse of update_shot_reconciles_datum_less_merge: a comment/LRUD/
+    // reference-only UpdateShot touches no geometry, so it must NOT run the
+    // reconcile epilogue. Reconciling would silently re-align an already-drifted
+    // project as a side effect of a metadata edit whose undo only restores the
+    // metadata — the asymmetric-undo hazard that keeps SetStationComment INERT.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("Drift".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![test_shot_data(5.0)], ..Default::default() })
+        .id;
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project.resolve_offsets();
+    assert!(project.check_merge_alignment().is_empty(), "starts aligned");
+
+    // Introduce drift WITHOUT reconciling: lengthen a shot upstream of the merge
+    // directly in the model, so A:2 moves out of alignment with B:0.
+    let shot0 = project.get_section(a).unwrap().shots[0].id;
+    project.get_section_mut(a).unwrap().shots[0].length = 9.0;
+    assert!(
+        !project.check_merge_alignment().is_empty(),
+        "drift is present before the metadata edit"
+    );
+    state.set_project_for_tests(project);
+
+    // A comment-only edit must leave the drift untouched.
+    let updates = ShotUpdates { comment: Some(Some("note".to_string())), ..Default::default() };
+    let result = state.execute(Command::UpdateShot { section_id: a, shot_id: shot0, updates });
+    assert!(result.success, "{:?}", result.error);
+    assert!(
+        !state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a metadata-only shot edit must not reconcile (heal) a drifted merge"
+    );
+
+    // Sanity-check the gate isn't simply always-off: a geometry edit DOES heal it.
+    let updates = ShotUpdates { length: Some(7.0), ..Default::default() };
+    assert!(
+        state.execute(Command::UpdateShot { section_id: a, shot_id: shot0, updates }).success
+    );
+    assert!(
+        state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a geometry edit must reconcile the drift"
+    );
+}
+
+#[test]
+fn metadata_only_update_shot_batch_does_not_heal_drift() {
+    // execute_batch gates its reconcile epilogue the same way execute() does: a
+    // batch of metadata-only UpdateShots (a multi-cell comment paste) must not
+    // heal a drifted merge as a side effect.
+    let state = AppState::new().unwrap();
+    let mut project = Project::new("DriftBatch".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![test_shot_data(5.0)], ..Default::default() })
+        .id;
+    project.merge_stations(StationRef::new(a, 2), StationRef::new(b, 0)).unwrap();
+    project.resolve_offsets();
+    assert!(project.check_merge_alignment().is_empty(), "starts aligned");
+
+    let shot0 = project.get_section(a).unwrap().shots[0].id;
+    let shot1 = project.get_section(a).unwrap().shots[1].id;
+    project.get_section_mut(a).unwrap().shots[0].length = 9.0;
+    assert!(!project.check_merge_alignment().is_empty(), "drift present before the batch");
+    state.set_project_for_tests(project);
+
+    // Multi-cell comment paste → one batch of two comment-only UpdateShots.
+    let mk = |shot_id| Command::UpdateShot {
+        section_id: a,
+        shot_id,
+        updates: ShotUpdates {
+            comment: Some(Some("note".to_string())),
+            ..Default::default()
+        },
+    };
+    let result = state.execute(Command::Batch { commands: vec![mk(shot0), mk(shot1)] });
+    assert!(result.success, "{:?}", result.error);
+    assert!(
+        !state.get_project_state().unwrap().check_merge_alignment().is_empty(),
+        "a metadata-only batch must not reconcile (heal) a drifted merge"
+    );
+}
+
+#[test]
 fn repair_noop_on_clean_project_reports_unchanged() {
     // A repair that finds nothing to fix must not report `changed` (which the
     // frontend dirties on) or push a spurious undo entry. This depends on

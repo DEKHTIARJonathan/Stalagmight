@@ -64,6 +64,13 @@ export interface SpreadsheetGridProps<Row> {
   onEdit: (rowIndex: number, colKey: string, value: unknown) => void;
   /** Commit many coerced edits as ONE undo unit (paste / fill / clear). */
   onBatchEdit?: (edits: CellEdit[]) => void;
+  /** A REQUIRED cell (`kind: 'number'`) was emptied/deleted, so no value was
+   *  emitted through {@link onEdit} — the grid just shows it as "missing" while
+   *  the model keeps its last value. Hosts whose model is PROVISIONAL (draft
+   *  rows that have not been committed yet) should use this to drop the field, so
+   *  a later auto-commit doesn't resurrect the value the user cleared. Hosts
+   *  backing committed rows can ignore it. */
+  onClearMissing?: (rowIndex: number, colKey: string) => void;
 
   /** Locale for number parsing/formatting (default: 'en-US'). At integration
    *  pass the app's active locale so comma-decimals parse correctly. */
@@ -178,6 +185,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     rowKey,
     onEdit,
     onBatchEdit,
+    onClearMissing,
     locale = 'en-US',
     height = 400,
     hiddenColumns,
@@ -567,9 +575,11 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         // The dirty draft didn't parse to a value — a required cell emptied, or
         // unparseable input ("abc" in a number cell, garbage in a custom-parse
         // column): keep the model value, show the cell as missing until a valid
-        // value is committed (same rule as Delete).
+        // value is committed (same rule as Delete). A provisional host (draft
+        // row) is told so it can drop the field rather than keep a stale value.
         const k = missKey(cur.row, cur.colKey);
         if (k !== null) markMissing([k]);
+        onClearMissing?.(cur.row, cur.colKey);
       }
       if (col && value !== undefined) {
         const k = missKey(cur.row, cur.colKey);
@@ -594,7 +604,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         scrollRef.current?.focus({ preventScroll: true });
       }
     },
-    [editing, colIndexOf, colAt, parseForColumn, rows, flashInvalid, onEdit, rowCount, colCount, moveFocusTo, missKey, markMissing, missingCells],
+    [editing, colIndexOf, colAt, parseForColumn, rows, flashInvalid, onEdit, onClearMissing, rowCount, colCount, moveFocusTo, missKey, markMissing, missingCells],
   );
 
   // Refocusing the scroller (from commitEdit or cancelEdit) blurs the still-
@@ -937,6 +947,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     const edits: CellEdit[] = [];
     const missing: string[] = [];
     const restored: string[] = [];
+    // Required cells freshly cleared to "missing" — reported to a provisional
+    // host so it can drop the field (a present→missing transition only, never a
+    // restore).
+    const cleared: { row: number; colKey: string }[] = [];
     for (let r = rect.r0; r <= rect.r1; r++) {
       for (let c = rect.c0; c <= rect.c1; c++) {
         const col = colAt(c);
@@ -949,7 +963,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         const value = parseForColumn(col, '', r);
         if (value === undefined) {
           const k = missKey(r, col.key);
-          if (k !== null) (missingCells.has(k) ? restored : missing).push(k);
+          if (k === null) continue;
+          if (missingCells.has(k)) {
+            restored.push(k);
+          } else {
+            missing.push(k);
+            cleared.push({ row: r, colKey: col.key });
+          }
           continue;
         }
         edits.push({ row: r, colKey: col.key, value });
@@ -963,8 +983,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         return next;
       });
     }
+    if (onClearMissing) for (const c of cleared) onClearMissing(c.row, c.colKey);
     applyEdits(edits);
-  }, [rect, colAt, cellEditable, parseForColumn, applyEdits, missKey, missingCells]);
+  }, [rect, colAt, cellEditable, parseForColumn, applyEdits, missKey, missingCells, onClearMissing]);
 
   // --- Keyboard -------------------------------------------------------------
   const onKeyDown = useCallback(
