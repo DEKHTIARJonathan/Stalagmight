@@ -3,6 +3,7 @@ import {
   adjustStationForDeletedShots,
   findReverseImportConnection,
   findOverlapForStation,
+  pruneSkippedImportConnections,
   redirectDeletedTargets,
   type SectionEditState,
   type ConfirmedOverlapInfo,
@@ -161,6 +162,80 @@ describe('findReverseImportConnection', () => {
     const emitted = new Map([[0, 0]]);
     // Section 99 is not targetImportIndex, so no reverse
     expect(findReverseImportConnection(1, conns, emitted)).toBeUndefined();
+  });
+});
+
+// ─── pruneSkippedImportConnections ───────────────────────────────────────────
+
+describe('pruneSkippedImportConnections', () => {
+  it('removes connections and overlaps where the skipped section is the import side', () => {
+    const conns = [
+      importingConn(0, 5, 1, 0),
+      importingConn(2, 4, 3, 0),
+    ];
+    const confirmed = new Map<number, ConfirmedOverlapInfo>([
+      [0, {
+        importStationIndex: 5,
+        matchedShots: 2,
+        direction: 'forward',
+        existingStationIndex: 0,
+        targetType: 'importing',
+        existingSectionId: null,
+        targetImportIndex: 1,
+        mergeImportStation: 5,
+      }],
+      [2, {
+        importStationIndex: 4,
+        matchedShots: 2,
+        direction: 'forward',
+        existingStationIndex: 0,
+        targetType: 'importing',
+        existingSectionId: null,
+        targetImportIndex: 3,
+        mergeImportStation: 4,
+      }],
+    ]);
+
+    const pruned = pruneSkippedImportConnections(0, conns, confirmed);
+
+    expect(pruned).toEqual([conns[1]]);
+    expect(confirmed.has(0)).toBe(false);
+    expect(confirmed.has(2)).toBe(true);
+  });
+
+  it('removes connections and overlaps where the skipped section is the target side', () => {
+    const conns = [
+      importingConn(0, 5, 1, 0),
+      importingConn(2, 4, 3, 0),
+    ];
+    const confirmed = new Map<number, ConfirmedOverlapInfo>([
+      [0, {
+        importStationIndex: 5,
+        matchedShots: 2,
+        direction: 'forward',
+        existingStationIndex: 0,
+        targetType: 'importing',
+        existingSectionId: null,
+        targetImportIndex: 1,
+        mergeImportStation: 5,
+      }],
+      [2, {
+        importStationIndex: 4,
+        matchedShots: 2,
+        direction: 'forward',
+        existingStationIndex: 0,
+        targetType: 'importing',
+        existingSectionId: null,
+        targetImportIndex: 3,
+        mergeImportStation: 4,
+      }],
+    ]);
+
+    const pruned = pruneSkippedImportConnections(1, conns, confirmed);
+
+    expect(pruned).toEqual([conns[1]]);
+    expect(confirmed.has(0)).toBe(false);
+    expect(confirmed.has(2)).toBe(true);
   });
 });
 

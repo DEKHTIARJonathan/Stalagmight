@@ -155,6 +155,37 @@ export function findReverseImportConnection(
   return undefined;
 }
 
+// ─── pruneSkippedImportConnections ───────────────────────────────────────────
+
+/**
+ * A skipped import section is no longer allowed to participate in previously
+ * accepted automatic import-to-import alignments. Otherwise a later manual drop
+ * can be pulled back to the skipped alignment through a stale connection.
+ */
+export function pruneSkippedImportConnections(
+  skippedSectionIndex: number,
+  connections: VirtualConnection[],
+  confirmedOverlaps: Map<number, ConfirmedOverlapInfo>,
+): VirtualConnection[] {
+  const prunedConnections = connections.filter((c) => {
+    if (c.importSectionIndex === skippedSectionIndex) return false;
+    if (c.targetType === 'importing' && c.targetImportIndex === skippedSectionIndex) return false;
+    return true;
+  });
+
+  for (const [sectionIndex, overlap] of confirmedOverlaps.entries()) {
+    if (sectionIndex === skippedSectionIndex) {
+      confirmedOverlaps.delete(sectionIndex);
+      continue;
+    }
+    if (overlap.targetType === 'importing' && overlap.targetImportIndex === skippedSectionIndex) {
+      confirmedOverlaps.delete(sectionIndex);
+    }
+  }
+
+  return prunedConnections;
+}
+
 // ─── redirectDeletedTargets ──────────────────────────────────────────────────
 
 /**

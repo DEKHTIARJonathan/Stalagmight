@@ -46,6 +46,7 @@ import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import {
   adjustStationForDeletedShots,
   findReverseImportConnection,
+  pruneSkippedImportConnections,
   redirectDeletedTargets,
   type SectionEditState,
   type ConfirmedOverlapInfo,
@@ -1973,6 +1974,7 @@ export default function DmpNewImportDialog({
       // Skip import-to-import suggestions that would create a direct cycle:
       // if the target already has an importing connection pointing back to this section
       if (s.targetType === 'importing' && s.targetImportIndex != null) {
+        if (skipped.has(s.targetImportIndex)) return false;
         const sourcesTargetingMe = importingTargets.get(s.importSectionIndex);
         if (sourcesTargetingMe?.has(s.targetImportIndex)) return false;
       }
@@ -2695,6 +2697,14 @@ export default function DmpNewImportDialog({
       const newSkipped = new Set(skippedIndicesRef.current);
       newSkipped.add(skippedIdx);
       skippedIndicesRef.current = newSkipped;
+
+      const prunedConnections = pruneSkippedImportConnections(
+        skippedIdx,
+        connectionsRef.current,
+        confirmedOverlapsRef.current,
+      );
+      connectionsRef.current = prunedConnections;
+      setConnections(prunedConnections);
 
       const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
       const newConnected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
