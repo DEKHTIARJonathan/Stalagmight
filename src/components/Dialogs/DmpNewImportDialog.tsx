@@ -271,6 +271,7 @@ function applyAllOverlapTreatments(
       importSectionIndex,
       importStationIndex,
       matchedShots,
+      existingMatchedShots,
       existingStationIndex,
       direction,
       targetType,
@@ -410,7 +411,7 @@ function applyAllOverlapTreatments(
 
             if (targetShotArray) {
               const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-              const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+              const overlapParams = { importStationIndex, matchedShots, existingMatchedShots, existingStationIndex, direction };
               targetMap = new Map<number, TargetShotLike>();
               for (const overlapId of actionableIds) {
                 const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
@@ -498,7 +499,7 @@ function applyAllOverlapTreatments(
       const currentProject = useProjectStore.getState().project;
       const targetSection = currentProject?.sections.find(s => s.id === existingSectionId);
       if (targetSection) {
-        const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+        const overlapParams = { importStationIndex, matchedShots, existingMatchedShots, existingStationIndex, direction };
         const shouldReverse = needsDirectionReversal(importStationIndex, direction);
         const importShotsForInterp = rawImportShots ?? [];
 
@@ -584,7 +585,7 @@ function applyAllOverlapTreatments(
         }
       }
       if (targetEdits) {
-        const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+        const overlapParams = { importStationIndex, matchedShots, existingMatchedShots, existingStationIndex, direction };
         const shouldReverse = needsDirectionReversal(importStationIndex, direction);
 
         let hasUntreatedTarget = false;
@@ -1690,7 +1691,7 @@ export default function DmpNewImportDialog({
       return editState?.shots ?? [];
     }
 
-    const { importStationIndex, matchedShots, direction } = currentSuggestion;
+    const { importStationIndex, matchedShots, existingMatchedShots, direction } = currentSuggestion;
     const mergeImportStation = selectedMergePair?.importStation ?? importStationIndex;
 
     const allOverlapIds = computeOverlapIds(importStationIndex, matchedShots);
@@ -1723,7 +1724,7 @@ export default function DmpNewImportDialog({
       // shots are actionable, not the overlap-to-target correspondence.
       if (targetShots) {
         const shouldReverse = needsDirectionReversal(importStationIndex, direction);
-        const overlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
+        const overlapParams = { importStationIndex, matchedShots, existingMatchedShots, existingStationIndex, direction };
         const targetMap = new Map<number, TargetShotLike>();
         for (const overlapId of allOverlapIds) {
           const targetIdx = computeTargetShotIndex(overlapId, overlapParams);
@@ -1916,6 +1917,10 @@ export default function DmpNewImportDialog({
       ? section.shots.filter((s) => s.shot_type === 'Standard').length
       : 0;
     const options = computeMergeOptions(suggestion, importShotCount);
+    if (suggestion.preferredMergeOffset != null) {
+      const preferred = options.find((option) => option.offset === suggestion.preferredMergeOffset);
+      if (preferred) return preferred.offset;
+    }
     return options[options.length - 1]?.offset ?? 0;
   }, [dmpFile.sections]);
 
@@ -2610,6 +2615,7 @@ export default function DmpNewImportDialog({
       confirmedOverlapsRef.current.set(importIdx, {
         importStationIndex: currentSuggestion.importStationIndex,
         matchedShots: currentSuggestion.matchedShots,
+        existingMatchedShots: currentSuggestion.existingMatchedShots,
         direction: currentSuggestion.direction,
         existingStationIndex: currentSuggestion.existingStationIndex,
         targetType: currentSuggestion.targetType,

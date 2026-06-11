@@ -145,13 +145,27 @@ function addEdge(graph: Graph, a: string, b: string, weight: number) {
 function defaultMergePair(s: CrossSectionSuggestion, sections: DmpSection[]) {
   const section = sections[s.importSectionIndex];
   const importShotCount = section ? standardShots(section).length : 0;
-  const maxOffset = s.isPartial ? s.matchedShots - 1 : s.matchedShots;
+  const existingMatchedShots = s.existingMatchedShots ?? s.matchedShots;
+  const maxImportOffset = s.isPartial ? s.matchedShots - 1 : s.matchedShots;
+  const maxExistingOffset = s.isPartial ? existingMatchedShots - 1 : existingMatchedShots;
+  const offsets = maxImportOffset === maxExistingOffset
+    ? Array.from({ length: maxImportOffset + 1 }, (_, idx) => {
+      const k = maxImportOffset - idx;
+      return [k, k] as const;
+    })
+    : [[maxImportOffset, maxExistingOffset] as const, [0, 0] as const];
+  const orderedOffsets = s.preferredMergeOffset != null
+    ? [
+      ...offsets.filter(([importOffset]) => importOffset === s.preferredMergeOffset),
+      ...offsets.filter(([importOffset]) => importOffset !== s.preferredMergeOffset),
+    ]
+    : offsets;
 
-  for (let k = maxOffset; k >= 0; k--) {
-    const importStationIndex = s.importStationIndex === 0 ? k : s.importStationIndex - k;
+  for (const [importOffset, existingOffset] of orderedOffsets) {
+    const importStationIndex = s.importStationIndex === 0 ? importOffset : s.importStationIndex - importOffset;
     const existingStationIndex = s.direction === 'forward'
-      ? s.existingStationIndex + k
-      : s.existingStationIndex - k;
+      ? s.existingStationIndex + existingOffset
+      : s.existingStationIndex - existingOffset;
 
     if (importStationIndex < 0 || importStationIndex > importShotCount) continue;
     if (existingStationIndex < 0) continue;

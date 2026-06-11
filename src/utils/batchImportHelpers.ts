@@ -27,6 +27,7 @@ export interface ConfirmedOverlapInfo {
   /** Fields to match the suggestion in the pool (reference equality breaks after save/restore). */
   importStationIndex: number;
   matchedShots: number;
+  existingMatchedShots?: number;
   direction: 'forward' | 'reverse';
   existingStationIndex: number;
   targetType: 'existing' | 'importing';
@@ -111,6 +112,7 @@ export function findOverlapForStation(
       return {
         importStationIndex: s.importStationIndex,
         matchedShots: s.matchedShots,
+        existingMatchedShots: s.existingMatchedShots,
         direction: s.direction,
         existingStationIndex: s.existingStationIndex,
         targetType: s.targetType as 'existing' | 'importing',
@@ -210,9 +212,19 @@ export function redirectDeletedTargets(
         ? targetStation
         : overlap.importStationIndex - targetStation;
 
+      const maxImportOffset = overlap.matchedShots;
+      const maxExistingOffset = overlap.existingMatchedShots ?? overlap.matchedShots;
+      const existingOffset = maxImportOffset === maxExistingOffset
+        ? offset
+        : offset >= maxImportOffset
+          ? maxExistingOffset
+          : offset <= 0
+            ? 0
+            : Math.round((offset / Math.max(1, maxImportOffset)) * maxExistingOffset);
+
       const newStation = overlap.direction === 'forward'
-        ? overlap.existingStationIndex + offset
-        : overlap.existingStationIndex - offset;
+        ? overlap.existingStationIndex + existingOffset
+        : overlap.existingStationIndex - existingOffset;
 
       depth++;
 

@@ -38,6 +38,12 @@ pub struct PlacementSuggestion {
     pub score: f64,
     /// Number of shots that matched.
     pub matched_shots: usize,
+    /// Number of existing/target shots consumed by the match.
+    #[serde(default)]
+    pub existing_matched_shots: usize,
+    /// Preferred import-side merge offset within the overlap.
+    #[serde(default)]
+    pub preferred_merge_offset: usize,
     /// Direction of match.
     pub direction: MatchDirection,
     /// Whether the last matched shot was a partial (shorter) match.
@@ -70,6 +76,12 @@ pub struct CrossSectionSuggestion {
     pub score: f64,
     /// Number of shots that matched.
     pub matched_shots: usize,
+    /// Number of existing/target shots consumed by the match.
+    #[serde(default)]
+    pub existing_matched_shots: usize,
+    /// Preferred import-side merge offset within the overlap.
+    #[serde(default)]
+    pub preferred_merge_offset: usize,
     /// Direction of match.
     pub direction: MatchDirection,
     /// Whether the last matched shot was a partial (shorter) match.
@@ -110,6 +122,12 @@ pub struct OrphanPlacementSuggestion {
     pub score: f64,
     /// Number of shots that matched
     pub matched_shots: usize,
+    /// Number of target shots consumed by the match
+    #[serde(default)]
+    pub existing_matched_shots: usize,
+    /// Preferred import-side merge offset within the overlap
+    #[serde(default)]
+    pub preferred_merge_offset: usize,
     /// Direction of match
     pub direction: MatchDirection,
     /// Whether the last matched shot was a partial (shorter) match
@@ -169,6 +187,8 @@ pub fn suggest_all_placements(
                 import_station_index: s.import_station_index,
                 score: s.score,
                 matched_shots: s.matched_shots,
+                existing_matched_shots: s.existing_matched_shots,
+                preferred_merge_offset: s.preferred_merge_offset,
                 direction: s.direction,
                 is_partial: s.is_partial,
                 confidence: s.confidence,
@@ -204,6 +224,8 @@ pub fn suggest_all_placements(
                     import_station_index: s.import_station_index,
                     score: s.score,
                     matched_shots: s.matched_shots,
+                    existing_matched_shots: s.existing_matched_shots,
+                    preferred_merge_offset: s.preferred_merge_offset,
                     direction: s.direction,
                     is_partial: s.is_partial,
                     confidence: s.confidence,
@@ -587,6 +609,7 @@ fn try_partial_one_direction(
 struct SequenceMatch {
     score: f64,
     matched_count: usize,
+    existing_matched_count: usize,
     is_partial: bool,
 }
 
@@ -676,6 +699,135 @@ fn suppress_equivalent_single_front_reverses(suggestions: &mut Vec<PlacementSugg
     });
 }
 
+fn outward_runs(shots: &[MatchShot], station_index: usize) -> Vec<(bool, Vec<MatchShot>)> {
+    let mut runs = Vec::new();
+    let max_len = 3;
+
+    for len in 1..=max_len {
+        if station_index >= len {
+            let run = shots[station_index - len..station_index]
+                .iter()
+                .rev()
+                .map(MatchShot::reversed)
+                .collect();
+            runs.push((false, run));
+        }
+    }
+
+    for len in 1..=max_len {
+        if station_index + len <= shots.len() {
+            runs.push((true, shots[station_index..station_index + len].to_vec()));
+        }
+    }
+
+    runs
+}
+
+fn station_context_multiplier(
+    import_shots: &[MatchShot],
+    existing_shots: &[MatchShot],
+    import_station_index: usize,
+    existing_station_index: usize,
+    config: &SuggestionConfig,
+) -> f64 {
+    if import_station_index > import_shots.len() || existing_station_index > existing_shots.len() {
+        return 0.75;
+    }
+
+    let import_runs = outward_runs(import_shots, import_station_index);
+    let existing_runs = outward_runs(existing_shots, existing_station_index);
+    if import_runs.is_empty() || existing_runs.is_empty() {
+        return 1.0;
+    }
+
+    let mut scored: Vec<(f64, bool, bool, usize, usize)> = Vec::new();
+    for (import_forward, import_run) in &import_runs {
+        for (existing_forward, existing_run) in &existing_runs {
+            if import_run.len() > 1 && existing_run.len() > 1 {
+                continue;
+            }
+            if let Some((score, _)) = score_composite_runs(import_run, existing_run, config) {
+                scored.push((
+                    score,
+                    *import_forward,
+                    *existing_forward,
+                    import_run.len(),
+                    existing_run.len(),
+                ));
+            }
+        }
+    }
+
+    if scored.is_empty() {
+        return 0.65;
+    }
+
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let best = scored[0];
+    let has_composite = best.3 > 1 || best.4 > 1;
+    let has_second_side = scored.iter().skip(1).any(|(_, import_forward, existing_forward, _, _)| {
+        *import_forward != best.1 && *existing_forward != best.2
+    });
+
+    let import_leaf = import_station_index == 0 || import_station_index == import_shots.len();
+    let existing_leaf = existing_station_index == 0 || existing_station_index == existing_shots.len();
+
+    if has_second_side {
+        1.18
+    } else if has_composite {
+        1.12
+    } else if import_leaf || existing_leaf {
+        1.0
+    } else if best.0 >= 0.85 {
+        0.86
+    } else {
+        0.72
+    }
+}
+
+fn merge_offset_pairs(suggestion: &PlacementSuggestion) -> Vec<(usize, usize)> {
+    let import_max_offset = if suggestion.is_partial {
+        suggestion.matched_shots.saturating_sub(1)
+    } else {
+        suggestion.matched_shots
+    };
+    let existing_max_offset = if suggestion.is_partial {
+        suggestion.existing_matched_shots.saturating_sub(1)
+    } else {
+        suggestion.existing_matched_shots
+    };
+
+    if import_max_offset == existing_max_offset {
+        (0..=import_max_offset).map(|k| (k, k)).collect()
+    } else {
+        vec![(0, 0), (import_max_offset, existing_max_offset)]
+    }
+}
+
+fn merge_station_pair_for_offsets(
+    import_shot_count: usize,
+    existing_shot_count: usize,
+    suggestion: &PlacementSuggestion,
+    import_offset: usize,
+    existing_offset: usize,
+) -> Option<(usize, usize)> {
+    let import_station = if suggestion.import_station_index == 0 {
+        import_offset
+    } else {
+        suggestion.import_station_index.checked_sub(import_offset)?
+    };
+    let existing_station = match suggestion.direction {
+        MatchDirection::Forward => suggestion.existing_station_index.checked_add(existing_offset)?,
+        MatchDirection::Reverse => suggestion.existing_station_index.checked_sub(existing_offset)?,
+    };
+
+    if import_station <= import_shot_count && existing_station <= existing_shot_count {
+        Some((import_station, existing_station))
+    } else {
+        None
+    }
+}
+
 fn score_composite_runs(
     import_run: &[MatchShot],
     existing_run: &[MatchShot],
@@ -703,7 +855,7 @@ fn try_match_sequence(
     config: &SuggestionConfig,
 ) -> SequenceMatch {
     if import_shots.is_empty() || existing_shots.is_empty() || start_idx >= existing_shots.len() {
-        return SequenceMatch { score: 0.0, matched_count: 0, is_partial: false };
+        return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
     }
 
     let existing_oriented = oriented_existing_shots(existing_shots, start_idx, direction);
@@ -791,7 +943,7 @@ fn try_match_sequence(
                     is_partial: true,
                 }
             } else {
-                return SequenceMatch { score: 0.0, matched_count: 0, is_partial: false };
+                return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
             }
         }
     };
@@ -819,12 +971,13 @@ fn try_match_sequence(
     }
 
     if best.import_count == 0 || best.weight_sum == 0.0 {
-        return SequenceMatch { score: 0.0, matched_count: 0, is_partial: false };
+        return SequenceMatch { score: 0.0, matched_count: 0, existing_matched_count: 0, is_partial: false };
     }
 
     SequenceMatch {
         score: cell_final_score(best, config),
         matched_count: best.import_count,
+        existing_matched_count: best.existing_count,
         is_partial: best.is_partial,
     }
 }
@@ -853,6 +1006,11 @@ pub fn suggest_placements(
 
     // Build import match shots for station 0 (first N shots, natural order)
     let import_from_0: Vec<MatchShot> = import_shots[..max_ref]
+        .iter()
+        .map(MatchShot::from_shot_data)
+        .collect();
+
+    let import_match_shots: Vec<MatchShot> = import_shots
         .iter()
         .map(MatchShot::from_shot_data)
         .collect();
@@ -909,9 +1067,62 @@ pub fn suggest_placements(
                         MatchDirection::Reverse => start_idx + 1,
                     };
 
-                    let confidence = if result.score >= 0.90 {
+                    let mut suggestion = PlacementSuggestion {
+                        existing_section_id: existing.id,
+                        existing_station_index,
+                        import_station_index: import_station,
+                        score: result.score,
+                        matched_shots: result.matched_count,
+                        existing_matched_shots: result.existing_matched_count,
+                        preferred_merge_offset: if result.is_partial {
+                            result.matched_count.saturating_sub(1)
+                        } else {
+                            result.matched_count
+                        },
+                        direction,
+                        is_partial: result.is_partial,
+                        confidence: SuggestionConfidence::Low,
+                        existing_section_name: existing.name.clone(),
+                    };
+
+                    let mut best_context: Option<(f64, usize)> = None;
+                    for (import_offset, existing_offset) in merge_offset_pairs(&suggestion) {
+                        let Some((merge_import_station, merge_existing_station)) =
+                            merge_station_pair_for_offsets(
+                                import_match_shots.len(),
+                                existing_match_shots.len(),
+                                &suggestion,
+                                import_offset,
+                                existing_offset,
+                            )
+                        else {
+                            continue;
+                        };
+                        let context_multiplier = station_context_multiplier(
+                            &import_match_shots,
+                            &existing_match_shots,
+                            merge_import_station,
+                            merge_existing_station,
+                            config,
+                        );
+                        if best_context
+                            .map(|(best, _)| context_multiplier > best)
+                            .unwrap_or(true)
+                        {
+                            best_context = Some((context_multiplier, import_offset));
+                        }
+                    }
+                    let (context_multiplier, preferred_offset) = best_context.unwrap_or((1.0, suggestion.preferred_merge_offset));
+                    suggestion.preferred_merge_offset = preferred_offset;
+                    suggestion.score *= context_multiplier;
+
+                    if suggestion.score < config.min_aggregate_score {
+                        continue;
+                    }
+
+                    suggestion.confidence = if suggestion.score >= 0.90 {
                         SuggestionConfidence::High
-                    } else if result.score >= 0.70 {
+                    } else if suggestion.score >= 0.70 {
                         SuggestionConfidence::Medium
                     } else {
                         SuggestionConfidence::Low
@@ -919,40 +1130,27 @@ pub fn suggest_placements(
 
                     // Check for duplicates
                     let is_dup = suggestions.iter().any(|s| {
-                        s.existing_section_id == existing.id
-                            && s.existing_station_index == existing_station_index
-                            && s.import_station_index == import_station
-                            && s.direction == direction
+                        s.existing_section_id == suggestion.existing_section_id
+                            && s.existing_station_index == suggestion.existing_station_index
+                            && s.import_station_index == suggestion.import_station_index
+                            && s.direction == suggestion.direction
                     });
                     if is_dup {
                         // Keep the better score
                         if let Some(existing_suggestion) = suggestions.iter_mut().find(|s| {
-                            s.existing_section_id == existing.id
-                                && s.existing_station_index == existing_station_index
-                                && s.import_station_index == import_station
-                                && s.direction == direction
+                            s.existing_section_id == suggestion.existing_section_id
+                                && s.existing_station_index == suggestion.existing_station_index
+                                && s.import_station_index == suggestion.import_station_index
+                                && s.direction == suggestion.direction
                         }) {
-                            if result.score > existing_suggestion.score {
-                                existing_suggestion.score = result.score;
-                                existing_suggestion.matched_shots = result.matched_count;
-                                existing_suggestion.is_partial = result.is_partial;
-                                existing_suggestion.confidence = confidence;
+                            if suggestion.score > existing_suggestion.score {
+                                *existing_suggestion = suggestion;
                             }
                         }
                         continue;
                     }
 
-                    suggestions.push(PlacementSuggestion {
-                        existing_section_id: existing.id,
-                        existing_station_index,
-                        import_station_index: import_station,
-                        score: result.score,
-                        matched_shots: result.matched_count,
-                        direction,
-                        is_partial: result.is_partial,
-                        confidence,
-                        existing_section_name: existing.name.clone(),
-                    });
+                    suggestions.push(suggestion);
                 }
             }
         }
@@ -1322,6 +1520,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn station_context_boosts_extra_station_composite() {
+        let config = SuggestionConfig::default();
+        let import = vec![
+            MatchShot { avg_azimuth: 90.0, length: 10.0, depth_in: 3.0, depth_out: 4.0 },
+        ];
+        let existing = vec![
+            MatchShot { avg_azimuth: 89.5, length: 4.0, depth_in: 3.0, depth_out: 3.4 },
+            MatchShot { avg_azimuth: 90.5, length: 6.0, depth_in: 3.4, depth_out: 4.0 },
+        ];
+
+        let multiplier = station_context_multiplier(&import, &existing, 0, 0, &config);
+
+        assert!(multiplier > 1.0, "extra station composite should be boosted, got {multiplier}");
+    }
+
+    #[test]
+    fn station_context_penalizes_one_sided_interior_match() {
+        let config = SuggestionConfig::default();
+        let import = vec![
+            MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 180.0, length: 5.0, depth_in: 4.0, depth_out: 5.0 },
+        ];
+        let existing = vec![
+            MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 270.0, length: 5.0, depth_in: 4.0, depth_out: 5.0 },
+        ];
+
+        let multiplier = station_context_multiplier(&import, &existing, 1, 1, &config);
+
+        assert!(multiplier < 1.0, "unsupported interior match should be penalized, got {multiplier}");
+    }
+
     // ========================================================================
     // suggest_placements integration tests
     // ========================================================================
@@ -1674,6 +1905,8 @@ mod tests {
             import_station_index: 0,
             score: 0.580,
             matched_shots: 1,
+            existing_matched_shots: 1,
+            preferred_merge_offset: 1,
             direction: MatchDirection::Forward,
             is_partial: false,
             confidence: SuggestionConfidence::Low,
@@ -1685,6 +1918,8 @@ mod tests {
             import_station_index: 0,
             score: 0.581,
             matched_shots: 1,
+            existing_matched_shots: 1,
+            preferred_merge_offset: 1,
             direction: MatchDirection::Reverse,
             is_partial: true,
             confidence: SuggestionConfidence::Low,

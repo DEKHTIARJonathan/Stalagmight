@@ -43,6 +43,7 @@ export interface EditableShotLike extends TargetShotLike {
 export interface OverlapParams {
   importStationIndex: number;
   matchedShots: number;
+  existingMatchedShots?: number;
   existingStationIndex: number;
   direction: 'forward' | 'reverse';
 }
@@ -57,6 +58,8 @@ interface SuggestionLike {
   importStationIndex: number;
   existingStationIndex: number;
   matchedShots: number;
+  existingMatchedShots?: number;
+  preferredMergeOffset?: number;
   direction: 'forward' | 'reverse';
   isPartial: boolean;
 }
@@ -149,8 +152,23 @@ export function computeTargetShotIndex(
   params: OverlapParams,
 ): number {
   const { importStationIndex, matchedShots, existingStationIndex, direction } = params;
+  const existingMatchedShots = params.existingMatchedShots ?? matchedShots;
   const overlapStart = importStationIndex === 0 ? 0 : importStationIndex - matchedShots;
   const k = overlapId - overlapStart;
+
+  if (existingMatchedShots !== matchedShots) {
+    if (k <= 0) return direction === 'forward' ? existingStationIndex : existingStationIndex - 1;
+    if (k >= matchedShots - 1) {
+      return direction === 'forward'
+        ? existingStationIndex + existingMatchedShots - 1
+        : existingStationIndex - existingMatchedShots;
+    }
+    const ratio = k / Math.max(1, matchedShots - 1);
+    const targetOffset = Math.round(ratio * Math.max(0, existingMatchedShots - 1));
+    return direction === 'forward'
+      ? existingStationIndex + targetOffset
+      : existingStationIndex - 1 - targetOffset;
+  }
 
   if (importStationIndex === 0) {
     // Front
@@ -180,21 +198,34 @@ export function computeMergeOptions(
   suggestion: SuggestionLike,
   importShotCount: number,
 ): MergeOption[] {
-  const { importStationIndex, existingStationIndex, matchedShots, direction, isPartial } = suggestion;
-  const maxOffset = isPartial ? matchedShots - 1 : matchedShots;
+  const {
+    importStationIndex,
+    existingStationIndex,
+    matchedShots,
+    direction,
+    isPartial,
+  } = suggestion;
+  const existingMatchedShots = suggestion.existingMatchedShots ?? matchedShots;
+  const maxImportOffset = isPartial ? matchedShots - 1 : matchedShots;
+  const maxExistingOffset = isPartial ? existingMatchedShots - 1 : existingMatchedShots;
   const options: MergeOption[] = [];
+  const offsets = maxImportOffset === maxExistingOffset
+    ? Array.from({ length: maxImportOffset + 1 }, (_, k) => [k, k] as const)
+    : [[0, 0] as const, [maxImportOffset, maxExistingOffset] as const];
 
-  for (let k = 0; k <= maxOffset; k++) {
-    const importStation = importStationIndex === 0 ? k : importStationIndex - k;
+  for (const [importOffset, existingOffset] of offsets) {
+    const importStation = importStationIndex === 0 ? importOffset : importStationIndex - importOffset;
     const existingStation = direction === 'forward'
-      ? existingStationIndex + k
-      : existingStationIndex - k;
+      ? existingStationIndex + existingOffset
+      : existingStationIndex - existingOffset;
 
     // Guard: stations must stay within valid ranges
     if (importStation < 0 || importStation > importShotCount) continue;
     if (existingStation < 0) continue;
 
-    options.push({ offset: k, importStation, existingStation });
+    if (!options.some((o) => o.importStation === importStation && o.existingStation === existingStation)) {
+      options.push({ offset: importOffset, importStation, existingStation });
+    }
   }
   return options;
 }

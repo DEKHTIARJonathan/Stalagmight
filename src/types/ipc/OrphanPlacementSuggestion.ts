@@ -2,4 +2,4 @@
 import type { MatchDirection } from "./MatchDirection";
 import type { SuggestionConfidence } from "./SuggestionConfidence";
 
-export interface OrphanPlacementSuggestion { orphanSectionId: number, orphanSectionName: string, orphanStationIndex: number, targetSectionId: number, targetSectionName: string, targetStationIndex: number, score: number, matchedShots: number, direction: MatchDirection, isPartial: boolean, confidence: SuggestionConfidence, }
+export interface OrphanPlacementSuggestion { orphanSectionId: number, orphanSectionName: string, orphanStationIndex: number, targetSectionId: number, targetSectionName: string, targetStationIndex: number, score: number, matchedShots: number, existingMatchedShots: number, preferredMergeOffset: number, direction: MatchDirection, isPartial: boolean, confidence: SuggestionConfidence, }

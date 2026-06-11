@@ -231,4 +231,26 @@ describe('rerankSuggestionsByTemporalPlan', () => {
     expect(result.suggestions).toEqual([]);
     expect(result.rejectedCount).toBeGreaterThan(0);
   });
+
+  it('honors the preferred endpoint for candidates with target-side extra stations', () => {
+    const localSections = [
+      makeSection('A', '2026-06-11T10:00:00', [makeShot(10, 10, 0), makeShot(10, 10, 5)]),
+      makeSection('B', '2026-06-11T10:15:00', [makeShot(100, 10, 15), makeShot(100, 10, 20)]),
+    ];
+    const candidate = suggestion({
+      importSectionIndex: 0,
+      targetImportIndex: 1,
+      importStationIndex: 0,
+      existingStationIndex: 0,
+      matchedShots: 1,
+      existingMatchedShots: 2,
+      preferredMergeOffset: 0,
+      score: 2,
+    });
+
+    const result = rerankSuggestionsByTemporalPlan([candidate], localSections, []);
+
+    expect(result.suggestions).toEqual([candidate]);
+    expect(result.rejectedCount).toBe(0);
+  });
 });
