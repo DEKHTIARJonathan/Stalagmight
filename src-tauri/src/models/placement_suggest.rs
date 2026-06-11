@@ -299,6 +299,7 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
 }
 
 /// Minimal shot data needed for matching.
+#[derive(Clone, Copy)]
 struct MatchShot {
     avg_azimuth: f64,
     length: f64,
@@ -340,6 +341,14 @@ impl MatchShot {
     }
 }
 
+/// A run of one or more consecutive shots collapsed into a single chord for
+/// matching surveys with different station density (markers / slight kiss-offs).
+struct CompositeShot {
+    shot: MatchShot,
+    shot_count: usize,
+    bend_penalty: f64,
+}
+
 /// Compute average azimuth from two readings, handling 360° wraparound.
 fn average_azimuth(azimuth_in: f64, azimuth_out: f64) -> f64 {
     let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
@@ -355,6 +364,71 @@ fn angular_difference(a: f64, b: f64) -> f64 {
 /// Gaussian falloff: exp(-(error / sigma)^2).
 fn gaussian(error: f64, sigma: f64) -> f64 {
     (-((error / sigma).powi(2))).exp()
+}
+
+fn shot_vector(shot: &MatchShot) -> (f64, f64) {
+    let rad = shot.avg_azimuth.to_radians();
+    (shot.length * rad.sin(), shot.length * rad.cos())
+}
+
+fn composite_shot(shots: &[MatchShot]) -> Option<CompositeShot> {
+    let first = shots.first()?;
+    let last = shots.last()?;
+
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut path_length = 0.0;
+    for shot in shots {
+        let (dx, dy) = shot_vector(shot);
+        x += dx;
+        y += dy;
+        path_length += shot.length;
+    }
+
+    let chord_length = (x * x + y * y).sqrt();
+    if chord_length <= f64::EPSILON {
+        return None;
+    }
+
+    let chord_azimuth = x.atan2(y).to_degrees().rem_euclid(360.0);
+    let mut max_az_error = 0.0_f64;
+    for shot in shots {
+        max_az_error = max_az_error.max(angular_difference(shot.avg_azimuth, chord_azimuth));
+    }
+
+    let relative_bend = if path_length > 0.0 {
+        (path_length - chord_length).max(0.0) / path_length
+    } else {
+        0.0
+    };
+
+    // Marker stations should be almost straight. Slight kiss-offs may bend, but
+    // cap both angular spread and path-vs-chord deviation so side passages do not
+    // collapse into one shot.
+    if shots.len() > 1 && (max_az_error > 20.0 || relative_bend > 0.08) {
+        return None;
+    }
+
+    let bend_penalty = if shots.len() <= 1 {
+        0.0
+    } else {
+        // Exact collinear marker splits get a small penalty; bent kiss-offs pay
+        // more, so clean 1:1 matches still win when available.
+        0.04 * (shots.len() - 1) as f64
+            + (max_az_error / 20.0).min(1.0) * 0.12
+            + (relative_bend / 0.08).min(1.0) * 0.12
+    };
+
+    Some(CompositeShot {
+        shot: MatchShot {
+            avg_azimuth: chord_azimuth,
+            length: path_length,
+            depth_in: first.depth_in,
+            depth_out: last.depth_out,
+        },
+        shot_count: shots.len(),
+        bend_penalty,
+    })
 }
 
 /// Dynamic length cutoff: 5% of existing length, floored at 0.6m.
@@ -518,6 +592,57 @@ struct SequenceMatch {
     is_partial: bool,
 }
 
+#[derive(Clone, Copy)]
+struct DpCell {
+    score_sum: f64,
+    weight_sum: f64,
+    import_count: usize,
+    existing_count: usize,
+    is_partial: bool,
+}
+
+fn oriented_existing_shots(
+    existing_shots: &[MatchShot],
+    start_idx: usize,
+    direction: MatchDirection,
+) -> Vec<MatchShot> {
+    match direction {
+        MatchDirection::Forward => existing_shots[start_idx..].to_vec(),
+        MatchDirection::Reverse => existing_shots[..=start_idx]
+            .iter()
+            .rev()
+            .map(MatchShot::reversed)
+            .collect(),
+    }
+}
+
+fn run_weight(composite: &CompositeShot, config: &SuggestionConfig) -> f64 {
+    let weight = if composite.shot.length < config.short_shot_threshold {
+        composite.shot.length / config.short_shot_threshold
+    } else {
+        1.0
+    };
+    weight * composite.shot_count as f64
+}
+
+fn score_composite_runs(
+    import_run: &[MatchShot],
+    existing_run: &[MatchShot],
+    config: &SuggestionConfig,
+) -> Option<(f64, f64)> {
+    let import = composite_shot(import_run)?;
+    let existing = composite_shot(existing_run)?;
+    let score = compute_shot_score(&import.shot, &existing.shot, MatchDirection::Forward, config);
+    if score < config.min_shot_score {
+        return None;
+    }
+    let adjusted = (score - import.bend_penalty - existing.bend_penalty).max(0.0);
+    if adjusted < config.min_shot_score {
+        return None;
+    }
+    Some((adjusted, run_weight(&import, config)))
+}
+
 /// Try matching a sequence of import shots against existing shots starting at `start_idx`.
 fn try_match_sequence(
     import_shots: &[MatchShot],
@@ -530,88 +655,134 @@ fn try_match_sequence(
         return SequenceMatch { score: 0.0, matched_count: 0, is_partial: false };
     }
 
-    let mut total_weight = 0.0;
-    let mut weighted_score = 0.0;
-    let mut matched = 0;
-    let mut is_partial = false;
+    let existing_oriented = oriented_existing_shots(existing_shots, start_idx, direction);
+    let n = import_shots.len();
+    let m = existing_oriented.len();
+    let mut dp: Vec<Vec<Option<DpCell>>> = vec![vec![None; m + 1]; n + 1];
+    dp[0][0] = Some(DpCell {
+        score_sum: 0.0,
+        weight_sum: 0.0,
+        import_count: 0,
+        existing_count: 0,
+        is_partial: false,
+    });
 
-    for (i, import_shot) in import_shots.iter().enumerate() {
-        let existing_idx = match direction {
-            MatchDirection::Forward => start_idx + i,
-            MatchDirection::Reverse => {
-                if start_idx < i {
-                    break;
+    for i in 0..=n {
+        for j in 0..=m {
+            let Some(cell) = dp[i][j] else { continue };
+            for import_len in 1..=3 {
+                if i + import_len > n { continue; }
+                for existing_len in 1..=3 {
+                    if j + existing_len > m { continue; }
+                    if import_len > 1 && existing_len > 1 { continue; }
+                    let Some((score, weight)) = score_composite_runs(
+                        &import_shots[i..i + import_len],
+                        &existing_oriented[j..j + existing_len],
+                        config,
+                    ) else {
+                        continue;
+                    };
+                    let next = DpCell {
+                        score_sum: cell.score_sum + score * weight,
+                        weight_sum: cell.weight_sum + weight,
+                        import_count: cell.import_count + import_len,
+                        existing_count: cell.existing_count + existing_len,
+                        is_partial: cell.is_partial,
+                    };
+                    let target = &mut dp[i + import_len][j + existing_len];
+                    let replace = target
+                        .map(|old| {
+                            (next.score_sum / next.weight_sum)
+                                > (old.score_sum / old.weight_sum)
+                        })
+                        .unwrap_or(true);
+                    if replace {
+                        *target = Some(next);
+                    }
                 }
-                start_idx - i
             }
-        };
-
-        if existing_idx >= existing_shots.len() {
-            break;
         }
+    }
 
-        let existing_shot = &existing_shots[existing_idx];
-        let is_last_import = i == import_shots.len() - 1;
+    let mut best: Option<DpCell> = None;
+    for row in dp.iter().skip(1) {
+        for cell in row.iter().flatten() {
+            let replace = best
+                .map(|old| {
+                    cell.import_count > old.import_count
+                        || (cell.import_count == old.import_count
+                            && (cell.score_sum / cell.weight_sum) > (old.score_sum / old.weight_sum))
+                })
+                .unwrap_or(true);
+            if replace {
+                best = Some(*cell);
+            }
+        }
+    }
 
-        let full_score = compute_shot_score(import_shot, existing_shot, direction, config);
-
-        // For the last import shot, also try partial match if import is shorter
-        let partial_result = if is_last_import {
-            try_partial_match(import_shot, existing_shot, direction, config)
-        } else {
-            None
-        };
-
-        // Decide between full and partial match
-        let use_partial = match partial_result {
-            Some((partial_score, _)) if partial_score > full_score => true,
-            Some(_) if full_score < config.min_shot_score => true,
-            _ => full_score < config.min_shot_score,
-        };
-
-        if use_partial {
-            if let Some((partial_score, length_ratio)) = partial_result {
+    let mut best = match best {
+        Some(cell) if cell.import_count > 0 && cell.weight_sum > 0.0 => cell,
+        _ => {
+            // Preserve the existing partial-last-shot behavior as a fallback. It
+            // handles cases where the import stops partway through the target leg.
+            let existing_first = &existing_oriented[0];
+            if let Some((partial_score, length_ratio)) =
+                try_partial_match(&import_shots[0], existing_first, MatchDirection::Forward, config)
+            {
                 let weight = length_ratio
-                    * if import_shot.length < config.short_shot_threshold {
-                        import_shot.length / config.short_shot_threshold
+                    * if import_shots[0].length < config.short_shot_threshold {
+                        import_shots[0].length / config.short_shot_threshold
                     } else {
                         1.0
                     };
-                weighted_score += partial_score * weight;
-                total_weight += weight;
-                matched += 1;
-                is_partial = true;
-            }
-            // Stop extending after last shot or failed match
-            break;
-        } else if full_score >= config.min_shot_score {
-            let weight = if import_shot.length < config.short_shot_threshold {
-                import_shot.length / config.short_shot_threshold
+                DpCell {
+                    score_sum: partial_score * weight,
+                    weight_sum: weight,
+                    import_count: 1,
+                    existing_count: 1,
+                    is_partial: true,
+                }
             } else {
-                1.0
-            };
-            weighted_score += full_score * weight;
-            total_weight += weight;
-            matched += 1;
-        } else {
-            // Full match failed and no partial — stop
-            break;
+                return SequenceMatch { score: 0.0, matched_count: 0, is_partial: false };
+            }
+        }
+    };
+
+    // If the best full/composite path did not consume all import reference shots,
+    // check whether the next unmatched import shot is a valid partial terminal leg.
+    if best.import_count < n && best.existing_count < existing_oriented.len() {
+        let import_shot = &import_shots[best.import_count];
+        let existing_shot = &existing_oriented[best.existing_count];
+        if let Some((partial_score, length_ratio)) =
+            try_partial_match(import_shot, existing_shot, MatchDirection::Forward, config)
+        {
+            let weight = length_ratio
+                * if import_shot.length < config.short_shot_threshold {
+                    import_shot.length / config.short_shot_threshold
+                } else {
+                    1.0
+                };
+            best.score_sum += partial_score * weight;
+            best.weight_sum += weight;
+            best.import_count += 1;
+            best.existing_count += 1;
+            best.is_partial = true;
         }
     }
 
-    if matched == 0 || total_weight == 0.0 {
+    if best.import_count == 0 || best.weight_sum == 0.0 {
         return SequenceMatch { score: 0.0, matched_count: 0, is_partial: false };
     }
 
-    let raw_score = weighted_score / total_weight;
-    let match_bonus = 1.0 + 0.15 * total_weight.ln();
-    let single_penalty = if matched == 1 { config.single_shot_penalty } else { 1.0 };
+    let raw_score = best.score_sum / best.weight_sum;
+    let match_bonus = 1.0 + 0.15 * best.weight_sum.ln();
+    let single_penalty = if best.import_count == 1 { config.single_shot_penalty } else { 1.0 };
     let final_score = raw_score * match_bonus.max(1.0) * single_penalty;
 
     SequenceMatch {
         score: final_score,
-        matched_count: matched,
-        is_partial,
+        matched_count: best.import_count,
+        is_partial: best.is_partial,
     }
 }
 
@@ -1060,6 +1231,48 @@ mod tests {
             (result.score - config.single_shot_penalty).abs() < 1e-6,
             "single shot should be penalized to {}, got {}",
             config.single_shot_penalty,
+            result.score,
+        );
+    }
+
+    #[test]
+    fn marker_station_split_matches_single_target_shot() {
+        let config = SuggestionConfig::default();
+        let import = vec![
+            MatchShot { avg_azimuth: 90.0, length: 4.0, depth_in: 3.0, depth_out: 3.4 },
+            MatchShot { avg_azimuth: 90.5, length: 6.0, depth_in: 3.4, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+        let existing = vec![
+            MatchShot { avg_azimuth: 90.2, length: 10.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+
+        let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
+
+        assert_eq!(result.matched_count, 3);
+        assert!(result.score > 0.8, "marker split should still align well, got {}", result.score);
+    }
+
+    #[test]
+    fn slight_kissoff_split_matches_single_target_shot_with_penalty() {
+        let config = SuggestionConfig::default();
+        let import = vec![
+            MatchShot { avg_azimuth: 82.0, length: 5.0, depth_in: 3.0, depth_out: 3.45 },
+            MatchShot { avg_azimuth: 98.0, length: 5.0, depth_in: 3.45, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+        let existing = vec![
+            MatchShot { avg_azimuth: 90.0, length: 10.0, depth_in: 3.0, depth_out: 4.0 },
+            MatchShot { avg_azimuth: 45.0, length: 3.0, depth_in: 4.0, depth_out: 4.5 },
+        ];
+
+        let result = try_match_sequence(&import, &existing, 0, MatchDirection::Forward, &config);
+
+        assert_eq!(result.matched_count, 3);
+        assert!(
+            result.score > 0.65 && result.score < 1.2,
+            "slight kiss-off should match with a penalty, got {}",
             result.score,
         );
     }
