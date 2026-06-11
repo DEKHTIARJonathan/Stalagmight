@@ -323,7 +323,7 @@ impl From<&PlacementSuggestionConfig> for SuggestionConfig {
             short_shot_threshold: c.short_shot_threshold,
             single_shot_penalty: c.single_shot_penalty,
             max_azimuth_error_full: c.max_azimuth_error_full,
-            max_depth_error: c.max_depth_error,
+            max_depth_error: c.max_depth_error.min(0.30),
             max_length_error_fraction: c.max_length_error_fraction.min(0.03),
             max_length_error_floor: c.max_length_error_floor.min(0.40),
             sequence_length_error_base_fraction: 0.03,
@@ -1766,15 +1766,15 @@ mod tests {
         let config = SuggestionConfig::default();
         let base = MatchShot { avg_azimuth: 90.0, length: 5.0, depth_in: 3.0, depth_out: 4.0 };
 
-        // 0.49m depth_in error — just under cutoff (max_depth_error=0.50)
-        let import_pass = MatchShot { depth_in: 3.49, ..base };
+        // 0.29m depth_in error — just under cutoff (max_depth_error=0.30)
+        let import_pass = MatchShot { depth_in: 3.29, ..base };
         let score = compute_shot_score(&import_pass, &base, MatchDirection::Forward, &config);
-        assert!(score > 0.0, "0.49m depth error should pass cutoff, got {score}");
+        assert!(score > 0.0, "0.29m depth error should pass cutoff, got {score}");
 
-        // 0.51m depth_in error — just over cutoff
-        let import_fail = MatchShot { depth_in: 3.51, ..base };
+        // 0.31m depth_in error — just over cutoff
+        let import_fail = MatchShot { depth_in: 3.31, ..base };
         let score = compute_shot_score(&import_fail, &base, MatchDirection::Forward, &config);
-        assert!(score == 0.0, "0.51m depth error should be hard-rejected, got {score}");
+        assert!(score == 0.0, "0.31m depth error should be hard-rejected, got {score}");
     }
 
     #[test]
