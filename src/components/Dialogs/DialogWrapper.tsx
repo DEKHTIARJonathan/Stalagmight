@@ -61,7 +61,7 @@ function focusElement(el: HTMLElement): void {
   }
 }
 
-type DialogSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '5xl';
+type DialogSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl' | '5xl' | 'fullscreen';
 
 const sizeClasses: Record<DialogSize, string> = {
   sm: 'max-w-sm',
@@ -71,6 +71,10 @@ const sizeClasses: Record<DialogSize, string> = {
   '2xl': 'max-w-2xl',
   '4xl': 'max-w-4xl',
   '5xl': 'max-w-5xl',
+  // Near-viewport "focus mode" footprint for surfaces that take over the screen
+  // (e.g. the import wizard). Explicit width/height with a 1rem inset on each
+  // side; the flex parent centers it. Exit stays via the close button / Escape.
+  fullscreen: 'max-w-none w-[calc(100vw-2rem)] h-[calc(100vh-2rem)]',
 };
 
 /** Fixed dimensions for dialogs that need constant size regardless of content. */
@@ -321,6 +325,13 @@ export function DialogWrapper({
     return null;
   }
 
+  // fullscreen sets its own explicit height, so it skips the default max-h clamp.
+  const containerSizing = fixedSize
+    ? ''
+    : size === 'fullscreen'
+      ? sizeClasses[size]
+      : `${sizeClasses[size]} ${maxHeight} w-full mx-4`;
+
   return createPortal(
     <div
       ref={dialogRef}
@@ -336,7 +347,7 @@ export function DialogWrapper({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className={`relative bg-panel border border-border rounded-lg shadow-xl ${fixedSize ? '' : `${sizeClasses[size]} ${maxHeight} w-full mx-4`} overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
+        className={`relative bg-panel border border-border rounded-lg shadow-xl ${containerSizing} overflow-${overflow} ${overflow === 'hidden' ? 'flex flex-col' : ''}`}
         style={fixedSize ? { width: fixedSize.width, height: fixedSize.height } : undefined}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">

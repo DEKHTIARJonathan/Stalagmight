@@ -1081,6 +1081,45 @@ function buildBatchImport(
 }
 
 /**
+ * Returns a callback ref + a square pixel size that fits the ref'd container's
+ * height (minus the preview panel's `p-4`), capped at `max`. The wizard's
+ * SectionPreview is a fixed square, so without this it overflows and is clipped
+ * by the dialog's `overflow-hidden` when the window is near its 600px minimum
+ * height (#93 review). Reacts to window/layout resizes via ResizeObserver.
+ */
+function usePreviewSquareSize(
+  max = 440,
+  min = 240,
+): [(el: HTMLDivElement | null) => void, number] {
+  const [size, setSize] = useState(max);
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  const measure = useCallback(() => {
+    const el = elRef.current;
+    if (!el) return;
+    // Preview panel adds p-4 (1rem top + bottom = 32px) around the square.
+    const available = el.clientHeight - 32;
+    setSize(Math.max(min, Math.min(max, Math.floor(available))));
+  }, [max, min]);
+
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      observerRef.current?.disconnect();
+      elRef.current = el;
+      if (el) {
+        measure();
+        observerRef.current = new ResizeObserver(measure);
+        observerRef.current.observe(el);
+      }
+    },
+    [measure],
+  );
+
+  return [setRef, size];
+}
+
+/**
  * Connection Wizard — pre-calculates all placements at startup, presents
  * suggestions sorted by score, records virtual connections on confirm,
  * then batch-places everything when suggestions are exhausted.
@@ -1099,6 +1138,11 @@ export default function DmpNewImportDialog({
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
   const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
+
+  // Responsive preview square — fits the available column height so it never
+  // overflows the fullscreen dialog on short windows (#93 review). One per flow.
+  const [suggestionPreviewRef, suggestionPreviewSize] = usePreviewSquareSize();
+  const [manualPreviewRef, manualPreviewSize] = usePreviewSquareSize();
 
   // Store selectors
   const importSections = useProjectStore((s) => s.importSections);
@@ -3444,7 +3488,7 @@ export default function DmpNewImportDialog({
     <DialogWrapper
       title={t('dialogs.dmpNewImport.title')}
       onClose={handleCancel}
-      fixedSize={{ width: 'min(1000px, 95vw)', height: 'min(700px, 90vh)' }}
+      size="fullscreen"
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
       hidden={autoStartManualPlacementPending}
@@ -3465,17 +3509,17 @@ export default function DmpNewImportDialog({
 
         {/* Body: side-by-side when showing suggestion, centered otherwise */}
         {showSideBySide ? (
-          <div className="flex-1 flex min-h-0 overflow-hidden relative">
+          <div ref={suggestionPreviewRef} className="flex-1 flex min-h-0 overflow-hidden relative">
             {/* Left column: SectionPreview */}
             <div
               className="shrink-0 flex flex-col items-center p-4 border-r border-border"
-              style={{ width: 380 }}
+              style={{ width: 480 }}
               data-testid="segment-preview-panel"
             >
               <SectionPreview
                 section={importPreviewSection}
                 color={importColor}
-                size={340}
+                size={suggestionPreviewSize}
                 mergePreview={mergePreviewConfig}
                 dmpMergePreview={dmpMergePreviewConfig}
                 focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
@@ -3638,6 +3682,9 @@ export default function DmpNewImportDialog({
               )}
 
               {/* Section Settings */}
+              {/* #61 embedding slot: section-name + SectionMetadataForm + ShotTableEditor.
+                  Consumed as-is here; Daniel's reusable focus-mode section-edit surface
+                  (fields-right / table-bottom) drops in here later. Do not refactor. */}
               {editState && (
                 <>
                   <div className="border-t border-border" />
@@ -3683,7 +3730,7 @@ export default function DmpNewImportDialog({
                       onInsertBefore={handleInsertBefore}
                       onInsertAfter={handleInsertAfter}
                       frozenShotIndices={frozenShotIndices}
-                      maxHeight="12rem"
+                      maxHeight="24rem"
                     />
                   </div>
                 </>
@@ -3691,17 +3738,17 @@ export default function DmpNewImportDialog({
             </div>
           </div>
         ) : showManualPlacing ? (
-          <div className="flex-1 flex min-h-0 overflow-hidden relative">
+          <div ref={manualPreviewRef} className="flex-1 flex min-h-0 overflow-hidden relative">
             {/* Left column: Segment Preview */}
             <div
               className="shrink-0 flex flex-col items-center p-4 border-r border-border"
-              style={{ width: 380 }}
+              style={{ width: 480 }}
               data-testid="segment-preview-panel"
             >
               <SectionPreview
                 segmentSections={segmentPreviewSections}
                 contextSections={fromExistingContextSections}
-                size={340}
+                size={manualPreviewSize}
                 onStationClick={handleSegmentStationClick}
                 selectedStationIndex={previewAnchor?.stationIndex ?? null}
                 selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
@@ -3959,6 +4006,7 @@ export default function DmpNewImportDialog({
               </div>
 
               {/* Section settings (same editing surface as section connection / zero datum flows) */}
+              {/* #61 embedding slot: section-edit surface goes here later. Do not refactor. */}
               {editState && (
                 <>
                   <div className="space-y-2" data-testid="wizard-manual-section-settings">
@@ -4006,7 +4054,7 @@ export default function DmpNewImportDialog({
                       onInsertBefore={handleInsertBefore}
                       onInsertAfter={handleInsertAfter}
                       frozenShotIndices={frozenShotIndices}
-                      maxHeight="12rem"
+                      maxHeight="24rem"
                     />
                   </div>
                 </>
