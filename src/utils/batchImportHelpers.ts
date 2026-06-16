@@ -27,6 +27,7 @@ export interface ConfirmedOverlapInfo {
   /** Fields to match the suggestion in the pool (reference equality breaks after save/restore). */
   importStationIndex: number;
   matchedShots: number;
+  existingMatchedShots?: number;
   direction: 'forward' | 'reverse';
   existingStationIndex: number;
   targetType: 'existing' | 'importing';
@@ -111,6 +112,7 @@ export function findOverlapForStation(
       return {
         importStationIndex: s.importStationIndex,
         matchedShots: s.matchedShots,
+        existingMatchedShots: s.existingMatchedShots,
         direction: s.direction,
         existingStationIndex: s.existingStationIndex,
         targetType: s.targetType as 'existing' | 'importing',

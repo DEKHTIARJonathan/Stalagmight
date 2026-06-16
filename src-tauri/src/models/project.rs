@@ -7151,6 +7151,8 @@ impl Project {
                             target_station_index: ps.existing_station_index,
                             score: ps.score,
                             matched_shots: ps.matched_shots,
+                            existing_matched_shots: ps.existing_matched_shots,
+                            preferred_merge_offset: ps.preferred_merge_offset,
                             direction: ps.direction,
                             is_partial: ps.is_partial,
                             confidence: ps.confidence,

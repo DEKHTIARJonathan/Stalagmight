@@ -251,9 +251,9 @@ export const defaultConfig: Config = {
     single_shot_penalty: 0.6,
     max_azimuth_error_full: 25.0,
     max_azimuth_error_partial: 35.0,
-    max_depth_error: 0.50,
-    max_length_error_fraction: 0.15,
-    max_length_error_floor: 2.0,
+    max_depth_error: 0.30,
+    max_length_error_fraction: 0.03,
+    max_length_error_floor: 0.4,
   },
 };
 

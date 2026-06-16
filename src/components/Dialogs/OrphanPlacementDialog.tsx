@@ -161,6 +161,8 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
         importStationIndex: currentSuggestion.orphanStationIndex,
         existingStationIndex: currentSuggestion.targetStationIndex,
         matchedShots: currentSuggestion.matchedShots,
+        existingMatchedShots: currentSuggestion.existingMatchedShots,
+        preferredMergeOffset: currentSuggestion.preferredMergeOffset,
         direction: currentSuggestion.direction,
         isPartial: currentSuggestion.isPartial,
       },
@@ -176,7 +178,10 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
   // Reset merge offset to last option (deepest overlap) when suggestion changes
   useEffect(() => {
     if (mergeOptions.length > 0) {
-      setSelectedMergeOffset(mergeOptions[mergeOptions.length - 1]!.offset);
+      const preferred = currentSuggestion?.preferredMergeOffset != null
+        ? mergeOptions.find((o) => o.offset === currentSuggestion.preferredMergeOffset)
+        : null;
+      setSelectedMergeOffset((preferred ?? mergeOptions[mergeOptions.length - 1]!).offset);
     }
   }, [currentSuggestion, mergeOptions]);
 
@@ -336,6 +341,7 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
     const overlapParams = {
       importStationIndex: suggestion.orphanStationIndex,
       matchedShots: suggestion.matchedShots,
+      existingMatchedShots: suggestion.existingMatchedShots,
       existingStationIndex: suggestion.targetStationIndex,
       direction: suggestion.direction,
     };

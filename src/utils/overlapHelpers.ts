@@ -43,6 +43,7 @@ export interface EditableShotLike extends TargetShotLike {
 export interface OverlapParams {
   importStationIndex: number;
   matchedShots: number;
+  existingMatchedShots?: number;
   existingStationIndex: number;
   direction: 'forward' | 'reverse';
 }
@@ -57,6 +58,8 @@ interface SuggestionLike {
   importStationIndex: number;
   existingStationIndex: number;
   matchedShots: number;
+  existingMatchedShots?: number;
+  preferredMergeOffset?: number;
   direction: 'forward' | 'reverse';
   isPartial: boolean;
 }
@@ -180,21 +183,30 @@ export function computeMergeOptions(
   suggestion: SuggestionLike,
   importShotCount: number,
 ): MergeOption[] {
-  const { importStationIndex, existingStationIndex, matchedShots, direction, isPartial } = suggestion;
-  const maxOffset = isPartial ? matchedShots - 1 : matchedShots;
+  const {
+    importStationIndex,
+    existingStationIndex,
+    matchedShots,
+    direction,
+    isPartial,
+  } = suggestion;
+  const maxImportOffset = isPartial ? matchedShots - 1 : matchedShots;
   const options: MergeOption[] = [];
+  const offsets = Array.from({ length: maxImportOffset + 1 }, (_, k) => k);
 
-  for (let k = 0; k <= maxOffset; k++) {
-    const importStation = importStationIndex === 0 ? k : importStationIndex - k;
+  for (const offset of offsets) {
+    const importStation = importStationIndex === 0 ? offset : importStationIndex - offset;
     const existingStation = direction === 'forward'
-      ? existingStationIndex + k
-      : existingStationIndex - k;
+      ? existingStationIndex + offset
+      : existingStationIndex - offset;
 
     // Guard: stations must stay within valid ranges
     if (importStation < 0 || importStation > importShotCount) continue;
     if (existingStation < 0) continue;
 
-    options.push({ offset: k, importStation, existingStation });
+    if (!options.some((o) => o.importStation === importStation && o.existingStation === existingStation)) {
+      options.push({ offset, importStation, existingStation });
+    }
   }
   return options;
 }

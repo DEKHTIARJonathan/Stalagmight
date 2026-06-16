@@ -443,6 +443,42 @@ describe('computeMergeOptions', () => {
     expect(opts[0]).toEqual({ offset: 0, importStation: 0, existingStation: 1 });
     expect(opts[1]).toEqual({ offset: 1, importStation: 1, existingStation: 0 });
   });
+
+  it('ignores target-side extra-shot metadata for forward merge options', () => {
+    const suggestion = {
+      importStationIndex: 0,
+      existingStationIndex: 18,
+      matchedShots: 1,
+      existingMatchedShots: 2,
+      direction: 'forward' as const,
+      isPartial: false,
+    };
+
+    const opts = computeMergeOptions(suggestion, 8);
+
+    expect(opts).toEqual([
+      { offset: 0, importStation: 0, existingStation: 18 },
+      { offset: 1, importStation: 1, existingStation: 19 },
+    ]);
+  });
+
+  it('ignores target-side extra-shot metadata for reverse merge options', () => {
+    const suggestion = {
+      importStationIndex: 0,
+      existingStationIndex: 20,
+      matchedShots: 1,
+      existingMatchedShots: 2,
+      direction: 'reverse' as const,
+      isPartial: false,
+    };
+
+    const opts = computeMergeOptions(suggestion, 8);
+
+    expect(opts).toEqual([
+      { offset: 0, importStation: 0, existingStation: 20 },
+      { offset: 1, importStation: 1, existingStation: 19 },
+    ]);
+  });
 });
 
 // ─── reverseTargetShot ──────────────────────────────────────────────────────
