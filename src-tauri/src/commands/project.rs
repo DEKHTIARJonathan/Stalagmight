@@ -5,7 +5,8 @@ use ts_rs::TS;
 use crate::core::{AppState, Command, CommandResult};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::models::{
-    DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats, Station, StationRef,
+    AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats,
+    RulerEndpoint, Station, StationRef,
 };
 
 /// Create a new in-memory project (no database file created).
@@ -123,6 +124,26 @@ pub async fn get_station_distances_from(
         // AppState::distance_field takes one reconciled snapshot so topology and
         // adjusted coords are consistent (no two-read skew).
         state.inner().distance_field(from.as_ref())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Along-cave-line distance between two ruler endpoints (#26): the shortest path
+/// through the survey graph (shots weighted by measured length; merges and loop
+/// closures zero-cost), plus the ordered shots traversed so the frontend can
+/// tint them. Each endpoint is a station or an exact point on a shot. Returns
+/// `along_line: null` when the endpoints are in different connected components.
+#[tauri::command]
+pub async fn get_along_line_distance(
+    app_handle: tauri::AppHandle,
+    a: RulerEndpoint,
+    b: RulerEndpoint,
+) -> Option<AlongLineResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        state.inner().along_line_between(a, b)
     })
     .await
     .ok()

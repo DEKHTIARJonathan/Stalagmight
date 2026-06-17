@@ -28,4 +28,7 @@ export type {
   ProjectState,
   FrozenShotRef,
   DistanceField,
+  RulerEndpoint,
+  PathShot,
+  AlongLineResult,
 } from './ipc.generated';

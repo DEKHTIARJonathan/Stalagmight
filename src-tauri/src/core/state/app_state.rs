@@ -7,7 +7,9 @@ use tauri::AppHandle;
 
 use crate::cache::TileCache;
 use crate::config::{ClosureAdjustmentConfig, Config};
-use crate::models::{DistanceField, Project, Station, StationAnchor, StationRef};
+use crate::models::{
+    AlongLineResult, DistanceField, Project, RulerEndpoint, Station, StationAnchor, StationRef,
+};
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
 use crate::TileFetchStats;
@@ -354,6 +356,20 @@ impl AppState {
         // coordinate-dependent). Closure-solve perf is tracked separately (#81).
         let stations = project.compute_station_coordinates();
         Some(project.distance_field_from(&stations, from))
+    }
+
+    /// Shortest along-cave-line distance + traversed shots between two ruler
+    /// endpoints (#26). Uses MEASURED geometry (topology-only — matches the
+    /// distance-gradient / Display "line distance" view); `stations` only
+    /// supplies the `StationRef -> index` map.
+    pub fn along_line_between(
+        &self,
+        a: RulerEndpoint,
+        b: RulerEndpoint,
+    ) -> Option<AlongLineResult> {
+        let project = self.get_project_state()?;
+        let stations = project.compute_station_coordinates();
+        Some(project.along_line_between(&stations, a, b))
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every

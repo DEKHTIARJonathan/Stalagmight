@@ -1678,6 +1678,251 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// along_line_between (#26 ruler: direct + along-cave-line distance + path shots)
+// ---------------------------------------------------------------------------
+
+fn ep_station(section_id: SectionId, station_index: u32) -> RulerEndpoint {
+    RulerEndpoint { section_id, station_index: Some(station_index), shot_id: None, t: None }
+}
+
+fn ep_shot(section_id: SectionId, shot_id: ShotId, t: f64) -> RulerEndpoint {
+    RulerEndpoint { section_id, station_index: None, shot_id: Some(shot_id), t: Some(t) }
+}
+
+#[test]
+fn along_line_simple_linear_section() {
+    let mut project = Project::new("Linear".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let shots: Vec<ShotId> = project.get_section(a).unwrap().shots.iter().map(|s| s.id).collect();
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 3));
+    assert!((r.along_line.unwrap() - 30.0).abs() < 1e-6, "got {:?}", r.along_line);
+    assert_eq!(
+        r.path_shots,
+        vec![
+            PathShot { section_id: a, shot_id: shots[0] },
+            PathShot { section_id: a, shot_id: shots[1] },
+            PathShot { section_id: a, shot_id: shots[2] },
+        ],
+    );
+}
+
+#[test]
+fn along_line_cross_section_merge_skips_merge_edge() {
+    let mut project = Project::new("Merge".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    let a_shot = project.get_section(a).unwrap().shots[0].id;
+    let b_shot = project.get_section(b).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(b, 1));
+    assert!((r.along_line.unwrap() - 10.0).abs() < 1e-6, "got {:?}", r.along_line);
+    // Two shots; the zero-cost merge edge is NOT emitted as a shot.
+    assert_eq!(
+        r.path_shots,
+        vec![
+            PathShot { section_id: a, shot_id: a_shot },
+            PathShot { section_id: b, shot_id: b_shot },
+        ],
+    );
+}
+
+#[test]
+fn along_line_routes_through_loop_closure() {
+    // Parity with the distance-gradient view (#34): loop closures are zero-cost
+    // edges, so a closed loop gives a shorter route than the direct long shot.
+    let mut project = Project::new("Closure".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 1.0, 0.0, 0.0), shot(90.0, 90.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    // Tie A.0<->B.0 and A.1<->B.2 with loop closures (not merges).
+    for (sa, sb) in [(StationRef::new(a, 0), StationRef::new(b, 0)), (StationRef::new(a, 1), StationRef::new(b, 2))] {
+        project.loop_closures.push(LoopClosure {
+            id: project.next_closure_id,
+            station_a: sa.into(),
+            station_b: sb.into(),
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
+        });
+        project.next_closure_id += 1;
+    }
+    let b_shots: Vec<ShotId> = project.get_section(b).unwrap().shots.iter().map(|s| s.id).collect();
+    let a_shot = project.get_section(a).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
+    assert!((r.along_line.unwrap() - 2.0).abs() < 1e-6, "should route via closure, got {:?}", r.along_line);
+    assert_eq!(
+        r.path_shots,
+        vec![
+            PathShot { section_id: b, shot_id: b_shots[0] },
+            PathShot { section_id: b, shot_id: b_shots[1] },
+        ],
+    );
+    assert!(
+        !r.path_shots.iter().any(|s| s.shot_id == a_shot),
+        "the long direct shot must not be on the path"
+    );
+}
+
+#[test]
+fn along_line_shot_point_partial_length() {
+    let mut project = Project::new("ShotPoint".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    // Station 0 to a point 25% along shot 0 → 2.5 m; whole shot tinted.
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_shot(a, s0, 0.25));
+    assert!((r.along_line.unwrap() - 2.5).abs() < 1e-6, "got {:?}", r.along_line);
+    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+}
+
+#[test]
+fn along_line_same_shot_endpoints() {
+    let mut project = Project::new("SameShot".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_shot(a, s0, 0.2), ep_shot(a, s0, 0.7));
+    assert!((r.along_line.unwrap() - 5.0).abs() < 1e-6, "got {:?}", r.along_line);
+    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+}
+
+#[test]
+fn along_line_disconnected_returns_none() {
+    let mut project = Project::new("Disconnected".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(b, 1));
+    assert_eq!(r.along_line, None);
+    assert!(r.path_shots.is_empty());
+}
+
+#[test]
+fn along_line_identical_and_degenerate_t() {
+    let mut project = Project::new("Degenerate".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    // Identical endpoints → 0, empty path.
+    let same = project.along_line_between(&stations, ep_station(a, 1), ep_station(a, 1));
+    assert_eq!(same.along_line, Some(0.0));
+    assert!(same.path_shots.is_empty());
+
+    // t≈0 on shot 0 collapses to station 0; t≈1 collapses to station 1.
+    let t0 = project.along_line_between(&stations, ep_shot(a, s0, 0.0), ep_station(a, 2));
+    let st = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 2));
+    assert!((t0.along_line.unwrap() - st.along_line.unwrap()).abs() < 1e-9);
+    assert_eq!(t0.path_shots, st.path_shots);
+}
+
+#[test]
+fn along_line_skips_merge_and_closure_phantoms() {
+    // A=merge=B=closure=C; A.0 -> C.1 should list exactly 3 shots, no phantom
+    // entries for the zero-cost merge/closure ties.
+    let mut project = Project::new("NoPhantom".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let c = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: Utc::now(),
+    });
+    project.loop_closures.push(LoopClosure {
+        id: project.next_closure_id,
+        station_a: StationRef::new(b, 1).into(),
+        station_b: StationRef::new(c, 0).into(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+    project.next_closure_id += 1;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(c, 1));
+    assert!((r.along_line.unwrap() - 3.0).abs() < 1e-6, "got {:?}", r.along_line);
+    assert_eq!(r.path_shots.len(), 3, "exactly 3 shots, no merge/closure phantoms: {:?}", r.path_shots);
+}
+
+#[test]
+fn along_line_reference_shot_is_traversed_and_tinted() {
+    // Reference shots are real measured legs (inherited #34 behavior): they are
+    // graph edges and get tinted like any shot.
+    let mut project = Project::new("RefShot".to_string(), None);
+    let mut ref_shot = shot(0.0, 0.0, 7.0, 0.0, 0.0);
+    ref_shot.is_reference = true;
+    let a = project
+        .add_section(SectionData { shots: vec![ref_shot], ..Default::default() })
+        .id;
+    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
+    assert!((r.along_line.unwrap() - 7.0).abs() < 1e-6, "got {:?}", r.along_line);
+    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+}
+
 #[test]
 fn new_merge_expands_existing_closure_connectivity() {
     // Test: Adding a merge after a closure exists should expand connectivity

@@ -261,6 +261,41 @@ pub struct DistanceField {
     pub max_reachable: f64,
 }
 
+/// One end of a ruler measurement (#26): either a **station** (set
+/// `station_index`; leave `shot_id`/`t` null) or an exact **point on a shot** at
+/// fraction `t` ∈ [0,1] from the shot's from-station toward its to-station (set
+/// `shot_id` + `t`). `t` ≈ 0 / ≈ 1 collapses to the from/to station.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+pub struct RulerEndpoint {
+    pub section_id: SectionId,
+    #[serde(default)]
+    pub station_index: Option<u32>,
+    #[serde(default)]
+    pub shot_id: Option<ShotId>,
+    #[serde(default)]
+    pub t: Option<f64>,
+}
+
+/// A shot on the along-line path, identified for tinting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct PathShot {
+    pub section_id: SectionId,
+    pub shot_id: ShotId,
+}
+
+/// Result of an along-cave-line ruler query (#26). `along_line` is `None` when the
+/// two endpoints lie in different connected components (no path). `path_shots`
+/// are the shots traversed from A toward B — whole shots, even when an endpoint
+/// only partially crosses one — with zero-cost merge/closure ties skipped (they
+/// aren't shots and must not be tinted). Uses the same shots+merges+closures
+/// graph as the distance-gradient overlay (#34), so it matches the Display
+/// "line distance" view.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct AlongLineResult {
+    pub along_line: Option<f64>,
+    pub path_shots: Vec<PathShot>,
+}
+
 /// Overall project statistics
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ProjectStats {
@@ -6483,6 +6518,212 @@ impl Project {
             station_refs: stations.iter().map(|s| s.station_ref).collect(),
             max_reachable,
         }
+    }
+
+    /// Shortest along-cave-line distance between two ruler endpoints (#26), plus
+    /// the ordered shots traversed (for tinting). Uses the same
+    /// shots+merges+closures graph as the distance-gradient overlay
+    /// (`build_survey_graph`, measured lengths), so results match the Display
+    /// "line distance" view. An endpoint may be a station or an exact point on a
+    /// shot at fraction `t` (which splits that shot's edge). Returns
+    /// `along_line: None` when the endpoints are in different connected
+    /// components. `stations` only supplies the `StationRef -> index` map.
+    pub fn along_line_between(
+        &self,
+        stations: &[Station],
+        a: RulerEndpoint,
+        b: RulerEndpoint,
+    ) -> AlongLineResult {
+        const EPS: f64 = 1e-9;
+        let none = || AlongLineResult { along_line: None, path_shots: Vec::new() };
+
+        let n = stations.len();
+        if n == 0 {
+            return none();
+        }
+        let idx = Self::station_index_map(stations);
+        let section_lookup = self.build_section_lookup();
+
+        // How an endpoint resolves onto the graph: an existing station node, or a
+        // virtual split of a shot edge at fraction `t`.
+        enum Resolved {
+            Station(usize),
+            Shot {
+                from: usize,
+                to: usize,
+                t: f64,
+                len: f64,
+                shot: PathShot,
+            },
+        }
+
+        let resolve = |ep: &RulerEndpoint| -> Option<Resolved> {
+            // Shot-point endpoint.
+            if let (Some(shot_id), Some(t)) = (ep.shot_id, ep.t) {
+                let section = section_lookup.get(&ep.section_id)?;
+                let pos = section.shots.iter().position(|s| s.id == shot_id)?;
+                let from = *idx.get(&StationRef::new(ep.section_id, pos as u32))?;
+                let to = *idx.get(&StationRef::new(ep.section_id, (pos + 1) as u32))?;
+                let len = section.shots[pos].length.max(0.0);
+                let tt = t.clamp(0.0, 1.0);
+                if tt <= EPS {
+                    return Some(Resolved::Station(from));
+                }
+                if tt >= 1.0 - EPS {
+                    return Some(Resolved::Station(to));
+                }
+                return Some(Resolved::Shot {
+                    from,
+                    to,
+                    t: tt,
+                    len,
+                    shot: PathShot { section_id: ep.section_id, shot_id },
+                });
+            }
+            // Station endpoint.
+            let si = ep.station_index?;
+            let node = *idx.get(&StationRef::new(ep.section_id, si))?;
+            Some(Resolved::Station(node))
+        };
+
+        let ra = match resolve(&a) {
+            Some(r) => r,
+            None => return none(),
+        };
+        let rb = match resolve(&b) {
+            Some(r) => r,
+            None => return none(),
+        };
+
+        // Both endpoints on the SAME shot: the cave-line distance is the direct
+        // sub-segment |Δt|·L (routing through the shared stations would overcount).
+        if let (
+            Resolved::Shot { t: ta, len, shot: sa, .. },
+            Resolved::Shot { t: tb, shot: sb, .. },
+        ) = (&ra, &rb)
+        {
+            if sa == sb {
+                return AlongLineResult {
+                    along_line: Some((ta - tb).abs() * len),
+                    path_shots: vec![*sa],
+                };
+            }
+        }
+
+        // Graph + a parallel (node_a, node_b) -> shot map, built in the SAME loop
+        // order as `build_survey_graph` so reconstructed node pairs map back to a
+        // shot. Zero-cost merge/closure edges are intentionally absent here ⇒ a
+        // reconstructed pair not in the map is a tie to skip (never tinted).
+        let mut adj = self.build_survey_graph(n, &idx, None);
+        let mut shot_edge: HashMap<(usize, usize), PathShot> = HashMap::new();
+        for section in &self.sections {
+            for (i, shot) in section.shots.iter().enumerate() {
+                let from = StationRef::new(section.id, i as u32);
+                let to = StationRef::new(section.id, (i + 1) as u32);
+                if let (Some(&fi), Some(&ti)) = (idx.get(&from), idx.get(&to)) {
+                    let ps = PathShot { section_id: section.id, shot_id: shot.id };
+                    shot_edge.insert((fi, ti), ps);
+                    shot_edge.insert((ti, fi), ps);
+                }
+            }
+        }
+
+        // Materialize an endpoint into a node index, appending a virtual node that
+        // splits the shot edge into `t·L` / `(1-t)·L` when it's a shot-point. Both
+        // partial legs map to the WHOLE shot so the partial end shot still tints.
+        fn materialize(
+            adj: &mut Vec<Vec<(usize, f64)>>,
+            shot_edge: &mut HashMap<(usize, usize), PathShot>,
+            r: Resolved,
+        ) -> usize {
+            match r {
+                Resolved::Station(i) => i,
+                Resolved::Shot { from, to, t, len, shot } => {
+                    let v = adj.len();
+                    adj.push(vec![(from, t * len), (to, (1.0 - t) * len)]);
+                    adj[from].push((v, t * len));
+                    adj[to].push((v, (1.0 - t) * len));
+                    shot_edge.insert((v, from), shot);
+                    shot_edge.insert((from, v), shot);
+                    shot_edge.insert((v, to), shot);
+                    shot_edge.insert((to, v), shot);
+                    v
+                }
+            }
+        }
+
+        let start = materialize(&mut adj, &mut shot_edge, ra);
+        let goal = materialize(&mut adj, &mut shot_edge, rb);
+
+        // Predecessor-tracking Dijkstra (the shared `dijkstra` returns distances
+        // only). Same min-heap ordering as `dijkstra`.
+        #[derive(Copy, Clone, PartialEq)]
+        struct Node(f64, usize);
+        impl Eq for Node {}
+        impl PartialOrd for Node {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for Node {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.0
+                    .partial_cmp(&other.0)
+                    .unwrap_or(Ordering::Equal)
+                    .then(self.1.cmp(&other.1))
+            }
+        }
+
+        let total = adj.len();
+        let mut dist = vec![f64::INFINITY; total];
+        let mut pred = vec![usize::MAX; total];
+        let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
+        dist[start] = 0.0;
+        heap.push(std::cmp::Reverse(Node(0.0, start)));
+        while let Some(std::cmp::Reverse(Node(d, u))) = heap.pop() {
+            if d > dist[u] {
+                continue;
+            }
+            if u == goal {
+                break;
+            }
+            for &(v, w) in &adj[u] {
+                let nd = d + w;
+                if nd < dist[v] {
+                    dist[v] = nd;
+                    pred[v] = u;
+                    heap.push(std::cmp::Reverse(Node(nd, v)));
+                }
+            }
+        }
+
+        if !dist[goal].is_finite() {
+            return none();
+        }
+
+        // Reconstruct the node chain start..goal and map consecutive pairs to
+        // shots, skipping zero-cost merge/closure ties and deduping repeats.
+        let mut chain = vec![goal];
+        let mut cur = goal;
+        while cur != start {
+            let p = pred[cur];
+            if p == usize::MAX {
+                return none();
+            }
+            chain.push(p);
+            cur = p;
+        }
+        chain.reverse();
+        let mut path_shots: Vec<PathShot> = Vec::new();
+        for w in chain.windows(2) {
+            if let Some(ps) = shot_edge.get(&(w[0], w[1])) {
+                if path_shots.last() != Some(ps) {
+                    path_shots.push(*ps);
+                }
+            }
+        }
+
+        AlongLineResult { along_line: Some(dist[goal]), path_shots }
     }
 
     /// Get metadata for this project
