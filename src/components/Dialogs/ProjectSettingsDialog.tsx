@@ -11,26 +11,11 @@ import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig, type Config } from '../../types/config';
+import { isValidationConfigValid } from '../../utils/validation';
 
 type ProjectSettingsTab = 'general' | 'validation' | 'experimental';
 const TABS: readonly ProjectSettingsTab[] = ['general', 'validation', 'experimental'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
-
-/** Mirrors the range checks in the global Settings dialog. Computed directly
- *  from the values so it holds even if the Validation tab was never mounted. */
-function isValidationValid(v: Config['validation']): boolean {
-  return (
-    v.warn_shot_length_min >= 0 &&
-    v.warn_shot_length_max > v.warn_shot_length_min &&
-    v.warn_depth_change_per_shot_max > 0 &&
-    v.azimuth_diff_threshold >= 0 &&
-    v.azimuth_diff_threshold <= 180 &&
-    v.pitch_diff_threshold >= 0 &&
-    v.pitch_diff_threshold <= 90 &&
-    v.inclination_depth_diff_threshold >= 0 &&
-    v.inclination_depth_diff_threshold <= 90
-  );
-}
 
 /**
  * Per-project settings (#57). Mirrors the global Settings dialog's structure
@@ -42,8 +27,13 @@ export function ProjectSettingsDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
-  const { project, globalConfig, updateProjectSettings } = useProjectStore(
-    useShallow((s) => ({ project: s.project, globalConfig: s.config, updateProjectSettings: s.updateProjectSettings })),
+  const { project, globalConfig, updateProjectSettings, setCollabEnabled } = useProjectStore(
+    useShallow((s) => ({
+      project: s.project,
+      globalConfig: s.config,
+      updateProjectSettings: s.updateProjectSettings,
+      setCollabEnabled: s.setCollabEnabled,
+    })),
   );
   const panelIdBase = useId();
   // Same id format as SettingsSidebar's getTabId/getPanelId, but accepting the
@@ -59,6 +49,9 @@ export function ProjectSettingsDialog() {
   );
   const [hasValidationError, setHasValidationError] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Stage the collab flag in dialog state so the toggle honors Save/Cancel like
+  // the rest of the dialog; persisted only in handleSave (#57).
+  const [collabEnabled, setCollabEnabledState] = useState(project?.collab?.enabled ?? false);
 
   // ValidationSettings is built against a full Config; wrap the project's
   // validation in a synthetic config and funnel its onChange back into local
@@ -74,20 +67,45 @@ export function ProjectSettingsDialog() {
   const trimmedName = name.trim();
   // Gate on the values directly (robust even if the Validation tab was never
   // opened), plus the live component check while it is mounted.
-  const validationValid = isValidationValid(validation);
+  const validationValid = isValidationConfigValid(validation);
   const canSave = !!project && trimmedName.length > 0 && validationValid && !hasValidationError && !saving;
 
   const handleSave = useCallback(async () => {
-    if (trimmedName.length === 0 || !isValidationValid(validation) || hasValidationError || saving) return;
+    if (!project || trimmedName.length === 0 || !isValidationConfigValid(validation) || hasValidationError || saving) return;
     setSaving(true);
     const result = await updateProjectSettings(trimmedName, validation);
-    setSaving(false);
-    if (result.success) {
-      closeDialog();
-    } else {
+    if (!result.success) {
+      setSaving(false);
       showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings');
+      return;
     }
-  }, [trimmedName, hasValidationError, saving, updateProjectSettings, validation, closeDialog, showToast, t]);
+    // Commit the staged collab flag only when it actually changed. setCollabEnabled
+    // (set_collab_enabled) sets the in-memory flag + project.touch() in one IPC;
+    // the sibling .tml is written by the normal save pipeline as before.
+    const currentCollab = project.collab?.enabled ?? false;
+    if (collabEnabled !== currentCollab) {
+      const collabResult = await setCollabEnabled(collabEnabled);
+      if (!collabResult.success) {
+        setSaving(false);
+        showToast(collabResult.error ?? t('detailPanel.collaboration.toggleFailed'), 'project-settings');
+        return;
+      }
+    }
+    setSaving(false);
+    closeDialog();
+  }, [
+    trimmedName,
+    hasValidationError,
+    saving,
+    updateProjectSettings,
+    validation,
+    closeDialog,
+    showToast,
+    t,
+    collabEnabled,
+    setCollabEnabled,
+    project,
+  ]);
 
   return (
     <DialogWrapper
@@ -159,7 +177,7 @@ export function ProjectSettingsDialog() {
               {tab === 'experimental' && (
                 <div role="tabpanel" id={panelId('experimental')} aria-labelledby={tabId('experimental')}>
                   <SettingsSection title={t('dialogs.projectSettings.tabs.experimental')}>
-                    <CollaborationSection project={project} />
+                    <CollaborationSection project={project} enabled={collabEnabled} onChange={setCollabEnabledState} />
                   </SettingsSection>
                 </div>
               )}

@@ -6,6 +6,7 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler } from './types';
 import { defaultConfig, type Config } from '../../../types/config';
+import { validateValidationConfig } from '../../../utils/validation';
 
 /**
  * Validation settings category content.
@@ -28,40 +29,17 @@ export function ValidationSettings({
   // Validation state
   const hasErrorRef = useRef(false);
 
-  // Validate on mount and when config changes
+  // Validate on mount and when config changes (shared rules, see
+  // utils/validation). Per-field messages were never rendered in this panel;
+  // only the boolean is reported via onValidationError.
   useEffect(() => {
-    const errors: string[] = [];
-
-    // Validate shot length thresholds
-    if (config.validation.warn_shot_length_min < 0) {
-      errors.push(t('settings.validation.validation.minShotLength'));
-    }
-    if (config.validation.warn_shot_length_max <= config.validation.warn_shot_length_min) {
-      errors.push(t('settings.validation.validation.maxShotLength'));
-    }
-
-    // Validate depth change threshold
-    if (config.validation.warn_depth_change_per_shot_max <= 0) {
-      errors.push(t('settings.validation.validation.depthChange'));
-    }
-
-    // Validate diff thresholds (0 means disabled)
-    if (config.validation.azimuth_diff_threshold < 0 || config.validation.azimuth_diff_threshold > 180) {
-      errors.push(t('settings.validation.validation.azimuthDiff'));
-    }
-    if (config.validation.pitch_diff_threshold < 0 || config.validation.pitch_diff_threshold > 90) {
-      errors.push(t('settings.validation.validation.pitchDiff'));
-    }
-    if (config.validation.inclination_depth_diff_threshold < 0 || config.validation.inclination_depth_diff_threshold > 90) {
-      errors.push(t('settings.validation.validation.inclinationDepthDiff'));
-    }
-
-    const hasError = errors.length > 0;
+    const errs = validateValidationConfig(config.validation);
+    const hasError = Object.values(errs).some((e) => e !== null);
     if (hasError !== hasErrorRef.current) {
       hasErrorRef.current = hasError;
       onValidationError('validation', hasError);
     }
-  }, [config.validation, onValidationError, t]);
+  }, [config.validation, onValidationError]);
 
   const handleShotLengthMinChange = createNumericHandler(onChange,
     (n) => ({ validation: { ...config.validation, warn_shot_length_min: n } }));

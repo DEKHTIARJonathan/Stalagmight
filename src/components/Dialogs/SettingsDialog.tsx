@@ -29,6 +29,7 @@ import {
 } from '../../types/config';
 import type { ResolvedTheme } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { isValidationConfigValid } from '../../utils/validation';
 
 /**
  * Deep comparison of two config objects to detect changed field paths.
@@ -166,21 +167,8 @@ function validateAllCategories(config: Config): Partial<Record<SettingsCategory,
     );
     errors.map = mapHasError;
 
-    // Validation category
-    const val = config?.validation;
-    const validationHasError = !!(
-      val &&
-      (val.warn_shot_length_min < 0 ||
-        val.warn_shot_length_max <= val.warn_shot_length_min ||
-        val.warn_depth_change_per_shot_max <= 0 ||
-        val.azimuth_diff_threshold < 0 ||
-        val.azimuth_diff_threshold > 180 ||
-        val.pitch_diff_threshold < 0 ||
-        val.pitch_diff_threshold > 90 ||
-        val.inclination_depth_diff_threshold < 0 ||
-        val.inclination_depth_diff_threshold > 90)
-    );
-    errors.validation = validationHasError;
+    // Validation category (shared rules, see utils/validation).
+    errors.validation = config?.validation ? !isValidationConfigValid(config.validation) : false;
 
     // Export category
     const exp = config?.export;

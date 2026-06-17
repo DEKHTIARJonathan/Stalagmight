@@ -181,7 +181,7 @@ test.describe('Collaboration Review Dialog', () => {
 });
 
 test.describe('Collaboration toggle (Project Settings)', () => {
-  test('the per-project toggle lives in Project Settings → Experimental and invokes set_collab_enabled', async ({ page }) => {
+  test('the per-project toggle lives in Project Settings → Experimental and invokes set_collab_enabled on Save', async ({ page }) => {
     await openProject(page);
 
     // The toggle moved into the Project Settings dialog's Experimental tab (#57).
@@ -198,18 +198,26 @@ test.describe('Collaboration toggle (Project Settings)', () => {
     await page.exposeFunction('__recordSetCollab', () => calls.push('set'));
     await page.evaluate(() => {
       const store = (window as unknown as {
-        __E2E_TEST__: { projectStore: { getState: () => { setCollabEnabled: (e: boolean) => Promise<unknown> }, setState: (p: unknown) => void } };
+        __E2E_TEST__: { projectStore: { setState: (p: unknown) => void } };
       }).__E2E_TEST__.projectStore;
-      const orig = store.getState().setCollabEnabled;
+      // Stub setCollabEnabled with a CommandResult-shaped success so the dialog's
+      // handleSave proceeds to close after committing the staged flag.
       store.setState({
-        setCollabEnabled: async (enabled: boolean) => {
+        setCollabEnabled: async () => {
           (window as unknown as { __recordSetCollab: () => void }).__recordSetCollab();
-          return orig(enabled);
+          return { success: true, warnings: [], error: null, section_ids: [] };
         },
       });
     });
 
+    // Persistence is now staged: toggling alone must NOT invoke set_collab_enabled.
     await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await page.waitForTimeout(200);
+    expect(calls.length).toBe(0);
+
+    // It is committed only on Save.
+    await page.getByTestId('project-settings-save').click();
     await expect.poll(() => calls.length).toBeGreaterThan(0);
   });
 });
