@@ -6,8 +6,8 @@
  * counters published from SurveyLayer/GlobalSurveyLayer/the Zustand stores.
  * Renders a compact bottom-left panel summarizing each retention bucket.
  *
- * Visibility is gated on `config.debug.memory_probe`; Ctrl+Shift+M toggles
- * a session-local override so it can be turned on without editing config.
+ * Visibility is driven by the Display ▸ "Dev stats" toggle (`showDevStats`),
+ * or forced on via `config.debug.memory_probe`.
  *
  * The "Dump" button writes a JSON snapshot to the system temp dir via the
  * Tauri fs plugin, with a console.log fallback if the user denied fs.
@@ -26,6 +26,7 @@ import {
 } from '../../utils/memoryProbe';
 import { useProjectStore } from '../../store/projectStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
+import { useUIStore } from '../../store/uiStore';
 
 const POLL_INTERVAL_MS = 2000;
 const MB = 1024 * 1024;
@@ -92,8 +93,8 @@ function takeSnapshot(memory: MemoryStats | null): Snapshot {
 
 export function MemoryProbe(): JSX.Element | null {
   const configEnabled = useProjectStore((s) => s.config?.debug?.memory_probe ?? false);
-  const [sessionOverride, setSessionOverride] = useState(false);
-  const visible = configEnabled || sessionOverride;
+  const showDevStats = useUIStore((s) => s.showDevStats);
+  const visible = showDevStats || configEnabled;
 
   const [memory, setMemory] = useState<MemoryStats | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot>(() => takeSnapshot(null));
@@ -102,18 +103,6 @@ export function MemoryProbe(): JSX.Element | null {
   const [rssDelta, setRssDelta] = useState<number | null>(null);
   /** Last dump result shown to the user; cleared after a few seconds. */
   const [dumpStatus, setDumpStatus] = useState<string | null>(null);
-
-  // Global Ctrl+Shift+M toggle. Doesn't affect persisted config; resets on reload.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.ctrlKey && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
-        e.preventDefault();
-        setSessionOverride((v) => !v);
-      }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
 
   // Long-task PerformanceObserver — runs even when the probe is hidden
   // so we capture freezes the user didn't expect.
@@ -215,16 +204,6 @@ export function MemoryProbe(): JSX.Element | null {
             >
               {dumpStatus ?? 'dump'}
             </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setSessionOverride(false);
-              }}
-              style={btnStyle}
-              title="Hide (Ctrl+Shift+M to reopen)"
-            >
-              ×
-            </button>
           </>
         )}
       </div>
@@ -297,7 +276,7 @@ export function MemoryProbe(): JSX.Element | null {
           )}
 
           <div style={{ fontSize: 10, color: '#888', marginTop: 6 }}>
-            Ctrl+Shift+M toggles · estimates ±2× — see backend RSS for truth
+            Display ▸ Dev stats toggles · estimates ±2× — see backend RSS for truth
           </div>
         </>
       )}

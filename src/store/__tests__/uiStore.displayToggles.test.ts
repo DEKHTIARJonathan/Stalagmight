@@ -769,4 +769,21 @@ describe('Geometry Mode', () => {
   it('geometryMode is NOT part of DISPLAY_DEFAULTS (telemetry registry contract)', () => {
     expect('geometryMode' in DISPLAY_DEFAULTS).toBe(false);
   });
+
+  it('applyDisplaySettings resets showDevStats so it never leaks across project loads', () => {
+    // Dev stats (memory probe + map dev overlay) is session-only and absent from
+    // the backend payload; a project load must reset it, not inherit it.
+    useUIStore.setState({ showDevStats: true });
+    useUIStore.getState().applyDisplaySettings({ geometryMode: 'measured' } as never);
+    expect(useUIStore.getState().showDevStats).toBe(false);
+  });
+
+  it('setView(global) resets showDevStats so the probe cannot strand over GlobalView', () => {
+    // The Display toggle lives only in SingleSystemView, so leaving for GlobalView
+    // must clear it — otherwise the app-mounted probe lingers with no way to hide.
+    useUIStore.setState({ view: 'single', showDevStats: true });
+    useUIStore.getState().setView('global');
+    expect(useUIStore.getState().showDevStats).toBe(false);
+    expect(useUIStore.getState().view).toBe('global');
+  });
 });

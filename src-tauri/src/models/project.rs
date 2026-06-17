@@ -3061,7 +3061,7 @@ impl Project {
         }
         let mut parent: HashMap<StationRef, StationRef> =
             station_list.iter().map(|&sr| (sr, sr)).collect();
-        let mut unite = |parent: &mut HashMap<StationRef, StationRef>, a, b| {
+        let unite = |parent: &mut HashMap<StationRef, StationRef>, a, b| {
             let (ra, rb) = (find(parent, a), find(parent, b));
             if ra != rb {
                 parent.insert(ra, rb);

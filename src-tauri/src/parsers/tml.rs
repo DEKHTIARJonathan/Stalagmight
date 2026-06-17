@@ -159,15 +159,9 @@ struct RawShot {
 // Dual key mapping (TML long names ↔ TMLU short names)
 // ============================================================================
 
-/// Normalize an XML element name to a canonical key.
-#[cfg(test)]
-fn normalize_key(name: &str) -> Option<&'static str> {
-    normalize_key_bytes(name.as_bytes())
-}
-
-/// Byte-slice form of `normalize_key` used by the hot XML loop so we
-/// don't have to allocate a `String` from the quick-xml element name on
-/// every Start/End/Empty event.
+/// Normalize an XML element name to a canonical key. Byte-slice form used by
+/// the hot XML loop so we don't have to allocate a `String` from the quick-xml
+/// element name on every Start/End/Empty event.
 fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
     match name {
         b"ID" | b"Id" => Some("id"),
