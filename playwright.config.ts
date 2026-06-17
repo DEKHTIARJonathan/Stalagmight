@@ -16,8 +16,16 @@ export default defineConfig({
   // Fail CI if test.only is committed
   forbidOnly: !!process.env.CI,
 
-  // Retry failed tests in CI
-  retries: process.env.CI ? 2 : 0,
+  // Retry flaky tests. CI gets 2; locally we still retry once so a single
+  // timing blip under load — e.g. the pre-push @smoke gate on a 1-worker
+  // headless VM — doesn't abort an otherwise-green push (issue #15).
+  // Override with PW_RETRIES (e.g. PW_RETRIES=0 to fail fast during dev).
+  retries:
+    process.env.PW_RETRIES !== undefined
+      ? Number(process.env.PW_RETRIES)
+      : process.env.CI
+        ? 2
+        : 1,
 
   // Use PW_WORKERS env var to override (Playwright accepts either an
   // integer count or a percentage of logical CPU cores, e.g. "50%").
