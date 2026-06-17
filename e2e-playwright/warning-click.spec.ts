@@ -445,6 +445,37 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-ignore')).toHaveCount(0);
   });
 
+  test('clicking the data-table warning indicator opens Warnings and the resolve view', async ({ page }) => {
+    await createProject(page, 'Table Warning Resolve Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'AZIMUTH_DEVIATION',
+        message: 'Shot 1:1 azimuth in/out difference exceeds threshold',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    // Open the data table and click the warning indicator on that shot's row.
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+    const indicator = page.getByTestId(`warning-${sectionId}-${shotIds[0]!}`);
+    await expect(indicator).toBeVisible();
+    await indicator.click();
+
+    // The Warnings tab opens straight into the resolution view for that issue.
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-average')).toBeVisible();
+  });
+
   test('badge only counts unresolved warnings', async ({ page }) => {
     await createProject(page, 'Badge Count Test');
     await seedProjectWithSections(page, sectionSeeds);

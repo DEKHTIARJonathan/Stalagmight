@@ -288,6 +288,12 @@ interface UIStore {
   geometryPreview: GeometryPreview | null;
   setGeometryPreview: (preview: GeometryPreview | null) => void;
 
+  /** Request to open the Warnings tab and start resolving a shot's issue
+   *  (e.g. clicking the warning indicator in the data table). */
+  requestResolveWarning: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => void;
+  clearResolveWarningRequest: () => void;
+
   // Display toggles
   showStations: boolean;
   showShots: boolean;
@@ -790,6 +796,10 @@ export const useUIStore = create<UIStore>((set) => ({
   requestCenterOnShot: null,
   geometryPreview: null,
   setGeometryPreview: (geometryPreview) => set({ geometryPreview }),
+  requestResolveWarning: null,
+  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) =>
+    set({ requestResolveWarning: { sectionId, shotId } }),
+  clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
   triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => {
     trackNav('center-on-shot');
     set({ requestCenterOnShot: { sectionId, shotId } });

@@ -195,13 +195,15 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   const { unresolveWarning } = useProjectStore(
     useShallow((s) => ({ unresolveWarning: s.unresolveWarning })),
   );
-  const { setSelection, setDetailPanelTab, announceSelection, triggerCenterOnShot, triggerPanToShot } = useUIStore(
+  const { setSelection, setDetailPanelTab, announceSelection, triggerCenterOnShot, triggerPanToShot, requestResolveWarning, clearResolveWarningRequest } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       announceSelection: s.announceSelection,
       triggerCenterOnShot: s.triggerCenterOnShot,
       triggerPanToShot: s.triggerPanToShot,
+      requestResolveWarning: s.requestResolveWarning,
+      clearResolveWarningRequest: s.clearResolveWarningRequest,
     })),
   );
   // At the Full level the location subtitle is shown as entity pills (section +
@@ -231,6 +233,19 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey]);
+
+  // Open the resolve flow when requested from outside (e.g. clicking the warning
+  // indicator in the data table opens this tab and jumps straight to resolving
+  // that shot's first outstanding issue).
+  useEffect(() => {
+    if (!requestResolveWarning) return;
+    const { sectionId, shotId } = requestResolveWarning;
+    clearResolveWarningRequest();
+    const target = warnings.find((w) => w.sectionId === sectionId && w.shotId === shotId && !w.isResolved);
+    if (target) {
+      setFlow({ kind: 'resolve', queue: [target], index: 0, resolveAll: false, resolved: 0, skipped: 0 });
+    }
+  }, [requestResolveWarning, warnings, clearResolveWarningRequest]);
 
   const getSectionName = (sectionId: number) => {
     const section = project?.sections.find((s) => s.id === sectionId);

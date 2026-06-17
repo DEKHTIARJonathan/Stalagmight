@@ -44,13 +44,16 @@ export interface ShotColumnContext {
   shotIndexAt: (gridRowIndex: number) => number | null;
   /** Toggle a shot's reference flag (the inline dot control). */
   onToggleReference: (shot: Shot) => void;
+  /** Open the Warnings tab and start resolving the given shot's issue (the
+   *  warning indicator becomes a button when the shot has unresolved warnings). */
+  onResolveWarning?: (shotId: number) => void;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value) ? formatFixed(value, undefined, precision) : '';
 
 export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
-  const { t, precision, sectionId, geometryReadOnly, isShotFrozen, getShotWarnings, shotIndexAt } = ctx;
+  const { t, precision, sectionId, geometryReadOnly, isShotFrozen, getShotWarnings, shotIndexAt, onResolveWarning } = ctx;
 
   // Editable iff the view is writable AND (non-geometry, or a non-frozen shot).
   // Draft rows (no shot index) are always editable.
@@ -142,19 +145,43 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
           ...(frozen ? [t('dataTable.frozen')] : []),
           ...shotWarnings.map((w) => w.message),
         ].join('\n');
+        const testId = frozen ? `frozen-${sectionId}-${shot.id}` : `warning-${sectionId}-${shot.id}`;
+        const colorClass = hasError
+          ? 'text-error'
+          : frozen && shotWarnings.length === 0
+            ? 'text-text-secondary'
+            : 'text-warning';
+        const icon =
+          frozen && shotWarnings.length === 0 ? (
+            <LockIcon size={13} />
+          ) : hasError ? (
+            <AlertCircleIcon size={14} />
+          ) : (
+            <AlertTriangleIcon size={14} />
+          );
+        // With unresolved warnings, the indicator is a button that opens the
+        // Warnings tab and jumps straight to resolving this shot's issue.
+        if (shotWarnings.length > 0 && onResolveWarning) {
+          return (
+            <button
+              type="button"
+              data-testid={testId}
+              className={`${colorClass} cursor-pointer rounded hover:opacity-80 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset`}
+              title={tooltip}
+              aria-label={t('detailPanel.warnings.resolve')}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onResolveWarning(shot.id);
+              }}
+            >
+              {icon}
+            </button>
+          );
+        }
         return (
-          <span
-            data-testid={frozen ? `frozen-${sectionId}-${shot.id}` : `warning-${sectionId}-${shot.id}`}
-            className={hasError ? 'text-error' : frozen && shotWarnings.length === 0 ? 'text-text-secondary' : 'text-warning'}
-            title={tooltip}
-          >
-            {frozen && shotWarnings.length === 0 ? (
-              <LockIcon size={13} />
-            ) : hasError ? (
-              <AlertCircleIcon size={14} />
-            ) : (
-              <AlertTriangleIcon size={14} />
-            )}
+          <span data-testid={testId} className={colorClass} title={tooltip}>
+            {icon}
           </span>
         );
       },
