@@ -13,7 +13,7 @@
 #   ./scripts/wdio.sh                    # Run all tests, auto-detect display
 #   ./scripts/wdio.sh --rebuild          # Force rebuild before tests
 #   ./scripts/wdio.sh --skip-build       # Skip build checks (dangerous)
-#   ./scripts/wdio.sh --spec e2e/specs/foo.spec.ts  # Run specific spec
+#   ./scripts/wdio.sh --spec e2e/legacy/specs/foo.spec.ts  # Run specific spec
 #   ./scripts/wdio.sh --headed           # Force headed mode (fail if no display)
 #   ./scripts/wdio.sh --headless         # Force xvfb (fail if not installed)
 #
@@ -124,8 +124,8 @@ Any additional arguments are passed through to wdio.
 Examples:
   $0                                    # Run all tests
   $0 --rebuild                          # Force rebuild, then run tests
-  $0 --spec e2e/specs/dmp-integration.spec.ts  # Run specific spec
-  $0 --headless --spec e2e/specs/foo.spec.ts   # Force xvfb, run specific spec
+  $0 --spec e2e/legacy/specs/dmp-integration.spec.ts  # Run specific spec
+  $0 --headless --spec e2e/legacy/specs/foo.spec.ts   # Force xvfb, run specific spec
 
 Environment Variables:
   CARGO_TARGET_DIR  Location of cargo build output (default: ~/.cargo_build)
@@ -287,7 +287,7 @@ cleanup_ports() {
     fi
 
     local spec_count
-    spec_count=$(find "$PROJECT_ROOT/e2e/specs" -name "*.spec.ts" 2>/dev/null | wc -l | tr -d ' ')
+    spec_count=$(find "$PROJECT_ROOT/e2e/legacy/specs" -name "*.spec.ts" 2>/dev/null | wc -l | tr -d ' ')
     if ! [[ "$spec_count" =~ ^[0-9]+$ ]] || [[ "$spec_count" -lt 1 ]]; then
         spec_count=$max_instances
     fi

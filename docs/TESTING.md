@@ -329,7 +329,7 @@ See `wdio.conf.ts`. Key settings:
 ./scripts/wdio.sh
 
 # Run a specific spec file
-./scripts/wdio.sh --spec e2e/specs/ctrl-drag-pan-movement.spec.ts
+./scripts/wdio.sh --spec e2e/legacy/specs/ctrl-drag-pan-movement.spec.ts
 
 # Force rebuild before tests
 ./scripts/wdio.sh --rebuild
@@ -341,7 +341,7 @@ See `wdio.conf.ts`. Key settings:
 ./scripts/wdio.sh --skip-build
 
 # Combine options: skip build and run single spec
-./scripts/wdio.sh --skip-build --spec e2e/specs/map-interactions.spec.ts
+./scripts/wdio.sh --skip-build --spec e2e/legacy/specs/map-interactions.spec.ts
 ```
 
 The `wdio.sh` script automatically handles:
@@ -368,7 +368,7 @@ SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
 WDIO_MAX_INSTANCES=4 xvfb-run -a pnpm test:e2e
 
 # Run a single spec file (must use npx wdio directly, not pnpm test:e2e)
-SKIP_BUILD=1 npx wdio run wdio.conf.ts --spec e2e/specs/ctrl-drag-pan-movement.spec.ts
+SKIP_BUILD=1 npx wdio run wdio.conf.ts --spec e2e/legacy/specs/ctrl-drag-pan-movement.spec.ts
 ```
 
 > **Note**: When running a single spec file manually, you must use `npx wdio run wdio.conf.ts --spec <file>` directly. The `pnpm test:e2e -- --spec <file>` syntax does not properly pass the `--spec` flag.

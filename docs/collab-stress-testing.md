@@ -154,7 +154,7 @@ COLLAB_CORPUS_DIR=~/src/cave/data/collab_test_data \
   cargo test --manifest-path src-tauri/Cargo.toml reconcile_fuzz::corpus_replay -- --nocapture
 ```
 
-### Layer 3 — WDIO fullstack round-trip (`e2e/specs/collab-roundtrip.spec.ts`)
+### Layer 3 — WDIO fullstack round-trip (`e2e/legacy/specs/collab-roundtrip.spec.ts`)
 
 Against the real backend (real reconcile, real `.stalx`/`.tml`): clean round-trip
 (no dialog), external shot edit (detect → apply → undo/redo → converge), external
@@ -162,7 +162,7 @@ section rename (meta change, no destroy), and a georeferenced project (no phanto
 section). Local-only (not CI).
 
 ```bash
-./scripts/wdio.sh --spec e2e/specs/collab-roundtrip.spec.ts
+./scripts/wdio.sh --spec e2e/legacy/specs/collab-roundtrip.spec.ts
 ```
 
 For nightly soak, raise `COLLAB_FUZZ_ITERS` and optionally run Layer 1 under
