@@ -9,8 +9,8 @@ default-run = "stalagmight"
 [features]
 e2e = ["tauri-plugin-webdriver-automation"]
 telemetry = []
-# Dev-only: gates the gen_ipc_types bin so release builds (and their LTO pass)
-# skip it. Enabled by `pnpm gen:ipc-types`.
+# Dev-only: gates the gen_ipc_types example so it isn't compiled in normal
+# builds/tests. Enabled by `pnpm gen:ipc-types`.
 ipc-typegen = []
 
 [lib]
@@ -19,11 +19,15 @@ name = "stalagmight_lib"
 # src-tauri/gen/apple). cdylib stays for Android (src-tauri/gen/android).
 crate-type = ["lib", "cdylib"]
 
-[[bin]]
+# Dev-only IPC type generator. Kept as an *example* rather than a `[[bin]]` so
+# Tauri's bundler doesn't try to copy it into the .app: the bundler enumerates
+# every bin target, and a feature-gated bin still appears in that list but isn't
+# built → `tauri build` failed to copy it. `required-features` also keeps it out
+# of default `cargo build`/`test`/`--release` — only `pnpm gen:ipc-types` (which
+# passes --features ipc-typegen) compiles it.
+[[example]]
 name = "gen_ipc_types"
-path = "src/bin/gen_ipc_types.rs"
-# Keeps the dev-only typegen tool out of `cargo build --release`, where it
-# paid its own full LTO pass (~45s) on every release build.
+path = "examples/gen_ipc_types.rs"
 required-features = ["ipc-typegen"]
 
 [build-dependencies]
