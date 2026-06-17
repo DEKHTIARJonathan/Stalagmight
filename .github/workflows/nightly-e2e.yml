@@ -1,0 +1,43 @@
+name: Nightly E2E Regression
+
+# Comprehensive Playwright suite — the slow regression guard (issue #23).
+# Runs on a schedule (and on demand) so timing-sensitive specs don't block the
+# fast pre-push / @smoke gate. Like the smoke workflow it runs against the Vite
+# dev server with mocked Tauri IPC (Node + Chromium only).
+#
+# NOTE: the heavyweight WebdriverIO suite (e2e/legacy/) drives the real Tauri
+# app and is intentionally NOT run here — it stays on-demand. See
+# e2e/legacy/README.md.
+on:
+  schedule:
+    # 07:00 UTC daily — overnight in the Americas, morning in CET.
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:ui
+        env:
+          PW_REPORTER: github
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

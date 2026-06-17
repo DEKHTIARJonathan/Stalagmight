@@ -1,0 +1,31 @@
+name: E2E Smoke
+
+# Fast Playwright @smoke subset — the reliable, every-change gate (issue #23).
+# Runs against the Vite dev server with mocked Tauri IPC, so it needs only
+# Node + Chromium (no Rust/Tauri build). The comprehensive suite runs nightly
+# (see nightly-e2e.yml).
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:ui:smoke
+        env:
+          # CI=true already gives 2 retries via playwright.config.ts.
+          PW_REPORTER: github

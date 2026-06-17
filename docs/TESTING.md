@@ -17,9 +17,35 @@ Stalagmight uses a multi-layered testing approach:
 
 | Layer | Framework | Purpose | Speed |
 |-------|-----------|---------|-------|
-| Playwright E2E | Playwright | UI tests with mocked IPC | Fast (~8s for 34 tests) |
-| WebdriverIO E2E | WebdriverIO + tauri-driver | Full app tests | Slow (real backend) |
+| Unit (frontend) | Vitest | Component/store/util logic | Fast |
+| Playwright E2E | Playwright | UI tests with mocked IPC (`e2e-playwright/`) | Fast |
+| WebdriverIO E2E | WebdriverIO + tauri-driver | Full real-app tests (`e2e/legacy/`, **on-demand only**) | Slow (real backend) |
 | Backend Unit | Rust `#[test]` | Rust logic tests | Fast |
+
+## Test Tiers (smoke vs nightly)
+
+To keep flaky, timing-sensitive tests from blocking everyday work (issue #23),
+the Playwright suite is split into two tiers:
+
+| Tier | What | When it runs | Command |
+|------|------|--------------|---------|
+| **Smoke** | ~50 critical-path specs tagged `@smoke` | pre-push hook + `e2e-smoke.yml` on every PR/push | `pnpm test:ui:smoke` |
+| **Nightly / full** | the entire Playwright suite | `nightly-e2e.yml` on a schedule (+ `workflow_dispatch`) | `pnpm test:ui` |
+| **On-demand** | WebdriverIO real-app suite | manual only | `./scripts/wdio.sh` |
+
+Guidelines:
+
+- **Tag a test `@smoke`** only if it covers a critical path *and* is reliable.
+  Append ` @smoke` to the test title: `test('does X @smoke', ...)`.
+- **Don't sleep.** Hard `page.waitForTimeout()` is the #1 flake source. Prefer
+  the helpers (`waitForActiveTool`, `waitForMapReady`, `waitForMapIdle`,
+  `waitForZoomChange`) or web-first assertions / `expect.poll`. See "Wait
+  Strategies" below.
+- **Retries:** `playwright.config.ts` retries failed tests twice in CI and once
+  locally (so a single blip doesn't abort a push). Override with `PW_RETRIES`
+  (e.g. `PW_RETRIES=0` to fail fast while debugging a flake).
+- A test that is valuable but timing-sensitive belongs in the nightly tier
+  (untagged), not the smoke tier.
 
 ## Quick Start
 
@@ -1350,10 +1376,18 @@ await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 ## CI Integration
 
-Tests are run in CI on every push. The CI pipeline:
+Two GitHub Actions run on every push/PR to `master`:
 
-1. Runs `pnpm tsc --noEmit` (type check)
-2. Runs `pnpm test:ui` (Playwright tests)
-3. Runs `cargo test --manifest-path src-tauri/Cargo.toml` (Rust tests)
+1. **`ci.yml` (`check`)** — `pnpm tsc --noEmit` + `cargo test --features telemetry`.
+   This is the historical merge gate. (Note: `--features telemetry` is required —
+   a plain `cargo test` filters out the `registry_covers_all_*` tests, and
+   `build.rs` requires `TELEMETRY_ENDPOINT` under that feature.)
+2. **`e2e-smoke.yml` (`smoke`)** — the fast Playwright `@smoke` subset
+   (`pnpm test:ui:smoke`), Chromium-only against the Vite dev server.
 
-All must pass for the build to succeed.
+The **full** Playwright suite runs on a schedule via **`nightly-e2e.yml`**
+(`pnpm test:ui`), not on every change. The WebdriverIO suite (`e2e/legacy/`) is
+**not** run by any workflow — it is on-demand only (see
+[`e2e/legacy/README.md`](../e2e/legacy/README.md)).
+
+See "Test Tiers" below for the rationale.
