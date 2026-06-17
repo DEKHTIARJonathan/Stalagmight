@@ -394,38 +394,55 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
 
   return (
     <div className="p-2 h-full flex flex-col" data-testid="warnings-content">
-      <div className="flex items-center justify-between mb-2 px-2 shrink-0">
-        <span className="text-sm text-text-secondary">
-          {t('detailPanel.warnings.count', {
-            count: unresolvedCount,
-            countFormatted: formatNumber(unresolvedCount),
-          })}
-          {resolvedCount > 0 && ` ${t('detailPanel.warnings.resolvedCount', {
-            count: resolvedCount,
-            countFormatted: formatNumber(resolvedCount),
-          })}`}
-        </span>
-        <div className="flex items-center gap-2">
-          {resolvedCount > 0 && (
-            <button
-              onClick={() => setShowResolved(!showResolved)}
-              className="text-xs text-accent hover:underline"
-            >
-              {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
-            </button>
-          )}
-          {unresolvedCount > 0 && (
-            <button
-              onClick={startResolveAll}
-              className="text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
-              data-testid="resolve-all-warnings"
-              title={t('detailPanel.warnings.resolveAll')}
-            >
-              {t('detailPanel.warnings.resolveAll')}
-            </button>
-          )}
-        </div>
-      </div>
+      {(() => {
+        const countText = (
+          <span className="text-sm text-text-secondary">
+            {t('detailPanel.warnings.count', {
+              count: unresolvedCount,
+              countFormatted: formatNumber(unresolvedCount),
+            })}
+            {resolvedCount > 0 && ` ${t('detailPanel.warnings.resolvedCount', {
+              count: resolvedCount,
+              countFormatted: formatNumber(resolvedCount),
+            })}`}
+          </span>
+        );
+        const actions = (
+          <>
+            {resolvedCount > 0 && (
+              <button
+                onClick={() => setShowResolved(!showResolved)}
+                className="text-xs text-accent hover:underline"
+              >
+                {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
+              </button>
+            )}
+            {unresolvedCount > 0 && (
+              <button
+                onClick={startResolveAll}
+                className="text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
+                data-testid="resolve-all-warnings"
+                title={t('detailPanel.warnings.resolveAll')}
+              >
+                {t('detailPanel.warnings.resolveAll')}
+              </button>
+            )}
+          </>
+        );
+        // When a "Show resolved" toggle is present, give the actions their own
+        // row below the count so they don't crowd it; otherwise keep them inline.
+        return resolvedCount > 0 ? (
+          <div className="mb-2 px-2 shrink-0">
+            <div>{countText}</div>
+            <div className="flex items-center gap-2 mt-1">{actions}</div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between mb-2 px-2 shrink-0">
+            {countText}
+            <div className="flex items-center gap-2">{actions}</div>
+          </div>
+        );
+      })()}
       <div ref={listParentRef} className="flex-1 min-h-0 overflow-auto" role="list" aria-label={t('detailPanel.tabs.warnings')}>
         <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
           {rowVirtualizer.getVirtualItems().map((vItem) => {
