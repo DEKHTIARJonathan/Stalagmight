@@ -175,19 +175,30 @@ export function WarningResolution({
         ];
       }
       case 'INCLINATION_DEPTH_MISMATCH': {
-        // Pitch is positive-upward (depth decreasing), so the inclination implied
-        // by the depth change uses (depth_in - depth_out) = -dz, and the depth
-        // implied by the recorded pitch subtracts length·sin(pitch).
+        // Depth gauges are trusted, so the depth change is never altered here.
+        // Pitch is positive-upward (depth decreasing) → the length-implied
+        // inclination uses (depth_in - depth_out) = -dz. Offer to reconcile by
+        // adjusting the length (keep the recorded inclination), the inclination
+        // (keep the recorded length), or splitting the correction between them.
         const dz = shot.depth_out - shot.depth_in;
         const horiz = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
         const computedPitch = (Math.atan2(-dz, horiz) * 180) / Math.PI;
         const recorded = recordedPitch(shot);
-        const depthFromIncl =
-          recorded === null ? undefined : dep(shot.depth_in - shot.length * Math.sin((recorded * Math.PI) / 180));
+        const sinR = recorded === null ? null : Math.sin((recorded * Math.PI) / 180);
+        const lengthFromIncl = sinR !== null && Math.abs(sinR) > 1e-6 ? Math.abs(dz) / Math.abs(sinR) : null;
+        const midPitch = recorded === null ? null : (recorded + computedPitch) / 2;
+        const sinMid = midPitch === null ? null : Math.sin((midPitch * Math.PI) / 180);
+        const splitLength = sinMid !== null && Math.abs(sinMid) > 1e-6 ? Math.abs(dz) / Math.abs(sinMid) : null;
         return [
-          { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.useDepth'), detail: `${formatFixed(computedPitch, undefined, precision.inclination)}°`, disabled: geometryDisabled },
-          { id: 'depth-from-incl', label: t('detailPanel.warnings.resolveOptions.useInclination'), detail: depthFromIncl, disabled: geometryDisabled },
-          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualDepth'), manual: 'depth', disabled: geometryDisabled },
+          // Default: trust the recorded inclination, adjust the length to match.
+          ...(lengthFromIncl !== null
+            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.adjustLength'), detail: len(lengthFromIncl), disabled: geometryDisabled }]
+            : []),
+          { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.adjustInclination'), detail: `${formatFixed(computedPitch, undefined, precision.inclination)}°`, disabled: geometryDisabled },
+          ...(splitLength !== null && midPitch !== null
+            ? [{ id: 'split-incl-length', label: t('detailPanel.warnings.resolveOptions.splitInclLength'), detail: `${formatFixed(midPitch, undefined, precision.inclination)}° · ${len(splitLength)}`, disabled: geometryDisabled }]
+            : []),
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
           ignore,
         ];
       }
@@ -369,7 +380,7 @@ export function WarningResolution({
         patch.azimuth_out = normalizeAzimuth(shot.azimuth_out);
         break;
       case 'incl-from-depth': {
-        // Trust the depth: recompute the inclination from length + depth change.
+        // Keep length + depth (depth is trusted): recompute the inclination.
         // Pitch is positive-upward, so use (depth_in - depth_out) = -dz.
         const dz = shot.depth_out - shot.depth_in;
         const horiz = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
@@ -378,12 +389,21 @@ export function WarningResolution({
         patch.pitch_out = p;
         break;
       }
-      case 'depth-from-incl': {
-        // Trust the inclination: recompute the depth change from length + pitch.
-        // Positive pitch means depth decreases, so subtract length·sin(pitch).
+      case 'split-incl-length': {
+        // Keep depth; split the disagreement between inclination and length:
+        // set pitch to the midpoint of recorded and length-implied, then make the
+        // length consistent with that midpoint (length = |dz| / |sin(midPitch)|).
         const recorded = recordedPitch(shot);
         if (recorded === null) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-        patch.depth_out = shot.depth_in - shot.length * Math.sin((recorded * Math.PI) / 180);
+        const dz = shot.depth_out - shot.depth_in;
+        const horiz = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
+        const computed = (Math.atan2(-dz, horiz) * 180) / Math.PI;
+        const mid = (recorded + computed) / 2;
+        const sinMid = Math.sin((mid * Math.PI) / 180);
+        if (Math.abs(sinMid) < 1e-6) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
+        patch.pitch_in = mid;
+        patch.pitch_out = mid;
+        patch.length = Math.abs(dz) / Math.abs(sinMid);
         break;
       }
       case 'length-from-depth':

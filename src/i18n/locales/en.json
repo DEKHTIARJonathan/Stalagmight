@@ -1397,8 +1397,9 @@
         "clear": "Clear value",
         "removeDatum": "Remove this zero datum",
         "goToStation": "Go to station",
-        "useDepth": "Use depth (set inclination)",
-        "useInclination": "Use inclination (set depth)",
+        "adjustLength": "Use inclination — adjust length",
+        "adjustInclination": "Use length — adjust inclination",
+        "splitInclLength": "Split — adjust inclination & length",
         "lengthFromDepth": "Set length to depth change",
         "lengthFromInclination": "Set length from inclination",
         "ignore": "Ignore (keep value, don't warn again)"

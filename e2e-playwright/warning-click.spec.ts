@@ -467,8 +467,12 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await page.getByTestId('detail-tab-warnings').click();
     await page.getByTestId('resolve-warning').first().click();
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    // Depth is trusted, so resolution adjusts the inclination (and length when a
+    // pitch is recorded) — never the depth. This seed shot has no recorded pitch,
+    // so the length/split options are omitted; adjust-inclination stays, and the
+    // old depth-changing option must not appear.
     await expect(page.getByTestId('warning-resolution-option-incl-from-depth')).toBeVisible();
-    await expect(page.getByTestId('warning-resolution-option-depth-from-incl')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-depth-from-incl')).toHaveCount(0);
     await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
   });
 
