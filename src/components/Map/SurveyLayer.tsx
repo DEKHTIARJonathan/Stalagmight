@@ -23,6 +23,8 @@ import {
   type DepthRange,
   type GhostSectionData,
 } from './surveyLayer/features';
+import { computeIssueSeverity } from './surveyLayer/severity';
+import type { ProjectWarning } from '../../types/commands';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';
 import {
   distanceColorExpression,
@@ -174,6 +176,8 @@ export default class SurveyLayer {
     showDepthGradient: boolean;
     depthRange: DepthRange;
     precision: DecimalPrecision | undefined;
+    showIssueSeverity: boolean;
+    warnings: ProjectWarning[];
   } | null = null;
   private updateScheduled = false;
   /** Coalesced-call counter, surfaced to memory probe for instrumentation. */
@@ -234,6 +238,11 @@ export default class SurveyLayer {
   // Depth gradient mode state (used during update() for feature color calculation)
   private showDepthGradient: boolean = false;
   private depthRange: DepthRange = { min: 0, max: 50 };
+
+  // Issue-severity coloring mode (#22). Like showDepthGradient, cached so the
+  // lazy-labels zoom rebuild and theme rebuild re-fire with the same mode.
+  private showIssueSeverity: boolean = false;
+  private cachedWarnings: ProjectWarning[] = [];
 
   // Distance-gradient overlay (#34). feature-state based so re-root needs no
   // feature rebuild; re-applied in updateVisualState() because MapLibre clears
@@ -1264,6 +1273,8 @@ export default class SurveyLayer {
           this.showDepthGradient,
           this.depthRange,
           this.cachedPrecision,
+          this.showIssueSeverity,
+          this.cachedWarnings,
         );
       }
     };
@@ -3647,7 +3658,9 @@ export default class SurveyLayer {
     gpsOrigin?: GpsOrigin | null,
     showDepthGradient: boolean = false,
     depthRange: DepthRange = { min: 0, max: 50 },
-    precision?: DecimalPrecision
+    precision?: DecimalPrecision,
+    showIssueSeverity: boolean = false,
+    warnings: ProjectWarning[] = []
   ) {
     // Overwrite the pending args — last-call-wins is correct because the
     // builder is deterministic in its inputs; coalescing equivalent calls
@@ -3660,6 +3673,8 @@ export default class SurveyLayer {
       showDepthGradient,
       depthRange,
       precision,
+      showIssueSeverity,
+      warnings,
     };
     this.coalescedUpdateCallsSinceLastFlush += 1;
 
@@ -3683,6 +3698,8 @@ export default class SurveyLayer {
         args.showDepthGradient,
         args.depthRange,
         args.precision,
+        args.showIssueSeverity,
+        args.warnings,
       );
       return;
     }
@@ -3705,6 +3722,8 @@ export default class SurveyLayer {
         args.showDepthGradient,
         args.depthRange,
         args.precision,
+        args.showIssueSeverity,
+        args.warnings,
       );
     });
   }
@@ -3722,12 +3741,16 @@ export default class SurveyLayer {
     showDepthGradient: boolean,
     depthRange: DepthRange,
     precision: DecimalPrecision | undefined,
+    showIssueSeverity: boolean = false,
+    warnings: ProjectWarning[] = [],
   ): Promise<void> {
     if (!hasLiveStyle(this.map)) return;
     this.coalescedUpdateCallsSinceLastFlush = 0;
     this.gpsOrigin = gpsOrigin;
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
+    this.showIssueSeverity = showIssueSeverity;
+    this.cachedWarnings = warnings;
     this.cachedSections = sections;
     this.cachedStations = stations;
     this.cachedLoopClosures = loopClosures;
@@ -3758,6 +3781,13 @@ export default class SurveyLayer {
       useUIStore.getState().geometryMode
     ) ?? surveyDataFromLegacy(sections, stations);
 
+    // Issue-severity arrays are computed against this exact surveyData so the
+    // per-shot/per-station indices align with what the builder iterates.
+    const issueSeverity = showIssueSeverity
+      ? computeIssueSeverity(surveyData, warnings)
+      : undefined;
+    const buildOptions = { buildLabels, showIssueSeverity, issueSeverity };
+
     const tBuildStart = performance.now();
     let features: ReturnType<typeof buildSurveyFeatures>;
     try {
@@ -3769,7 +3799,7 @@ export default class SurveyLayer {
         depthRange: this.depthRange,
         themeColors: this.themeColors,
         precision: this.cachedPrecision,
-        options: { buildLabels },
+        options: buildOptions,
       });
     } catch (e) {
       console.error('[SurveyLayer] feature worker failed, falling back to inline build:', e);
@@ -3782,7 +3812,7 @@ export default class SurveyLayer {
         this.depthRange,
         this.themeColors,
         this.cachedPrecision,
-        { buildLabels },
+        buildOptions,
       );
     }
     recordPerfTiming('buildFeatures (async)', performance.now() - tBuildStart);
@@ -3806,6 +3836,8 @@ export default class SurveyLayer {
     showDepthGradient: boolean = false,
     depthRange: DepthRange = { min: 0, max: 50 },
     precision?: DecimalPrecision,
+    showIssueSeverity: boolean = false,
+    warnings: ProjectWarning[] = [],
   ): void {
     // Cancel any pending coalesced flush so we don't re-run with stale args.
     this.updateScheduled = false;
@@ -3818,7 +3850,17 @@ export default class SurveyLayer {
     // that arrives between the user's last zoom rebuild and the worker
     // finishing.
     this.lastUpdateToken += 1;
-    this.flushUpdate(sections, stations, loopClosures, gpsOrigin ?? null, showDepthGradient, depthRange, precision);
+    this.flushUpdate(
+      sections,
+      stations,
+      loopClosures,
+      gpsOrigin ?? null,
+      showDepthGradient,
+      depthRange,
+      precision,
+      showIssueSeverity,
+      warnings,
+    );
   }
 
   private flushUpdate(
@@ -3829,6 +3871,8 @@ export default class SurveyLayer {
     showDepthGradient: boolean,
     depthRange: DepthRange,
     precision: DecimalPrecision | undefined,
+    showIssueSeverity: boolean = false,
+    warnings: ProjectWarning[] = [],
   ): void {
     // Early bail when the map is gone or its style has been torn down — the
     // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove(),
@@ -3843,6 +3887,8 @@ export default class SurveyLayer {
     // Store depth mode parameters for use in feature color calculation
     this.showDepthGradient = showDepthGradient;
     this.depthRange = normalizeDepthRange(depthRange);
+    this.showIssueSeverity = showIssueSeverity;
+    this.cachedWarnings = warnings;
 
     // Cache input data for feature rebuild on theme change
     this.cachedSections = sections;
@@ -3866,6 +3912,10 @@ export default class SurveyLayer {
       useUIStore.getState().geometryMode
     ) ?? surveyDataFromLegacy(sections, stations);
 
+    const issueSeverity = showIssueSeverity
+      ? computeIssueSeverity(surveyData, warnings)
+      : undefined;
+
     const features = buildSurveyFeatures(
       surveyData,
       loopClosures,
@@ -3874,7 +3924,7 @@ export default class SurveyLayer {
       this.depthRange,
       this.themeColors,
       this.cachedPrecision,
-      { buildLabels }
+      { buildLabels, showIssueSeverity, issueSeverity }
     );
     this.applyFeaturesToSources(features);
   }
@@ -4095,7 +4145,10 @@ export default class SurveyLayer {
         this.cachedLoopClosures,
         this.gpsOrigin,
         this.showDepthGradient,
-        this.depthRange
+        this.depthRange,
+        this.cachedPrecision,
+        this.showIssueSeverity,
+        this.cachedWarnings
       );
     }
   }

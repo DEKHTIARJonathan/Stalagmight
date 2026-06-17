@@ -205,6 +205,10 @@ export function MapSettings({
   const handlePointZoomChange = createNumericHandler(onChange,
     (n) => ({ map: { ...config.map, animation: { ...config.map.animation, point_zoom: n } } }), parseIntRadix10);
 
+  // --- Warnings ---
+  const handleHighlightWarningsToggle = createToggleHandler(onChange,
+    (v) => ({ map: { ...config.map, highlight_warnings_on_tab_switch: v } }));
+
   return (
     <div
       role="tabpanel"
@@ -718,6 +722,24 @@ export function MapSettings({
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
             aria-label={t('settings.map.animation.pointZoom.aria')}
             data-testid="input-point-zoom"
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.map.sections.warnings')} data-testid="section-map-warnings">
+        <SettingRow
+          label={t('settings.map.highlightWarnings.label')}
+          helpText={t('settings.map.highlightWarnings.help')}
+          isChanged={isFieldChanged(changedFields, 'map.highlight_warnings_on_tab_switch')}
+          onReset={() => onChange({ map: { ...config.map, highlight_warnings_on_tab_switch: defaultConfig.map.highlight_warnings_on_tab_switch } })}
+          isDefault={config.map.highlight_warnings_on_tab_switch === defaultConfig.map.highlight_warnings_on_tab_switch}
+          data-testid="setting-highlight-warnings"
+        >
+          <Toggle
+            checked={config.map.highlight_warnings_on_tab_switch}
+            onChange={handleHighlightWarningsToggle}
+            aria-label={t('settings.map.highlightWarnings.aria')}
+            data-testid="toggle-highlight-warnings"
           />
         </SettingRow>
       </SettingsSection>

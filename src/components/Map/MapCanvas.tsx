@@ -246,7 +246,7 @@ export default function MapCanvas() {
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Geometry display mode (measured vs read-only closure-adjusted).
@@ -362,6 +362,7 @@ export default function MapCanvas() {
     showReferenceShots,
     showDepthGradient,
     showDistanceGradient,
+    showIssueSeverity,
     distanceGradientOrigin,
     distanceField,
     setDistanceField,
@@ -407,6 +408,9 @@ export default function MapCanvas() {
     geometryPreview,
     resolvedTheme,
     moveCommentSource,
+    detailPanelOpen,
+    detailPanelTab,
+    setIssueSeverity,
   } = useUIStore(
     // measureSnapShot is excluded: the live shot-snap `t` is rewritten on every
     // mousemove over a shot, and the cursor dot is driven imperatively via refs,
@@ -1656,10 +1660,45 @@ export default function MapCanvas() {
         gpsOrigin,
         showDepthGradient,
         depthRange,
-        precision
+        precision,
+        showIssueSeverity,
+        warnings
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, showIssueSeverity, warnings]);
+
+  // Warnings-tab auto-switch (#22): opening the Warnings tab temporarily flips
+  // the map into Issue-severity coloring (gated by the global setting), then
+  // restores the prior coloring on leave. We snapshot the prior gradient flags
+  // on enter so we can put them back. Depends only on the tab signal + the
+  // setting — NOT on the coloring flags — so a manual toggle while in the tab
+  // doesn't re-fire this effect.
+  const priorColoringRef = useRef<{ depth: boolean; distance: boolean } | null>(null);
+  const highlightWarningsOnTabSwitch = config?.map.highlight_warnings_on_tab_switch ?? true;
+  useEffect(() => {
+    if (!highlightWarningsOnTabSwitch) {
+      // Setting off: release any pending auto-switch without forcing a restore
+      // (the user keeps whatever they're currently viewing).
+      priorColoringRef.current = null;
+      return;
+    }
+    const onWarnings = detailPanelOpen && detailPanelTab === 'warnings';
+    if (onWarnings && priorColoringRef.current === null) {
+      const s = useUIStore.getState();
+      priorColoringRef.current = { depth: s.showDepthGradient, distance: s.showDistanceGradient };
+      setIssueSeverity(true);
+    } else if (!onWarnings && priorColoringRef.current !== null) {
+      const prior = priorColoringRef.current;
+      priorColoringRef.current = null;
+      // Only auto-restore if issue-severity is still the active mode. If the
+      // user manually picked a different coloring while in the tab, respect it.
+      if (useUIStore.getState().showIssueSeverity) {
+        setIssueSeverity(false);
+        if (prior.depth) useUIStore.getState().toggleDisplay('showDepthGradient');
+        else if (prior.distance) useUIStore.getState().toggleDistanceGradient();
+      }
+    }
+  }, [detailPanelOpen, detailPanelTab, highlightWarningsOnTabSwitch, setIssueSeverity]);
 
   // On a project switch (created_at changes on switch, stable across edits AND
   // saves), reset the distance origin to the entrance default and drop the stale

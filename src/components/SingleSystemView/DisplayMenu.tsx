@@ -10,9 +10,10 @@ import { setSource } from '../../utils/telemetry';
 import { hasEligibleClosures } from '../../utils/closures';
 
 interface DisplayOption {
-  // 'showDistanceGradient' is a runtime-only overlay (#34), not a persisted
-  // DisplayToggleKey — it's toggled via its own store action.
-  key: DisplayToggleKey | 'showDistanceGradient';
+  // 'showDistanceGradient' (#34) and 'showIssueSeverity' (#22) are runtime-only
+  // overlays, not persisted DisplayToggleKeys — each is toggled via its own
+  // store action.
+  key: DisplayToggleKey | 'showDistanceGradient' | 'showIssueSeverity';
   labelKey: string;
   descriptionKey?: string;
   disabledWhen?: DisplayToggleKey;
@@ -41,6 +42,7 @@ const displayOptions: { groupKey: string; items: DisplayOption[] }[] = [
       { key: 'showSatellite', labelKey: 'displayMenu.items.satellite', descriptionKey: 'displayMenu.descriptions.satellite' },
       { key: 'showDepthGradient', labelKey: 'displayMenu.items.depthGradient', descriptionKey: 'displayMenu.descriptions.depthGradient' },
       { key: 'showDistanceGradient', labelKey: 'displayMenu.items.distanceGradient', descriptionKey: 'displayMenu.descriptions.distanceGradient' },
+      { key: 'showIssueSeverity', labelKey: 'displayMenu.items.issueSeverity', descriptionKey: 'displayMenu.descriptions.issueSeverity' },
     ],
   },
   {
@@ -74,10 +76,12 @@ export default function DisplayMenu() {
     showShotComments,
     showDevStats,
     showDistanceGradient,
+    showIssueSeverity,
     gridSpacing,
     geometryMode,
     toggleDisplay,
     toggleDistanceGradient,
+    toggleIssueSeverity,
     setGridSpacing,
     setGeometryMode,
   } = useUIStore(useShallow((s) => ({
@@ -96,10 +100,12 @@ export default function DisplayMenu() {
     showShotComments: s.showShotComments,
     showDevStats: s.showDevStats,
     showDistanceGradient: s.showDistanceGradient,
+    showIssueSeverity: s.showIssueSeverity,
     gridSpacing: s.gridSpacing,
     geometryMode: s.geometryMode,
     toggleDisplay: s.toggleDisplay,
     toggleDistanceGradient: s.toggleDistanceGradient,
+    toggleIssueSeverity: s.toggleIssueSeverity,
     setGridSpacing: s.setGridSpacing,
     setGeometryMode: s.setGeometryMode,
   })));
@@ -312,15 +318,21 @@ export default function DisplayMenu() {
               <div className="pb-1">
                 {group.items.map((item) => {
                   const disabled = isDisabled(item);
-                  // 'showDistanceGradient' is runtime-only (#34) — read/toggle it
-                  // via its dedicated store field/action, not the persisted path.
-                  // Compare item.key directly so TS narrows it in each branch.
+                  // 'showDistanceGradient' (#34) and 'showIssueSeverity' (#22)
+                  // are runtime-only — read/toggle each via its dedicated store
+                  // field/action, not the persisted path. Compare item.key
+                  // directly so TS narrows it in each branch.
                   const checked =
-                    item.key === 'showDistanceGradient' ? showDistanceGradient : toggleValues[item.key];
+                    item.key === 'showDistanceGradient'
+                      ? showDistanceGradient
+                      : item.key === 'showIssueSeverity'
+                        ? showIssueSeverity
+                        : toggleValues[item.key];
                   const onToggle = () => {
                     if (disabled) return;
                     setSource('display-menu');
                     if (item.key === 'showDistanceGradient') toggleDistanceGradient();
+                    else if (item.key === 'showIssueSeverity') toggleIssueSeverity();
                     else toggleDisplay(item.key);
                   };
                   return (

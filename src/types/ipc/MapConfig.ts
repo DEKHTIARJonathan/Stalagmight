@@ -6,4 +6,4 @@ import type { MapSnapConfig } from "./MapSnapConfig";
 import type { ShotConfig } from "./ShotConfig";
 import type { StationConfig } from "./StationConfig";
 
-export interface MapConfig { satellite_provider: string, satellite_enabled: boolean, satellite_gps_origin: GpsOrigin, zoom_default: number, zoom_min: number, zoom_max: number, zoom_step: number, controls: MapControlsConfig, station: StationConfig, shot: ShotConfig, snap: MapSnapConfig, animation: MapAnimationConfig, }
+export interface MapConfig { satellite_provider: string, satellite_enabled: boolean, satellite_gps_origin: GpsOrigin, zoom_default: number, zoom_min: number, zoom_max: number, zoom_step: number, controls: MapControlsConfig, station: StationConfig, shot: ShotConfig, snap: MapSnapConfig, animation: MapAnimationConfig, highlight_warnings_on_tab_switch: boolean, }

@@ -295,6 +295,69 @@ describe('Display Toggle State', () => {
       );
     });
   });
+
+  // Issue-severity coloring also paints the shots/stations layer, so it is
+  // mutually exclusive with both gradients and, like the distance overlay, is
+  // runtime-only (never persisted) (#22).
+  describe('Issue-severity Mutual Exclusion (#22)', () => {
+    beforeEach(() => {
+      useUIStore.setState(getCleanTestState());
+      vi.clearAllMocks();
+    });
+
+    it('enabling issue severity turns off both gradients and clears the distance origin/field', () => {
+      useUIStore.setState({
+        showDepthGradient: true,
+        showDistanceGradient: true,
+        distanceGradientOrigin: { section_id: 1, station_index: 2 },
+        distanceField: {} as never,
+        showIssueSeverity: false,
+      });
+      useUIStore.getState().toggleIssueSeverity();
+      const s = useUIStore.getState();
+      expect(s.showIssueSeverity).toBe(true);
+      expect(s.showDepthGradient).toBe(false);
+      expect(s.showDistanceGradient).toBe(false);
+      expect(s.distanceGradientOrigin).toBeNull();
+      expect(s.distanceField).toBeNull();
+    });
+
+    it('enabling the depth gradient turns issue severity off', () => {
+      useUIStore.setState({ showIssueSeverity: true, showDepthGradient: false });
+      useUIStore.getState().toggleDisplay('showDepthGradient');
+      const s = useUIStore.getState();
+      expect(s.showDepthGradient).toBe(true);
+      expect(s.showIssueSeverity).toBe(false);
+    });
+
+    it('enabling the distance gradient turns issue severity off', () => {
+      useUIStore.setState({ showIssueSeverity: true, showDistanceGradient: false });
+      useUIStore.getState().toggleDistanceGradient();
+      const s = useUIStore.getState();
+      expect(s.showDistanceGradient).toBe(true);
+      expect(s.showIssueSeverity).toBe(false);
+    });
+
+    it('setIssueSeverity(true) enables it exclusively; setIssueSeverity(false) clears it', () => {
+      useUIStore.setState({ showDepthGradient: true, showIssueSeverity: false });
+      useUIStore.getState().setIssueSeverity(true);
+      let s = useUIStore.getState();
+      expect(s.showIssueSeverity).toBe(true);
+      expect(s.showDepthGradient).toBe(false);
+      useUIStore.getState().setIssueSeverity(false);
+      s = useUIStore.getState();
+      expect(s.showIssueSeverity).toBe(false);
+    });
+
+    it('is runtime-only — toggling it never persists a display setting', () => {
+      useUIStore.setState({ showIssueSeverity: false });
+      useUIStore.getState().toggleIssueSeverity();
+      expect(invoke).not.toHaveBeenCalledWith(
+        'save_display_setting',
+        expect.objectContaining({ key: 'showIssueSeverity' })
+      );
+    });
+  });
 });
 
 describe('Effective Value Selectors', () => {

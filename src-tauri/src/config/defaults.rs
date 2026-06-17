@@ -142,6 +142,7 @@ impl Default for MapConfig {
             shot: ShotConfig::default(),
             snap: MapSnapConfig::default(),
             animation: MapAnimationConfig::default(),
+            highlight_warnings_on_tab_switch: true,
         }
     }
 }

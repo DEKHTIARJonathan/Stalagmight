@@ -337,6 +337,16 @@ interface UIStore {
   setDistanceGradientOrigin: (ref: StationRef | null) => void;
   setDistanceField: (field: DistanceField | null) => void;
 
+  // Issue-severity coloring overlay (#22). Runtime-only — like
+  // showDistanceGradient it is NOT a DisplayToggleKey and is never persisted
+  // (off on every load; the Warnings-tab auto-switch drives it transiently).
+  showIssueSeverity: boolean;
+  /** Toggle issue-severity coloring (mutually exclusive with depth/distance). */
+  toggleIssueSeverity: () => void;
+  /** Set issue-severity coloring explicitly (used by the Warnings-tab
+   *  auto-switch). Enabling turns off both gradients. */
+  setIssueSeverity: (on: boolean) => void;
+
   // Geometry display mode (measured vs non-destructive closure-adjusted)
   geometryMode: GeometryMode;
   /** Switch the geometry display mode; persists across sessions (remember last used). */
@@ -857,8 +867,41 @@ export const useUIStore = create<UIStore>((set) => ({
     // re-enabling starts fresh at the entrance (zero-datum) default.
     set(
       on
-        ? { showDistanceGradient: true, showDepthGradient: false }
+        ? { showDistanceGradient: true, showDepthGradient: false, showIssueSeverity: false }
         : { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
+    );
+  },
+  // Issue-severity coloring (#22) — runtime-only, never persisted.
+  showIssueSeverity: false,
+  toggleIssueSeverity: () => {
+    const on = !useUIStore.getState().showIssueSeverity;
+    // Mutually exclusive with both gradients — all three paint the shots/stations
+    // layer. Flip depth's *runtime* flag only (don't persist), and clear the
+    // distance overlay's origin/field like toggleDistanceGradient does.
+    set(
+      on
+        ? {
+            showIssueSeverity: true,
+            showDepthGradient: false,
+            showDistanceGradient: false,
+            distanceGradientOrigin: null,
+            distanceField: null,
+          }
+        : { showIssueSeverity: false }
+    );
+  },
+  setIssueSeverity: (on) => {
+    if (useUIStore.getState().showIssueSeverity === on) return;
+    set(
+      on
+        ? {
+            showIssueSeverity: true,
+            showDepthGradient: false,
+            showDistanceGradient: false,
+            distanceGradientOrigin: null,
+            distanceField: null,
+          }
+        : { showIssueSeverity: false }
     );
   },
   setDistanceGradientOrigin: (distanceGradientOrigin) =>
@@ -870,11 +913,16 @@ export const useUIStore = create<UIStore>((set) => ({
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
     const newValue = !state[key];
-    // Enabling the depth gradient turns off the (runtime-only) distance gradient —
-    // the two are mutually exclusive since both paint the shots layer (#34).
+    // Enabling the depth gradient turns off the (runtime-only) distance gradient
+    // and issue-severity overlays — all three paint the shots layer (#34, #22).
     const exclusive =
-      key === 'showDepthGradient' && newValue && state.showDistanceGradient
-        ? { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
+      key === 'showDepthGradient' && newValue
+        ? {
+            showDistanceGradient: false,
+            distanceGradientOrigin: null,
+            distanceField: null,
+            showIssueSeverity: false,
+          }
         : {};
     set({ [key]: newValue, ...exclusive });
     // Persist the setting asynchronously via the helper

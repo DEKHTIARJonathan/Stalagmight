@@ -127,6 +127,7 @@ export const defaultConfig: Config = {
       duration: 300,
       point_zoom: 18,
     },
+    highlight_warnings_on_tab_switch: true,
   },
   validation: {
     // Keep in sync with the Rust ValidationConfig default

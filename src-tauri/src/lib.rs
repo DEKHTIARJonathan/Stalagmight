@@ -2207,6 +2207,7 @@ mod tests {
             shot: config::ShotConfig::default(),
             snap: config::MapSnapConfig::default(),
             animation: config::MapAnimationConfig::default(),
+            highlight_warnings_on_tab_switch: true,
         };
         map_config.normalize();
         assert_eq!(map_config.satellite_provider, "esri");
@@ -2234,6 +2235,7 @@ mod tests {
             shot: config::ShotConfig::default(),
             snap: config::MapSnapConfig::default(),
             animation: config::MapAnimationConfig::default(),
+            highlight_warnings_on_tab_switch: true,
         };
         map_config.normalize();
         assert_eq!(map_config.satellite_provider, "esri");

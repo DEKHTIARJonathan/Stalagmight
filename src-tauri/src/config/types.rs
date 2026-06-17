@@ -873,6 +873,10 @@ pub struct MapConfig {
     /// Animation settings for map focus transitions
     #[serde(default)]
     pub animation: MapAnimationConfig,
+    /// When true, switching the detail panel to the Warnings tab auto-enables the
+    /// map's Issue-severity coloring (restored on leaving the tab).
+    #[serde(default = "default_true")]
+    pub highlight_warnings_on_tab_switch: bool,
 }
 
 impl MapConfig {

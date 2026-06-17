@@ -872,7 +872,13 @@
         "station": "Station Appearance",
         "shot": "Shot Appearance",
         "snap": "Snap-to-Station",
-        "animation": "Animation"
+        "animation": "Animation",
+        "warnings": "Warnings"
+      },
+      "highlightWarnings": {
+        "label": "Switching to warnings tab highlights issues on the map",
+        "help": "When you open the Warnings tab, color shots and stations by validation severity (red = error, yellow = warning, green = clear), then restore the previous coloring when you leave.",
+        "aria": "Highlight issues on the map when switching to the warnings tab"
       },
       "satellite": {
         "provider": {
@@ -1575,6 +1581,7 @@
       "satellite": "Satellite",
       "depthGradient": "Depth Gradient",
       "distanceGradient": "Distance Gradient",
+      "issueSeverity": "Issue severity",
       "devStats": "Dev stats"
     },
     "descriptions": {
@@ -1592,6 +1599,7 @@
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
       "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
+      "issueSeverity": "Color shots and stations by validation issues (red = error, yellow = warning, green = clear)",
       "devStats": "Show developer stats overlay"
     }
   },
