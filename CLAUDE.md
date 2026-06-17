@@ -12,7 +12,8 @@ It is year 2026.
 | Dev server | `./scripts/dev.sh` |
 | Type check | `pnpm tsc --noEmit` |
 | Playwright tests | `pnpm test:ui` |
-| Rust tests | `TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry` |
+| Rust tests (Linux/macOS) | `TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry` |
+| Rust tests (Windows) | `./scripts/test.ps1` |
 | Production build | `pnpm tauri build` |
 
 ## Critical Rules
@@ -46,6 +47,15 @@ CI runs the Rust tests with `--features telemetry`, which gates the
 registry-coverage tests (`registry_covers_all_*`). A plain `cargo test` filters
 those out, so it can pass locally while CI fails; `build.rs` also requires
 `TELEMETRY_ENDPOINT` to be set under that feature.
+
+On **Windows**, run the Rust tests via `./scripts/test.ps1` (sets
+`STALAGMIGHT_TEST_MANIFEST=1`). Without that env var, every `cargo test` harness
+binary aborts at startup with `STATUS_ENTRYPOINT_NOT_FOUND` (`0xC0000139`)
+before any test runs: the loader binds to comctl32 v5 (System32), which lacks
+`TaskDialogIndirect` (statically imported via rfd / tauri-plugin-dialog). The
+env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
+never resolved at startup. The shipping app is unaffected (it gets a
+Common-Controls v6 manifest from `tauri_build`).
 
 ### Don't Run `cargo fmt`
 
