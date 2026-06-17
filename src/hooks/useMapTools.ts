@@ -8,7 +8,7 @@ import { useActiveStations } from './useActiveStations';
 import { getErrorMessage, invokeIpc } from '../utils/ipc';
 import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
 import type { GpsOrigin } from '../types/config';
-import { mapCoordsToMeters } from '../utils/coordinates';
+import { distance, mapCoordsToMeters } from '../utils/coordinates';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 
@@ -80,8 +80,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showToast,
     showDistanceGradient,
     setDistanceGradientOrigin,
+    // measureSnapShot is excluded too: it's rewritten on every mousemove over a
+    // shot (the live `t`), and is only ever read via getState() at click time — so
+    // subscribing here would re-render MapCanvas ~60×/s for nothing (#26).
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest));
+  } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest));
 
   const { stations, project, checkMergeConnectivity } = useProjectStore();
   // Coordinate lookups for read-only inspection (the measure tool) follow the
@@ -107,16 +110,22 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   );
 
   // Direct (3D straight-line) distance + depth diff between two measure endpoints.
+  // A raw map `point` has no real depth (its z is a sentinel 0): when measuring
+  // between a point and a real station/shot we treat the point's depth as equal to
+  // the other endpoint's, so the readout reports the horizontal distance with zero
+  // depth change rather than inflating it by the geometry endpoint's depth (#26).
+  // Two raw points likewise have no depth change.
   const calculateDistance = useCallback(
     (a: MeasureEndpoint, b: MeasureEndpoint): { distance: number; depthDiff: number } => {
       const ca = endpointCoords(a);
       const cb = endpointCoords(b);
-      const dx = cb.x - ca.x;
-      const dy = cb.y - ca.y;
-      const dz = cb.z - ca.z;
+      const aHasDepth = a.kind !== 'point';
+      const bHasDepth = b.kind !== 'point';
+      const za = aHasDepth ? ca.z : bHasDepth ? cb.z : 0;
+      const zb = bHasDepth ? cb.z : aHasDepth ? ca.z : 0;
       return {
-        distance: Math.sqrt(dx * dx + dy * dy + dz * dz),
-        depthDiff: dz,
+        distance: distance({ x: ca.x, y: ca.y, z: za }, { x: cb.x, y: cb.y, z: zb }),
+        depthDiff: zb - za,
       };
     },
     []
@@ -165,9 +174,16 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           { a, b },
           { purpose: 'ruler along-line distance' }
         );
-        // Discard stale responses and results that arrive after the tool changed.
+        // Discard the response if a newer request superseded it, or if the
+        // measurement it belongs to is gone. Every reset funnel — Escape/clearMeasure,
+        // tool switch, dialog open, geometry-mode change, project load, and the
+        // reset-and-restart third click — clears the endpoints through the store and
+        // can't bump this hook-local request ref, so we re-check live store state
+        // here. Without the endpoint check a late response would resurrect a stale
+        // readout + path tint after the user already reset (#26).
+        const ui = useUIStore.getState();
         if (requestId !== measureRequestIdRef.current) return;
-        if (useUIStore.getState().activeTool !== 'measure') return;
+        if (ui.activeTool !== 'measure' || !ui.measureStart || !ui.measureEnd) return;
         setMeasureAlongLine(
           result
             ? { alongLine: result.along_line, pathShots: result.path_shots, pathStations: result.path_stations }

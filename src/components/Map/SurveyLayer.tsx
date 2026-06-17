@@ -78,6 +78,9 @@ export default class SurveyLayer {
   private sourceId = 'survey-data';
   private shotsLayerId = 'survey-shots';
   private shotGradientsLayerId = 'survey-shot-gradients';
+  // Measure along-line tint overlay (#26): the measured path's shots redrawn ABOVE
+  // the depth-gradient sub-segments so the tint is never occluded by them.
+  private measurePathLayerId = 'survey-measure-path';
   private stationsLayerId = 'survey-stations';
   private labelsLayerId = 'survey-labels';
   private shotLabelsLayerId = 'survey-shot-labels';
@@ -680,6 +683,36 @@ export default class SurveyLayer {
           'case',
           ['get', 'isReference'], 0.5,
           1,
+        ],
+      },
+    });
+
+    // Measure along-line tint overlay (#26): the measured path's shots, drawn on
+    // top of the depth-gradient sub-segments so the highlight is never occluded by
+    // them. Visibility is driven by the same `measured` feature-state as the main
+    // shots layer (opacity 1 when measured, else 0), so non-path shots stay
+    // invisible here and keep their normal/gradient color underneath. Width matches
+    // the main shots line so it fully covers the (narrower) gradient.
+    this.map.addLayer({
+      id: this.measurePathLayerId,
+      type: 'line',
+      source: this.sourceId + '-shots',
+      layout: {
+        'line-cap': 'round',
+        'line-join': 'round',
+      },
+      paint: {
+        'line-color': this.measureTintColor,
+        'line-width': [
+          'case',
+          ['boolean', ['feature-state', 'hover'], false], hoverWidth,
+          ['boolean', ['feature-state', 'selected'], false], selectionWidth,
+          baseWidth,
+        ],
+        'line-opacity': [
+          'case',
+          ['boolean', ['feature-state', 'measured'], false], 1,
+          0,
         ],
       },
     });
@@ -1739,20 +1772,21 @@ export default class SurveyLayer {
     this.applyDistanceFeatureState();
   }
 
-  /** The shots layer's `line-color` expression. The distance gradient wins when
-   *  active; otherwise the measured along-line path (#26) tints its shots via the
-   *  `measured` feature-state; otherwise the plain per-shot color. Centralized so
-   *  the distance overlay and the measure tint never clobber each other. */
-  private shotsLineColor(): ExpressionSpecification {
-    if (this.distanceMode) {
-      return distanceColorExpression(
-        DISTANCE_NEAR,
-        DISTANCE_FAR,
-        this.distanceState?.max ?? 0,
-        this.themeColors.grayLine,
-      );
-    }
-    if (this.measuredPathIds && this.measuredPathIds.size > 0) {
+  /** The distance-gradient color ramp, shared by the shots line-color and the
+   *  stations circle-color so the two can't drift. */
+  private distanceRampExpression(): ExpressionSpecification {
+    return distanceColorExpression(
+      DISTANCE_NEAR,
+      DISTANCE_FAR,
+      this.distanceState?.max ?? 0,
+      this.themeColors.grayLine,
+    );
+  }
+
+  /** A `measured` feature-state tint case (#26) over the plain per-feature color,
+   *  or just the plain color when no path is set. Shared by shots/stations. */
+  private measuredTintExpression(measuredIds: Set<number> | null): ExpressionSpecification {
+    if (measuredIds && measuredIds.size > 0) {
       return [
         'case',
         ['boolean', ['feature-state', 'measured'], false],
@@ -1763,26 +1797,20 @@ export default class SurveyLayer {
     return ['get', 'color'] as ExpressionSpecification;
   }
 
-  /** The stations layer's `circle-color` expression — distance ramp when active,
-   *  else the measured-path tint for the path's stations (#26), else plain. */
+  /** The shots layer's `line-color`: distance ramp when active, else the measured
+   *  along-line tint (#26), else plain. (The `measurePathLayerId` overlay redraws
+   *  the tint on top of the depth gradient; this keeps it correct when the gradient
+   *  is off and centralizes the distance-vs-tint precedence.) */
+  private shotsLineColor(): ExpressionSpecification {
+    if (this.distanceMode) return this.distanceRampExpression();
+    return this.measuredTintExpression(this.measuredPathIds);
+  }
+
+  /** The stations layer's `circle-color`: distance ramp when active, else the
+   *  measured-path tint for the path's stations (#26), else plain. */
   private stationsCircleColor(): ExpressionSpecification {
-    if (this.distanceMode) {
-      return distanceColorExpression(
-        DISTANCE_NEAR,
-        DISTANCE_FAR,
-        this.distanceState?.max ?? 0,
-        this.themeColors.grayLine,
-      );
-    }
-    if (this.measuredPathStationIds && this.measuredPathStationIds.size > 0) {
-      return [
-        'case',
-        ['boolean', ['feature-state', 'measured'], false],
-        this.measureTintColor,
-        ['get', 'color'],
-      ] as ExpressionSpecification;
-    }
-    return ['get', 'color'] as ExpressionSpecification;
+    if (this.distanceMode) return this.distanceRampExpression();
+    return this.measuredTintExpression(this.measuredPathStationIds);
   }
 
   /** Swap shots/stations color to the distance ramp (or restore), and suspend the
@@ -1852,6 +1880,11 @@ export default class SurveyLayer {
     }
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.setPaintProperty(this.stationsLayerId, 'circle-color', this.stationsCircleColor());
+    }
+    // The on-top tint overlay (#26) reads the same `measured` feature-state; only
+    // its color needs updating here.
+    if (this.map.getLayer(this.measurePathLayerId)) {
+      this.map.setPaintProperty(this.measurePathLayerId, 'line-color', this.measureTintColor);
     }
     this.applyMeasuredPathFeatureState();
   }
@@ -2070,6 +2103,15 @@ export default class SurveyLayer {
    * along that shot's line (#26 ruler snap-to-shot). The caller interpolates the
    * 3D coords at `t` from the active stations (the 2D shot geometry has no z).
    * Returns null when no shot is within `threshold` pixels.
+   *
+   * NOTE (known edge case): `t` is derived from the rendered endpoints
+   * (`queryRenderedFeatures`), which MapLibre clips at tile boundaries + the
+   * source buffer. For a long shot with one station well off-screen, those
+   * endpoints can be clip points rather than the true stations, so `t` (and the
+   * snap marker) are slightly off for that shot. Short/on-screen shots — the
+   * common case — are unaffected (the buffer covers them). A precise fix would
+   * require retaining the true per-shot endpoints from setData; deferred as an
+   * edge case.
    */
   queryNearestShotPoint(
     screenX: number,
@@ -2302,6 +2344,7 @@ export default class SurveyLayer {
     }
     this.map.setLayoutProperty(this.shotsLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.shotGradientsLayerId, 'visibility', visibility);
+    this.map.setLayoutProperty(this.measurePathLayerId, 'visibility', visibility);
     this.map.setLayoutProperty(this.shotsHitboxLayerId, 'visibility', visibility);
   }
 
@@ -2317,6 +2360,7 @@ export default class SurveyLayer {
       // Restore original filters (label layers have zoom-based density filters)
       this.map.setFilter(this.shotsLayerId, null);
       this.map.setFilter(this.shotGradientsLayerId, null);
+      this.map.setFilter(this.measurePathLayerId, null);
       this.map.setFilter(this.stationsLayerId, null);
       this.map.setFilter(this.stationsHitboxLayerId, null);
       this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
@@ -2326,6 +2370,7 @@ export default class SurveyLayer {
       // Hide reference shots and their labels
       this.map.setFilter(this.shotsLayerId, notReference);
       this.map.setFilter(this.shotGradientsLayerId, notReference);
+      this.map.setFilter(this.measurePathLayerId, notReference);
       this.map.setFilter(this.shotLabelsLayerId,
         this.shotLabelsBaseFilter
           ? ['all', this.shotLabelsBaseFilter, notReference] as maplibregl.FilterSpecification
@@ -4119,6 +4164,9 @@ export default class SurveyLayer {
       }
       if (this.map.getLayer(this.shotGradientsLayerId)) {
         this.map.removeLayer(this.shotGradientsLayerId);
+      }
+      if (this.map.getLayer(this.measurePathLayerId)) {
+        this.map.removeLayer(this.measurePathLayerId);
       }
       if (this.map.getLayer(this.loopClosuresLayerId)) {
         this.map.removeLayer(this.loopClosuresLayerId);

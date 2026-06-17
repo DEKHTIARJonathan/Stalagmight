@@ -375,7 +375,6 @@ export default function MapCanvas() {
     measureDirect,
     measureAlongLine,
     measureAlongLinePending,
-    measureSnapShot,
     setMeasureSnapShot,
     clearMeasure,
     addToSelection,
@@ -406,8 +405,12 @@ export default function MapCanvas() {
     resolvedTheme,
     moveCommentSource,
   } = useUIStore(
+    // measureSnapShot is excluded: the live shot-snap `t` is rewritten on every
+    // mousemove over a shot, and the cursor dot is driven imperatively via refs,
+    // so subscribing would re-render this large component ~60×/s (#26). The
+    // leave-tool cleanup below reads it via getState() instead.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest)
+    useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
   );
 
   const alignedClosureIds = useMemo(() => {
@@ -673,9 +676,10 @@ export default function MapCanvas() {
       shotSnapMarkerRef.current?.remove();
       shotSnapMarkerRef.current = null;
       measureSnapShotRef.current = null;
-      if (measureSnapShot) setMeasureSnapShot(null);
+      // measureSnapShot isn't subscribed (see useShallow above) — read it live.
+      if (useUIStore.getState().measureSnapShot) setMeasureSnapShot(null);
     }
-  }, [activeTool, snappedStation, setSnappedStation, measureSnapShot, setMeasureSnapShot]);
+  }, [activeTool, snappedStation, setSnappedStation, setMeasureSnapShot]);
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
@@ -1650,14 +1654,18 @@ export default function MapCanvas() {
   const measurePathColor = config?.display.measure_path_color ?? MEASURE_TINT;
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    const shotIds = measureAlongLine ? buildMeasuredPathIds(measureAlongLine.pathShots) : null;
-    const stationIds = measureAlongLine ? buildMeasuredStationIds(measureAlongLine.pathStations) : null;
+    // Only tint while a completed measurement exists. Gating on measureEnd (not
+    // measureAlongLine alone) means a late along-line response that lands after a
+    // reset can't repaint a stale path with no active measurement (#26).
+    const alongLine = measureEnd ? measureAlongLine : null;
+    const shotIds = alongLine ? buildMeasuredPathIds(alongLine.pathShots) : null;
+    const stationIds = alongLine ? buildMeasuredStationIds(alongLine.pathStations) : null;
     surveyLayerRef.current.setMeasuredPath(
       shotIds && shotIds.size > 0 ? shotIds : null,
       stationIds && stationIds.size > 0 ? stationIds : null,
       measurePathColor,
     );
-  }, [measureAlongLine, mapLoaded, measurePathColor]);
+  }, [measureAlongLine, measureEnd, mapLoaded, measurePathColor]);
 
   // Distance-gradient origin marker (#34): a ring on the chosen origin station.
   // A MapLibre Marker so it auto-tracks the camera and shows even when the
