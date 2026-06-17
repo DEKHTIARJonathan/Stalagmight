@@ -1382,6 +1382,8 @@
       "resolveFailed": "Could not apply the fix.",
       "resolveInvalid": "Enter a valid number.",
       "resolveInvalidLength": "Length must be greater than 0.",
+      "resolveInvalidAzimuth": "Azimuth must be between -360° and 360°.",
+      "azimuthLabel": "Azimuth",
       "resolveOptions": {
         "useIn": "Use azimuth in",
         "useOut": "Use azimuth out",

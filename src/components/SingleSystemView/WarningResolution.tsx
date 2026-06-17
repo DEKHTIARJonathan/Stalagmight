@@ -164,11 +164,13 @@ export function WarningResolution({
     }
   }, [warning.code, warning.datumStationIndex, shot, geometryDisabled, geometryReadOnly, t, precision]);
 
-  // Default to the first enabled option (falls back to Ignore when every fix
-  // is locked, e.g. a frozen shot in the closure-adjusted view).
+  // Default selection: prefer "Average" (the safe azimuth fix) when offered,
+  // else the first enabled option (falls back to Ignore when every fix is
+  // locked, e.g. a frozen shot in the closure-adjusted view).
   useEffect(() => {
-    const firstEnabled = options.find((o) => !o.disabled) ?? options[options.length - 1];
-    setSelected(firstEnabled?.id ?? '');
+    const enabled = options.filter((o) => !o.disabled);
+    const preferred = enabled.find((o) => o.id === 'average') ?? enabled[0] ?? options[options.length - 1];
+    setSelected(preferred?.id ?? '');
     if (shot) {
       setManual({
         azimuth: '',
@@ -191,6 +193,14 @@ export function WarningResolution({
   }, [warning.sectionId, warning.shotId, warning.code]);
 
   const num = (key: string): number => parseFloat(manual[key] ?? '');
+
+  // Azimuth fields: reject NaN or values outside [-360, 360]; otherwise
+  // normalize into [0, 360) (wrap, not clip). Returns null on rejection.
+  const parseAzimuth = (key: string): number | null => {
+    const v = num(key);
+    if (Number.isNaN(v) || v < -360 || v > 360) return null;
+    return normalizeAzimuth(v);
+  };
 
   // Live on-map preview of the proposed geometry as the user tries options
   // (issue #57). Anchored to the real solved endpoint so it shows just the
@@ -226,13 +236,13 @@ export function WarningResolution({
         break;
       case 'manual':
         if (opt.manual === 'azimuth') {
-          const v = num('azimuth');
-          if (Number.isNaN(v)) return null;
-          propAz = normalizeAzimuth(v);
+          const n = parseAzimuth('azimuth');
+          if (n === null) return null;
+          propAz = n;
         } else if (opt.manual === 'azimuthInOut') {
-          const vi = num('azimuthIn'); const vo = num('azimuthOut');
-          if (Number.isNaN(vi) || Number.isNaN(vo)) return null;
-          propAz = averageAzimuth(normalizeAzimuth(vi), normalizeAzimuth(vo));
+          const ni = parseAzimuth('azimuthIn'); const no = parseAzimuth('azimuthOut');
+          if (ni === null || no === null) return null;
+          propAz = averageAzimuth(ni, no);
         } else if (opt.manual === 'length') {
           const v = num('length');
           if (Number.isNaN(v) || v <= 0) return null;
@@ -327,16 +337,15 @@ export function WarningResolution({
         break;
       case 'manual':
         if (opt.manual === 'azimuth') {
-          const v = num('azimuth');
-          if (Number.isNaN(v)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-          const n = normalizeAzimuth(v);
+          const n = parseAzimuth('azimuth');
+          if (n === null) { showToast(t('detailPanel.warnings.resolveInvalidAzimuth'), 'warning-resolve'); return 'failed'; }
           patch.azimuth_in = n;
           patch.azimuth_out = n;
         } else if (opt.manual === 'azimuthInOut') {
-          const vi = num('azimuthIn'); const vo = num('azimuthOut');
-          if (Number.isNaN(vi) || Number.isNaN(vo)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-          patch.azimuth_in = normalizeAzimuth(vi);
-          patch.azimuth_out = normalizeAzimuth(vo);
+          const ni = parseAzimuth('azimuthIn'); const no = parseAzimuth('azimuthOut');
+          if (ni === null || no === null) { showToast(t('detailPanel.warnings.resolveInvalidAzimuth'), 'warning-resolve'); return 'failed'; }
+          patch.azimuth_in = ni;
+          patch.azimuth_out = no;
         } else if (opt.manual === 'length') {
           const v = num('length');
           if (Number.isNaN(v) || v <= 0) { showToast(t('detailPanel.warnings.resolveInvalidLength'), 'warning-resolve'); return 'failed'; }
@@ -452,7 +461,7 @@ export function WarningResolution({
               {selected === opt.id && opt.manual && (
                 <div className="pl-6 pr-1 pb-1">
                   {opt.manual === 'azimuth' && (
-                    <ManualField value={manual.azimuth ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuth: v }))} unit="°" placeholder={t('detailPanel.labels.azimuthIn')} testId="manual-azimuth" />
+                    <ManualField value={manual.azimuth ?? ''} onChange={(v) => setManual((m) => ({ ...m, azimuth: v }))} unit="°" placeholder={t('detailPanel.warnings.azimuthLabel')} testId="manual-azimuth" />
                   )}
                   {opt.manual === 'azimuthInOut' && (
                     <div className="grid grid-cols-2 gap-2">
