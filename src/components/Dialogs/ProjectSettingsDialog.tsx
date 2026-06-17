@@ -42,8 +42,8 @@ export function ProjectSettingsDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
-  const { project, updateProjectSettings } = useProjectStore(
-    useShallow((s) => ({ project: s.project, updateProjectSettings: s.updateProjectSettings })),
+  const { project, globalConfig, updateProjectSettings } = useProjectStore(
+    useShallow((s) => ({ project: s.project, globalConfig: s.config, updateProjectSettings: s.updateProjectSettings })),
   );
   const panelIdBase = useId();
 
@@ -88,7 +88,9 @@ export function ProjectSettingsDialog() {
     <DialogWrapper
       title={t('dialogs.projectSettings.title')}
       onClose={closeDialog}
-      size="2xl"
+      // Fixed height (like the global Settings dialog) so the content pane
+      // scrolls within the dialog instead of overflowing the screen.
+      fixedSize={{ width: 'min(720px, 95vw)', height: 'clamp(420px, 75vh, 760px)' }}
       closeOnBackdropClick={false}
       overflow="hidden"
       bodyClassName="flex flex-col"
@@ -145,6 +147,7 @@ export function ProjectSettingsDialog() {
                   onValidationError={handleValidationError}
                   panelIdBase={panelIdBase}
                   scope="project"
+                  defaults={globalConfig?.validation ?? defaultConfig.validation}
                 />
               )}
             </div>

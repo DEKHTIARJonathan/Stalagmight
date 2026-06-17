@@ -1376,8 +1376,6 @@ impl AppState {
     }
 
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
-        let config = self.config.lock().ok();
-
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -1421,9 +1419,8 @@ impl AppState {
                     shot.length
                 ));
             }
-            if let Some(ref cfg) = config {
-                warnings.extend(Validator::validate_shot(shot, &cfg.validation, section_id_for_validation, i));
-            }
+            // Per-project thresholds (#57) so create-time warnings match the panel.
+            warnings.extend(Validator::validate_shot(shot, &project.validation, section_id_for_validation, i));
         }
 
         let section = project.add_section(data);
@@ -1497,8 +1494,6 @@ impl AppState {
             return CommandResult::failure("Shot has a non-finite (NaN/inf) value".to_string());
         }
 
-        let config = self.config.lock().ok();
-
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -1551,9 +1546,8 @@ impl AppState {
         }
 
         let mut warnings = Vec::new();
-        if let Some(ref cfg) = config {
-            warnings.extend(Validator::validate_shot(&data, &cfg.validation, section_id, shot_index));
-        }
+        // Per-project thresholds (#57) so create-time warnings match the panel.
+        warnings.extend(Validator::validate_shot(&data, &project.validation, section_id, shot_index));
 
         let shot = if let Some(before_id) = before_shot_id {
             project.insert_shot_before(section_id, before_id, data, None, None)
