@@ -6527,10 +6527,12 @@ impl Project {
     /// Shortest along-cave-line distance between two ruler endpoints (#26), plus
     /// the ordered shots traversed (for tinting). The distance sums the lengths of
     /// the shots on the path — each shot weighted by the euclidean distance between
-    /// its endpoints in `stations`, so passing the closure-ADJUSTED coordinates
-    /// (see `AppState::along_line_between`) yields the closure-adjusted shot lengths
-    /// the user asked for; passing measured coordinates yields the surveyed tape
-    /// lengths (the two coincide when there are no loop closures to adjust). An
+    /// its endpoints in `stations` (the *placed* shot length), so passing the
+    /// closure-ADJUSTED coordinates (see `AppState::along_line_between`) yields the
+    /// closure-adjusted shot lengths the user asked for. For a continuous survey
+    /// this placed length equals the surveyed tape length; at depth discontinuities
+    /// the depth-averaged station placement can differ slightly, matching what is
+    /// drawn rather than the raw tape figure. An
     /// endpoint may be a station or an exact point on a shot at fraction `t` (which
     /// splits that shot's edge; a mid-shot leg contributes `t` of the adjusted shot
     /// length). Returns `along_line: None` when the endpoints are in different

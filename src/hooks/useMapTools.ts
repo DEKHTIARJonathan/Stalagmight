@@ -167,6 +167,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       }
       measureRequestIdRef.current += 1;
       const requestId = measureRequestIdRef.current;
+      // Capture the project identity so a response landing after a project switch
+      // is discarded directly, without depending on the MapCanvas clearMeasure
+      // effect having already run (it nulls the endpoints, but only after the
+      // project-change render commits) (#26).
+      const requestProjectId = useProjectStore.getState().project?.created_at ?? null;
       setMeasureAlongLinePending(true);
       try {
         const result = await invokeIpc<AlongLineResult | null>(
@@ -184,6 +189,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         const ui = useUIStore.getState();
         if (requestId !== measureRequestIdRef.current) return;
         if (ui.activeTool !== 'measure' || !ui.measureStart || !ui.measureEnd) return;
+        if ((useProjectStore.getState().project?.created_at ?? null) !== requestProjectId) return;
         setMeasureAlongLine(
           result
             ? { alongLine: result.along_line, pathShots: result.path_shots, pathStations: result.path_stations }

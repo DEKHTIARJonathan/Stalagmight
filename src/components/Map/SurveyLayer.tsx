@@ -1814,7 +1814,7 @@ export default class SurveyLayer {
   }
 
   /** Swap shots/stations color to the distance ramp (or restore), and suspend the
-   *  depth sub-segment layer so distance wins cleanly. */
+   *  depth sub-segment layer + measure tint overlay so distance wins cleanly. */
   private applyDistancePaint(): void {
     if (!this.map) return;
     if (this.map.getLayer(this.shotsLayerId)) {
@@ -1823,19 +1823,18 @@ export default class SurveyLayer {
     if (this.map.getLayer(this.stationsLayerId)) {
       this.map.setPaintProperty(this.stationsLayerId, 'circle-color', this.stationsCircleColor());
     }
-    // Depth's per-segment gradient renders above the main shot line; hide it while
-    // distance is active so it can't cover the distance colors. When restoring,
-    // match the main shots layer's visibility rather than forcing 'visible' — the
-    // user may have Shots hidden (then depth segments must stay hidden too).
-    if (this.map.getLayer(this.shotGradientsLayerId)) {
-      const shotsVisibility =
-        (this.map.getLayoutProperty(this.shotsLayerId, 'visibility') as string | undefined) ??
-        'visible';
-      this.map.setLayoutProperty(
-        this.shotGradientsLayerId,
-        'visibility',
-        this.distanceMode ? 'none' : shotsVisibility,
-      );
+    // Depth's per-segment gradient AND the measure tint overlay both render above
+    // the main shot line; hide them while distance is active so they can't cover
+    // the distance colors (the distance gradient owns color). When restoring, match
+    // the main shots layer's visibility rather than forcing 'visible' — the user
+    // may have Shots hidden (then these overlays must stay hidden too).
+    const shotsVisibility =
+      (this.map.getLayoutProperty(this.shotsLayerId, 'visibility') as string | undefined) ??
+      'visible';
+    for (const layerId of [this.shotGradientsLayerId, this.measurePathLayerId]) {
+      if (this.map.getLayer(layerId)) {
+        this.map.setLayoutProperty(layerId, 'visibility', this.distanceMode ? 'none' : shotsVisibility);
+      }
     }
   }
 

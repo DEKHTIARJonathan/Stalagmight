@@ -371,6 +371,13 @@ impl AppState {
         b: RulerEndpoint,
     ) -> Option<AlongLineResult> {
         let project = self.get_project_state()?;
+        // `project` (topology) and `stations` (adjusted coords) are two independent
+        // locked reads, so a concurrent edit between them could yield a slightly
+        // skewed snapshot. That's safe here — `along_line_between` looks everything
+        // up by `StationRef` through guarded `idx.get(..)` and indexes coords only
+        // via those resolved indices, so a mismatch drops an edge at worst (never
+        // panics) and the ruler re-queries. We deliberately avoid a single
+        // command-locked snapshot to keep reusing the adjusted-stations cache.
         let stations = self
             .get_adjusted_stations()
             .unwrap_or_else(|| project.compute_station_coordinates());
