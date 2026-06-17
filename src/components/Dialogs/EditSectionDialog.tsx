@@ -377,7 +377,7 @@ export default function EditSectionDialog() {
     azimuth_diff_threshold:
       project?.validation?.azimuth_diff_threshold ?? config?.validation?.azimuth_diff_threshold ?? 20,
     pitch_diff_threshold:
-      project?.validation?.pitch_diff_threshold ?? config?.validation?.pitch_diff_threshold ?? 5,
+      project?.validation?.pitch_diff_threshold ?? config?.validation?.pitch_diff_threshold ?? 10,
   };
 
   if (!section) {

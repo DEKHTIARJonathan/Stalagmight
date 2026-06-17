@@ -227,7 +227,7 @@ fn test_get_config_defaults_validation() {
     with_config_lock(|| {
         let app = app_with_state();
         let cfg = config::get_config(state(&app));
-        assert_eq!(cfg.validation.warn_shot_length_min, 0.4);
+        assert_eq!(cfg.validation.warn_shot_length_min, 0.3);
         assert_eq!(cfg.validation.warn_shot_length_max, 50.0);
     });
 }
@@ -2321,7 +2321,7 @@ fn test_project_validation_drives_warnings_and_persists() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    // A 1.0 m shot is not short under the default 0.4 m minimum.
+    // A 1.0 m shot is not short under the default 0.3 m minimum.
     assert!(validation::get_project_warnings(state(&app))
         .iter()
         .all(|w| w.code != "SHORT_SHOT"));
@@ -2378,7 +2378,7 @@ fn test_update_project_settings_is_undoable() {
     assert_success(&history::undo(state(&app)));
     let reverted = state(&app).get_project_state().unwrap();
     assert_eq!(reverted.name, "Test Cave");
-    assert_eq!(reverted.validation.warn_shot_length_min, 0.4);
+    assert_eq!(reverted.validation.warn_shot_length_min, 0.3);
 }
 
 #[test]
