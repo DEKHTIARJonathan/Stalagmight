@@ -291,6 +291,10 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
 
   const finish = useCallback(async () => {
     await refreshProjectState();
+    // Persist after orphan placement (#92): import + orphan-merge changes are
+    // otherwise held in memory only (deferred initial save, no dirty flag), so
+    // the project would show "saved" yet never reach disk or Recent Projects.
+    await useProjectStore.getState().saveAfterImport();
     trackDialogComplete('orphan-placement');
     closeDialog();
     setView('single');

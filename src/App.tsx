@@ -646,6 +646,11 @@ function App() {
                 // Non-fatal: proceed without orphan detection
               }
             }
+            // Persist the freshly-imported project (#92): imports bypass the
+            // dirty/save machinery and a new project's initial save is deferred,
+            // so without this the import is never written to disk or added to
+            // Recent Projects despite the UI showing "saved".
+            await useProjectStore.getState().saveAfterImport();
             closeDialog();
             setView('single');
             triggerFitToBounds();

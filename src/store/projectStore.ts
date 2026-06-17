@@ -215,6 +215,15 @@ interface ProjectStore {
    * leave it `false` (the default) so the .tml is always written.
    */
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
+  /**
+   * Persist the project after a DMP import completes (#92). Imports bypass
+   * `executeCommand` (so the project is never marked dirty) and a new project's
+   * initial save is deferred, so without an explicit save the import is never
+   * written to disk or added to Recent Projects. Swallows errors so a save
+   * failure never blocks the post-import navigation — `saveProject` surfaces its
+   * own feedback.
+   */
+  saveAfterImport: () => Promise<void>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
@@ -936,6 +945,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       await get().checkProjectIntegrity();
     }
     return result;
+  },
+
+  saveAfterImport: async () => {
+    try {
+      await get().saveProject();
+    } catch (e) {
+      // saveProject surfaces its own errors; never block import navigation.
+      console.error('[import] save after import failed:', e);
+    }
   },
 
   closeProject: async () => {
