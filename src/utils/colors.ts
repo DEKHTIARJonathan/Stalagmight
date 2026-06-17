@@ -1,12 +1,23 @@
 /**
+ * Traffic-light severity palette. Single source of truth for the
+ * green / yellow / orange / red used by closure-error coloring
+ * (getErrorColor) and the map's Issue-severity Display mode
+ * (src/utils/themeColors.ts). Keep as literals here; consumers import.
+ */
+export const SEVERITY_GREEN = '#22c55e';
+export const SEVERITY_YELLOW = '#eab308';
+export const SEVERITY_ORANGE = '#f97316';
+export const SEVERITY_RED = '#ef4444';
+
+/**
  * Get color for closure error percentage severity.
  * Green (<1%), Yellow (1-3%), Orange (3-5%), Red (>5%)
  */
 export function getErrorColor(errorPct: number): string {
-  if (errorPct < 1) return '#22c55e';
-  if (errorPct < 3) return '#eab308';
-  if (errorPct < 5) return '#f97316';
-  return '#ef4444';
+  if (errorPct < 1) return SEVERITY_GREEN;
+  if (errorPct < 3) return SEVERITY_YELLOW;
+  if (errorPct < 5) return SEVERITY_ORANGE;
+  return SEVERITY_RED;
 }
 
 /**

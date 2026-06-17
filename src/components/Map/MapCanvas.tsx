@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, sta
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
-import type { BatchCommand } from '../../types/commands';
+import type { BatchCommand, ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
@@ -42,6 +42,11 @@ import { debugLog } from '../../utils/debugLog';
 
 // Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
+
+// Stable empty warnings array fed to the survey-layer rebuild effect when
+// Issue-severity coloring is OFF. Module-level so its identity never changes
+// across renders — a per-render [] would defeat the rebuild-gating memo below.
+const EMPTY_WARNINGS: ProjectWarning[] = [];
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -418,6 +423,17 @@ export default function MapCanvas() {
     // leave-tool cleanup below reads it via getState() instead.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
+  );
+
+  // Gate the survey-layer rebuild on Issue-severity coloring. `warnings` changes
+  // identity on every refreshWarnings (each edit/resolve/ignore), but warnings
+  // only affect map geometry/colors when severity coloring is ON. Feeding the
+  // rebuild effect this memo (real warnings when ON, a stable shared [] when OFF)
+  // means warning-only refreshes no longer trigger a full GeoJSON rebuild while
+  // severity is OFF. Toggling severity flips the identity, firing one rebuild.
+  const severityWarnings = useMemo(
+    () => (showIssueSeverity ? warnings : EMPTY_WARNINGS),
+    [showIssueSeverity, warnings]
   );
 
   const alignedClosureIds = useMemo(() => {
@@ -1662,10 +1678,10 @@ export default function MapCanvas() {
         depthRange,
         precision,
         showIssueSeverity,
-        warnings
+        severityWarnings
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, showIssueSeverity, warnings]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, showIssueSeverity, severityWarnings]);
 
   // Warnings-tab auto-switch (#22): opening the Warnings tab temporarily flips
   // the map into Issue-severity coloring (gated by the global setting), then
