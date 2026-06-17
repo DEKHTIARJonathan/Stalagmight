@@ -53,6 +53,9 @@ interface ResolutionOption {
   label: string;
   /** Optional formatted preview value shown after the label, e.g. "(57.0°)". */
   detail?: string | undefined;
+  /** Extra context shown below the option only while it is selected (like the
+   *  inline manual editors), e.g. the inclination a length was derived from. */
+  selectedNote?: string | undefined;
   /** Disabled (frozen / closure-adjusted view) — applies to data fixes. */
   disabled?: boolean;
   /** Reveals an inline editor when selected. */
@@ -183,7 +186,7 @@ export function WarningResolution({
           // Default: shortest valid length is the vertical change (vertical shot).
           { id: 'length-from-depth', label: t('detailPanel.warnings.resolveOptions.lengthFromDepth'), detail: len(Math.abs(dz)), disabled: geometryDisabled },
           ...(lengthFromIncl !== null && recorded !== null
-            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.lengthFromInclination'), detail: `${formatFixed(recorded, undefined, precision.inclination)}° → ${len(lengthFromIncl)}`, disabled: geometryDisabled }]
+            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.lengthFromInclination'), detail: len(lengthFromIncl), selectedNote: t('detailPanel.warnings.fromInclinationNote', { value: formatFixed(recorded, undefined, precision.inclination) }), disabled: geometryDisabled }]
             : []),
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
           ignore,
@@ -207,7 +210,7 @@ export function WarningResolution({
         return [
           // Default: trust the recorded inclination, adjust the length to match.
           ...(lengthFromIncl !== null && recorded !== null
-            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.adjustLength'), detail: `${formatFixed(recorded, undefined, precision.inclination)}° → ${len(lengthFromIncl)}`, disabled: geometryDisabled }]
+            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.adjustLength'), detail: len(lengthFromIncl), selectedNote: t('detailPanel.warnings.fromInclinationNote', { value: formatFixed(recorded, undefined, precision.inclination) }), disabled: geometryDisabled }]
             : []),
           { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.adjustInclination'), detail: `${formatFixed(implied, undefined, precision.inclination)}°`, disabled: geometryDisabled },
           ...(splitLength !== null && midPitch !== null
@@ -620,6 +623,13 @@ export function WarningResolution({
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+              {/* Extra context (e.g. the inclination used), shown only while
+                  this option is selected — mirrors the inline manual editors. */}
+              {selected === opt.id && opt.selectedNote && (
+                <div className="pl-6 pr-1 pb-1 text-xs text-text-secondary" data-testid={`warning-resolution-note-${opt.id}`}>
+                  {opt.selectedNote}
                 </div>
               )}
             </div>
