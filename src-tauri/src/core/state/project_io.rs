@@ -561,13 +561,41 @@ impl AppState {
             }
         }
 
-        // Close the database before renaming
+        // Close the temp database before renaming
         drop(db);
+
+        // Close our own persistent connection to the destination BEFORE the
+        // rename. Windows refuses to rename a file over a destination that
+        // still has an open handle: SQLite's Connection opens the file without
+        // FILE_SHARE_DELETE, so MoveFileEx(REPLACE_EXISTING) fails with
+        // "Access is denied" (os error 5). Unix renames over an open file fine
+        // (the live handle keeps pointing at the old inode), which is why this
+        // only bit Windows. We reopen below — at save_path on success (existing
+        // logic), or at the prior path here if the rename fails — so the
+        // session keeps a working connection either way.
+        let closed_open_db = self
+            .database
+            .lock()
+            .map(|mut db| db.take().is_some())
+            .unwrap_or(false);
 
         // Atomically rename temp file to final destination
         // This is safe: if rename fails, original file is untouched
         if let Err(e) = std::fs::rename(&temp_path, &save_path) {
             let _ = std::fs::remove_file(&temp_path);
+            // The destination is untouched. If we just closed our live
+            // connection, reopen the previously-open project so subsequent
+            // saves, undo persistence, and the implicit-save overwrite guard
+            // keep working instead of operating with no open database.
+            if closed_open_db {
+                if let Some(prev_path) = project.file_path.clone() {
+                    if let Ok(reopened) = Database::open(&prev_path) {
+                        if let Ok(mut database) = self.database.lock() {
+                            *database = Some(reopened);
+                        }
+                    }
+                }
+            }
             let e = anyhow::Error::from(e);
             tracing::error!(
                 error = %e,
