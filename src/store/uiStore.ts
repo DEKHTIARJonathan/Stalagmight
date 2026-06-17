@@ -399,7 +399,11 @@ export const useUIStore = create<UIStore>((set) => ({
     if (view === 'single') {
       void advanceProjectSeq();
     }
-    set({ view });
+    // Dev stats is a single-view developer overlay — the Display toggle that
+    // controls it lives only in SingleSystemView, but <MemoryProbe/> is mounted
+    // app-wide. Reset it on the way back to GlobalView so the probe (and its 2 s
+    // memory-IPC poll) can't strand there with no in-view way to hide it.
+    set(view === 'global' ? { view, showDevStats: DISPLAY_DEFAULTS.showDevStats } : { view });
   },
 
   // Tool state
