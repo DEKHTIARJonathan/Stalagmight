@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -217,6 +218,17 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   const resolvedCount = warnings.length - unresolvedCount;
   const displayedWarnings = showResolved ? warnings : unresolvedWarnings;
 
+  // Virtualize the list so a large warning set (hundreds+) doesn't mount every
+  // row — only the visible window renders, and a refreshWarnings() after each
+  // resolve step reconciles a handful of rows instead of the whole list.
+  const listParentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: displayedWarnings.length,
+    getScrollElement: () => listParentRef.current,
+    estimateSize: () => 56,
+    overscan: 8,
+  });
+
   // The warning currently under resolution, resolved against live project data
   // so it reflects edits applied earlier in a "Resolve all" pass.
   const activeWarning = flow.kind === 'resolve' ? flow.queue[flow.index] : undefined;
@@ -380,8 +392,8 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   }
 
   return (
-    <div className="p-2" data-testid="warnings-content">
-      <div className="flex items-center justify-between mb-2 px-2">
+    <div className="p-2 h-full flex flex-col" data-testid="warnings-content">
+      <div className="flex items-center justify-between mb-2 px-2 shrink-0">
         <span className="text-sm text-text-secondary">
           {t('detailPanel.warnings.count', {
             count: unresolvedCount,
@@ -413,17 +425,27 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
           )}
         </div>
       </div>
-      <div className="space-y-1" role="list" aria-label={t('detailPanel.tabs.warnings')}>
-        {displayedWarnings.map((warning, index) => (
-          <div
-            key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
-            role="listitem"
-            className={`
+      <div ref={listParentRef} className="flex-1 min-h-0 overflow-auto" role="list" aria-label={t('detailPanel.tabs.warnings')}>
+        <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+          {rowVirtualizer.getVirtualItems().map((vItem) => {
+            const warning = displayedWarnings[vItem.index]!;
+            const index = vItem.index;
+            return (
+            <div
+              key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
+              data-index={index}
+              ref={rowVirtualizer.measureElement}
+              role="listitem"
+              className="absolute left-0 w-full pb-1"
+              style={{ transform: `translateY(${vItem.start}px)` }}
+            >
+            <div
+              className={`
               p-2 rounded transition-colors flow-root
               ${warning.isResolved ? 'opacity-50' : ''}
               hover:bg-background-50
             `}
-          >
+            >
             {/* Action button floats right so the warning text wraps around it
                 (issue #57) instead of the button reserving its own column. */}
             {warning.isResolved ? (
@@ -520,8 +542,11 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 />
               </div>
             )}
-          </div>
-        ))}
+            </div>
+            </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

@@ -476,6 +476,33 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
   });
 
+  test('virtualizes the warnings list (only a window of rows is in the DOM)', async ({ page }) => {
+    await createProject(page, 'Warnings Virtualization Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+    const many = Array.from({ length: 200 }, (_, i) => ({
+      sectionId,
+      shotId: shotIds[i % shotIds.length]!,
+      shotIndex: i % shotIds.length,
+      code: 'AZIMUTH_DEVIATION',
+      message: `Shot ${sectionId}:${(i % shotIds.length) + 1} azimuth in/out difference #${i}`,
+      severity: 'warning' as const,
+      isResolved: false,
+    }));
+    await injectWarnings(page, many);
+
+    await page.getByTestId('detail-tab-warnings').click();
+    await expect(page.getByTestId('warnings-content')).toBeVisible();
+    // With 200 warnings the virtualizer mounts only the visible window, not all
+    // rows — so far fewer Resolve buttons are in the DOM than warnings.
+    const rendered = await page.getByTestId('resolve-warning').count();
+    expect(rendered).toBeGreaterThan(0);
+    expect(rendered).toBeLessThan(many.length);
+  });
+
   test('clicking the data-table warning indicator opens Warnings and the resolve view', async ({ page }) => {
     await createProject(page, 'Table Warning Resolve Test');
     await seedProjectWithSections(page, sectionSeeds);
