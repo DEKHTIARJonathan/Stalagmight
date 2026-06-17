@@ -1051,7 +1051,8 @@
       "saveFailed": "Failed to save project settings.",
       "tabs": {
         "general": "General",
-        "validation": "Validation"
+        "validation": "Validation",
+        "experimental": "Experimental"
       },
       "name": {
         "label": "Project name",

@@ -31,6 +31,10 @@ test.describe('Project Settings', () => {
     // General tab shows the project name.
     await expect(page.getByTestId('project-settings-name')).toHaveValue('Proj Settings');
 
+    // Experimental tab hosts the Ariane collaboration toggle (moved here).
+    await page.getByTestId('project-settings-tab-experimental').click();
+    await expect(page.getByTestId('toggle-collaboration')).toBeVisible();
+
     // Validation tab exposes the same thresholds as the global settings.
     await page.getByTestId('project-settings-tab-validation').click();
     const minInput = page.getByTestId('input-shot-length-min');

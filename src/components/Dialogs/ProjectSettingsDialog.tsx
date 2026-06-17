@@ -3,17 +3,17 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { DialogWrapper } from './DialogWrapper';
 import { ValidationSettings } from './settings/ValidationSettings';
+import { CollaborationSection } from './settings/CollaborationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
 import type { SettingsCategory } from './SettingsSidebar';
-import { getPanelId, getTabId } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig, type Config } from '../../types/config';
 
-type ProjectSettingsTab = 'general' | 'validation';
-const TABS: readonly ProjectSettingsTab[] = ['general', 'validation'];
+type ProjectSettingsTab = 'general' | 'validation' | 'experimental';
+const TABS: readonly ProjectSettingsTab[] = ['general', 'validation', 'experimental'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
 
 /** Mirrors the range checks in the global Settings dialog. Computed directly
@@ -46,6 +46,11 @@ export function ProjectSettingsDialog() {
     useShallow((s) => ({ project: s.project, globalConfig: s.config, updateProjectSettings: s.updateProjectSettings })),
   );
   const panelIdBase = useId();
+  // Same id format as SettingsSidebar's getTabId/getPanelId, but accepting the
+  // project-only 'experimental' tab. The validation tab's ids therefore still
+  // match what ValidationSettings emits for its aria-labelledby/panel id.
+  const tabId = (tk: ProjectSettingsTab) => `${panelIdBase}-tab-${tk}`;
+  const panelId = (tk: ProjectSettingsTab) => `${panelIdBase}-panel-${tk}`;
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
   const [name, setName] = useState(project?.name ?? '');
@@ -93,7 +98,7 @@ export function ProjectSettingsDialog() {
       fixedSize={{ width: 'min(720px, 95vw)', height: 'clamp(420px, 75vh, 760px)' }}
       closeOnBackdropClick={false}
       overflow="hidden"
-      bodyClassName="flex flex-col"
+      bodyClassName="flex flex-col flex-1 min-h-0"
       data-testid="project-settings-dialog"
     >
       {!project ? (
@@ -106,10 +111,10 @@ export function ProjectSettingsDialog() {
               {TABS.map((tk) => (
                 <button
                   key={tk}
-                  id={getTabId(panelIdBase, tk)}
+                  id={tabId(tk)}
                   role="tab"
                   aria-selected={tab === tk}
-                  aria-controls={getPanelId(panelIdBase, tk)}
+                  aria-controls={panelId(tk)}
                   onClick={() => setTab(tk)}
                   className={`w-full text-left px-3 py-1.5 rounded text-sm ${tab === tk ? 'bg-accent-10 text-text-primary' : 'text-text-secondary hover:bg-background-50'}`}
                   data-testid={`project-settings-tab-${tk}`}
@@ -120,26 +125,27 @@ export function ProjectSettingsDialog() {
             </div>
 
             <div className="flex-1 min-w-0 overflow-auto p-4">
-              {tab === 'general' ? (
-                <div role="tabpanel" id={getPanelId(panelIdBase, 'general')} aria-labelledby={getTabId(panelIdBase, 'general')}>
-                <SettingsSection title={t('dialogs.projectSettings.tabs.general')}>
-                  <SettingRow
-                    label={t('dialogs.projectSettings.name.label')}
-                    helpText={t('dialogs.projectSettings.name.help')}
-                    data-testid="project-settings-name-row"
-                  >
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      className="w-64 px-2 py-1 bg-background border border-border rounded text-sm"
-                      aria-label={t('dialogs.projectSettings.name.label')}
-                      data-testid="project-settings-name"
-                    />
-                  </SettingRow>
-                </SettingsSection>
+              {tab === 'general' && (
+                <div role="tabpanel" id={panelId('general')} aria-labelledby={tabId('general')}>
+                  <SettingsSection title={t('dialogs.projectSettings.tabs.general')}>
+                    <SettingRow
+                      label={t('dialogs.projectSettings.name.label')}
+                      helpText={t('dialogs.projectSettings.name.help')}
+                      data-testid="project-settings-name-row"
+                    >
+                      <input
+                        type="text"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-64 px-2 py-1 bg-background border border-border rounded text-sm"
+                        aria-label={t('dialogs.projectSettings.name.label')}
+                        data-testid="project-settings-name"
+                      />
+                    </SettingRow>
+                  </SettingsSection>
                 </div>
-              ) : (
+              )}
+              {tab === 'validation' && (
                 <ValidationSettings
                   config={syntheticConfig}
                   onChange={handleConfigChange}
@@ -149,6 +155,13 @@ export function ProjectSettingsDialog() {
                   scope="project"
                   defaults={globalConfig?.validation ?? defaultConfig.validation}
                 />
+              )}
+              {tab === 'experimental' && (
+                <div role="tabpanel" id={panelId('experimental')} aria-labelledby={tabId('experimental')}>
+                  <SettingsSection title={t('dialogs.projectSettings.tabs.experimental')}>
+                    <CollaborationSection project={project} />
+                  </SettingsSection>
+                </div>
               )}
             </div>
           </div>
