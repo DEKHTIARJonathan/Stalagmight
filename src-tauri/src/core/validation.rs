@@ -194,7 +194,9 @@ impl Validator {
                 };
                 if let Some(recorded) = recorded_pitch {
                     let horizontal = (shot.length * shot.length - dz * dz).max(0.0).sqrt();
-                    let computed = dz.atan2(horizontal).to_degrees();
+                    // Pitch is positive-upward (depth decreasing), matching the
+                    // recorded convention, so compute from (depth_in - depth_out) = -dz.
+                    let computed = (-dz).atan2(horizontal).to_degrees();
                     if (computed - recorded).abs() > config.pitch_diff_threshold {
                         warnings.push(ValidationWarning {
                             code: "INCLINATION_DEPTH_MISMATCH".to_string(),
@@ -791,14 +793,16 @@ mod tests {
             ..Default::default()
         };
 
-        // Recorded 10° vs implied ~30° → 20° apart, flagged.
-        let mismatched = ShotData { pitch_in: Some(10.0), pitch_out: Some(10.0), ..base.clone() };
+        // Descending 5m over a 10m slope → implied pitch ≈ -30° (positive is
+        // upward / depth decreasing, matching the recorded pitch convention).
+        // Recorded -10° vs implied ~-30° → 20° apart, flagged.
+        let mismatched = ShotData { pitch_in: Some(-10.0), pitch_out: Some(-10.0), ..base.clone() };
         assert!(Validator::validate_shot(&mismatched, &config, 0, 0)
             .iter()
             .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH"));
 
-        // Recorded ~30° matches the geometry → not flagged.
-        let consistent = ShotData { pitch_in: Some(30.0), pitch_out: Some(30.0), ..base.clone() };
+        // Recorded ~-30° matches the geometry → not flagged.
+        let consistent = ShotData { pitch_in: Some(-30.0), pitch_out: Some(-30.0), ..base.clone() };
         assert!(Validator::validate_shot(&consistent, &config, 0, 0)
             .iter()
             .all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"));

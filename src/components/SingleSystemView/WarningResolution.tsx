@@ -159,18 +159,31 @@ export function WarningResolution({
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'lrud', disabled: geometryReadOnly },
           ignore,
         ];
-      case 'LENGTH_BELOW_DEPTH_CHANGE':
+      case 'LENGTH_BELOW_DEPTH_CHANGE': {
+        const dz = shot.depth_out - shot.depth_in;
+        const recorded = recordedPitch(shot);
+        const sinP = recorded === null ? null : Math.sin((recorded * Math.PI) / 180);
+        const lengthFromIncl = sinP !== null && Math.abs(sinP) > 1e-6 ? Math.abs(dz) / Math.abs(sinP) : null;
         return [
+          // Default: shortest valid length is the vertical change (vertical shot).
+          { id: 'length-from-depth', label: t('detailPanel.warnings.resolveOptions.lengthFromDepth'), detail: len(Math.abs(dz)), disabled: geometryDisabled },
+          ...(lengthFromIncl !== null
+            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.lengthFromInclination'), detail: len(lengthFromIncl), disabled: geometryDisabled }]
+            : []),
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
           ignore,
         ];
+      }
       case 'INCLINATION_DEPTH_MISMATCH': {
+        // Pitch is positive-upward (depth decreasing), so the inclination implied
+        // by the depth change uses (depth_in - depth_out) = -dz, and the depth
+        // implied by the recorded pitch subtracts length·sin(pitch).
         const dz = shot.depth_out - shot.depth_in;
         const horiz = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
-        const computedPitch = (Math.atan2(dz, horiz) * 180) / Math.PI;
+        const computedPitch = (Math.atan2(-dz, horiz) * 180) / Math.PI;
         const recorded = recordedPitch(shot);
         const depthFromIncl =
-          recorded === null ? undefined : dep(shot.depth_in + shot.length * Math.sin((recorded * Math.PI) / 180));
+          recorded === null ? undefined : dep(shot.depth_in - shot.length * Math.sin((recorded * Math.PI) / 180));
         return [
           { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.useDepth'), detail: `${formatFixed(computedPitch, undefined, precision.inclination)}°`, disabled: geometryDisabled },
           { id: 'depth-from-incl', label: t('detailPanel.warnings.resolveOptions.useInclination'), detail: depthFromIncl, disabled: geometryDisabled },
@@ -357,18 +370,32 @@ export function WarningResolution({
         break;
       case 'incl-from-depth': {
         // Trust the depth: recompute the inclination from length + depth change.
+        // Pitch is positive-upward, so use (depth_in - depth_out) = -dz.
         const dz = shot.depth_out - shot.depth_in;
         const horiz = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
-        const p = (Math.atan2(dz, horiz) * 180) / Math.PI;
+        const p = (Math.atan2(-dz, horiz) * 180) / Math.PI;
         patch.pitch_in = p;
         patch.pitch_out = p;
         break;
       }
       case 'depth-from-incl': {
         // Trust the inclination: recompute the depth change from length + pitch.
+        // Positive pitch means depth decreases, so subtract length·sin(pitch).
         const recorded = recordedPitch(shot);
         if (recorded === null) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-        patch.depth_out = shot.depth_in + shot.length * Math.sin((recorded * Math.PI) / 180);
+        patch.depth_out = shot.depth_in - shot.length * Math.sin((recorded * Math.PI) / 180);
+        break;
+      }
+      case 'length-from-depth':
+        // Shortest valid slope length is the vertical change itself (vertical shot).
+        patch.length = Math.abs(shot.depth_out - shot.depth_in);
+        break;
+      case 'length-from-incl': {
+        // |depth change| = length·sin(pitch) → length = |dz| / |sin(pitch)|.
+        const recorded = recordedPitch(shot);
+        const sinP = recorded === null ? 0 : Math.sin((recorded * Math.PI) / 180);
+        if (Math.abs(sinP) < 1e-6) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
+        patch.length = Math.abs(shot.depth_out - shot.depth_in) / Math.abs(sinP);
         break;
       }
       case 'lrud-abs':
