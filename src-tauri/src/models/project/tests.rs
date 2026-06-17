@@ -4425,7 +4425,7 @@ fn solve_reduced_laplacian_matches_dense() {
         let mut diag_x = vec![0.0; n];
         let mut diag_y = vec![0.0; n];
 
-        let mut add_edge = |a: usize, b: usize, seed: &mut u64,
+        let add_edge = |a: usize, b: usize, seed: &mut u64,
                             adj: &mut Vec<Vec<(usize, f64, f64)>>,
                             dx: &mut Vec<f64>, dy: &mut Vec<f64>| {
             let wx = 0.5 + next(seed);
