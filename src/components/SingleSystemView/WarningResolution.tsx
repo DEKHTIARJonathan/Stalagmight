@@ -56,6 +56,8 @@ interface ResolutionOption {
   /** Extra context shown below the option only while it is selected (like the
    *  inline manual editors), e.g. the inclination a length was derived from. */
   selectedNote?: string | undefined;
+  /** Destructive option (e.g. delete the shot) — rendered in red. */
+  danger?: boolean | undefined;
   /** Disabled (frozen / closure-adjusted view) — applies to data fixes. */
   disabled?: boolean;
   /** Reveals an inline editor when selected. */
@@ -94,10 +96,11 @@ export function WarningResolution({
 }: WarningResolutionProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { updateShot, removeZeroDatum, resolveWarning, isShotFrozen } = useProjectStore(
+  const { updateShot, removeZeroDatum, deleteShot, resolveWarning, isShotFrozen } = useProjectStore(
     useShallow((s) => ({
       updateShot: s.updateShot,
       removeZeroDatum: s.removeZeroDatum,
+      deleteShot: s.deleteShot,
       resolveWarning: s.resolveWarning,
       isShotFrozen: s.isShotFrozen,
     })),
@@ -157,12 +160,19 @@ export function WarningResolution({
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'azimuthInOut', disabled: geometryDisabled },
           ignore,
         ];
-      case 'ZERO_LENGTH':
-      case 'NEGATIVE_LENGTH':
-      case 'SHORT_SHOT':
       case 'LONG_SHOT':
         return [
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
+          ignore,
+        ];
+      case 'ZERO_LENGTH':
+      case 'NEGATIVE_LENGTH':
+      case 'SHORT_SHOT':
+        // Failing the minimum-length test: correct the length, delete the shot
+        // (a spurious too-short segment is often best removed), or ignore.
+        return [
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
+          { id: 'delete-shot', label: t('detailPanel.warnings.resolveOptions.deleteShot'), disabled: geometryReadOnly, danger: true },
           ignore,
         ];
       case 'LARGE_DEPTH_CHANGE':
@@ -399,6 +409,12 @@ export function WarningResolution({
       return result.success ? 'resolved' : 'failed';
     }
 
+    if (opt.id === 'delete-shot') {
+      const result = await deleteShot(warning.sectionId, warning.shotId);
+      if (!result.success) showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
+      return result.success ? 'resolved' : 'failed';
+    }
+
     // Data fixes via the undoable update_shot command.
     const patch: Partial<ShotUpdates> = {};
     switch (opt.id) {
@@ -590,7 +606,7 @@ export function WarningResolution({
                   onChange={() => setSelected(opt.id)}
                   data-testid={`warning-resolution-option-${opt.id}`}
                 />
-                <span>
+                <span className={opt.danger ? 'text-error font-medium' : undefined}>
                   {opt.label}
                   {opt.detail && <span className="text-text-secondary"> ({opt.detail})</span>}
                 </span>

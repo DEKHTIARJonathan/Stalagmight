@@ -1414,6 +1414,7 @@
         "manual": "Manual correction",
         "manualLength": "Set length",
         "manualDepth": "Set depths",
+        "deleteShot": "Delete this shot",
         "normalize": "Normalize to 0–360°",
         "useAbs": "Use absolute value",
         "clear": "Clear value",

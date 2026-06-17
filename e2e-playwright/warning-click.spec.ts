@@ -476,6 +476,35 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
   });
 
+  test('short shot offers a delete-shot resolution', async ({ page }) => {
+    await createProject(page, 'Short Shot Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'SHORT_SHOT',
+        message: 'Shot 1:1 length 0.2m below minimum threshold 0.3m',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+    await page.getByTestId('resolve-warning').first().click();
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    // A shot failing the minimum-length test offers Set length, Delete this shot,
+    // and Ignore. "Set length" is the default (first enabled); delete is offered.
+    await expect(page.getByTestId('warning-resolution-option-manual')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-delete-shot')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
+  });
+
   test('virtualizes the warnings list (only a window of rows is in the DOM)', async ({ page }) => {
     await createProject(page, 'Warnings Virtualization Test');
     await seedProjectWithSections(page, sectionSeeds);
