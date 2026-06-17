@@ -47,6 +47,7 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src/components/GlobalView/MetadataPanel.tsx` | System metadata display with aggregate stats |
 | `src/utils/coordinates.ts` | Coordinate transforms (meters ↔ GPS) |
 | `src/utils/tileProtocol.ts` | MapLibre tile protocol for caching |
+| `src/utils/tileConfig.ts` | Tile source config; platform-specific `stalagmight-tiles` URL form |
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
@@ -192,6 +193,31 @@ GlobalSurveyLayer.ts
     ├── Applies search filter via setSearchFilter()
     └── Updates selection highlighting via setSelectedSystems()
 ```
+
+### Tile Protocol (cross-platform)
+
+Map tiles route through the `stalagmight-tiles` custom protocol, served by the
+Rust handler registered in `src-tauri/src/lib.rs` via
+`register_asynchronous_uri_scheme_protocol` (SQLite caching + offline support).
+The frontend builds the MapLibre source URL in `src/utils/tileConfig.ts`
+(`getTileConfig`).
+
+The URL form **differs by platform** — this is a required gotcha, not a
+preference:
+
+| Platform | Tile URL template |
+|----------|-------------------|
+| macOS / Linux (WRY) | `stalagmight-tiles://<provider>/{z}/{y}/{x}` (provider = host) |
+| **Windows (WebView2)** | `http://stalagmight-tiles.localhost/<provider>/{z}/{y}/{x}` (provider in path) |
+| Android | `stalagmight-tiles://<provider>/{z}/{y}/{x}` via MapLibre `addProtocol` (see `tileProtocol.ts`) |
+
+**Why:** WebView2 cannot navigate a bare custom URI scheme, so it serves
+Tauri-registered protocols only under `http://<scheme>.localhost/...`. Using the
+bare `stalagmight-tiles://` scheme on Windows means requests never reach the Rust
+handler and **tiles silently fail to load** (no error, just blank tiles) while
+macOS/Linux work fine. The Rust `parse_tile_uri` accepts both host-based and
+path-based forms, so only the frontend URL needs to branch on platform
+(`navigator.userAgent.includes('Windows')`).
 
 ### View Mode Toggle
 
