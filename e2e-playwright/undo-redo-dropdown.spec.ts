@@ -308,14 +308,10 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover to open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
       await expect(dropdown).toBeVisible();
 
       // Move mouse away from dropdown
       await page.mouse.move(0, 0);
-
-      // Wait for close delay buffer
-      await page.waitForTimeout(200);
 
       // Dropdown should close
       await expect(dropdown).not.toBeVisible({ timeout: 1000 });
@@ -329,7 +325,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover to open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
       await expect(dropdown).toBeVisible();
 
       // Click item at index 2
@@ -351,7 +346,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover to open dropdown
       await redoButton.hover();
-      await page.waitForTimeout(400);
 
       // Click first item
       const item = page.getByTestId('toolbar-redo-button-item-0');
@@ -491,7 +485,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Open dropdown via hover
       await undoButton.hover();
-      await page.waitForTimeout(400);
       await expect(dropdown).toBeVisible();
 
       // Press Escape
@@ -508,7 +501,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover to open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       // Hover over first item (which has previewData)
       const firstItem = page.getByTestId('toolbar-undo-button-item-0');
@@ -530,7 +522,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover to open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       // Hover over item at index 3 (merge_stations with info-only newValue fields)
       const item = page.getByTestId('toolbar-undo-button-item-3');
@@ -554,7 +545,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover to open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       // Hover over item at index 2 (delete_shot with old values)
       const item = page.getByTestId('toolbar-undo-button-item-2');
@@ -593,7 +583,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Re-open dropdown to pick up new mock data
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       const item = page.getByTestId('toolbar-undo-button-item-0');
       await expect(item).toBeVisible();
@@ -638,7 +627,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Re-open dropdown to pick up new mock data
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       const item = page.getByTestId('toolbar-undo-button-item-0');
       await expect(item).toBeVisible();
@@ -675,7 +663,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Re-open dropdown to pick up new mock data
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       const item = page.getByTestId('toolbar-undo-button-item-0');
       await expect(item).toBeVisible();
@@ -715,6 +702,7 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Hover should not open dropdown on disabled button
       await undoButton.hover({ force: true });
+      // Give a (buggy) dropdown time to open before asserting it didn't.
       await page.waitForTimeout(400);
 
       // Dropdown should not appear
@@ -728,7 +716,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
       await expect(dropdown).toBeVisible();
 
       // Press Ctrl+Z (ensure focus is NOT in a text input)
@@ -745,7 +732,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
       await expect(dropdown).toBeVisible();
 
       // Press Ctrl+Y (ensure focus is NOT in a text input)
@@ -761,7 +747,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       // Find item at index 3 which has null timestamp
       const item = page.getByTestId('toolbar-undo-button-item-3');
@@ -790,7 +775,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Open dropdown
       await undoButton.hover();
-      await page.waitForTimeout(400);
 
       const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
       await expect(dropdown).toBeVisible();
@@ -814,7 +798,6 @@ test.describe('Undo/Redo History Dropdown', () => {
 
       // Open dropdown
       await redoButton.hover();
-      await page.waitForTimeout(400);
 
       const dropdown = page.getByTestId('toolbar-redo-button-dropdown');
       await expect(dropdown).toBeVisible();
