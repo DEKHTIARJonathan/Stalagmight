@@ -1,4 +1,4 @@
-import type { CrossSectionSuggestion, DmpSection } from '../types/commands';
+import type { CrossSectionSuggestion, DmpSection, SuggestionConfidence } from '../types/commands';
 import type { DistanceField, StationRef } from '../types/project';
 import type { VirtualConnection } from './segmentContext';
 
@@ -11,11 +11,12 @@ export const TEMPORAL_BEAM_WIDTH = 100;
 export const TEMPORAL_CANDIDATES_PER_SECTION = 10;
 
 /**
- * Confidence tiers, best first. Temporal reranking is confined within a tier so
- * a feasible higher-confidence suggestion is never demoted below a lower one (#101).
+ * Confidence tiers, best first. Used to surface the highest-confidence feasible
+ * candidate first *within* each import section, so temporal planning can't demote
+ * a feasible higher-confidence suggestion below a lower one (#101). Typed to the
+ * generated union so tsc flags it if the IPC enum gains/renames a tier.
  */
-const CONFIDENCE_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
-const CONFIDENCE_RANK_FALLBACK = 3;
+const CONFIDENCE_RANK: Record<SuggestionConfidence, number> = { high: 0, medium: 1, low: 2 };
 
 type DmpTiming = {
   sectionIndex: number;
@@ -441,20 +442,7 @@ export function rerankSuggestionsByTemporalPlan(
     return true;
   });
 
-  // #101: temporal planning may reorder candidates only *within* a confidence
-  // tier — it must never surface a lower-confidence connection ahead of a
-  // feasible higher-confidence one. The plan's `rankStates` weighs `checkedPairs`
-  // above geometry, so a weak import-to-import chain link (e.g. AC3→AC2, Low)
-  // that "explains" a temporal adjacency outranks a strong existing-section
-  // match (AC3→Mainline 2, High) and becomes the plan's firstSuggestion. Sorting
-  // by tier first keeps temporal tie-breaking for comparable candidates while
-  // preventing that High→Low inversion. Feasibility filtering above is unchanged.
-  const tierOf = (s: CrossSectionSuggestion): number =>
-    CONFIDENCE_RANK[s.confidence] ?? CONFIDENCE_RANK_FALLBACK;
-
   feasible.sort((a, b) => {
-    const tierDelta = tierOf(a) - tierOf(b);
-    if (tierDelta !== 0) return tierDelta;
     const ai = bestFirstKeys.indexOf(keyFor(a));
     const bi = bestFirstKeys.indexOf(keyFor(b));
     if (ai !== -1 || bi !== -1) {
@@ -465,7 +453,36 @@ export function rerankSuggestionsByTemporalPlan(
     return b.score - a.score;
   });
 
-  return { suggestions: feasible, rejectedCount };
+  // #101: within each import section, surface the highest-confidence feasible
+  // candidate first — but do NOT disturb the temporal plan's cross-section order
+  // (the plan still chooses which section leads). The plan's `rankStates` weighs
+  // `checkedPairs` above geometry, so a weak import-to-import link (e.g. AC3→AC2,
+  // Low) that "explains" a temporal adjacency can become a section's first
+  // suggestion over a strong existing-section match (AC3→Mainline 2, High). A
+  // *global* confidence sort would over-correct, letting an unrelated
+  // high-confidence section jump ahead of a low/medium link the plan chose to
+  // satisfy a temporal pair. Grouping by section and stably reordering within
+  // each group fixes the same-section High→Low inversion without touching section
+  // order. Array.sort is stable, so same-tier candidates keep their plan/score order.
+  const tierOf = (s: CrossSectionSuggestion): number => CONFIDENCE_RANK[s.confidence];
+  const groups = new Map<number, CrossSectionSuggestion[]>();
+  const sectionOrder: number[] = [];
+  for (const s of feasible) {
+    let group = groups.get(s.importSectionIndex);
+    if (!group) {
+      group = [];
+      groups.set(s.importSectionIndex, group);
+      sectionOrder.push(s.importSectionIndex);
+    }
+    group.push(s);
+  }
+  const ordered = sectionOrder.flatMap((idx) => {
+    const group = groups.get(idx)!;
+    group.sort((a, b) => tierOf(a) - tierOf(b));
+    return group;
+  });
+
+  return { suggestions: ordered, rejectedCount };
 }
 
 export function collectExistingAnchorsForTemporalRerank(
