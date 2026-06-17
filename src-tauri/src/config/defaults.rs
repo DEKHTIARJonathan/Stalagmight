@@ -166,7 +166,8 @@ impl Default for ValidationConfig {
             warn_depth_change_per_shot_max: 10.0,
             warn_azimuth_deviation_max: 30.0,
             azimuth_diff_threshold: 20.0,
-            pitch_diff_threshold: 10.0,
+            pitch_diff_threshold: 5.0,
+            inclination_depth_diff_threshold: 10.0,
         }
     }
 }

@@ -176,7 +176,9 @@ function validateAllCategories(config: Config): Partial<Record<SettingsCategory,
         val.azimuth_diff_threshold < 0 ||
         val.azimuth_diff_threshold > 180 ||
         val.pitch_diff_threshold < 0 ||
-        val.pitch_diff_threshold > 90)
+        val.pitch_diff_threshold > 90 ||
+        val.inclination_depth_diff_threshold < 0 ||
+        val.inclination_depth_diff_threshold > 90)
     );
     errors.validation = validationHasError;
 

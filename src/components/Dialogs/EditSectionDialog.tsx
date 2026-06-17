@@ -374,7 +374,7 @@ export default function EditSectionDialog() {
   // Validation config from app config
   const validationConfig = {
     azimuth_diff_threshold: config?.validation?.azimuth_diff_threshold ?? 20,
-    pitch_diff_threshold: config?.validation?.pitch_diff_threshold ?? 10,
+    pitch_diff_threshold: config?.validation?.pitch_diff_threshold ?? 5,
   };
 
   if (!section) {

@@ -486,12 +486,18 @@
         "help": "Warn when forward/back pitch differs by more than this (0-90 degrees)",
         "aria": "Pitch in/out difference threshold"
       },
+      "inclinationDepthDiff": {
+        "label": "Inclination vs depth",
+        "help": "Warn when the recorded inclination differs from the inclination implied by the shot's length and depth change by more than this (0-90 degrees)",
+        "aria": "Inclination versus depth/length threshold"
+      },
       "validation": {
         "minShotLength": "Minimum shot length warning must be >= 0",
         "maxShotLength": "Maximum shot length warning must be greater than minimum",
         "depthChange": "Depth change warning threshold must be positive",
         "azimuthDiff": "Azimuth difference threshold must be between 0 and 180",
-        "pitchDiff": "Pitch difference threshold must be between 0 and 90"
+        "pitchDiff": "Pitch difference threshold must be between 0 and 90",
+        "inclinationDepthDiff": "Inclination vs depth threshold must be between 0 and 90"
       }
     },
     "export": {

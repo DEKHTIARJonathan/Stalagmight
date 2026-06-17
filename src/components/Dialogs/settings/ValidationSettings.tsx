@@ -47,6 +47,9 @@ export function ValidationSettings({
     if (config.validation.pitch_diff_threshold < 0 || config.validation.pitch_diff_threshold > 90) {
       errors.push(t('settings.validation.validation.pitchDiff'));
     }
+    if (config.validation.inclination_depth_diff_threshold < 0 || config.validation.inclination_depth_diff_threshold > 90) {
+      errors.push(t('settings.validation.validation.inclinationDepthDiff'));
+    }
 
     const hasError = errors.length > 0;
     if (hasError !== hasErrorRef.current) {
@@ -65,6 +68,8 @@ export function ValidationSettings({
     (n) => ({ validation: { ...config.validation, azimuth_diff_threshold: n } }));
   const handlePitchDiffChange = createNumericHandler(onChange,
     (n) => ({ validation: { ...config.validation, pitch_diff_threshold: n } }));
+  const handleInclinationDepthDiffChange = createNumericHandler(onChange,
+    (n) => ({ validation: { ...config.validation, inclination_depth_diff_threshold: n } }));
 
   return (
     <div
@@ -179,6 +184,27 @@ export function ValidationSettings({
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
             aria-label={t('settings.validation.pitchDiff.aria')}
             data-testid="input-pitch-diff"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.validation.inclinationDepthDiff.label')}
+          helpText={t('settings.validation.inclinationDepthDiff.help')}
+          isChanged={isFieldChanged(changedFields, 'validation.inclination_depth_diff_threshold')}
+          onReset={() => onChange({ validation: { ...config.validation, inclination_depth_diff_threshold: defaultConfig.validation.inclination_depth_diff_threshold } })}
+          isDefault={config.validation.inclination_depth_diff_threshold === defaultConfig.validation.inclination_depth_diff_threshold}
+          data-testid="setting-inclination-depth-diff"
+        >
+          <input
+            type="number" inputMode="decimal"
+            step={1}
+            min={0}
+            max={90}
+            value={config.validation.inclination_depth_diff_threshold}
+            onChange={(e) => handleInclinationDepthDiffChange(e.target.value)}
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label={t('settings.validation.inclinationDepthDiff.aria')}
+            data-testid="input-inclination-depth-diff"
           />
         </SettingRow>
       </SettingsSection>

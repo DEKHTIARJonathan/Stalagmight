@@ -203,7 +203,7 @@ impl Validator {
                     // while still catching a genuine magnitude disagreement.
                     let implied_mag = (dz.abs() / shot.length).clamp(0.0, 1.0).asin().to_degrees();
                     let implied = if recorded < 0.0 { -implied_mag } else { implied_mag };
-                    if (recorded - implied).abs() > config.pitch_diff_threshold {
+                    if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
                         warnings.push(ValidationWarning {
                             code: "INCLINATION_DEPTH_MISMATCH".to_string(),
                             message: format!(
@@ -212,7 +212,7 @@ impl Validator {
                                 shot_index + 1,
                                 recorded,
                                 implied,
-                                config.pitch_diff_threshold
+                                config.inclination_depth_diff_threshold
                             ),
                             severity: WarningSeverity::Warning,
                         });
@@ -245,7 +245,8 @@ mod tests {
             warn_depth_change_per_shot_max: 10.0,
             warn_azimuth_deviation_max: 30.0,
             azimuth_diff_threshold: 20.0,
-            pitch_diff_threshold: 10.0,
+            pitch_diff_threshold: 5.0,
+            inclination_depth_diff_threshold: 10.0,
         }
     }
 
@@ -787,7 +788,7 @@ mod tests {
     /// length and depth change (|dz| = length * sin(pitch)).
     #[test]
     fn test_inclination_depth_mismatch() {
-        let config = default_config(); // pitch_diff_threshold = 10.0
+        let config = default_config(); // inclination_depth_diff_threshold = 10.0
 
         // length 10, |dz| 5 → implied inclination MAGNITUDE asin(5/10) ≈ 30°.
         let base = ShotData {
