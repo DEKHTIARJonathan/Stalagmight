@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { computeGhostEnd, horizontalLength } from '../resolutionPreview';
+import {
+  computeGhostEnd,
+  horizontalLength,
+  lengthFromInclination,
+  exceedsSlopeLength,
+} from '../resolutionPreview';
 
 describe('horizontalLength', () => {
   it('projects slope length by depth change', () => {
@@ -52,5 +57,65 @@ describe('computeGhostEnd', () => {
     // Proposal == current, so ghost sits on the real (drifted) end.
     expect(g!.x).toBeCloseTo(10.05, 6);
     expect(g!.y).toBeCloseTo(0, 6);
+  });
+});
+
+describe('lengthFromInclination', () => {
+  it('returns null when there is no recorded pitch', () => {
+    expect(lengthFromInclination(5, null)).toBeNull();
+  });
+
+  it('returns null when the inclination is below the sin floor', () => {
+    // pitch ≈ 2.8° -> sin ≈ 0.0488 < 0.05 (MIN_SIN_INCLINATION) -> withheld.
+    expect(lengthFromInclination(5, 2.8)).toBeNull();
+  });
+
+  it('returns |dz| / |sin(pitch)| once above the floor', () => {
+    // pitch = 3° -> sin ≈ 0.05234 > 0.05 -> computes.
+    expect(lengthFromInclination(5, 3)).toBeCloseTo(5 / Math.sin((3 * Math.PI) / 180), 6);
+    // pitch = 30° -> sin = 0.5 -> length = 3 / 0.5 = 6.
+    expect(lengthFromInclination(3, 30)).toBeCloseTo(6, 6);
+    // pitch = 90° -> sin = 1 -> length = |dz|.
+    expect(lengthFromInclination(5, 90)).toBeCloseTo(5, 6);
+  });
+
+  it('ignores the sign of the pitch (uses magnitudes)', () => {
+    expect(lengthFromInclination(4, 30)).toBeCloseTo(lengthFromInclination(4, -30)!, 9);
+  });
+
+  it('ignores the sign of the depth change and is non-negative', () => {
+    const up = lengthFromInclination(-4, -90);
+    expect(up).toBeCloseTo(4, 6);
+    expect(up!).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns 0 for a zero depth change at a valid inclination', () => {
+    expect(lengthFromInclination(0, 90)).toBe(0);
+  });
+});
+
+describe('exceedsSlopeLength', () => {
+  it('is true when the length is shorter than the depth change', () => {
+    expect(exceedsSlopeLength(5, 0, 12)).toBe(true); // |dz| = 12 > 5
+  });
+
+  it('is false when the length comfortably spans the depth change', () => {
+    expect(exceedsSlopeLength(5, 0, 3)).toBe(false); // |dz| = 3 < 5
+  });
+
+  it('uses a 1e-6 epsilon at the boundary, matching the backend check', () => {
+    // length == |dz| exactly: not exceeding (a vertical shot is valid).
+    expect(exceedsSlopeLength(5, 0, 5)).toBe(false);
+    // Just over the epsilon: exceeds.
+    expect(exceedsSlopeLength(5, 0, 5.001)).toBe(true);
+    // Within epsilon: still not exceeding.
+    expect(exceedsSlopeLength(5, 0, 5 + 1e-7)).toBe(false);
+  });
+
+  it('is false for a non-positive length or non-finite depths', () => {
+    expect(exceedsSlopeLength(0, 0, 12)).toBe(false);
+    expect(exceedsSlopeLength(-5, 0, 12)).toBe(false);
+    expect(exceedsSlopeLength(5, NaN, 12)).toBe(false);
+    expect(exceedsSlopeLength(5, 0, NaN)).toBe(false);
   });
 });

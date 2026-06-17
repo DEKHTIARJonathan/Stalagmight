@@ -9,7 +9,12 @@ import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { normalizeAzimuth, averageAzimuth } from '../../utils/azimuth';
-import { computeGhostEnd, horizontalLength } from '../../utils/resolutionPreview';
+import {
+  computeGhostEnd,
+  horizontalLength,
+  lengthFromInclination,
+  exceedsSlopeLength,
+} from '../../utils/resolutionPreview';
 import { setSource } from '../../utils/telemetry';
 import type { Section, Shot, ShotUpdates } from '../../types/project';
 import type { GeometryPreview } from '../../store/uiStore';
@@ -24,14 +29,12 @@ function recordedPitch(shot: Shot): number | null {
   return shot.pitch_in ?? shot.pitch_out ?? null;
 }
 
-// Below ~2.9° a recorded inclination can't meaningfully imply a slope length
-// (length = |dz| / |sin θ| explodes), so length-from-inclination is withheld.
-const MIN_SIN_INCLINATION = 0.05;
-
 /** Inclination implied by the depth change and slope length, expressed in the
  *  recorded pitch's own sign. The geometric constraint |dz| = length·sin(|pitch|)
- *  is on magnitude; pitch sign is an unenforced per-source convention, so we keep
- *  whatever sign the recorded value uses (matching the backend check). */
+ *  only fixes the magnitude; pitch_in/pitch_out are both forward (foresight)
+ *  readings in the +down convention, but we keep whatever sign the recorded value
+ *  uses so the preview stays robust to an un-normalised source (matching the
+ *  backend check). */
 function impliedInclination(shot: Shot): number {
   const dz = shot.depth_out - shot.depth_in;
   const mag = shot.length > 0 ? (Math.asin(Math.min(1, Math.abs(dz) / shot.length)) * 180) / Math.PI : 0;
@@ -40,7 +43,7 @@ function impliedInclination(shot: Shot): number {
 }
 
 /** What a manual option needs to render as an inline editable field. */
-type ManualKind =
+export type ManualKind =
   | 'azimuth' // single corrected azimuth, applied to both in & out
   | 'azimuthInOut' // separate in / out azimuths
   | 'length'
@@ -84,6 +87,143 @@ interface WarningResolutionProps {
 
 const LRUD_FIELDS = ['left', 'right', 'up', 'down'] as const;
 type LrudField = (typeof LRUD_FIELDS)[number];
+
+/**
+ * The proposed RAW shot fields for a resolution option — the single source the
+ * on-map preview and the applied `update_shot` patch are BOTH derived from, so
+ * the ghost and the committed change cannot diverge (issue #57).
+ *
+ * Azimuth is always carried as both legs (`azimuthIn`/`azimuthOut`) so the
+ * preview can take their average — for the single-leg options (`use-in`/
+ * `use-out`) both legs are set equal so `averageAzimuth(x, x) === x` reproduces
+ * the old preview azimuth; the apply translation still emits only the one
+ * changed leg for those. `invalid` reports a rejected manual input, mapped by
+ * the caller to the same per-kind toast message as before.
+ */
+interface ProposedRaw {
+  azimuthIn?: number;
+  azimuthOut?: number;
+  length?: number;
+  pitchIn?: number;
+  pitchOut?: number;
+  depthIn?: number;
+  depthOut?: number;
+  lrud?: Partial<Record<LrudField, number | null>>;
+  invalid?: 'azimuth' | 'length' | 'invalid';
+}
+
+/** parseFloat of a manual field (NaN when empty/non-numeric), like `num`. */
+function manualNum(manual: Record<string, string>, key: string): number {
+  return parseFloat(manual[key] ?? '');
+}
+
+/**
+ * Azimuth field parse: reject NaN or values outside [-360, 360], else normalize
+ * into [0, 360). Returns null on rejection (mirrors the component's parseAzimuth).
+ */
+function parseManualAzimuth(manual: Record<string, string>, key: string): number | null {
+  const v = manualNum(manual, key);
+  if (Number.isNaN(v) || v < -360 || v > 360) return null;
+  return normalizeAzimuth(v);
+}
+
+/**
+ * Map a resolution option id to the proposed RAW shot fields. Pure (no React,
+ * no toast) and exported so the parity test can assert preview/apply derive
+ * identically. Returns `null` for options that never change shot data
+ * (ignore/navigate/remove-datum/delete-shot/unknown); for data fixes returns the
+ * proposed fields, or `{ invalid }` for a rejected manual input.
+ */
+export function computeProposedRaw(
+  optId: string,
+  manualKind: ManualKind | undefined,
+  shot: Shot,
+  manual: Record<string, string>,
+  negativeLrud: readonly LrudField[],
+): ProposedRaw | null {
+  const dz = shot.depth_out - shot.depth_in;
+  switch (optId) {
+    case 'use-in':
+      // Apply writes only azimuth_out; both legs equal here so the preview's
+      // averageAzimuth(in, out) === shot.azimuth_in (the old preview azimuth).
+      return { azimuthIn: shot.azimuth_in, azimuthOut: shot.azimuth_in };
+    case 'use-out':
+      return { azimuthIn: shot.azimuth_out, azimuthOut: shot.azimuth_out };
+    case 'average': {
+      const avg = averageAzimuth(shot.azimuth_in, shot.azimuth_out);
+      return { azimuthIn: avg, azimuthOut: avg };
+    }
+    case 'normalize':
+      return { azimuthIn: normalizeAzimuth(shot.azimuth_in), azimuthOut: normalizeAzimuth(shot.azimuth_out) };
+    case 'incl-from-depth': {
+      const p = impliedInclination(shot);
+      return { pitchIn: p, pitchOut: p };
+    }
+    case 'split-incl-length': {
+      const recorded = recordedPitch(shot);
+      if (recorded === null) return { invalid: 'invalid' };
+      const mid = (recorded + impliedInclination(shot)) / 2;
+      const length = lengthFromInclination(dz, mid);
+      if (length === null) return { invalid: 'invalid' };
+      return { pitchIn: mid, pitchOut: mid, length };
+    }
+    case 'length-from-depth':
+      return { length: Math.abs(dz) };
+    case 'length-from-incl': {
+      const recorded = recordedPitch(shot);
+      const length = lengthFromInclination(dz, recorded);
+      if (length === null) return { invalid: 'invalid' };
+      return { length };
+    }
+    case 'lrud-abs': {
+      // Return { lrud } even when nothing is negative so the empty-patch guard
+      // still fires resolveInvalid (rather than a generic failure).
+      const lrud: Partial<Record<LrudField, number | null>> = {};
+      for (const f of negativeLrud) lrud[f] = Math.abs(shot[f] ?? 0);
+      return { lrud };
+    }
+    case 'lrud-clear': {
+      const lrud: Partial<Record<LrudField, number | null>> = {};
+      for (const f of negativeLrud) lrud[f] = null;
+      return { lrud };
+    }
+    case 'manual':
+      if (manualKind === 'azimuth') {
+        const n = parseManualAzimuth(manual, 'azimuth');
+        if (n === null) return { invalid: 'azimuth' };
+        return { azimuthIn: n, azimuthOut: n };
+      } else if (manualKind === 'azimuthInOut') {
+        const ni = parseManualAzimuth(manual, 'azimuthIn');
+        const no = parseManualAzimuth(manual, 'azimuthOut');
+        if (ni === null || no === null) return { invalid: 'azimuth' };
+        return { azimuthIn: ni, azimuthOut: no };
+      } else if (manualKind === 'length') {
+        const v = manualNum(manual, 'length');
+        if (Number.isNaN(v) || v <= 0) return { invalid: 'length' };
+        return { length: v };
+      } else if (manualKind === 'depth') {
+        const vi = manualNum(manual, 'depthIn');
+        const vo = manualNum(manual, 'depthOut');
+        if (Number.isNaN(vi) || Number.isNaN(vo)) return { invalid: 'invalid' };
+        return { depthIn: vi, depthOut: vo };
+      } else if (manualKind === 'lrud') {
+        // Iterate ALL LRUD fields (null for empty, parseFloat otherwise) so the
+        // patch keys match the old apply switch byte-for-byte.
+        const lrud: Partial<Record<LrudField, number | null>> = {};
+        for (const f of LRUD_FIELDS) {
+          const rawValue = manual[f]?.trim() ?? '';
+          lrud[f] = rawValue === '' ? null : parseFloat(rawValue);
+        }
+        if (LRUD_FIELDS.some((f) => lrud[f] !== null && Number.isNaN(lrud[f] as number))) {
+          return { invalid: 'invalid' };
+        }
+        return { lrud };
+      }
+      return null;
+    default:
+      return null;
+  }
+}
 
 export function WarningResolution({
   warning,
@@ -172,7 +312,7 @@ export function WarningResolution({
         // (a spurious too-short segment is often best removed), or ignore.
         return [
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
-          { id: 'delete-shot', label: t('detailPanel.warnings.resolveOptions.deleteShot'), disabled: geometryReadOnly, danger: true },
+          { id: 'delete-shot', label: t('detailPanel.warnings.resolveOptions.deleteShot'), disabled: geometryDisabled, danger: true },
           ignore,
         ];
       case 'LARGE_DEPTH_CHANGE':
@@ -190,8 +330,7 @@ export function WarningResolution({
       case 'LENGTH_BELOW_DEPTH_CHANGE': {
         const dz = shot.depth_out - shot.depth_in;
         const recorded = recordedPitch(shot);
-        const sinP = recorded === null ? null : Math.sin((recorded * Math.PI) / 180);
-        const lengthFromIncl = sinP !== null && Math.abs(sinP) > MIN_SIN_INCLINATION ? Math.abs(dz) / Math.abs(sinP) : null;
+        const lengthFromIncl = lengthFromInclination(dz, recorded);
         return [
           // Default: shortest valid length is the vertical change (vertical shot).
           { id: 'length-from-depth', label: t('detailPanel.warnings.resolveOptions.lengthFromDepth'), detail: len(Math.abs(dz)), disabled: geometryDisabled },
@@ -205,18 +344,18 @@ export function WarningResolution({
       case 'INCLINATION_DEPTH_MISMATCH': {
         // Depth gauges are trusted, so the depth change is never altered here.
         // The geometric constraint is on the inclination MAGNITUDE (|dz| =
-        // length·sin|pitch|); pitch sign is an unenforced convention, so the
-        // implied inclination keeps the recorded value's sign. Offer to adjust
-        // the length (keep the recorded inclination), the inclination (keep the
-        // recorded length), or split the correction between them.
+        // length·sin|pitch|). pitch_in/pitch_out are both forward (foresight)
+        // readings in the +down convention, but the implied inclination keeps the
+        // recorded value's sign so it stays robust to an un-normalised source
+        // (matching the backend check). Offer to adjust the length (keep the
+        // recorded inclination), the inclination (keep the recorded length), or
+        // split the correction between them.
         const dz = shot.depth_out - shot.depth_in;
         const implied = impliedInclination(shot);
         const recorded = recordedPitch(shot);
-        const sinR = recorded === null ? null : Math.sin((recorded * Math.PI) / 180);
-        const lengthFromIncl = sinR !== null && Math.abs(sinR) > MIN_SIN_INCLINATION ? Math.abs(dz) / Math.abs(sinR) : null;
+        const lengthFromIncl = lengthFromInclination(dz, recorded);
         const midPitch = recorded === null ? null : (recorded + implied) / 2;
-        const sinMid = midPitch === null ? null : Math.sin((midPitch * Math.PI) / 180);
-        const splitLength = sinMid !== null && Math.abs(sinMid) > MIN_SIN_INCLINATION ? Math.abs(dz) / Math.abs(sinMid) : null;
+        const splitLength = lengthFromInclination(dz, midPitch);
         return [
           // Default (first): trust the recorded length, adjust the inclination.
           { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.adjustInclination'), detail: `${formatFixed(implied, undefined, precision.inclination)}°`, disabled: geometryDisabled },
@@ -270,15 +409,9 @@ export function WarningResolution({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [warning.sectionId, warning.shotId, warning.code]);
 
+  // parseFloat of a manual field (NaN when empty/non-numeric). Used only by the
+  // proposedCreatesError memo now; the proposal math lives in computeProposedRaw.
   const num = (key: string): number => parseFloat(manual[key] ?? '');
-
-  // Azimuth fields: reject NaN or values outside [-360, 360]; otherwise
-  // normalize into [0, 360) (wrap, not clip). Returns null on rejection.
-  const parseAzimuth = (key: string): number | null => {
-    const v = num(key);
-    if (Number.isNaN(v) || v < -360 || v > 360) return null;
-    return normalizeAzimuth(v);
-  };
 
   // Live on-map preview of the proposed geometry as the user tries options
   // (issue #57). Anchored to the real solved endpoint so it shows just the
@@ -303,59 +436,50 @@ export function WarningResolution({
     const currentHoriz = horizontalLength(shot.length, depthChange);
     const currentAz = averageAzimuth(shot.azimuth_in, shot.azimuth_out);
 
+    // Single source of truth: the on-map ghost and the applied patch both derive
+    // from computeProposedRaw, so they cannot diverge.
+    const raw = computeProposedRaw(opt.id, opt.manual, shot, manual, negativeLrud);
+    if (!raw || raw.invalid) return null;
+
+    // Pitch-only proposals (incl-from-depth) change neither azimuth, length, nor
+    // depth — no ghost (preserves the old switch's no-case-for-incl-from-depth).
+    if (
+      raw.azimuthIn === undefined &&
+      raw.azimuthOut === undefined &&
+      raw.length === undefined &&
+      raw.depthIn === undefined &&
+      raw.depthOut === undefined
+    ) {
+      return null;
+    }
+
+    // Suppress the clamped, misleading ghost when the proposed length/depth makes
+    // |dz| exceed the slope length (the geometry the backend will reject). The
+    // advisory notice handles user feedback; here we simply draw no ghost.
+    if (raw.length !== undefined && exceedsSlopeLength(raw.length, shot.depth_in, shot.depth_out)) {
+      return null;
+    }
+    if (
+      raw.depthIn !== undefined &&
+      raw.depthOut !== undefined &&
+      exceedsSlopeLength(shot.length, raw.depthIn, raw.depthOut)
+    ) {
+      return null;
+    }
+
     let propAz = currentAz;
+    if (raw.azimuthIn !== undefined || raw.azimuthOut !== undefined) {
+      // Both legs are always carried for azimuth fixes; for use-in/use-out they
+      // are set equal so averageAzimuth(x, x) === x matches the old preview az.
+      propAz = averageAzimuth(raw.azimuthIn ?? shot.azimuth_in, raw.azimuthOut ?? shot.azimuth_out);
+    }
     let propHoriz = currentHoriz;
-    switch (opt.id) {
-      case 'use-in': propAz = shot.azimuth_in; break;
-      case 'use-out': propAz = shot.azimuth_out; break;
-      case 'average': propAz = averageAzimuth(shot.azimuth_in, shot.azimuth_out); break;
-      case 'normalize':
-        propAz = averageAzimuth(normalizeAzimuth(shot.azimuth_in), normalizeAzimuth(shot.azimuth_out));
-        break;
-      case 'manual':
-        if (opt.manual === 'azimuth') {
-          const n = parseAzimuth('azimuth');
-          if (n === null) return null;
-          propAz = n;
-        } else if (opt.manual === 'azimuthInOut') {
-          const ni = parseAzimuth('azimuthIn'); const no = parseAzimuth('azimuthOut');
-          if (ni === null || no === null) return null;
-          propAz = averageAzimuth(ni, no);
-        } else if (opt.manual === 'length') {
-          const v = num('length');
-          if (Number.isNaN(v) || v <= 0) return null;
-          propHoriz = horizontalLength(v, depthChange);
-        } else if (opt.manual === 'depth') {
-          const vi = num('depthIn'); const vo = num('depthOut');
-          if (Number.isNaN(vi) || Number.isNaN(vo)) return null;
-          propHoriz = horizontalLength(shot.length, vo - vi);
-        } else {
-          return null;
-        }
-        break;
-      // Length-changing fixes move the endpoint (same azimuth, new horizontal).
-      // incl-from-depth only changes pitch (metadata) → no ghost (default null).
-      case 'length-from-depth':
-        propHoriz = horizontalLength(Math.abs(depthChange), depthChange);
-        break;
-      case 'length-from-incl': {
-        const recorded = recordedPitch(shot);
-        const sinP = recorded === null ? 0 : Math.sin((recorded * Math.PI) / 180);
-        if (Math.abs(sinP) < MIN_SIN_INCLINATION) return null;
-        propHoriz = horizontalLength(Math.abs(depthChange) / Math.abs(sinP), depthChange);
-        break;
-      }
-      case 'split-incl-length': {
-        const recorded = recordedPitch(shot);
-        if (recorded === null) return null;
-        const mid = (recorded + impliedInclination(shot)) / 2;
-        const sinMid = Math.sin((mid * Math.PI) / 180);
-        if (Math.abs(sinMid) < MIN_SIN_INCLINATION) return null;
-        propHoriz = horizontalLength(Math.abs(depthChange) / Math.abs(sinMid), depthChange);
-        break;
-      }
-      default:
-        return null;
+    if (raw.length !== undefined) {
+      propHoriz = horizontalLength(raw.length, depthChange);
+    } else if (raw.depthIn !== undefined && raw.depthOut !== undefined) {
+      // Depth fix: recompute horizontal from the CURRENT slope length and the
+      // new depth delta (matches the old 'manual depth' preview branch).
+      propHoriz = horizontalLength(shot.length, raw.depthOut - raw.depthIn);
     }
 
     const ghostEnd = computeGhostEnd(start, end, currentAz, currentHoriz, propAz, propHoriz);
@@ -367,13 +491,31 @@ export function WarningResolution({
       color: PREVIEW_COLOR,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, manual, shot, options, activeStations, warning.sectionId, warning.shotIndex]);
+  }, [selected, manual, shot, options, activeStations, negativeLrud, warning.sectionId, warning.shotIndex]);
 
   // Push the preview to the map; clear it when leaving the resolution view.
   useEffect(() => {
     setGeometryPreview(preview);
   }, [preview, setGeometryPreview]);
   useEffect(() => () => setGeometryPreview(null), [setGeometryPreview]);
+
+  // True when the selected manual length/depth values make the shot shorter than
+  // its depth change (|dz| > length): applying is allowed but will raise a
+  // LENGTH_BELOW_DEPTH_CHANGE error on revalidation (issue #57). Drives an
+  // advisory notice only; the Apply button stays enabled.
+  const proposedCreatesError = useMemo<boolean>(() => {
+    if (!shot) return false;
+    const opt = options.find((o) => o.id === selected);
+    if (!opt || opt.id !== 'manual') return false;
+    if (opt.manual === 'depth') {
+      return exceedsSlopeLength(shot.length, num('depthIn'), num('depthOut'));
+    }
+    if (opt.manual === 'length') {
+      return exceedsSlopeLength(num('length'), shot.depth_in, shot.depth_out);
+    }
+    return false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, manual, shot, options]);
 
   /**
    * Apply the selected option.
@@ -423,100 +565,43 @@ export function WarningResolution({
       return result.success ? 'resolved' : 'failed';
     }
 
-    // Data fixes via the undoable update_shot command.
+    // Data fixes via the undoable update_shot command. The proposed RAW fields
+    // come from the single source shared with the preview (computeProposedRaw),
+    // so the ghost and the committed change cannot diverge.
+    const raw = computeProposedRaw(opt.id, opt.manual, shot, manual, negativeLrud);
+    if (!raw) return 'failed';
+    if (raw.invalid) {
+      const key =
+        raw.invalid === 'azimuth'
+          ? 'detailPanel.warnings.resolveInvalidAzimuth'
+          : raw.invalid === 'length'
+            ? 'detailPanel.warnings.resolveInvalidLength'
+            : 'detailPanel.warnings.resolveInvalid';
+      showToast(t(key), 'warning-resolve');
+      return 'failed';
+    }
+
     const patch: Partial<ShotUpdates> = {};
-    switch (opt.id) {
-      case 'use-in':
-        patch.azimuth_out = shot.azimuth_in;
-        break;
-      case 'use-out':
-        patch.azimuth_in = shot.azimuth_out;
-        break;
-      case 'average': {
-        const avg = averageAzimuth(shot.azimuth_in, shot.azimuth_out);
-        patch.azimuth_in = avg;
-        patch.azimuth_out = avg;
-        break;
+    // use-in/use-out only ever changed the OPPOSITE leg; emit just that one leg
+    // (computeProposedRaw carries both equal legs for the preview's average).
+    if (opt.id === 'use-in') {
+      patch.azimuth_out = shot.azimuth_in;
+    } else if (opt.id === 'use-out') {
+      patch.azimuth_in = shot.azimuth_out;
+    } else {
+      if (raw.azimuthIn !== undefined) patch.azimuth_in = raw.azimuthIn;
+      if (raw.azimuthOut !== undefined) patch.azimuth_out = raw.azimuthOut;
+    }
+    if (raw.pitchIn !== undefined) patch.pitch_in = raw.pitchIn;
+    if (raw.pitchOut !== undefined) patch.pitch_out = raw.pitchOut;
+    if (raw.length !== undefined) patch.length = raw.length;
+    if (raw.depthIn !== undefined) patch.depth_in = raw.depthIn;
+    if (raw.depthOut !== undefined) patch.depth_out = raw.depthOut;
+    if (raw.lrud) {
+      for (const f of LRUD_FIELDS) {
+        const v = raw.lrud[f];
+        if (v !== undefined) patch[f] = v;
       }
-      case 'normalize':
-        patch.azimuth_in = normalizeAzimuth(shot.azimuth_in);
-        patch.azimuth_out = normalizeAzimuth(shot.azimuth_out);
-        break;
-      case 'incl-from-depth': {
-        // Keep length + depth (depth is trusted): set the inclination to the
-        // magnitude implied by the geometry, in the recorded value's own sign.
-        const p = impliedInclination(shot);
-        patch.pitch_in = p;
-        patch.pitch_out = p;
-        break;
-      }
-      case 'split-incl-length': {
-        // Keep depth; split the disagreement between inclination and length: set
-        // pitch to the midpoint of recorded and the implied magnitude, then make
-        // the length consistent with that midpoint (length = |dz| / |sin(mid)|),
-        // yielding a geometrically consistent shot at the compromise inclination.
-        const recorded = recordedPitch(shot);
-        if (recorded === null) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-        const dz = shot.depth_out - shot.depth_in;
-        const mid = (recorded + impliedInclination(shot)) / 2;
-        const sinMid = Math.sin((mid * Math.PI) / 180);
-        if (Math.abs(sinMid) < MIN_SIN_INCLINATION) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-        patch.pitch_in = mid;
-        patch.pitch_out = mid;
-        patch.length = Math.abs(dz) / Math.abs(sinMid);
-        break;
-      }
-      case 'length-from-depth':
-        // Shortest valid slope length is the vertical change itself (vertical shot).
-        patch.length = Math.abs(shot.depth_out - shot.depth_in);
-        break;
-      case 'length-from-incl': {
-        // |depth change| = length·sin(pitch) → length = |dz| / |sin(pitch)|.
-        const recorded = recordedPitch(shot);
-        const sinP = recorded === null ? 0 : Math.sin((recorded * Math.PI) / 180);
-        if (Math.abs(sinP) < MIN_SIN_INCLINATION) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-        patch.length = Math.abs(shot.depth_out - shot.depth_in) / Math.abs(sinP);
-        break;
-      }
-      case 'lrud-abs':
-        for (const f of negativeLrud) patch[f] = Math.abs(shot[f] ?? 0);
-        break;
-      case 'lrud-clear':
-        for (const f of negativeLrud) patch[f] = null;
-        break;
-      case 'manual':
-        if (opt.manual === 'azimuth') {
-          const n = parseAzimuth('azimuth');
-          if (n === null) { showToast(t('detailPanel.warnings.resolveInvalidAzimuth'), 'warning-resolve'); return 'failed'; }
-          patch.azimuth_in = n;
-          patch.azimuth_out = n;
-        } else if (opt.manual === 'azimuthInOut') {
-          const ni = parseAzimuth('azimuthIn'); const no = parseAzimuth('azimuthOut');
-          if (ni === null || no === null) { showToast(t('detailPanel.warnings.resolveInvalidAzimuth'), 'warning-resolve'); return 'failed'; }
-          patch.azimuth_in = ni;
-          patch.azimuth_out = no;
-        } else if (opt.manual === 'length') {
-          const v = num('length');
-          if (Number.isNaN(v) || v <= 0) { showToast(t('detailPanel.warnings.resolveInvalidLength'), 'warning-resolve'); return 'failed'; }
-          patch.length = v;
-        } else if (opt.manual === 'depth') {
-          const vi = num('depthIn'); const vo = num('depthOut');
-          if (Number.isNaN(vi) || Number.isNaN(vo)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
-          patch.depth_in = vi;
-          patch.depth_out = vo;
-        } else if (opt.manual === 'lrud') {
-          for (const f of LRUD_FIELDS) {
-            const raw = manual[f]?.trim() ?? '';
-            patch[f] = raw === '' ? null : parseFloat(raw);
-          }
-          if (LRUD_FIELDS.some((f) => patch[f] !== null && Number.isNaN(patch[f] as number))) {
-            showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve');
-            return 'failed';
-          }
-        }
-        break;
-      default:
-        return 'failed';
     }
 
     // Guard against a no-op (e.g. lrud-abs/clear when nothing is negative after a
@@ -647,6 +732,14 @@ export function WarningResolution({
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+              {/* Advisory: the proposed length/depth makes the shot shorter than
+                  its depth change, which revalidation will flag. Applying is
+                  still allowed (the Apply button stays enabled) — we just warn. */}
+              {selected === opt.id && (opt.manual === 'depth' || opt.manual === 'length') && proposedCreatesError && (
+                <div className="pl-6 pr-1 pb-1 text-xs text-warning" data-testid={`warning-resolution-impossible-${opt.id}`}>
+                  {t('detailPanel.warnings.proposedImpossibleGeometry')}
                 </div>
               )}
               {/* Extra context (e.g. the inclination used), shown only while

@@ -50,3 +50,37 @@ export function computeGhostEnd(
   const currentVec = calculatePosition({ x: 0, y: 0, z: 0 }, currentAzimuth, currentHoriz, 0);
   return { x: end.x + (proposedVec.x - currentVec.x), y: end.y + (proposedVec.y - currentVec.y) };
 }
+
+// Below ~2.9° a recorded inclination can't meaningfully imply a slope length
+// (length = |dz| / |sin θ| explodes), so length-from-inclination is withheld.
+export const MIN_SIN_INCLINATION = 0.05;
+
+/**
+ * Slope length implied by an inclination and a depth change:
+ * `length = |dz| / |sin(pitch)|`. Returns `null` when there is no pitch, or when
+ * `|sin(pitch)| <= MIN_SIN_INCLINATION` (the floor that keeps the quotient from
+ * exploding). This is the single home of the inclination→length floor predicate;
+ * all callers reject via `lengthFromInclination(...) === null`.
+ *
+ * @param depthChange the shot's depth change `depth_out - depth_in` (m; sign ignored)
+ * @param pitchDeg    the inclination in degrees, or `null` when none is recorded
+ */
+export function lengthFromInclination(depthChange: number, pitchDeg: number | null): number | null {
+  if (pitchDeg === null) return null;
+  const sin = Math.sin((pitchDeg * Math.PI) / 180);
+  if (Math.abs(sin) <= MIN_SIN_INCLINATION) return null;
+  return Math.abs(depthChange) / Math.abs(sin);
+}
+
+/**
+ * Whether the proposed slope `length` is shorter than the vertical change it
+ * must span — i.e. `length + ε < |depthOut - depthIn|`, the same condition the
+ * backend raises `LENGTH_BELOW_DEPTH_CHANGE` for (validation.rs uses ε = 1e-6).
+ * A preview built from such values would draw a clamped, misleading ghost, and
+ * applying it raises an error on revalidation (issue #57). Requires a positive
+ * length and finite depths; returns `false` otherwise.
+ */
+export function exceedsSlopeLength(length: number, depthIn: number, depthOut: number): boolean {
+  if (!(length > 0) || !Number.isFinite(depthIn) || !Number.isFinite(depthOut)) return false;
+  return length + 1e-6 < Math.abs(depthOut - depthIn);
+}

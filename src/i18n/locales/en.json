@@ -1412,6 +1412,7 @@
       "resolveInvalidAzimuth": "Azimuth must be between -360° and 360°.",
       "azimuthLabel": "Azimuth",
       "fromInclinationNote": "From recorded inclination {{value}}°",
+      "proposedImpossibleGeometry": "These values make the shot shorter than its depth change, so applying will raise an error.",
       "zoomToShot": "Zoom to the shot",
       "resolveOptions": {
         "useIn": "Use azimuth in",
