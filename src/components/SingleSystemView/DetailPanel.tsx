@@ -66,13 +66,15 @@ export default function DetailPanel() {
             warnings={warnings}
             project={project}
             onWarningClick={(warning) => {
+              // Selecting the row highlights the problematic geometry on the map
+              // but stays on the Warnings tab (the entity pills are the way to
+              // jump to Details).
               setSource('detail-panel');
               setSelection({
                 type: 'shot',
                 sectionId: warning.sectionId,
                 shotId: warning.shotId,
               });
-              setDetailPanelTab('details');
             }}
           />
         )}
@@ -435,6 +437,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 }
               }}
               className="text-left cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+              data-testid="warning-message"
             >
               <span className={`mr-1.5 align-text-bottom inline-block ${warning.severity === 'error' ? 'text-error' : 'text-warning'}`}>
                 {warning.isResolved
@@ -449,9 +452,26 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                   if (!m) return warning.message;
                   return (
                     <>
-                      <EntityBlob entity="shot">
-                        {formatShotId(warning.sectionId, warning.shotIndex + 1)}
-                      </EntityBlob>
+                      {/* The shot pill navigates to Details (select + switch tab),
+                          its prior behaviour; stopPropagation keeps the row's
+                          select-only handler from also firing. */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSource('detail-panel');
+                          setSelection({ type: 'shot', sectionId: warning.sectionId, shotId: warning.shotId });
+                          setDetailPanelTab('details');
+                        }}
+                        className="inline align-middle p-0 cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+                        aria-label={t('detailPanel.warnings.openShotDetails', {
+                          shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                        })}
+                      >
+                        <EntityBlob entity="shot">
+                          {formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                        </EntityBlob>
+                      </button>
                       {' '}
                       {warning.message.slice(m[0].length)}
                     </>

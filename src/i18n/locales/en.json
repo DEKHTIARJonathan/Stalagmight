@@ -1367,6 +1367,7 @@
       "location": "Section {{section}} - Shot {{shot}}",
       "markUnresolved": "Mark unresolved",
       "resolve": "Resolve",
+      "openShotDetails": "Open shot {{shot}} details",
       "resolveAll": "Resolve all",
       "resolveTitle": "Resolve warning",
       "resolveBack": "Back",

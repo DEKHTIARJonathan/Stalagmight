@@ -161,7 +161,7 @@ test.describe('Warning Click Navigation', () => {
     await setupMockedPage(page);
   });
 
-  test('clicking a warning navigates to shot details', async ({ page }) => {
+  test('clicking a warning selects the shot and stays on the Warnings tab', async ({ page }) => {
     // Create project with sections
     await createProject(page, 'Warning Click Test');
     await seedProjectWithSections(page, sectionSeeds);
@@ -194,10 +194,11 @@ test.describe('Warning Click Navigation', () => {
     const warningText = page.locator('text=azimuth difference exceeds threshold');
     await expect(warningText).toBeVisible();
 
-    // Click the warning message button (the clickable area)
-    await warningText.click();
+    // Clicking the warning row (the message area, away from the shot pill)
+    // selects the problematic shot but stays on the Warnings tab (issue #57);
+    // the entity pills are the way to jump to Details.
+    await page.getByTestId('warning-message').first().click({ position: { x: 4, y: 4 } });
 
-    // Wait for selection to be updated
     const selection = await pollSelectionState(
       page,
       (sel) => sel?.type === 'shot' && sel?.shotId === targetShotId
@@ -206,16 +207,11 @@ test.describe('Warning Click Navigation', () => {
     expect(selection?.sectionId).toBe(mainSectionId);
     expect(selection?.shotId).toBe(targetShotId);
 
-    // Verify "Selection not found" is NOT displayed
-    const selectionNotFound = page.locator('text=Selection not found');
-    await expect(selectionNotFound).toBeHidden();
-
-    // Verify shot detail heading is shown
-    const shotHeading = page.locator('h3:has-text("Shot")');
-    await expect(shotHeading).toBeVisible();
+    // Still on the Warnings tab — the row select does not navigate to Details.
+    await expect(page.getByTestId('warnings-content')).toBeVisible();
   });
 
-  test('clicking a warning on a DMP-imported project navigates to shot details', async ({
+  test('clicking a warning on a DMP-imported project selects the shot (stays on Warnings tab)', async ({
     page,
   }) => {
     // Create project with multiple sections (simulating a DMP import)
@@ -252,10 +248,10 @@ test.describe('Warning Click Navigation', () => {
     const warningText = page.locator('text=length is zero');
     await expect(warningText).toBeVisible();
 
-    // Click the warning
-    await warningText.click();
+    // Clicking the row (message area, away from the shot pill) selects the shot
+    // but stays on the Warnings tab (#57).
+    await page.getByTestId('warning-message').first().click({ position: { x: 4, y: 4 } });
 
-    // Verify navigation works
     const selection = await pollSelectionState(
       page,
       (sel) => sel?.type === 'shot' && sel?.shotId === targetShotId
@@ -264,13 +260,8 @@ test.describe('Warning Click Navigation', () => {
     expect(selection?.sectionId).toBe(firstSectionId);
     expect(selection?.shotId).toBe(targetShotId);
 
-    // Verify "Selection not found" is NOT displayed
-    const selectionNotFound = page.locator('text=Selection not found');
-    await expect(selectionNotFound).toBeHidden();
-
-    // Verify shot detail heading is shown
-    const shotHeading = page.locator('h3:has-text("Shot")');
-    await expect(shotHeading).toBeVisible();
+    // Still on the Warnings tab — the row select does not navigate to Details.
+    await expect(page.getByTestId('warnings-content')).toBeVisible();
   });
 });
 
