@@ -396,72 +396,79 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
             key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
             role="listitem"
             className={`
-              p-2 rounded transition-colors
+              p-2 rounded transition-colors flow-root
               ${warning.isResolved ? 'opacity-50' : ''}
               hover:bg-background-50
             `}
           >
-            <div className="flex items-start gap-2">
+            {/* Action button floats right so the warning text wraps around it
+                (issue #57) instead of the button reserving its own column. */}
+            {warning.isResolved ? (
               <button
-                onClick={() => onWarningClick(warning)}
-                className="flex-1 text-left"
+                onClick={(e) => handleUndoResolve(e, warning)}
+                className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
+                title={t('detailPanel.warnings.markUnresolved')}
               >
-                <div className="flex items-start gap-2">
-                  <span className={warning.severity === 'error' ? 'text-error' : 'text-warning'}>
-                    {warning.isResolved
-                      ? <CheckCircleIcon size={14} />
-                      : (warning.severity === 'error' ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />)}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
-                      {(() => {
-                        // Messages start with "Shot <sectionId>:<position> …"; at the
-                        // Full level swap that leading reference for the shot pill.
-                        const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
-                        if (!m) return warning.message;
-                        return (
-                          <>
-                            <EntityBlob entity="shot">
-                              {formatShotId(warning.sectionId, warning.shotIndex + 1)}
-                            </EntityBlob>
-                            {' '}
-                            {warning.message.slice(m[0].length)}
-                          </>
-                        );
-                      })()}
-                    </div>
-                    {!showPills && (
-                      <div className="text-xs text-text-secondary mt-0.5">
-                        {t('detailPanel.warnings.location', {
-                          section: getSectionName(warning.sectionId),
-                          shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                {t('common.actions.undo')}
               </button>
-              {warning.isResolved ? (
-                <button
-                  onClick={(e) => handleUndoResolve(e, warning)}
-                  className="text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-secondary"
-                  title={t('detailPanel.warnings.markUnresolved')}
-                >
-                  {t('common.actions.undo')}
-                </button>
-              ) : (
-                <button
-                  onClick={(e) => startResolve(e, warning)}
-                  className="shrink-0 text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
-                  title={t('detailPanel.warnings.resolve')}
-                  data-testid="resolve-warning"
-                >
-                  {t('detailPanel.warnings.resolve')}
-                </button>
+            ) : (
+              <button
+                onClick={(e) => startResolve(e, warning)}
+                className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-primary"
+                title={t('detailPanel.warnings.resolve')}
+                data-testid="resolve-warning"
+              >
+                {t('detailPanel.warnings.resolve')}
+              </button>
+            )}
+            {/* Clickable message (selects the shot). Plain flow — not a <button>,
+                which would form a block-formatting context and refuse to wrap
+                around the floated action button. */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => onWarningClick(warning)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onWarningClick(warning);
+                }
+              }}
+              className="text-left cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+            >
+              <span className={`mr-1.5 align-text-bottom inline-block ${warning.severity === 'error' ? 'text-error' : 'text-warning'}`}>
+                {warning.isResolved
+                  ? <CheckCircleIcon size={14} />
+                  : (warning.severity === 'error' ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />)}
+              </span>
+              <span className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
+                {(() => {
+                  // Messages start with "Shot <sectionId>:<position> …"; at the
+                  // Full level swap that leading reference for the shot pill.
+                  const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
+                  if (!m) return warning.message;
+                  return (
+                    <>
+                      <EntityBlob entity="shot">
+                        {formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                      </EntityBlob>
+                      {' '}
+                      {warning.message.slice(m[0].length)}
+                    </>
+                  );
+                })()}
+              </span>
+              {!showPills && (
+                <div className="text-xs text-text-secondary mt-0.5">
+                  {t('detailPanel.warnings.location', {
+                    section: getSectionName(warning.sectionId),
+                    shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                  })}
+                </div>
               )}
             </div>
             {showPills && (
-              <div className="mt-1 pl-6 flex items-center gap-1.5 flex-wrap">
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap clear-both">
                 <DetailLink
                   type="section"
                   target={{ sectionId: warning.sectionId }}

@@ -195,8 +195,7 @@ test.describe('Warning Click Navigation', () => {
     await expect(warningText).toBeVisible();
 
     // Click the warning message button (the clickable area)
-    const warningButton = warningText.locator('xpath=ancestor::button');
-    await warningButton.click();
+    await warningText.click();
 
     // Wait for selection to be updated
     const selection = await pollSelectionState(
@@ -254,8 +253,7 @@ test.describe('Warning Click Navigation', () => {
     await expect(warningText).toBeVisible();
 
     // Click the warning
-    const warningButton = warningText.locator('xpath=ancestor::button');
-    await warningButton.click();
+    await warningText.click();
 
     // Verify navigation works
     const selection = await pollSelectionState(
