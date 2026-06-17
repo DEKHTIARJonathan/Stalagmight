@@ -803,8 +803,18 @@ export const useUIStore = create<UIStore>((set) => ({
   geometryPreview: null,
   setGeometryPreview: (geometryPreview) => set({ geometryPreview }),
   requestResolveWarning: null,
-  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) =>
-    set({ requestResolveWarning: { sectionId, shotId } }),
+  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => {
+    // Make sure the resolve view will actually mount and be visible before
+    // requesting it: section-focus and data-table fullscreen hide/cover the
+    // detail panel, and the panel may simply be collapsed. WarningsContent only
+    // consumes the request while mounted (detailPanelOpen && tab === 'warnings'),
+    // so open the panel on the Warnings tab here. (Otherwise the click would be
+    // a no-op and the request would sit stale and fire on a later tab switch.)
+    const s = useUIStore.getState();
+    if (s.focusedSectionId !== null) s.exitSectionFocus();
+    if (s.dataTableFullScreen) s.exitDataTableFullScreen();
+    set({ requestResolveWarning: { sectionId, shotId }, detailPanelOpen: true, detailPanelTab: 'warnings' });
+  },
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
   requestZoomToShot: null,
   triggerZoomToShot: (sectionId: SectionId, shotId: ShotId) =>

@@ -2987,8 +2987,8 @@ export default function MapCanvas() {
   }, [requestCenterOnShot, mapLoaded, clearCenterOnShotRequest, fitToShot]);
 
   // Render the transient geometry preview (issue #57): the warning-resolution
-  // flow pushes a proposed ghost shot here as the user tries options. Reuses the
-  // survey layer's ghost overlay (same one merge-preview uses).
+  // flow pushes a proposed ghost shot here as the user tries options, drawn via
+  // the survey layer's ghost overlay (setGhostSection).
   useEffect(() => {
     if (!mapLoaded) return;
     surveyLayerRef.current?.setGhostSection(geometryPreview ?? null);

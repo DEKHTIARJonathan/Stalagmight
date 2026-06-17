@@ -1552,7 +1552,7 @@ zoom_speed = 1.0
 invert_scroll = false
 
 [validation]
-warn_shot_length_min = 0.1
+warn_shot_length_min = 0.4
 warn_shot_length_max = 50.0
 warn_depth_change_per_shot_max = 10.0
 warn_azimuth_deviation_max = 30.0  # Between in and out readings
@@ -2749,7 +2749,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 
 | Rule | Severity | Message |
 |------|----------|---------|
-| Shot length < 0.1m | Warning | "Shot {section_id}:{position} length {length}m below minimum threshold {threshold}m" |
+| Shot length < 0.4m (default; configurable) | Warning | "Shot {section_id}:{position} length {length}m below minimum threshold {threshold}m" |
 | Shot length > 50m | Warning | "Shot {section_id}:{position} length {length}m above maximum threshold {threshold}m" |
 | Depth change > 10m per shot | Warning | "Shot {section_id}:{position} depth change {change}m exceeds threshold {threshold}m" |
 | Azimuth deviation > 30° | Warning | "Shot {section_id}:{position} azimuth in/out deviation {dev}° exceeds threshold {threshold}°" |

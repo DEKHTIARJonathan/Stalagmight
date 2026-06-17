@@ -254,7 +254,6 @@ export default function DataTable({ sections }: DataTableProps) {
     setHoveredStation,
     hoveredStation,
     showToast,
-    setDetailPanelTab,
     triggerResolveWarning,
   } = useUIStore(useShallow((s) => ({
     selection: s.selection,
@@ -262,7 +261,6 @@ export default function DataTable({ sections }: DataTableProps) {
     setHoveredShot: s.setHoveredShot,
     hoveredShot: s.hoveredShot,
     triggerPanToShot: s.triggerPanToShot,
-    setDetailPanelTab: s.setDetailPanelTab,
     triggerResolveWarning: s.triggerResolveWarning,
     dataTableOpen: s.dataTableOpen,
     dataTableHeight: s.dataTableHeight,
@@ -1027,14 +1025,15 @@ export default function DataTable({ sections }: DataTableProps) {
         onToggleReference: handleToggleReference,
         onResolveWarning: (shotId: number) => {
           if (selectedSectionId === null) return;
-          setDetailPanelTab('warnings');
+          // triggerResolveWarning opens the Warnings panel (and exits
+          // section-focus / fullscreen) so the resolve view is actually shown.
           triggerResolveWarning(selectedSectionId, shotId);
         },
       }),
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, shotIndexAt, handleToggleReference, setDetailPanelTab, triggerResolveWarning]
+    [t, precision, selectedSectionId, geometryReadOnly, isShotFrozen, warnings, shotIndexAt, handleToggleReference, triggerResolveWarning]
   );
 
   // Localized grid chrome; rowNoun makes the context menus speak in shots

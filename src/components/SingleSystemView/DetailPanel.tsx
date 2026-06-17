@@ -444,21 +444,17 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 {t('detailPanel.warnings.resolve')}
               </button>
             )}
-            {/* Clickable message (selects the shot). Plain flow — not a <button>,
-                which would form a block-formatting context and refuse to wrap
-                around the floated action button. */}
+            {/* Clickable message: single-click selects the shot, double-click
+                pans to it. A plain <div> (not role="button") so the inline shot
+                pill <button> isn't nested inside another interactive element;
+                it also stays normal flow so the text wraps around the floated
+                action button. Keyboard users reach the shot via the pill and
+                the Resolve button (both real buttons). */}
+            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
             <div
-              role="button"
-              tabIndex={0}
               onClick={() => onWarningClick(warning)}
               onDoubleClick={() => triggerPanToShot(warning.sectionId, warning.shotId)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onWarningClick(warning);
-                }
-              }}
-              className="text-left cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+              className="text-left cursor-pointer rounded"
               data-testid="warning-message"
             >
               <span className={`mr-1.5 align-text-bottom inline-block ${warning.severity === 'error' ? 'text-error' : 'text-warning'}`}>

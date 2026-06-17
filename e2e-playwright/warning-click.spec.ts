@@ -476,6 +476,40 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-average')).toBeVisible();
   });
 
+  test('data-table warning indicator opens the resolve view even when the detail panel is closed', async ({ page }) => {
+    await createProject(page, 'Closed Panel Resolve Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'AZIMUTH_DEVIATION',
+        message: 'Shot 1:1 azimuth in/out difference exceeds threshold',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    await page.keyboard.press('Control+3');
+    await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+
+    // Collapse the detail panel (as section-focus mode does).
+    await page.evaluate(() => {
+      (window as unknown as { __E2E_TEST__?: { uiStore: { setState: (s: Record<string, unknown>) => void } } })
+        .__E2E_TEST__?.uiStore.setState({ detailPanelOpen: false });
+    });
+    await expect(page.getByTestId('detail-panel')).toHaveCount(0);
+
+    // Clicking the indicator must reopen the panel and open the resolve view.
+    await page.getByTestId(`warning-${sectionId}-${shotIds[0]!}`).click();
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+  });
+
   test('opening Resolve fully focuses the shot and offers a zoom button', async ({ page }) => {
     await createProject(page, 'Resolve Focus Test');
     await seedProjectWithSections(page, sectionSeeds);
