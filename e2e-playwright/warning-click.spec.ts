@@ -476,6 +476,43 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-average')).toBeVisible();
   });
 
+  test('opening Resolve fully focuses the shot and offers a zoom button', async ({ page }) => {
+    await createProject(page, 'Resolve Focus Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'AZIMUTH_DEVIATION',
+        message: 'Shot 1:1 azimuth in/out difference exceeds threshold',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+    await page.getByTestId('resolve-warning').first().click();
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+
+    // Full focus: the shot is selected (which highlights it on the map and
+    // focuses the details, sections and data panels — same as a link click).
+    const selection = await pollSelectionState(
+      page,
+      (sel) => sel?.type === 'shot' && sel?.shotId === shotIds[0]!,
+    );
+    expect(selection?.sectionId).toBe(sectionId);
+    expect(selection?.shotId).toBe(shotIds[0]!);
+
+    // A zoom button is offered to close in on the problematic shot.
+    await expect(page.getByTestId('warning-resolution-zoom')).toBeVisible();
+    await page.getByTestId('warning-resolution-zoom').click(); // does not throw
+  });
+
   test('badge only counts unresolved warnings', async ({ page }) => {
     await createProject(page, 'Badge Count Test');
     await seedProjectWithSections(page, sectionSeeds);

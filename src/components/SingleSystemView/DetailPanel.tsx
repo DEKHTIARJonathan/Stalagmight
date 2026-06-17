@@ -195,12 +195,11 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   const { unresolveWarning } = useProjectStore(
     useShallow((s) => ({ unresolveWarning: s.unresolveWarning })),
   );
-  const { setSelection, setDetailPanelTab, announceSelection, triggerCenterOnShot, triggerPanToShot, requestResolveWarning, clearResolveWarningRequest } = useUIStore(
+  const { setSelection, setDetailPanelTab, announceSelection, triggerPanToShot, requestResolveWarning, clearResolveWarningRequest } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       announceSelection: s.announceSelection,
-      triggerCenterOnShot: s.triggerCenterOnShot,
       triggerPanToShot: s.triggerPanToShot,
       requestResolveWarning: s.requestResolveWarning,
       clearResolveWarningRequest: s.clearResolveWarningRequest,
@@ -223,13 +222,16 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   const activeSection = activeWarning ? project?.sections.find((s) => s.id === activeWarning.sectionId) : undefined;
   const activeShot = activeWarning && activeSection ? activeSection.shots.find((s) => s.id === activeWarning.shotId) : undefined;
 
-  // Zoom the map to the shot/station under resolution (issue #57). Keyed on the
-  // warning identity so it re-fires as "Resolve all" steps through the queue.
+  // Full focus on the shot under resolution (issue #57): selecting it is exactly
+  // what clicking its geometry link does anywhere else — it highlights on the
+  // map and focuses the details, sections and data panels. Keyed on the warning
+  // identity so it re-fires as "Resolve all" steps through the queue. (Zoom is
+  // left to the explicit zoom button in the resolve view.)
   const activeKey = activeWarning ? warningKey(activeWarning) : undefined;
   useEffect(() => {
     if (activeWarning) {
       setSource('detail-panel');
-      triggerCenterOnShot(activeWarning.sectionId, activeWarning.shotId);
+      setSelection({ type: 'shot', sectionId: activeWarning.sectionId, shotId: activeWarning.shotId });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey]);

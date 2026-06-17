@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { Button } from '../common/Button';
-import { ChevronLeftIcon } from '../common/icons';
+import { ChevronLeftIcon, CenterMapIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
@@ -78,13 +78,14 @@ export function WarningResolution({
       isShotFrozen: s.isShotFrozen,
     })),
   );
-  const { setSelection, setDetailPanelTab, triggerCenterOnStation, showToast, setGeometryPreview } = useUIStore(
+  const { setSelection, setDetailPanelTab, triggerCenterOnStation, showToast, setGeometryPreview, triggerZoomToShot } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       triggerCenterOnStation: s.triggerCenterOnStation,
       showToast: s.showToast,
       setGeometryPreview: s.setGeometryPreview,
+      triggerZoomToShot: s.triggerZoomToShot,
     })),
   );
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
@@ -399,7 +400,7 @@ export function WarningResolution({
 
   return (
     <div className="p-2" data-testid="warning-resolution">
-      {/* Header: back + (n of N) */}
+      {/* Header: back · zoom button + (n of N) */}
       <div className="flex items-center justify-between mb-2 px-1">
         <button
           onClick={onExit}
@@ -409,11 +410,24 @@ export function WarningResolution({
           <ChevronLeftIcon size={16} />
           {isResolveAll ? t('detailPanel.warnings.resolveExit') : t('detailPanel.warnings.resolveBack')}
         </button>
-        {isResolveAll && position && (
-          <span className="text-xs text-text-secondary" data-testid="warning-resolution-progress">
-            {t('detailPanel.warnings.resolvePosition', { index: position.index + 1, total: position.total })}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {isResolveAll && position && (
+            <span className="text-xs text-text-secondary" data-testid="warning-resolution-progress">
+              {t('detailPanel.warnings.resolvePosition', { index: position.index + 1, total: position.total })}
+            </span>
+          )}
+          {/* Each click zooms one step closer onto the problematic shot. */}
+          <button
+            type="button"
+            onClick={() => triggerZoomToShot(warning.sectionId, warning.shotId)}
+            className="p-1 text-text-secondary hover:text-text-primary rounded hover:bg-background-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+            title={t('detailPanel.warnings.zoomToShot')}
+            aria-label={t('detailPanel.warnings.zoomToShot')}
+            data-testid="warning-resolution-zoom"
+          >
+            <CenterMapIcon size={16} />
+          </button>
+        </div>
       </div>
 
       {/* The warning + current values */}

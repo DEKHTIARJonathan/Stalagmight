@@ -294,6 +294,12 @@ interface UIStore {
   triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => void;
   clearResolveWarningRequest: () => void;
 
+  /** Progressive zoom-in centered on a shot: each request recenters and zooms
+   *  one step closer (used by the resolve view's zoom button, #57). */
+  requestZoomToShot: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerZoomToShot: (sectionId: SectionId, shotId: ShotId) => void;
+  clearZoomToShotRequest: () => void;
+
   // Display toggles
   showStations: boolean;
   showShots: boolean;
@@ -800,6 +806,10 @@ export const useUIStore = create<UIStore>((set) => ({
   triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) =>
     set({ requestResolveWarning: { sectionId, shotId } }),
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
+  requestZoomToShot: null,
+  triggerZoomToShot: (sectionId: SectionId, shotId: ShotId) =>
+    set({ requestZoomToShot: { sectionId, shotId } }),
+  clearZoomToShotRequest: () => set({ requestZoomToShot: null }),
   triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => {
     trackNav('center-on-shot');
     set({ requestCenterOnShot: { sectionId, shotId } });

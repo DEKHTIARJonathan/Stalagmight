@@ -402,6 +402,8 @@ export default function MapCanvas() {
     clearCenterOnStationRequest,
     requestCenterOnShot,
     clearCenterOnShotRequest,
+    requestZoomToShot,
+    clearZoomToShotRequest,
     geometryPreview,
     resolvedTheme,
     moveCommentSource,
@@ -2749,6 +2751,39 @@ export default function MapCanvas() {
     [project, activeStations, config, gpsOrigin]
   );
 
+  // Progressive zoom-in centered on a shot's midpoint: each call recenters and
+  // zooms one step closer (capped at zoom_max). Drives the resolve view's zoom
+  // button (#57) — clicking repeatedly closes in on the problematic shot.
+  const zoomToShotMidpoint = useCallback(
+    (sectionId: SectionId, shotId: ShotId) => {
+      if (!map.current || !config || !project) return;
+      const section = project.sections.find((s) => s.id === sectionId);
+      if (!section) return;
+      const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+      if (shotIndex === -1) return;
+      const fromStation = activeStations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === shotIndex,
+      );
+      const toStation = activeStations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === shotIndex + 1,
+      );
+      if (!fromStation || !toStation) return;
+      const midpointX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
+      const midpointY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
+      const mapCoords = metersToMapCoords(midpointX, midpointY, gpsOrigin);
+      const currentZoom = map.current.getZoom();
+      const targetZoom = Math.min(zoomMax, currentZoom + zoomStep);
+      const animationConfig = config.map.animation;
+      const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
+      map.current.easeTo({
+        center: mapCoords as [number, number],
+        zoom: targetZoom,
+        duration: animationDuration,
+      });
+    },
+    [project, activeStations, config, gpsOrigin, zoomMax, zoomStep],
+  );
+
   // Center on a station (used by DetailLink)
   // Returns true if centering was performed, false if prerequisites not met
   const fitToStation = useCallback(
@@ -2958,6 +2993,16 @@ export default function MapCanvas() {
     if (!mapLoaded) return;
     surveyLayerRef.current?.setGhostSection(geometryPreview ?? null);
   }, [geometryPreview, mapLoaded]);
+
+  // Progressive zoom-in onto a shot (resolve view's zoom button, #57). Each
+  // request recenters and zooms one step closer.
+  useEffect(() => {
+    if (requestZoomToShot !== null) {
+      const { sectionId, shotId } = requestZoomToShot;
+      clearZoomToShotRequest();
+      if (mapLoaded) zoomToShotMidpoint(sectionId, shotId);
+    }
+  }, [requestZoomToShot, mapLoaded, clearZoomToShotRequest, zoomToShotMidpoint]);
 
   // Process pending center-on-shot request when map loads
   useEffect(() => {
