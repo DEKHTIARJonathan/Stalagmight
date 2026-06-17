@@ -1840,6 +1840,36 @@ fn along_line_same_shot_endpoints() {
 }
 
 #[test]
+fn along_line_same_shot_prefers_shorter_route_around() {
+    // Two points on one long shot whose endpoints are ALSO tied by a zero-cost loop
+    // closure: routing around the closure (0.1·100 + 0 + 0.1·100 = 20) beats the
+    // direct sub-segment (0.8·100 = 80), so the same-shot case must NOT short-circuit
+    // to the direct segment — Dijkstra picks the genuine shortest path (#26, Codex).
+    let mut project = Project::new("SameShotRoute".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.loop_closures.push(LoopClosure {
+        id: project.next_closure_id,
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(a, 1).into(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+    project.next_closure_id += 1;
+    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_shot(a, s0, 0.1), ep_shot(a, s0, 0.9));
+    assert!((r.along_line.unwrap() - 20.0).abs() < 1e-6, "should route around, got {:?}", r.along_line);
+}
+
+#[test]
 fn along_line_disconnected_returns_none() {
     let mut project = Project::new("Disconnected".to_string(), None);
     let a = project

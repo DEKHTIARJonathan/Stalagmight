@@ -6619,22 +6619,19 @@ impl Project {
             None => return none(),
         };
 
-        // Both endpoints on the SAME shot: the cave-line distance is the direct
-        // sub-segment |Δt|·L (routing through the shared stations would overcount).
-        if let (
-            Resolved::Shot { t: ta, len, shot: sa, .. },
-            Resolved::Shot { t: tb, shot: sb, .. },
-        ) = (&ra, &rb)
-        {
-            if sa == sb {
-                // Two points on one shot: the sub-segment crosses no station.
-                return AlongLineResult {
-                    along_line: Some((ta - tb).abs() * len),
-                    path_shots: vec![*sa],
-                    path_stations: Vec::new(),
-                };
-            }
-        }
+        // Both endpoints on the SAME shot: the direct sub-segment is |Δt|·L. We do
+        // NOT short-circuit to it — a merge/loop closure between the shot's stations
+        // can make a route *around* shorter than the direct segment, and Dijkstra
+        // must stay free to pick the genuine shortest along-cave-line path. Instead
+        // we remember it and add it as a direct edge between the two virtual nodes
+        // after materializing, so it simply competes with the around routes.
+        let same_shot_direct: Option<(f64, PathShot)> = match (&ra, &rb) {
+            (
+                Resolved::Shot { t: ta, len, shot: sa, .. },
+                Resolved::Shot { t: tb, shot: sb, .. },
+            ) if sa == sb => Some(((ta - tb).abs() * len, *sa)),
+            _ => None,
+        };
 
         // Graph + a parallel (node_a, node_b) -> shot map, built in the SAME loop
         // order as `build_survey_graph` so reconstructed node pairs map back to a
@@ -6680,6 +6677,17 @@ impl Project {
 
         let start = materialize(&mut adj, &mut shot_edge, ra);
         let goal = materialize(&mut adj, &mut shot_edge, rb);
+
+        // Same-shot direct sub-segment (see above): connect the two virtual nodes
+        // directly with weight |Δt|·L so it competes with routing around via the
+        // shared stations / any closure. Tagged with the shot so a direct pick still
+        // tints it.
+        if let Some((w, ps)) = same_shot_direct {
+            adj[start].push((goal, w));
+            adj[goal].push((start, w));
+            shot_edge.insert((start, goal), ps);
+            shot_edge.insert((goal, start), ps);
+        }
 
         // Predecessor-tracking Dijkstra (the shared `dijkstra` returns distances
         // only). Same min-heap ordering as `dijkstra`.

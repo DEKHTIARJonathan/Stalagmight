@@ -681,6 +681,21 @@ export default function MapCanvas() {
     }
   }, [activeTool, snappedStation, setSnappedStation, setMeasureSnapShot]);
 
+  // Tear down the shot-snap marker + ref whenever the store snap clears, even while
+  // the measure tool stays active — a reset that keeps the tool (Escape, dialog,
+  // geometry-mode/project change → clearMeasure) nulls the store snap but there's
+  // no mousemove to run checkSnapToStation's teardown, so a stale cyan dot would
+  // linger and the ref would desync from the cleared store value (#26, Codex).
+  // Keyed on the null-ness boolean, so per-pixel `t` updates don't re-render here.
+  const hasMeasureSnap = useUIStore((s) => s.measureSnapShot !== null);
+  useEffect(() => {
+    if (!hasMeasureSnap && (shotSnapMarkerRef.current || measureSnapShotRef.current)) {
+      shotSnapMarkerRef.current?.remove();
+      shotSnapMarkerRef.current = null;
+      measureSnapShotRef.current = null;
+    }
+  }, [hasMeasureSnap]);
+
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
     (data: { type: 'station' | 'segment' | 'shot'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; shotIndex?: number; screenX?: number; screenY?: number }) => {
@@ -1617,6 +1632,15 @@ export default function MapCanvas() {
     setDistanceGradientOrigin(null);
     clearMeasure();
   }, [project?.created_at, setDistanceGradientOrigin, clearMeasure]);
+
+  // Also reset the ruler when the SAME project's geometry/data changes (undo/redo
+  // or any edit bumps modified_at): a persisted readout + path tint computed from
+  // the old geometry would otherwise survive a setData() rebuild and silently lie.
+  // Kept separate from the switch reset above so an edit doesn't also move the
+  // distance-gradient origin (intentionally stable across edits) (#26, Codex).
+  useEffect(() => {
+    clearMeasure();
+  }, [project?.modified_at, clearMeasure]);
 
   // Distance-gradient overlay (#34): fetch the per-station distance field when the
   // overlay is on and the origin or project data changes. Distances use MEASURED

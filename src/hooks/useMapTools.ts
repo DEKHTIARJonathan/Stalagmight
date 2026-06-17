@@ -11,6 +11,7 @@ import type { GpsOrigin } from '../types/config';
 import { distance, mapCoordsToMeters } from '../utils/coordinates';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
+import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 
 /** A measure endpoint's 3D coords (meters). For a raw `point` the fields are inline. */
 function endpointCoords(ep: MeasureEndpoint): Coordinates {
@@ -150,6 +151,27 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       return { kind: 'shotPoint', section_id: sectionId, shot_id: shotId, t, coords };
     },
     [project?.sections, getStationCoordinates]
+  );
+
+  // Fractional position `t` of a click along a shot, derived from the click's map
+  // position projected onto the shot segment. The plan view is affine, so this
+  // meters-space projection matches the on-screen one. Used when no live snap is
+  // available (snapping disabled), so a click near an end of a long shot isn't
+  // recorded as the midpoint (#26, Codex).
+  const clickShotParam = useCallback(
+    (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent): number | null => {
+      if (!event.lngLat) return null;
+      const section = project?.sections.find((s) => s.id === sectionId);
+      if (!section) return null;
+      const pos = section.shots.findIndex((sh) => sh.id === shotId);
+      if (pos < 0) return null;
+      const from = getStationCoordinates({ section_id: sectionId, station_index: pos });
+      const to = getStationCoordinates({ section_id: sectionId, station_index: pos + 1 });
+      if (!from || !to) return null;
+      const m = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
+      return projectParamOnSegment(m.x, m.y, from.x, from.y, to.x, to.y);
+    },
+    [project?.sections, getStationCoordinates, options.gpsOrigin]
   );
 
   // Monotonic id so a fast second measurement discards a stale along-line response.
@@ -462,7 +484,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
   // Handle shot click based on active tool
   const handleShotClick = useCallback(
-    async (sectionId: SectionId, shotId: ShotId, event: { originalEvent: MouseEvent }) => {
+    async (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => {
       // GUARD: No interactions for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) return;
 
@@ -599,17 +621,22 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'measure': {
-          // The mousemove snap gives the exact fractional point on the shot; fall
-          // back to the midpoint when snapping is disabled (#26).
+          // Prefer the live mousemove snap; when snapping is disabled (no snap),
+          // derive t from the actual click position so a click near an end of a long
+          // shot isn't recorded as the midpoint, then fall back to the midpoint only
+          // if the click can't be projected (#26, Codex).
           const snap = useUIStore.getState().measureSnapShot;
-          const t = snap && snap.section_id === sectionId && snap.shot_id === shotId ? snap.t : 0.5;
+          const t =
+            snap && snap.section_id === sectionId && snap.shot_id === shotId
+              ? snap.t
+              : clickShotParam(sectionId, shotId, event) ?? 0.5;
           const ep = buildShotPointEndpoint(sectionId, shotId, t);
           if (ep) applyMeasureClick(ep);
           break;
         }
       }
     },
-    [activeTool, addToSelection, applyMeasureClick, buildShotPointEndpoint, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
+    [activeTool, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
