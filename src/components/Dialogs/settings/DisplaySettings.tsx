@@ -114,6 +114,10 @@ export function DisplaySettings({
   const handleDeepDepthChange = createNumericHandler(onChange,
     (n) => ({ display: { ...config.display, depth_gradient: { ...config.display.depth_gradient, deep_depth: n } } }));
 
+  // --- Measure tool (#26) ---
+  const handleMeasurePathColorChange = createSelectHandler(onChange,
+    (v) => ({ display: { ...config.display, measure_path_color: v } }));
+
   return (
     <div
       role="tabpanel"
@@ -340,6 +344,26 @@ export function DisplaySettings({
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
             aria-label={t('settings.display.depthGradient.deepDepth.aria')}
             data-testid="input-deep-depth"
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.display.sections.measure')} data-testid="section-measure">
+        <SettingRow
+          label={t('settings.display.measurePathColor.label')}
+          helpText={t('settings.display.measurePathColor.help')}
+          isChanged={isFieldChanged(changedFields, 'display.measure_path_color')}
+          data-testid="setting-measure-path-color"
+          onReset={() => onChange({ display: { ...config.display, measure_path_color: displayDefaults.measure_path_color } })}
+          isDefault={config.display.measure_path_color === displayDefaults.measure_path_color}
+        >
+          <input
+            type="color"
+            value={config.display.measure_path_color}
+            onChange={(e) => handleMeasurePathColorChange(e.target.value)}
+            className="w-12 h-8 rounded border border-border cursor-pointer"
+            aria-label={t('settings.display.measurePathColor.aria')}
+            data-testid="input-measure-path-color"
           />
         </SettingRow>
       </SettingsSection>

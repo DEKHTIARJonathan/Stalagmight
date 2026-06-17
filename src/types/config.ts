@@ -77,6 +77,7 @@ export const defaultConfig: Config = {
       shallow_depth: 0.0,
       deep_depth: 50.0,
     },
+    measure_path_color: '#22d3ee',
   },
   section_colors: {
     palette: [
@@ -275,6 +276,7 @@ export const lightDisplayDefaults: DisplayConfig = {
     shallow_depth: 0.0,
     deep_depth: 50.0,
   },
+  measure_path_color: '#22d3ee',
 };
 
 /**

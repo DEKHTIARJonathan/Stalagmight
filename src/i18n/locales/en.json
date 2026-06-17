@@ -369,7 +369,8 @@
         "grid": "Grid",
         "font": "Font",
         "depthGradient": "Depth Gradient",
-        "sectionColors": "Section Colors"
+        "sectionColors": "Section Colors",
+        "measure": "Measure tool"
       },
       "uiScale": {
         "label": "UI scale",
@@ -438,6 +439,11 @@
         "label": "Color palette",
         "help": "Colors assigned to new sections (click to change)",
         "aria": "Section color {{index}}"
+      },
+      "measurePathColor": {
+        "label": "Path highlight color",
+        "help": "Color used to tint the shots and stations on the ruler's chosen path",
+        "aria": "Measure path highlight color"
       },
       "validation": {
         "fontSize": "Font size must be between 8 and 32",

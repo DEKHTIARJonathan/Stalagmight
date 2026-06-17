@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MEASURE_TINT, buildMeasuredPathIds } from '../measurePath';
+import { MEASURE_TINT, buildMeasuredPathIds, buildMeasuredStationIds } from '../measurePath';
 import { encodeFeatureId } from '../ids';
 
 describe('measurePath (#26)', () => {
@@ -25,5 +25,17 @@ describe('measurePath (#26)', () => {
       { section_id: 1, shot_id: 1 },
     ]);
     expect(ids.size).toBe(1);
+  });
+
+  it('buildMeasuredStationIds maps path stations to canonical feature ids', () => {
+    const ids = buildMeasuredStationIds([
+      { section_id: 1, station_index: 0 },
+      { section_id: 2, station_index: 3 },
+    ]);
+    expect(ids).toEqual(new Set([encodeFeatureId(1, 0), encodeFeatureId(2, 3)]));
+  });
+
+  it('buildMeasuredStationIds on an empty path yields an empty set', () => {
+    expect(buildMeasuredStationIds([]).size).toBe(0);
   });
 });

@@ -17,7 +17,7 @@ import {
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState } from '../../utils/distanceGradient';
-import { buildMeasuredPathIds } from '../../utils/measurePath';
+import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
@@ -1644,14 +1644,20 @@ export default function MapCanvas() {
     }
   }, [showDistanceGradient, distanceField, project, mapLoaded, surveyLayerRef]);
 
-  // Tint the measured along-line path shots (#26): push the path-shot feature ids
-  // to the SurveyLayer. Keyed on the along-line result so it applies when the IPC
-  // resolves and clears on reset (clearMeasure nulls measureAlongLine).
+  // Tint the measured along-line path's shots AND stations (#26) in the
+  // user-configured color. Keyed on the along-line result so it applies when the
+  // IPC resolves and clears on reset (clearMeasure nulls measureAlongLine).
+  const measurePathColor = config?.display.measure_path_color ?? MEASURE_TINT;
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    const ids = measureAlongLine ? buildMeasuredPathIds(measureAlongLine.pathShots) : null;
-    surveyLayerRef.current.setMeasuredPathShots(ids && ids.size > 0 ? ids : null);
-  }, [measureAlongLine, mapLoaded]);
+    const shotIds = measureAlongLine ? buildMeasuredPathIds(measureAlongLine.pathShots) : null;
+    const stationIds = measureAlongLine ? buildMeasuredStationIds(measureAlongLine.pathStations) : null;
+    surveyLayerRef.current.setMeasuredPath(
+      shotIds && shotIds.size > 0 ? shotIds : null,
+      stationIds && stationIds.size > 0 ? stationIds : null,
+      measurePathColor,
+    );
+  }, [measureAlongLine, mapLoaded, measurePathColor]);
 
   // Distance-gradient origin marker (#34): a ring on the chosen origin station.
   // A MapLibre Marker so it auto-tracks the camera and shows even when the

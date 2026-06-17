@@ -1716,6 +1716,15 @@ fn along_line_simple_linear_section() {
             PathShot { section_id: a, shot_id: shots[2] },
         ],
     );
+    assert_eq!(
+        r.path_stations,
+        vec![
+            StationRef::new(a, 0),
+            StationRef::new(a, 1),
+            StationRef::new(a, 2),
+            StationRef::new(a, 3),
+        ],
+    );
 }
 
 #[test]
@@ -1810,6 +1819,8 @@ fn along_line_shot_point_partial_length() {
     let r = project.along_line_between(&stations, ep_station(a, 0), ep_shot(a, s0, 0.25));
     assert!((r.along_line.unwrap() - 2.5).abs() < 1e-6, "got {:?}", r.along_line);
     assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+    // Only station 0 is a real node on the path; the shot-point endpoint is virtual.
+    assert_eq!(r.path_stations, vec![StationRef::new(a, 0)]);
 }
 
 #[test]
@@ -1824,6 +1835,8 @@ fn along_line_same_shot_endpoints() {
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.2), ep_shot(a, s0, 0.7));
     assert!((r.along_line.unwrap() - 5.0).abs() < 1e-6, "got {:?}", r.along_line);
     assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+    // Two mid-shot points cross no station.
+    assert!(r.path_stations.is_empty());
 }
 
 #[test]

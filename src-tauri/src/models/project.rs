@@ -294,6 +294,10 @@ pub struct PathShot {
 pub struct AlongLineResult {
     pub along_line: Option<f64>,
     pub path_shots: Vec<PathShot>,
+    /// Stations traversed along the path (the chain nodes), in order from A toward
+    /// B. Shot-point endpoints contribute their adjacent stations but not a
+    /// station of their own. Tinted alongside `path_shots`.
+    pub path_stations: Vec<StationRef>,
 }
 
 /// Overall project statistics
@@ -6535,7 +6539,11 @@ impl Project {
         b: RulerEndpoint,
     ) -> AlongLineResult {
         const EPS: f64 = 1e-9;
-        let none = || AlongLineResult { along_line: None, path_shots: Vec::new() };
+        let none = || AlongLineResult {
+            along_line: None,
+            path_shots: Vec::new(),
+            path_stations: Vec::new(),
+        };
 
         let n = stations.len();
         if n == 0 {
@@ -6603,9 +6611,11 @@ impl Project {
         ) = (&ra, &rb)
         {
             if sa == sb {
+                // Two points on one shot: the sub-segment crosses no station.
                 return AlongLineResult {
                     along_line: Some((ta - tb).abs() * len),
                     path_shots: vec![*sa],
+                    path_stations: Vec::new(),
                 };
             }
         }
@@ -6722,8 +6732,19 @@ impl Project {
                 }
             }
         }
+        // Stations on the path = chain nodes that are real stations (virtual
+        // shot-split nodes have index >= n and carry no StationRef).
+        let mut path_stations: Vec<StationRef> = Vec::new();
+        for &node in &chain {
+            if node < n {
+                let sr = stations[node].station_ref;
+                if path_stations.last() != Some(&sr) {
+                    path_stations.push(sr);
+                }
+            }
+        }
 
-        AlongLineResult { along_line: Some(dist[goal]), path_shots }
+        AlongLineResult { along_line: Some(dist[goal]), path_shots, path_stations }
     }
 
     /// Get metadata for this project

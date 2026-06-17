@@ -68,6 +68,8 @@ export interface MeasureAlongLine {
   alongLine: number | null;
   /** Shots traversed on the path (for tinting). */
   pathShots: PathShot[];
+  /** Stations traversed on the path (tinted alongside the shots). */
+  pathStations: StationRef[];
 }
 
 /** Live shot-snap candidate while the measure tool hovers a shot (not a station).

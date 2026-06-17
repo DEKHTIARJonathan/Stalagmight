@@ -24,7 +24,7 @@ describe('uiStore measure reset funnels (#26)', () => {
     s.setMeasureStart(station(1, 0));
     s.setMeasureEnd(station(1, 1));
     s.setMeasureDirect({ distance: 5, depthDiff: 0 });
-    s.setMeasureAlongLine({ alongLine: 5, pathShots: [{ section_id: 1, shot_id: 0 }] });
+    s.setMeasureAlongLine({ alongLine: 5, pathShots: [{ section_id: 1, shot_id: 0 }], pathStations: [{ section_id: 1, station_index: 0 }] });
     s.setMeasureAlongLinePending(true);
     s.setMeasureSnapShot({ section_id: 1, shot_id: 0, t: 0.5 });
 
@@ -62,7 +62,7 @@ describe('uiStore measure reset funnels (#26)', () => {
 
   it('setMeasureAlongLine resolves the pending flag', () => {
     useUIStore.getState().setMeasureAlongLinePending(true);
-    useUIStore.getState().setMeasureAlongLine({ alongLine: null, pathShots: [] });
+    useUIStore.getState().setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
     expect(useUIStore.getState().measureAlongLinePending).toBe(false);
   });
 });

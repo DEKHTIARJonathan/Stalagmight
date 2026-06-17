@@ -88,6 +88,27 @@ async function countMeasuredShots(page: Page): Promise<number> {
   });
 }
 
+/** Count distinct stations whose `measured` feature-state is set (the path tint). */
+async function countMeasuredStations(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const map = (window as unknown as {
+      __stalagmight_map__?: {
+        querySourceFeatures: (s: string) => Array<{ id?: number }>;
+        getFeatureState: (f: { source: string; id: number }) => { measured?: boolean };
+      };
+    }).__stalagmight_map__;
+    if (!map) return 0;
+    const seen = new Set<number>();
+    let n = 0;
+    for (const f of map.querySourceFeatures('survey-data-stations')) {
+      if (f.id == null || seen.has(f.id)) continue;
+      seen.add(f.id);
+      if (map.getFeatureState({ source: 'survey-data-stations', id: f.id })?.measured) n++;
+    }
+    return n;
+  });
+}
+
 async function shotsLineColor(page: Page): Promise<string> {
   return page.evaluate(() => {
     const map = (window as unknown as { __stalagmight_map__?: { getPaintProperty: (l: string, p: string) => unknown } }).__stalagmight_map__;
@@ -129,19 +150,21 @@ test.describe('Measure tool — dual distance + tint (#26)', () => {
     await expect(page.locator('[data-testid="measure-depth-diff"]')).toContainText('m');
   });
 
-  test('tints the path shots and clears them on Escape', async ({ page }) => {
+  test('tints the path shots and stations, and clears them on Escape', async ({ page }) => {
     await clickStation(page, 0);
     await clickStation(page, 1);
     await expect(page.locator('[data-testid="measure-along-line"]')).toContainText('12.3');
 
     // The shots line-color expression references the measured feature-state, and
-    // at least one shot is tinted.
+    // both at least one shot AND at least one station are tinted (#26).
     await expect.poll(() => shotsLineColor(page)).toContain('measured');
     await expect.poll(() => countMeasuredShots(page)).toBeGreaterThan(0);
+    await expect.poll(() => countMeasuredStations(page)).toBeGreaterThan(0);
 
     await page.keyboard.press('Escape');
     await expect(page.locator('[data-testid="measure-readout"]')).toHaveCount(0);
     await expect.poll(() => countMeasuredShots(page)).toBe(0);
+    await expect.poll(() => countMeasuredStations(page)).toBe(0);
   });
 
   test('readout persists past the old 5-second auto-clear', async ({ page }) => {

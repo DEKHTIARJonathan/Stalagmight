@@ -153,7 +153,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       const a = toRulerEndpoint(start);
       const b = toRulerEndpoint(end);
       if (!a || !b) {
-        setMeasureAlongLine({ alongLine: null, pathShots: [] });
+        setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
         return;
       }
       measureRequestIdRef.current += 1;
@@ -170,13 +170,13 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         if (useUIStore.getState().activeTool !== 'measure') return;
         setMeasureAlongLine(
           result
-            ? { alongLine: result.along_line, pathShots: result.path_shots }
-            : { alongLine: null, pathShots: [] }
+            ? { alongLine: result.along_line, pathShots: result.path_shots, pathStations: result.path_stations }
+            : { alongLine: null, pathShots: [], pathStations: [] }
         );
       } catch (e) {
         if (requestId === measureRequestIdRef.current) {
           console.warn('Along-line distance query failed:', getErrorMessage(e, 'unknown error'));
-          setMeasureAlongLine({ alongLine: null, pathShots: [] });
+          setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
         }
       }
     },
@@ -202,7 +202,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       if (isConnectable(start) && isConnectable(ep)) {
         void requestAlongLine(start, ep);
       } else {
-        setMeasureAlongLine({ alongLine: null, pathShots: [] });
+        setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
       }
     },
     [calculateDistance, clearMeasure, requestAlongLine, setMeasureAlongLine, setMeasureDirect, setMeasureEnd, setMeasureStart]

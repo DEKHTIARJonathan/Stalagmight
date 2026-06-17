@@ -1222,7 +1222,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const path_shots = sec
               ? (sec.shots ?? []).slice(0, 2).map((sh) => ({ section_id: sec.id, shot_id: sh.id }))
               : [];
-            return { along_line: 12.34, path_shots };
+            // Stations bounding those shots (one more than the shot count).
+            const path_stations = sec
+              ? Array.from({ length: path_shots.length + 1 }, (_, i) => ({ section_id: sec.id, station_index: i }))
+              : [];
+            return { along_line: 12.34, path_shots, path_stations };
           }
 
           case 'create_section': {

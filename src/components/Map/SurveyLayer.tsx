@@ -237,10 +237,13 @@ export default class SurveyLayer {
   // feature-state on every setData().
   private distanceMode: boolean = false;
   private distanceState: DistanceFeatureState | null = null;
-  // Measured along-line path shots (#26): tinted via the `measured` feature-state
-  // + a paint `case` on the shots line-color. Re-applied after setData() (which
+  // Measured along-line path (#26): the path's shots AND stations are tinted via
+  // a `measured` feature-state + a paint `case` on shots line-color / stations
+  // circle-color, in a user-configurable color. Re-applied after setData() (which
   // clears feature-state), and suppressed while the distance gradient owns color.
   private measuredPathIds: Set<number> | null = null;
+  private measuredPathStationIds: Set<number> | null = null;
+  private measureTintColor: string = MEASURE_TINT;
 
   // Theme colors for MapLibre paint properties (MapLibre cannot read CSS vars)
   // Seeded at construction so first paint uses current theme, not legacy fallbacks
@@ -1753,7 +1756,29 @@ export default class SurveyLayer {
       return [
         'case',
         ['boolean', ['feature-state', 'measured'], false],
-        MEASURE_TINT,
+        this.measureTintColor,
+        ['get', 'color'],
+      ] as ExpressionSpecification;
+    }
+    return ['get', 'color'] as ExpressionSpecification;
+  }
+
+  /** The stations layer's `circle-color` expression — distance ramp when active,
+   *  else the measured-path tint for the path's stations (#26), else plain. */
+  private stationsCircleColor(): ExpressionSpecification {
+    if (this.distanceMode) {
+      return distanceColorExpression(
+        DISTANCE_NEAR,
+        DISTANCE_FAR,
+        this.distanceState?.max ?? 0,
+        this.themeColors.grayLine,
+      );
+    }
+    if (this.measuredPathStationIds && this.measuredPathStationIds.size > 0) {
+      return [
+        'case',
+        ['boolean', ['feature-state', 'measured'], false],
+        this.measureTintColor,
         ['get', 'color'],
       ] as ExpressionSpecification;
     }
@@ -1764,20 +1789,11 @@ export default class SurveyLayer {
    *  depth sub-segment layer so distance wins cleanly. */
   private applyDistancePaint(): void {
     if (!this.map) return;
-    // Stations follow the distance ramp only (the measure tint is shots-only).
-    const stationColor: ExpressionSpecification = this.distanceMode
-      ? distanceColorExpression(
-          DISTANCE_NEAR,
-          DISTANCE_FAR,
-          this.distanceState?.max ?? 0,
-          this.themeColors.grayLine,
-        )
-      : (['get', 'color'] as ExpressionSpecification);
     if (this.map.getLayer(this.shotsLayerId)) {
       this.map.setPaintProperty(this.shotsLayerId, 'line-color', this.shotsLineColor());
     }
     if (this.map.getLayer(this.stationsLayerId)) {
-      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', stationColor);
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', this.stationsCircleColor());
     }
     // Depth's per-segment gradient renders above the main shot line; hide it while
     // distance is active so it can't cover the distance colors. When restoring,
@@ -1808,33 +1824,53 @@ export default class SurveyLayer {
     }
   }
 
-  /** Tint the shots on the measured along-cave-line path (#26), or clear with
-   *  `null`. Mirrors the distance-gradient overlay: a `measured` feature-state +
-   *  a paint `case` (see `shotsLineColor`). The distance gradient still wins on
-   *  color while it's active; the tint resurfaces when it turns off. */
-  setMeasuredPathShots(ids: Set<number> | null): void {
+  /** Tint the measured along-cave-line path's shots AND stations (#26) in `color`,
+   *  or clear with empty/null sets. Mirrors the distance-gradient overlay: a
+   *  `measured` feature-state + a paint `case` (see `shotsLineColor` /
+   *  `stationsCircleColor`). The distance gradient still wins on color while it's
+   *  active; the tint resurfaces when it turns off. */
+  setMeasuredPath(shotIds: Set<number> | null, stationIds: Set<number> | null, color: string): void {
     const shotsSource = this.sourceId + '-shots';
+    const stationsSource = this.sourceId + '-stations';
     // Clear any previous tint feature-state.
     if (this.map && this.measuredPathIds) {
       for (const id of this.measuredPathIds) {
         this.map.setFeatureState({ source: shotsSource, id }, { measured: false });
       }
     }
-    this.measuredPathIds = ids && ids.size > 0 ? ids : null;
+    if (this.map && this.measuredPathStationIds) {
+      for (const id of this.measuredPathStationIds) {
+        this.map.setFeatureState({ source: stationsSource, id }, { measured: false });
+      }
+    }
+    this.measuredPathIds = shotIds && shotIds.size > 0 ? shotIds : null;
+    this.measuredPathStationIds = stationIds && stationIds.size > 0 ? stationIds : null;
+    this.measureTintColor = color;
     if (!this.map || !hasLiveStyle(this.map)) return;
     if (this.map.getLayer(this.shotsLayerId)) {
       this.map.setPaintProperty(this.shotsLayerId, 'line-color', this.shotsLineColor());
     }
+    if (this.map.getLayer(this.stationsLayerId)) {
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', this.stationsCircleColor());
+    }
     this.applyMeasuredPathFeatureState();
   }
 
-  /** Push the `measured` feature-state for the tinted path shots (no-op when the
-   *  set is empty). Re-applied after setData() wipes feature-state. */
+  /** Push the `measured` feature-state for the tinted path shots + stations (no-op
+   *  when empty). Re-applied after setData() wipes feature-state. */
   private applyMeasuredPathFeatureState(): void {
-    if (!this.map || !this.measuredPathIds) return;
-    const shotsSource = this.sourceId + '-shots';
-    for (const id of this.measuredPathIds) {
-      this.map.setFeatureState({ source: shotsSource, id }, { measured: true });
+    if (!this.map) return;
+    if (this.measuredPathIds) {
+      const shotsSource = this.sourceId + '-shots';
+      for (const id of this.measuredPathIds) {
+        this.map.setFeatureState({ source: shotsSource, id }, { measured: true });
+      }
+    }
+    if (this.measuredPathStationIds) {
+      const stationsSource = this.sourceId + '-stations';
+      for (const id of this.measuredPathStationIds) {
+        this.map.setFeatureState({ source: stationsSource, id }, { measured: true });
+      }
     }
   }
 
@@ -3906,7 +3942,7 @@ export default class SurveyLayer {
       this.applyDistanceFeatureState();
     }
     // Likewise re-apply the measured along-line path tint (#26).
-    if (this.measuredPathIds) {
+    if (this.measuredPathIds || this.measuredPathStationIds) {
       this.applyMeasuredPathFeatureState();
     }
 
