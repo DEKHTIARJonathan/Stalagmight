@@ -129,7 +129,9 @@ export const defaultConfig: Config = {
     },
   },
   validation: {
-    warn_shot_length_min: 0.1,
+    // Keep in sync with the Rust ValidationConfig default
+    // (src-tauri/src/config/defaults.rs): flag shots under 0.5 m.
+    warn_shot_length_min: 0.5,
     warn_shot_length_max: 50.0,
     warn_depth_change_per_shot_max: 10.0,
     warn_azimuth_deviation_max: 30.0,

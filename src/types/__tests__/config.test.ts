@@ -144,7 +144,7 @@ describe('defaultConfig structure', () => {
 
   describe('validation config', () => {
     it('has correct validation defaults', () => {
-      expect(defaultConfig.validation.warn_shot_length_min).toBe(0.1);
+      expect(defaultConfig.validation.warn_shot_length_min).toBe(0.5);
       expect(defaultConfig.validation.warn_shot_length_max).toBe(50.0);
       expect(defaultConfig.validation.warn_depth_change_per_shot_max).toBe(10.0);
       expect(defaultConfig.validation.warn_azimuth_deviation_max).toBe(30.0);
