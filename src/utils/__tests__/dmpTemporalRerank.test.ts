@@ -252,4 +252,47 @@ describe('rerankSuggestionsByTemporalPlan', () => {
     expect(result.suggestions).toEqual([candidate]);
     expect(result.rejectedCount).toBe(0);
   });
+
+  it('keeps a feasible High match ahead of a Low import-chain link the plan would open with (#101)', () => {
+    // Mirrors the AC3 regression: C has a strong existing-section match (High) and
+    // a weak import-to-import link to its predecessor B (Low). The chain link
+    // "explains" the B→C temporal adjacency, so the planner scores it higher on
+    // checkedPairs and would surface it first — but a feasible High must win.
+    const localSections = [
+      makeSection('B', '2026-06-11T10:00:00', [makeShot(10, 10, 0), makeShot(10, 10, 5)]),
+      makeSection('C', '2026-06-11T10:10:00', [makeShot(10, 10, 10), makeShot(10, 10, 15)]),
+    ];
+    const highExisting = suggestion({
+      importSectionIndex: 1,
+      targetType: 'existing',
+      existingSectionId: 100,
+      targetImportIndex: null,
+      existingStationIndex: 0,
+      importStationIndex: 0,
+      matchedShots: 1,
+      score: 1.2,
+      confidence: 'high',
+      existingSectionName: 'Mainline 2',
+    });
+    const lowChain = suggestion({
+      importSectionIndex: 1,
+      targetType: 'importing',
+      targetImportIndex: 0,
+      existingSectionId: null,
+      existingStationIndex: 0,
+      importStationIndex: 0,
+      matchedShots: 1,
+      score: 0.6,
+      confidence: 'low',
+      existingSectionName: 'B',
+    });
+
+    const result = rerankSuggestionsByTemporalPlan([highExisting, lowChain], localSections, []);
+
+    // Both feasible → both survive as options...
+    expect(result.suggestions).toContain(highExisting);
+    expect(result.suggestions).toContain(lowChain);
+    // ...but the High existing-section match must be the primary, not the Low link.
+    expect(result.suggestions[0]).toBe(highExisting);
+  });
 });

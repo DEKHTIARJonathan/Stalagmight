@@ -10,6 +10,13 @@ export const TEMPORAL_HARD_SPEED_M_PER_MIN = 25;
 export const TEMPORAL_BEAM_WIDTH = 100;
 export const TEMPORAL_CANDIDATES_PER_SECTION = 10;
 
+/**
+ * Confidence tiers, best first. Temporal reranking is confined within a tier so
+ * a feasible higher-confidence suggestion is never demoted below a lower one (#101).
+ */
+const CONFIDENCE_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+const CONFIDENCE_RANK_FALLBACK = 3;
+
 type DmpTiming = {
   sectionIndex: number;
   startedAtMs: number;
@@ -434,7 +441,20 @@ export function rerankSuggestionsByTemporalPlan(
     return true;
   });
 
+  // #101: temporal planning may reorder candidates only *within* a confidence
+  // tier — it must never surface a lower-confidence connection ahead of a
+  // feasible higher-confidence one. The plan's `rankStates` weighs `checkedPairs`
+  // above geometry, so a weak import-to-import chain link (e.g. AC3→AC2, Low)
+  // that "explains" a temporal adjacency outranks a strong existing-section
+  // match (AC3→Mainline 2, High) and becomes the plan's firstSuggestion. Sorting
+  // by tier first keeps temporal tie-breaking for comparable candidates while
+  // preventing that High→Low inversion. Feasibility filtering above is unchanged.
+  const tierOf = (s: CrossSectionSuggestion): number =>
+    CONFIDENCE_RANK[s.confidence] ?? CONFIDENCE_RANK_FALLBACK;
+
   feasible.sort((a, b) => {
+    const tierDelta = tierOf(a) - tierOf(b);
+    if (tierDelta !== 0) return tierDelta;
     const ai = bestFirstKeys.indexOf(keyFor(a));
     const bi = bestFirstKeys.indexOf(keyFor(b));
     if (ai !== -1 || bi !== -1) {
