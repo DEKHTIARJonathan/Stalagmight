@@ -387,6 +387,10 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_along_line_distance",
     // Per-project settings: validation thresholds stored in the .stalx (#57).
     "command.update_project_settings",
+    // Project Settings dialog (#57).
+    "action.dialog.project-settings",
+    "dialog-cancel.project-settings",
+    "dwell.dialog.project-settings",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -525,7 +529,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 322);
+        assert_eq!(EVENT_NAMES.len(), 325);
     }
 
     #[test]

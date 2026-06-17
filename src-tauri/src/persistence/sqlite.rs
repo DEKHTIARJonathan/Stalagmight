@@ -2874,16 +2874,6 @@ impl Database {
             .unwrap_or_default())
     }
 
-    /// Persist the per-project validation config (#57) as a JSON row.
-    pub fn save_project_validation(&self, validation: &crate::config::ValidationConfig) -> Result<()> {
-        let json = serde_json::to_string(validation)?;
-        self.conn.execute(
-            "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('validation', ?1)",
-            params![json],
-        )?;
-        Ok(())
-    }
-
     /// Load all display settings from database
     pub fn load_display_settings(&self) -> Result<HashMap<String, String>> {
         let mut stmt = self.conn.prepare("SELECT key, value FROM display_settings")?;

@@ -375,9 +375,9 @@ impl Serialize for ProjectIpc<'_> {
         let zero_datums: Vec<_> = p.zero_datums.iter().filter_map(|z| p.datum_to_wire(z)).collect();
         let loop_closures: Vec<_> = p.loop_closures.iter().filter_map(|c| p.closure_to_wire(c)).collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
-        // (15 ts-exported fields). Adding a ts-exported field to `Project`
+        // (16 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 15)?;
+        let mut st = serializer.serialize_struct("Project", 16)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
@@ -393,6 +393,7 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
         st.serialize_field("next_closure_id", &p.next_closure_id)?;
         st.serialize_field("collab", &p.collab)?;
+        st.serialize_field("validation", &p.validation)?;
         st.end()
     }
 }

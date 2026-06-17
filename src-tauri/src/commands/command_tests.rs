@@ -2351,6 +2351,37 @@ fn test_project_validation_drives_warnings_and_persists() {
 }
 
 #[test]
+fn test_update_project_settings_is_undoable() {
+    // The settings change must be its own undo entry (#57 review). Otherwise
+    // undoing an unrelated edit made earlier would silently revert the
+    // name/validation back to whatever the edit's snapshot captured.
+    let mut project = project_with_section(vec![shot_data(1.0)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let validation_cfg = crate::config::ValidationConfig {
+        warn_shot_length_min: 2.0,
+        ..crate::config::ValidationConfig::default()
+    };
+    assert_success(&project::update_project_settings(
+        state(&app),
+        "Renamed Cave".to_string(),
+        validation_cfg,
+    ));
+    assert!(history::can_undo(state(&app)), "settings change must be undoable");
+    let applied = state(&app).get_project_state().unwrap();
+    assert_eq!(applied.name, "Renamed Cave");
+    assert_eq!(applied.validation.warn_shot_length_min, 2.0);
+
+    // Undo reverts the settings change instead of leaving it stranded.
+    assert_success(&history::undo(state(&app)));
+    let reverted = state(&app).get_project_state().unwrap();
+    assert_eq!(reverted.name, "Test Cave");
+    assert_eq!(reverted.validation.warn_shot_length_min, 0.4);
+}
+
+#[test]
 fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
     // Over-anchoring is not ignorable (issue #57): the resolve_warning command
     // must refuse to persist a suppression for it.

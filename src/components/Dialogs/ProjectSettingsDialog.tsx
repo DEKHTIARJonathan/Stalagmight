@@ -6,6 +6,7 @@ import { ValidationSettings } from './settings/ValidationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
 import type { SettingsCategory } from './SettingsSidebar';
+import { getPanelId, getTabId } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -14,6 +15,22 @@ import { defaultConfig, type Config } from '../../types/config';
 type ProjectSettingsTab = 'general' | 'validation';
 const TABS: readonly ProjectSettingsTab[] = ['general', 'validation'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
+
+/** Mirrors the range checks in the global Settings dialog. Computed directly
+ *  from the values so it holds even if the Validation tab was never mounted. */
+function isValidationValid(v: Config['validation']): boolean {
+  return (
+    v.warn_shot_length_min >= 0 &&
+    v.warn_shot_length_max > v.warn_shot_length_min &&
+    v.warn_depth_change_per_shot_max > 0 &&
+    v.azimuth_diff_threshold >= 0 &&
+    v.azimuth_diff_threshold <= 180 &&
+    v.pitch_diff_threshold >= 0 &&
+    v.pitch_diff_threshold <= 90 &&
+    v.inclination_depth_diff_threshold >= 0 &&
+    v.inclination_depth_diff_threshold <= 90
+  );
+}
 
 /**
  * Per-project settings (#57). Mirrors the global Settings dialog's structure
@@ -50,10 +67,13 @@ export function ProjectSettingsDialog() {
   }, []);
 
   const trimmedName = name.trim();
-  const canSave = !!project && trimmedName.length > 0 && !hasValidationError && !saving;
+  // Gate on the values directly (robust even if the Validation tab was never
+  // opened), plus the live component check while it is mounted.
+  const validationValid = isValidationValid(validation);
+  const canSave = !!project && trimmedName.length > 0 && validationValid && !hasValidationError && !saving;
 
   const handleSave = useCallback(async () => {
-    if (trimmedName.length === 0 || hasValidationError || saving) return;
+    if (trimmedName.length === 0 || !isValidationValid(validation) || hasValidationError || saving) return;
     setSaving(true);
     const result = await updateProjectSettings(trimmedName, validation);
     setSaving(false);
@@ -84,8 +104,10 @@ export function ProjectSettingsDialog() {
               {TABS.map((tk) => (
                 <button
                   key={tk}
+                  id={getTabId(panelIdBase, tk)}
                   role="tab"
                   aria-selected={tab === tk}
+                  aria-controls={getPanelId(panelIdBase, tk)}
                   onClick={() => setTab(tk)}
                   className={`w-full text-left px-3 py-1.5 rounded text-sm ${tab === tk ? 'bg-accent-10 text-text-primary' : 'text-text-secondary hover:bg-background-50'}`}
                   data-testid={`project-settings-tab-${tk}`}
@@ -97,6 +119,7 @@ export function ProjectSettingsDialog() {
 
             <div className="flex-1 min-w-0 overflow-auto p-4">
               {tab === 'general' ? (
+                <div role="tabpanel" id={getPanelId(panelIdBase, 'general')} aria-labelledby={getTabId(panelIdBase, 'general')}>
                 <SettingsSection title={t('dialogs.projectSettings.tabs.general')}>
                   <SettingRow
                     label={t('dialogs.projectSettings.name.label')}
@@ -113,6 +136,7 @@ export function ProjectSettingsDialog() {
                     />
                   </SettingRow>
                 </SettingsSection>
+                </div>
               ) : (
                 <ValidationSettings
                   config={syntheticConfig}

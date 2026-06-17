@@ -149,7 +149,8 @@ impl AppState {
             // that geometry change — an asymmetric undo.
             | SetStationComment { .. }
             | MoveComment { .. }
-            | RepairIntegrity => INERT,
+            | RepairIntegrity
+            | UpdateProjectSettings => INERT,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
             // section behind a sole-bridge closure.
@@ -554,6 +555,10 @@ impl AppState {
             // exhaustiveness.
             Command::RepairIntegrity => CommandResult::failure(
                 "RepairIntegrity is applied via repair_project_integrity, not execute()"
+                    .to_string(),
+            ),
+            Command::UpdateProjectSettings => CommandResult::failure(
+                "UpdateProjectSettings is applied via update_project_settings, not execute()"
                     .to_string(),
             ),
         };

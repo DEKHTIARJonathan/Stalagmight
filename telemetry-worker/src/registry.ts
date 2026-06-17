@@ -384,4 +384,8 @@ export const EVENT_NAMES: readonly string[] = [
   'command.get_along_line_distance',
   // Per-project settings: validation thresholds stored in the .stalx (#57).
   'command.update_project_settings',
+  // Project Settings dialog (#57).
+  'action.dialog.project-settings',
+  'dialog-cancel.project-settings',
+  'dwell.dialog.project-settings',
 ];

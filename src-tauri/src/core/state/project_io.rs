@@ -184,21 +184,46 @@ impl AppState {
     /// Update per-project settings (#57): the project name and validation
     /// thresholds. Persisted into the .stalx on the next save; warnings recompute
     /// from the new thresholds on the next get_project_warnings.
+    ///
+    /// Undoable via a snapshot pair (mirrors repair_open_project_integrity) so an
+    /// unrelated undo can't silently revert a settings change: without its own
+    /// undo entry, undoing an edit made BEFORE the settings change would restore a
+    /// snapshot carrying the old name/validation.
     pub fn update_project_settings(
         &self,
         name: String,
         validation: crate::config::ValidationConfig,
     ) -> CommandResult {
-        let mut guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(p) => p.into_inner(),
+        // Serialize against execute()/undo()/redo() so the before/after pair is
+        // consistent (same rationale as repair_open_project_integrity).
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
         };
-        let Some(project) = guard.as_mut() else {
-            return CommandResult::failure("No project open".to_string());
-        };
-        project.name = name;
-        project.validation = validation;
-        project.touch();
+        let before_snapshot = self.capture_project_snapshot().ok();
+        {
+            let mut guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let Some(project) = guard.as_mut() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            project.name = name;
+            project.validation = validation;
+            project.touch();
+        }
+        // Record an undo entry (before -> after) so the change is on the stack.
+        if let Some(before_json) = before_snapshot {
+            if let Ok(after_json) = self.capture_project_snapshot() {
+                if before_json != after_json {
+                    self.push_snapshot_undo(
+                        crate::core::Command::UpdateProjectSettings,
+                        before_json,
+                        after_json,
+                    );
+                }
+            }
+        }
         CommandResult::success()
     }
 
@@ -954,8 +979,10 @@ impl AppState {
             }
         }
 
-        // Create a new merged project
+        // Create a new merged project; seed validation from the global config
+        // (the "defaults for new projects", #57) rather than the hardcoded default.
         let mut merged_project = Project::new(output_name, None);
+        merged_project.validation = self.get_config().validation;
 
         // Track section ID remapping: (old_project_idx, old_section_id) -> new_section_id
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
@@ -1716,6 +1743,9 @@ impl AppState {
         // === PHASE 1: Initializing project (40%) ===
         progress.start_phase(LoadingPhase::InitializingProject);
         let mut project = Project::new(name.clone(), project_location);
+        // Seed per-project validation from the global config (the "defaults for
+        // new projects", #57). This is the path the New Project UI actually uses.
+        project.validation = self.get_config().validation;
         project.file_path = Some(db_path.clone());
 
         if let Some(ref mut database) = db {

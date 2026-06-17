@@ -371,10 +371,13 @@ export default function EditSectionDialog() {
     })
   ) : false;
 
-  // Validation config from app config
+  // Per-project validation thresholds (#57) so inline warnings match the
+  // Warnings panel; fall back to the global config, then hardcoded defaults.
   const validationConfig = {
-    azimuth_diff_threshold: config?.validation?.azimuth_diff_threshold ?? 20,
-    pitch_diff_threshold: config?.validation?.pitch_diff_threshold ?? 5,
+    azimuth_diff_threshold:
+      project?.validation?.azimuth_diff_threshold ?? config?.validation?.azimuth_diff_threshold ?? 20,
+    pitch_diff_threshold:
+      project?.validation?.pitch_diff_threshold ?? config?.validation?.pitch_diff_threshold ?? 5,
   };
 
   if (!section) {
