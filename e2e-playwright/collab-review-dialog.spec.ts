@@ -180,12 +180,15 @@ test.describe('Collaboration Review Dialog', () => {
   });
 });
 
-test.describe('Collaboration toggle (Project details)', () => {
-  test('the per-project toggle renders in the Details tab and invokes set_collab_enabled', async ({ page }) => {
+test.describe('Collaboration toggle (Project Settings)', () => {
+  test('the per-project toggle lives in Project Settings → Experimental and invokes set_collab_enabled', async ({ page }) => {
     await openProject(page);
 
-    // Details tab shows ProjectStats (with the Collaboration section) when nothing is selected.
+    // The toggle moved into the Project Settings dialog's Experimental tab (#57).
     await page.getByTestId('detail-tab-details').click();
+    await page.getByTestId('open-project-settings').click();
+    await expect(page.getByTestId('project-settings-dialog')).toBeVisible();
+    await page.getByTestId('project-settings-tab-experimental').click();
     await expect(page.getByTestId('collaboration-section')).toBeVisible();
 
     const toggle = page.getByTestId('toggle-collaboration');

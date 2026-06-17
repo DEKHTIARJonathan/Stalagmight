@@ -1748,6 +1748,8 @@
       "actions": {
         "openProject": "Open project",
         "openProjectAria": "Open {{name}}",
+        "projectSettings": "Project Settings",
+        "projectSettingsAria": "Open settings for {{name}}",
         "showInFolder": "Show in folder",
         "showInFolderAria": "Show {{name}} in folder",
         "removeFromRecent": "Remove from recent",

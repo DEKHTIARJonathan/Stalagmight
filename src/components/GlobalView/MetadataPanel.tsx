@@ -6,7 +6,6 @@ import { ResizablePanel } from '../common/Panel';
 import { ElidedPath } from '../common/ElidedPath';
 import { MarqueeText } from '../common/MarqueeText';
 import { Button } from '../common/Button';
-import { Toggle } from '../common/Toggle';
 import { PencilIcon, CheckIcon, CloseIcon } from '../common/icons';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -20,6 +19,8 @@ interface MetadataPanelProps {
   selectedProjects?: ProjectMetadata[];
   /** Callback when the user clicks Open Project */
   onOpenProject: (filePath: string) => void;
+  /** Callback when the user clicks Project Settings (opens the project, then its settings). */
+  onProjectSettings: (filePath: string) => void;
   /** Callback when the user clicks Delete (remove from recent) */
   onRemoveFromRecent: (filePath: string) => void;
   /** Whether the panel is collapsed */
@@ -36,18 +37,17 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   project,
   selectedProjects,
   onOpenProject,
+  onProjectSettings,
   onRemoveFromRecent,
   collapsed = false,
   onCollapseChange,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(collapsed);
-  const [collabBusy, setCollabBusy] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [nameBusy, setNameBusy] = useState(false);
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const setCollabEnabledForPath = useProjectStore((s) => s.setCollabEnabledForPath);
   const setProjectNameForPath = useProjectStore((s) => s.setProjectNameForPath);
   const loadRecentProjects = useProjectStore((s) => s.loadRecentProjects);
   const showToast = useUIStore((s) => s.showToast);
@@ -101,31 +101,13 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     }
   }, [singleProject?.file_path, onRemoveFromRecent]);
 
-  // Toggle Ariane collaboration for the selected (not-necessarily-open) project.
-  // Mutates the `.stalx` on disk by path, then refreshes the list so the panel
-  // reflects the new state.
-  const handleCollabToggle = useCallback(
-    async (next: boolean) => {
-      if (!singleProject?.file_path) return;
-      setCollabBusy(true);
-      try {
-        const result = await setCollabEnabledForPath(singleProject.file_path, next);
-        if (!result.success) {
-          showToast(
-            result.error ?? t('detailPanel.collaboration.toggleFailed', 'Failed to change collaboration mode'),
-            'collab-toggle'
-          );
-        } else {
-          await loadRecentProjects();
-        }
-      } catch (e) {
-        showToast(String(e), 'collab-toggle');
-      } finally {
-        setCollabBusy(false);
-      }
-    },
-    [singleProject?.file_path, setCollabEnabledForPath, loadRecentProjects, showToast, t]
-  );
+  // Project Settings (incl. Ariane collaboration) now live in the open project,
+  // so this opens the project, then its Project Settings dialog.
+  const handleProjectSettings = useCallback(() => {
+    if (singleProject?.file_path) {
+      onProjectSettings(singleProject.file_path);
+    }
+  }, [singleProject?.file_path, onProjectSettings]);
 
   // Rename the selected (not-necessarily-open) project's display name.
   const startEditName = useCallback(() => {
@@ -450,44 +432,17 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
               )}
             </div>
 
-            {/* Collaboration toggle (per-project Ariane .tml round-trip) */}
-            <div
-              className="p-3 border-t border-border space-y-2"
-              data-testid="metadata-collaboration"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-text-primary">
-                    {t('detailPanel.collaboration.enable', 'Ariane collaboration')}
-                  </div>
-                  <div className="text-xs text-text-secondary mt-0.5">
-                    {t(
-                      'detailPanel.collaboration.help',
-                      'Saves a companion Ariane file (.tml) on every save and merges external Ariane edits when you reopen the project.'
-                    )}
-                  </div>
-                </div>
-                <Toggle
-                  checked={singleProject.collab_enabled}
-                  onChange={handleCollabToggle}
-                  disabled={collabBusy}
-                  aria-label={t('detailPanel.collaboration.aria', 'Toggle Ariane collaboration mode')}
-                  data-testid="metadata-toggle-collaboration"
-                />
-              </div>
-              {singleProject.collab_enabled && (
-                <div
-                  className="text-xs text-text-tertiary"
-                  data-testid="metadata-collaboration-sibling"
-                >
-                  {t('detailPanel.collaboration.companion', 'Companion file')}:{' '}
-                  <code className="break-all">{deriveSiblingName(singleProject.file_path)}</code>
-                </div>
-              )}
-            </div>
-
             {/* Actions */}
             <div className="p-3 border-t border-border space-y-2">
+              <Button
+                onClick={handleProjectSettings}
+                variant="secondary"
+                className="w-full"
+                data-testid="metadata-project-settings-button"
+                aria-label={t('globalView.metadata.actions.projectSettingsAria', { name: singleProject.name })}
+              >
+                {t('globalView.metadata.actions.projectSettings')}
+              </Button>
               <Button
                 onClick={handleOpenProject}
                 className="w-full"
@@ -530,15 +485,6 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     </ResizablePanel>
   );
 };
-
-/** Derive `<stem>.tml` from a project's `.stalx` path for display. */
-function deriveSiblingName(filePath: string | null | undefined): string | null {
-  if (!filePath) return null;
-  const base = filePath.replace(/^.*[\\/]/, '');
-  const dot = base.lastIndexOf('.');
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  return `${stem}.tml`;
-}
 
 interface MetadataFieldProps {
   label: string;
