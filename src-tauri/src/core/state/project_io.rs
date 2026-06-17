@@ -522,6 +522,19 @@ impl AppState {
             }
         };
 
+        // Resolved (ignored) warnings live in their own table, not in the Project
+        // model, so save_project() won't carry them. Snapshot them from the
+        // current database and re-apply to the fresh save file below, otherwise
+        // every save would drop the user's "Ignore" acknowledgements (issue #57).
+        let resolved_warnings = {
+            let db_guard = self.database.lock().ok();
+            db_guard
+                .as_ref()
+                .and_then(|db| db.as_ref())
+                .and_then(|db| db.load_resolved_warnings().ok())
+                .unwrap_or_default()
+        };
+
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
@@ -557,6 +570,17 @@ impl AppState {
                     error = %e,
                     purpose = "preserve display settings on save",
                     "Failed to copy display setting"
+                );
+            }
+        }
+
+        // Carry over resolved (ignored) warnings so they survive the save.
+        if !resolved_warnings.is_empty() {
+            if let Err(e) = db.save_resolved_warnings_bulk(&resolved_warnings) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve resolved warnings on save",
+                    "Failed to copy resolved warnings"
                 );
             }
         }

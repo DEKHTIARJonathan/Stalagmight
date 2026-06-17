@@ -2227,6 +2227,41 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
 }
 
 #[test]
+fn test_resolved_warning_survives_save() {
+    // Issue #57 regression: resolved (ignored) warnings live in their own table,
+    // not the Project model, so the save pipeline (temp file + atomic rename)
+    // used to drop them. A save must carry them over so an ignore persists.
+    let mut project = project_with_section(vec![shot_data(0.0)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+
+    // Save rebuilds the .stalx and reopens the DB at the new file.
+    let dir = tempfile::tempdir().unwrap();
+    let _saved = save_project_to_temp(&app, &dir);
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    assert!(w.is_resolved, "resolved/ignored warning must survive a save");
+}
+
+#[test]
 fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
     // Over-anchoring is not ignorable (issue #57): the resolve_warning command
     // must refuse to persist a suppression for it.
