@@ -159,7 +159,9 @@ impl Default for MapControlsConfig {
 impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
-            warn_shot_length_min: 0.1,
+            // Flag suspiciously short shots (under 0.5 m by default; configurable
+            // via the `[validation]` config). Surfaces as the SHORT_SHOT warning.
+            warn_shot_length_min: 0.5,
             warn_shot_length_max: 50.0,
             warn_depth_change_per_shot_max: 10.0,
             warn_azimuth_deviation_max: 30.0,

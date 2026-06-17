@@ -227,7 +227,7 @@ fn test_get_config_defaults_validation() {
     with_config_lock(|| {
         let app = app_with_state();
         let cfg = config::get_config(state(&app));
-        assert_eq!(cfg.validation.warn_shot_length_min, 0.1);
+        assert_eq!(cfg.validation.warn_shot_length_min, 0.5);
         assert_eq!(cfg.validation.warn_shot_length_max, 50.0);
     });
 }
