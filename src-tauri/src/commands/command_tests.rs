@@ -2262,6 +2262,57 @@ fn test_resolved_warning_survives_save() {
 }
 
 #[test]
+fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
+    // Regression (#57 review): a resolved_warnings row for a deleted section is
+    // orphaned in the DB (delete_section is in-memory and never prunes the
+    // table). The save carry-over must skip it instead of letting one FK-violating
+    // row abort the whole transaction and silently drop every other ignore.
+    let mut project = Project::new("Test Cave".to_string(), None);
+    for (name, color) in [("A", "#4ecdc4"), ("B", "#ff6b6b")] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: color.to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(0.0)], // zero-length → ZERO_LENGTH warning
+        });
+    }
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // Ignore the ZERO_LENGTH warning in each section.
+    let zero: Vec<_> = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .filter(|w| w.code == "ZERO_LENGTH")
+        .collect();
+    assert_eq!(zero.len(), 2, "expected a zero-length warning per section");
+    for w in &zero {
+        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None).unwrap();
+    }
+    let surviving_section = zero[1].section_id;
+
+    // Delete the first section — its resolved_warnings row is now orphaned.
+    assert_success(&section::delete_section(state(&app), zero[0].section_id));
+
+    // Save, then confirm the surviving section's ignore is still resolved.
+    let dir = tempfile::tempdir().unwrap();
+    let _ = save_project_to_temp(&app, &dir);
+
+    let after = validation::get_project_warnings(state(&app));
+    let surviving = after
+        .iter()
+        .find(|w| w.section_id == surviving_section && w.code == "ZERO_LENGTH")
+        .expect("surviving section's zero-length warning");
+    assert!(
+        surviving.is_resolved,
+        "an ignore in a surviving section must not be lost because another section was deleted"
+    );
+}
+
+#[test]
 fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
     // Over-anchoring is not ignorable (issue #57): the resolve_warning command
     // must refuse to persist a suppression for it.

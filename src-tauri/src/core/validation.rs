@@ -193,11 +193,17 @@ impl Validator {
                     (None, None) => None,
                 };
                 if let Some(recorded) = recorded_pitch {
-                    let horizontal = (shot.length * shot.length - dz * dz).max(0.0).sqrt();
-                    // Pitch is positive-upward (depth decreasing), matching the
-                    // recorded convention, so compute from (depth_in - depth_out) = -dz.
-                    let computed = (-dz).atan2(horizontal).to_degrees();
-                    if (computed - recorded).abs() > config.pitch_diff_threshold {
+                    // The triangle constrains the MAGNITUDE: |dz| = length·sin(|pitch|).
+                    // The pitch SIGN is an unenforced per-source labelling convention
+                    // (the DMP device format stores its raw sign; Compass is normalised
+                    // on import; the canonical-looking pitch_from_components is test-only),
+                    // so we can't reliably know whether +pitch means up or down. Compare
+                    // the recorded inclination against the implied magnitude expressed in
+                    // the recorded value's own sign — immune to the up/down convention
+                    // while still catching a genuine magnitude disagreement.
+                    let implied_mag = (dz.abs() / shot.length).clamp(0.0, 1.0).asin().to_degrees();
+                    let implied = if recorded < 0.0 { -implied_mag } else { implied_mag };
+                    if (recorded - implied).abs() > config.pitch_diff_threshold {
                         warnings.push(ValidationWarning {
                             code: "INCLINATION_DEPTH_MISMATCH".to_string(),
                             message: format!(
@@ -205,7 +211,7 @@ impl Validator {
                                 section_id,
                                 shot_index + 1,
                                 recorded,
-                                computed,
+                                implied,
                                 config.pitch_diff_threshold
                             ),
                             severity: WarningSeverity::Warning,
@@ -783,7 +789,7 @@ mod tests {
     fn test_inclination_depth_mismatch() {
         let config = default_config(); // pitch_diff_threshold = 5.0
 
-        // length 10, dz 5 → horizontal 8.66 → implied pitch atan2(5, 8.66) ≈ 30°.
+        // length 10, |dz| 5 → implied inclination MAGNITUDE asin(5/10) ≈ 30°.
         let base = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 90.0,
@@ -793,19 +799,31 @@ mod tests {
             ..Default::default()
         };
 
-        // Descending 5m over a 10m slope → implied pitch ≈ -30° (positive is
-        // upward / depth decreasing, matching the recorded pitch convention).
-        // Recorded -10° vs implied ~-30° → 20° apart, flagged.
-        let mismatched = ShotData { pitch_in: Some(-10.0), pitch_out: Some(-10.0), ..base.clone() };
-        assert!(Validator::validate_shot(&mismatched, &config, 0, 0)
-            .iter()
-            .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH"));
+        // The check is magnitude-based and sign-convention-agnostic: a recorded
+        // inclination of ~30° magnitude is consistent regardless of whether the
+        // source labels descent as +30 (e.g. Compass, normalised) or -30 (e.g. a
+        // raw DMP device using +up). Neither must be flagged.
+        for recorded in [30.0_f64, -30.0_f64] {
+            let consistent = ShotData { pitch_in: Some(recorded), pitch_out: Some(recorded), ..base.clone() };
+            assert!(
+                Validator::validate_shot(&consistent, &config, 0, 0)
+                    .iter()
+                    .all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"),
+                "recorded {recorded}° (≈30° magnitude) is geometrically consistent and must not be flagged"
+            );
+        }
 
-        // Recorded ~-30° matches the geometry → not flagged.
-        let consistent = ShotData { pitch_in: Some(-30.0), pitch_out: Some(-30.0), ..base.clone() };
-        assert!(Validator::validate_shot(&consistent, &config, 0, 0)
-            .iter()
-            .all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"));
+        // A genuine magnitude disagreement IS flagged (10° magnitude vs ~30°),
+        // in either sign convention.
+        for recorded in [10.0_f64, -10.0_f64] {
+            let mismatched = ShotData { pitch_in: Some(recorded), pitch_out: Some(recorded), ..base.clone() };
+            assert!(
+                Validator::validate_shot(&mismatched, &config, 0, 0)
+                    .iter()
+                    .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH"),
+                "recorded {recorded}° (10° magnitude) disagrees with the ~30° implied and must be flagged"
+            );
+        }
 
         // No recorded inclination → nothing to cross-check, not flagged.
         let no_pitch = ShotData { pitch_in: None, pitch_out: None, ..base.clone() };

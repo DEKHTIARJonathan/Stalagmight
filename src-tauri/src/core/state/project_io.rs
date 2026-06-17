@@ -527,12 +527,33 @@ impl AppState {
         // current database and re-apply to the fresh save file below, otherwise
         // every save would drop the user's "Ignore" acknowledgements (issue #57).
         let resolved_warnings = {
-            let db_guard = self.database.lock().ok();
-            db_guard
-                .as_ref()
-                .and_then(|db| db.as_ref())
-                .and_then(|db| db.load_resolved_warnings().ok())
-                .unwrap_or_default()
+            // Recover a poisoned lock rather than silently dropping every ignore.
+            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
+            let loaded = db_guard.as_ref().map(|db| db.load_resolved_warnings());
+            match loaded {
+                Some(Ok(rows)) => {
+                    // Drop rows whose section no longer exists. resolved_warnings has
+                    // a FOREIGN KEY on section_id and the carry-over re-inserts in a
+                    // single transaction — one orphaned row (e.g. a section deleted
+                    // after a warning on it was ignored; delete_section is in-memory
+                    // only and never prunes this table) would abort the whole
+                    // transaction and silently drop EVERY still-valid ignore.
+                    let section_ids: std::collections::HashSet<_> =
+                        project.sections.iter().map(|s| s.id).collect();
+                    rows.into_iter()
+                        .filter(|r| section_ids.contains(&r.section_id))
+                        .collect()
+                }
+                Some(Err(e)) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "carry resolved warnings across save",
+                        "Failed to read resolved warnings; ignores may not be preserved on this save"
+                    );
+                    Vec::new()
+                }
+                None => Vec::new(),
+            }
         };
 
         // Remove any leftover temp file from previous failed saves
@@ -1172,6 +1193,10 @@ impl AppState {
             let _ = std::fs::remove_file(&temp_path);
             return save_failure("Failed to save merged project", &output_path, &e);
         }
+
+        // Resolved (ignored) warnings are intentionally NOT carried into the
+        // merged output: it is a fresh artifact with re-derived offsets and
+        // reassigned closure ids, so warnings are re-evaluated from scratch.
 
         // Close database before rename
         drop(db);

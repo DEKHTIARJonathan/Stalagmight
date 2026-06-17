@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
@@ -467,16 +468,29 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               </button>
             )}
             {/* Clickable message: single-click selects the shot, double-click
-                pans to it. A plain <div> (not role="button") so the inline shot
-                pill <button> isn't nested inside another interactive element;
-                it also stays normal flow so the text wraps around the floated
-                action button. Keyboard users reach the shot via the pill and
-                the Resolve button (both real buttons). */}
+                pans to it. With pills (Full level) it stays a plain <div> so the
+                inline shot pill <button> isn't nested in another interactive
+                element; without pills there is no pill, so it becomes keyboard-
+                operable (role=button + Enter/Space) to preserve select-by-keyboard.
+                Either way it stays normal flow so the text wraps around the
+                floated action button. */}
             {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
             <div
+              {...(showPills
+                ? {}
+                : {
+                    role: 'button' as const,
+                    tabIndex: 0,
+                    onKeyDown: (e: ReactKeyboardEvent) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onWarningClick(warning);
+                      }
+                    },
+                  })}
               onClick={() => onWarningClick(warning)}
               onDoubleClick={() => triggerPanToShot(warning.sectionId, warning.shotId)}
-              className="text-left cursor-pointer rounded"
+              className={`text-left cursor-pointer rounded${showPills ? '' : ' focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset'}`}
               data-testid="warning-message"
             >
               <span className={`mr-1.5 align-text-bottom inline-block ${warning.severity === 'error' ? 'text-error' : 'text-warning'}`}>
