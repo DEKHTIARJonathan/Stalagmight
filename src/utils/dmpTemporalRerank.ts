@@ -17,6 +17,9 @@ export const TEMPORAL_CANDIDATES_PER_SECTION = 10;
  * generated union so tsc flags it if the IPC enum gains/renames a tier.
  */
 const CONFIDENCE_RANK: Record<SuggestionConfidence, number> = { high: 0, medium: 1, low: 2 };
+/** Tier for an unrecognized confidence value — treat as lowest so a malformed
+ *  input can never displace a valid higher-confidence candidate. */
+const CONFIDENCE_RANK_FALLBACK = 3;
 
 type DmpTiming = {
   sectionIndex: number;
@@ -464,7 +467,15 @@ export function rerankSuggestionsByTemporalPlan(
   // satisfy a temporal pair. Grouping by section and stably reordering within
   // each group fixes the same-section High→Low inversion without touching section
   // order. Array.sort is stable, so same-tier candidates keep their plan/score order.
-  const tierOf = (s: CrossSectionSuggestion): number => CONFIDENCE_RANK[s.confidence];
+  // Fall back to the lowest tier for any unrecognized confidence so a malformed
+  // value yields a finite comparator (never NaN) and can't displace a valid one.
+  const tierOf = (s: CrossSectionSuggestion): number =>
+    (CONFIDENCE_RANK as Record<string, number>)[s.confidence] ?? CONFIDENCE_RANK_FALLBACK;
+  // `feasible` is already in plan/score order; capture each index so the within-
+  // group sort below is deterministic without relying on Array.sort stability.
+  const planOrder = new Map<CrossSectionSuggestion, number>();
+  feasible.forEach((s, i) => planOrder.set(s, i));
+
   const groups = new Map<number, CrossSectionSuggestion[]>();
   const sectionOrder: number[] = [];
   for (const s of feasible) {
@@ -478,7 +489,7 @@ export function rerankSuggestionsByTemporalPlan(
   }
   const ordered = sectionOrder.flatMap((idx) => {
     const group = groups.get(idx)!;
-    group.sort((a, b) => tierOf(a) - tierOf(b));
+    group.sort((a, b) => tierOf(a) - tierOf(b) || planOrder.get(a)! - planOrder.get(b)!);
     return group;
   });
 
