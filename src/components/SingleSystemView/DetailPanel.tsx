@@ -1377,6 +1377,7 @@ interface ProjectStatsProps {
 function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
+  const openDialog = useUIStore((s) => s.openDialog);
   if (!project || !stats) {
     return (
       <div className="p-4 text-center text-text-secondary">
@@ -1482,6 +1483,17 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
               <StatCard label={t('detailPanel.projectStats.stationMerges')} value={formatNumber(project.station_merges.length)} />
               <StatCard label={t('detailPanel.projectStats.zeroDatums')} value={formatNumber(project.zero_datums.length)} />
             </div>
+          </div>
+
+          {/* Per-project settings (name + validation thresholds, stored in the .stalx) */}
+          <div className="pt-2 border-t border-border">
+            <button
+              onClick={() => openDialog('project-settings')}
+              className="text-sm px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
+              data-testid="open-project-settings"
+            >
+              {t('detailPanel.projectSettings.open')}
+            </button>
           </div>
 
           {/* Collaboration mode (per-project Ariane .tml round-trip) */}

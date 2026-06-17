@@ -310,6 +310,8 @@ interface ProjectStore {
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  // Per-project settings (#57): name + validation thresholds, stored in the .stalx
+  updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
   // Collaboration mode
   setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
   setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
@@ -1587,6 +1589,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Collaboration mode
+  updateProjectSettings: async (name: string, validation: Config['validation']) => {
+    return executeCommand(
+      'update_project_settings',
+      { name, validation },
+      { purpose: 'update per-project settings' }
+    );
+  },
+
   setCollabEnabled: async (enabled: boolean) => {
     return executeCommand(
       'set_collab_enabled',

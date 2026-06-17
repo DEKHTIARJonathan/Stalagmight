@@ -478,6 +478,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, project: currentProject };
           }
 
+          case 'update_project_settings': {
+            // Per-project settings (#57): name + validation thresholds.
+            if (currentProject) {
+              if (typeof args?.name === 'string') currentProject.name = args.name;
+              if (args?.validation) {
+                (currentProject as Record<string, unknown>).validation = args.validation;
+              }
+            }
+            return { success: true, project: currentProject };
+          }
+
           case 'create_project_full': {
             // Consolidated create_project_full command for loading progress feature
             const name = (args?.name as string) ?? 'Untitled Project';

@@ -18,7 +18,8 @@ export function ValidationSettings({
   changedFields,
   onValidationError,
   panelIdBase,
-}: SettingsCategoryProps) {
+  scope = 'global',
+}: SettingsCategoryProps & { scope?: 'global' | 'project' }) {
   const { t } = useTranslation();
   // Validation state
   const hasErrorRef = useRef(false);
@@ -78,7 +79,10 @@ export function ValidationSettings({
       aria-labelledby={getTabId(panelIdBase, 'validation')}
       data-testid="settings-panel-validation"
     >
-      <h2 className="text-lg font-medium mb-4">{t('settings.validation.title')}</h2>
+      <h2 className="text-lg font-medium mb-1">{t('settings.validation.title')}</h2>
+      {scope === 'global' && (
+        <p className="text-xs text-text-secondary mb-4">{t('settings.validation.defaultsNote')}</p>
+      )}
 
       <SettingsSection title={t('settings.validation.sections.shotLength')} data-testid="section-shot-length">
         <SettingRow

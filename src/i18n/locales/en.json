@@ -452,6 +452,7 @@
     },
     "validation": {
       "title": "Validation",
+      "defaultsNote": "These are the defaults for newly created projects. Each project stores its own thresholds (in its .stalx) — edit them per project under Project Settings.",
       "sections": {
         "shotLength": "Shot Length Warnings",
         "depth": "Depth Warnings",
@@ -1044,6 +1045,19 @@
     "settings": {
       "title": "Settings"
     },
+    "projectSettings": {
+      "title": "Project Settings",
+      "noProject": "No project is open.",
+      "saveFailed": "Failed to save project settings.",
+      "tabs": {
+        "general": "General",
+        "validation": "Validation"
+      },
+      "name": {
+        "label": "Project name",
+        "help": "The name of this cave system / project."
+      }
+    },
     "collabReview": {
       "title": "Review Collaborator Changes",
       "intro": "The companion Ariane file (.tml) was edited outside Stalagmight. The following changes will be merged into this project. Stalagmight-only data (loop closures, merges, offsets, comments) is preserved.",
@@ -1503,6 +1517,9 @@
       "connections": "Connections",
       "stationMerges": "Station merges",
       "zeroDatums": "Zero datums"
+    },
+    "projectSettings": {
+      "open": "Project Settings…"
     },
     "collaboration": {
       "title": "Collaboration",
