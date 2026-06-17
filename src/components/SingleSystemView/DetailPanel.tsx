@@ -195,12 +195,13 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
   const { unresolveWarning } = useProjectStore(
     useShallow((s) => ({ unresolveWarning: s.unresolveWarning })),
   );
-  const { setSelection, setDetailPanelTab, announceSelection, triggerCenterOnShot } = useUIStore(
+  const { setSelection, setDetailPanelTab, announceSelection, triggerCenterOnShot, triggerPanToShot } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       announceSelection: s.announceSelection,
       triggerCenterOnShot: s.triggerCenterOnShot,
+      triggerPanToShot: s.triggerPanToShot,
     })),
   );
   // At the Full level the location subtitle is shown as entity pills (section +
@@ -430,6 +431,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               role="button"
               tabIndex={0}
               onClick={() => onWarningClick(warning)}
+              onDoubleClick={() => triggerPanToShot(warning.sectionId, warning.shotId)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
