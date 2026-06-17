@@ -6525,13 +6525,17 @@ impl Project {
     }
 
     /// Shortest along-cave-line distance between two ruler endpoints (#26), plus
-    /// the ordered shots traversed (for tinting). Uses the same
-    /// shots+merges+closures graph as the distance-gradient overlay
-    /// (`build_survey_graph`, measured lengths), so results match the Display
-    /// "line distance" view. An endpoint may be a station or an exact point on a
-    /// shot at fraction `t` (which splits that shot's edge). Returns
-    /// `along_line: None` when the endpoints are in different connected
-    /// components. `stations` only supplies the `StationRef -> index` map.
+    /// the ordered shots traversed (for tinting). The distance sums the lengths of
+    /// the shots on the path — each shot weighted by the euclidean distance between
+    /// its endpoints in `stations`, so passing the closure-ADJUSTED coordinates
+    /// (see `AppState::along_line_between`) yields the closure-adjusted shot lengths
+    /// the user asked for; passing measured coordinates yields the surveyed tape
+    /// lengths (the two coincide when there are no loop closures to adjust). An
+    /// endpoint may be a station or an exact point on a shot at fraction `t` (which
+    /// splits that shot's edge; a mid-shot leg contributes `t` of the adjusted shot
+    /// length). Returns `along_line: None` when the endpoints are in different
+    /// connected components. `stations` supplies both the `StationRef -> index` map
+    /// and the per-node coordinates used for the weights.
     pub fn along_line_between(
         &self,
         stations: &[Station],
@@ -6551,6 +6555,16 @@ impl Project {
         }
         let idx = Self::station_index_map(stations);
         let section_lookup = self.build_section_lookup();
+
+        // Shot lengths come from the euclidean distance between the (adjusted)
+        // station coordinates, so the along-line distance sums the closure-adjusted
+        // shot lengths (#26). `shot_len` is only ever called with real station node
+        // indices (a shot's from/to), which are always < `coords.len()`.
+        let coords: Vec<Coordinates> = stations.iter().map(|s| s.coordinates).collect();
+        let shot_len = |from: usize, to: usize| -> f64 {
+            let (p, q) = (&coords[from], &coords[to]);
+            ((q.x - p.x).powi(2) + (q.y - p.y).powi(2) + (q.z - p.z).powi(2)).sqrt()
+        };
 
         // How an endpoint resolves onto the graph: an existing station node, or a
         // virtual split of a shot edge at fraction `t`.
@@ -6572,7 +6586,7 @@ impl Project {
                 let pos = section.shots.iter().position(|s| s.id == shot_id)?;
                 let from = *idx.get(&StationRef::new(ep.section_id, pos as u32))?;
                 let to = *idx.get(&StationRef::new(ep.section_id, (pos + 1) as u32))?;
-                let len = section.shots[pos].length.max(0.0);
+                let len = shot_len(from, to);
                 let tt = t.clamp(0.0, 1.0);
                 if tt <= EPS {
                     return Some(Resolved::Station(from));
@@ -6624,7 +6638,7 @@ impl Project {
         // order as `build_survey_graph` so reconstructed node pairs map back to a
         // shot. Zero-cost merge/closure edges are intentionally absent here ⇒ a
         // reconstructed pair not in the map is a tie to skip (never tinted).
-        let mut adj = self.build_survey_graph(n, &idx, None);
+        let mut adj = self.build_survey_graph(n, &idx, Some(&coords));
         let mut shot_edge: HashMap<(usize, usize), PathShot> = HashMap::new();
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {

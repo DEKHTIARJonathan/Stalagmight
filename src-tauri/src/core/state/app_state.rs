@@ -359,16 +359,21 @@ impl AppState {
     }
 
     /// Shortest along-cave-line distance + traversed shots between two ruler
-    /// endpoints (#26). Uses MEASURED geometry (topology-only — matches the
-    /// distance-gradient / Display "line distance" view); `stations` only
-    /// supplies the `StationRef -> index` map.
+    /// endpoints (#26). The distance sums the CLOSURE-ADJUSTED shot lengths, so it
+    /// uses the memoized adjusted-stations cache (`get_adjusted_stations`): warm
+    /// while the adjusted view is in use, and on a cold cache it pays one closure
+    /// solve (then repeat measurements are instant). Falls back to measured
+    /// coordinates only if the adjusted solve is unavailable — without loop
+    /// closures the two coincide anyway.
     pub fn along_line_between(
         &self,
         a: RulerEndpoint,
         b: RulerEndpoint,
     ) -> Option<AlongLineResult> {
         let project = self.get_project_state()?;
-        let stations = project.compute_station_coordinates();
+        let stations = self
+            .get_adjusted_stations()
+            .unwrap_or_else(|| project.compute_station_coordinates());
         Some(project.along_line_between(&stations, a, b))
     }
 

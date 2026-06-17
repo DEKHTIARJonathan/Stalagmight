@@ -1937,6 +1937,42 @@ fn along_line_reference_shot_is_traversed_and_tinted() {
 }
 
 #[test]
+fn along_line_follows_passed_coordinates_not_measured_length() {
+    // The along-line distance sums the euclidean distance between the coordinates
+    // in `stations`, NOT the raw shot.length (#26): feeding the closure-ADJUSTED
+    // coordinates yields the adjusted shot lengths the user asked for. Here we feed
+    // coordinates that deliberately disagree with the 10 m measured lengths and
+    // confirm the result follows the coordinates (3 + 25 = 28, not 10 + 10 = 20).
+    let mut project = Project::new("AdjustedLengths".to_string(), None);
+    let a = project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0), shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let s1 = project.get_section(a).unwrap().shots[1].id;
+    let mut stations = project.compute_station_coordinates();
+    let set = |stations: &mut Vec<Station>, station_index: u32, y: f64| {
+        let i = stations
+            .iter()
+            .position(|s| s.station_ref == StationRef::new(a, station_index))
+            .unwrap();
+        stations[i].coordinates = Coordinates::new(0.0, y, 0.0);
+    };
+    set(&mut stations, 0, 0.0);
+    set(&mut stations, 1, 3.0); // shot 0 → 3 m apart
+    set(&mut stations, 2, 28.0); // shot 1 → 25 m apart
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 2));
+    assert!((r.along_line.unwrap() - 28.0).abs() < 1e-6, "got {:?}", r.along_line);
+
+    // A mid-shot endpoint's partial leg uses the same coordinate-derived length:
+    // 40 % along shot 1 (25 m apart) = 10 m, plus shot 0's 3 m = 13 m.
+    let r2 = project.along_line_between(&stations, ep_station(a, 0), ep_shot(a, s1, 0.4));
+    assert!((r2.along_line.unwrap() - 13.0).abs() < 1e-6, "got {:?}", r2.along_line);
+}
+
+#[test]
 fn new_merge_expands_existing_closure_connectivity() {
     // Test: Adding a merge after a closure exists should expand connectivity
     // Setup: A-B closure, then merge B-C -> A should connect to C
