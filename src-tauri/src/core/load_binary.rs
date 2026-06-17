@@ -142,6 +142,9 @@ pub struct ProjectHeaderBinary {
     /// `result.project.collab` is undefined and the load-time collab
     /// detection (collab-mode `loadProject` hook) silently never runs.
     pub collab: Option<crate::models::CollabState>,
+    /// Per-project validation thresholds (#57), so binary-loaded projects keep
+    /// their own config instead of falling back to the global defaults.
+    pub validation: crate::config::ValidationConfig,
 }
 
 #[derive(Serialize)]
@@ -337,6 +340,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         imported_file_hashes: project.imported_file_hashes,
         imported_section_hashes: project.imported_section_hashes,
         collab: project.collab,
+        validation: project.validation,
     };
 
     let result = LoadProjectFullBinaryResult {

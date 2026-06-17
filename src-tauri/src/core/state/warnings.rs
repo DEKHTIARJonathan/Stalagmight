@@ -63,7 +63,8 @@ impl AppState {
                 resolved_by_position.contains(&(section_id, shot_id, code.to_string()))
             };
 
-        let config = self.get_config();
+        // Per-project validation thresholds (#57): stored in the .stalx, seeded
+        // from the global config at project creation, authoritative thereafter.
         let mut all_warnings = Vec::new();
 
         for section in &project.sections {
@@ -87,7 +88,7 @@ impl AppState {
                     temperature: shot.temperature,
                 };
 
-                let warnings = Validator::validate_shot(&shot_data, &config.validation, section.id, shot_index);
+                let warnings = Validator::validate_shot(&shot_data, &project.validation, section.id, shot_index);
                 for warning in warnings {
                     let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &warning.code);
                     all_warnings.push(ProjectWarning {

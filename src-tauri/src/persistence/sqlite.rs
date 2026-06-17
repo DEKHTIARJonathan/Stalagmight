@@ -4,7 +4,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::path::Path;
@@ -266,6 +266,16 @@ impl Database {
         // Ensure display_settings table exists (added in v1.x for per-project display toggles)
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS display_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Ensure project_settings table exists (#57: per-project validation
+        // thresholds stored in the .stalx so they travel with the file).
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS project_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )",
@@ -1295,6 +1305,12 @@ impl Database {
                 value TEXT NOT NULL
             );
 
+            -- Per-project settings (validation thresholds, #57)
+            CREATE TABLE IF NOT EXISTS project_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             -- Resolved warnings (user acknowledged)
             CREATE TABLE IF NOT EXISTS resolved_warnings (
                 id INTEGER PRIMARY KEY,
@@ -1629,6 +1645,12 @@ impl Database {
                 params![hash],
             )?;
         }
+
+        // Per-project validation thresholds (#57) travel in the .stalx.
+        tx.execute(
+            "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('validation', ?1)",
+            params![serde_json::to_string(&project.validation)?],
+        )?;
 
         tx.commit()?;
         tracing::debug!("Transaction committed");
@@ -2142,6 +2164,9 @@ impl Database {
         // Load collaboration state (None for pre-v5 projects or when off)
         let collab = self.load_collab_state()?;
 
+        // Per-project validation thresholds (#57); default for legacy projects.
+        let validation = self.load_project_validation()?;
+
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
         let mut section_index_cache = HashMap::with_capacity(sections.len());
@@ -2180,6 +2205,7 @@ impl Database {
             imported_section_hashes,
             next_closure_id,
             collab,
+            validation,
             cascade_deferred: false,
             section_index_cache,
             merge_adjacency_cache,
@@ -2824,6 +2850,37 @@ impl Database {
             }
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Load the per-project validation config (#57). Returns the default config
+    /// for legacy projects that predate the feature (no stored row), or if the
+    /// stored JSON can't be parsed.
+    pub fn load_project_validation(&self) -> Result<crate::config::ValidationConfig> {
+        // Tolerant of a missing project_settings table: open_existing() skips
+        // migrations, and legacy .stalx files predate the table — both should
+        // fall back to the default config rather than failing the whole load.
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'validation'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        Ok(json
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default())
+    }
+
+    /// Persist the per-project validation config (#57) as a JSON row.
+    pub fn save_project_validation(&self, validation: &crate::config::ValidationConfig) -> Result<()> {
+        let json = serde_json::to_string(validation)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('validation', ?1)",
+            params![json],
+        )?;
         Ok(())
     }
 

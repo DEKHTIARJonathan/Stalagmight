@@ -155,7 +155,10 @@ impl AppState {
     }
 
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
-        let project = Project::new(name, location);
+        let mut project = Project::new(name, location);
+        // Seed per-project validation thresholds from the global config — the
+        // "defaults for new projects" (#57). Authoritative in the .stalx after.
+        project.validation = self.get_config().validation;
 
         tracing::info!(
             project_name = %project.name,
@@ -175,6 +178,27 @@ impl AppState {
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
 
+        CommandResult::success()
+    }
+
+    /// Update per-project settings (#57): the project name and validation
+    /// thresholds. Persisted into the .stalx on the next save; warnings recompute
+    /// from the new thresholds on the next get_project_warnings.
+    pub fn update_project_settings(
+        &self,
+        name: String,
+        validation: crate::config::ValidationConfig,
+    ) -> CommandResult {
+        let mut guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let Some(project) = guard.as_mut() else {
+            return CommandResult::failure("No project open".to_string());
+        };
+        project.name = name;
+        project.validation = validation;
+        project.touch();
         CommandResult::success()
     }
 

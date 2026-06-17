@@ -382,4 +382,6 @@ export const EVENT_NAMES: readonly string[] = [
   'command.get_raw_table',
   // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
   'command.get_along_line_distance',
+  // Per-project settings: validation thresholds stored in the .stalx (#57).
+  'command.update_project_settings',
 ];

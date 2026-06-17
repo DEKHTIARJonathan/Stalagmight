@@ -18,6 +18,7 @@ import { decode as msgpackDecode } from '@msgpack/msgpack';
 import type { LoadProjectFullResult } from '../types/ipc/LoadProjectFullResult';
 import type { Project } from '../types/ipc/Project';
 import type { CollabState } from '../types/ipc/CollabState';
+import type { ValidationConfig } from '../types/ipc/ValidationConfig';
 import type { Section } from '../types/ipc/Section';
 import type { Shot } from '../types/ipc/Shot';
 import type { Station } from '../types/ipc/Station';
@@ -105,6 +106,7 @@ interface ProjectHeaderBinary {
   imported_file_hashes: string[];
   imported_section_hashes: string[];
   collab: CollabState | null;
+  validation: ValidationConfig;
 }
 
 interface SectionHeaderBinary {
@@ -294,6 +296,7 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
     imported_section_hashes: env.project_header.imported_section_hashes,
     next_closure_id: BigInt(env.project_header.next_closure_id as unknown as number | bigint),
     collab: env.project_header.collab,
+    validation: env.project_header.validation,
   };
 
   // Stations: typed-array views over the binary buffers.

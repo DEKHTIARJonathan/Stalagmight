@@ -2313,6 +2313,44 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
 }
 
 #[test]
+fn test_project_validation_drives_warnings_and_persists() {
+    // Per-project validation (#57): warnings use the project's own thresholds,
+    // and those thresholds survive a save into the .stalx.
+    let mut project = project_with_section(vec![shot_data(1.0)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // A 1.0 m shot is not short under the default 0.4 m minimum.
+    assert!(validation::get_project_warnings(state(&app))
+        .iter()
+        .all(|w| w.code != "SHORT_SHOT"));
+
+    // Raise the project's minimum length to 2.0 m via the settings command.
+    let validation_cfg = crate::config::ValidationConfig {
+        warn_shot_length_min: 2.0,
+        ..crate::config::ValidationConfig::default()
+    };
+    assert_success(&project::update_project_settings(
+        state(&app),
+        "Renamed Cave".to_string(),
+        validation_cfg,
+    ));
+
+    // Now it's flagged — warnings use the PROJECT's thresholds, not the global.
+    assert!(validation::get_project_warnings(state(&app))
+        .iter()
+        .any(|w| w.code == "SHORT_SHOT"));
+
+    // Save, then reopen the .stalx fresh: the thresholds (and name) persisted.
+    let dir = tempfile::tempdir().unwrap();
+    let saved = save_project_to_temp(&app, &dir);
+    let reopened = Database::open(&saved).unwrap().load_project().unwrap();
+    assert_eq!(reopened.validation.warn_shot_length_min, 2.0);
+    assert_eq!(reopened.name, "Renamed Cave");
+}
+
+#[test]
 fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
     // Over-anchoring is not ignorable (issue #57): the resolve_warning command
     // must refuse to persist a suppression for it.

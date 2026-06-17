@@ -1119,6 +1119,7 @@ pub fn run() {
             commands::cache::get_tile_providers,
             // Project commands
             commands::project::create_project,
+            commands::project::update_project_settings,
             commands::project::open_project,
             commands::project::save_project,
             commands::project::close_project,

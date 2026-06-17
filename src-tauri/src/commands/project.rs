@@ -36,6 +36,17 @@ pub(crate) fn create_project_impl(
     state.execute(Command::CreateProject { name, location })
 }
 
+/// Update per-project settings (#57): project name + validation thresholds.
+/// Stored in the .stalx so they travel with the file between collaborators.
+#[tauri::command]
+pub fn update_project_settings(
+    state: State<AppState>,
+    name: String,
+    validation: crate::config::ValidationConfig,
+) -> CommandResult {
+    state.update_project_settings(name, validation)
+}
+
 /// Open an existing project
 #[tauri::command]
 pub fn open_project(state: State<AppState>, path: PathBuf) -> CommandResult {

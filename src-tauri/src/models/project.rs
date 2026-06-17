@@ -189,6 +189,13 @@ pub struct Project {
     #[serde(default)]
     pub collab: Option<CollabState>,
 
+    /// Per-project validation thresholds (#57). Stored in the `.stalx` so they
+    /// travel with the file between collaborators. New projects are seeded from
+    /// the global config (the "defaults for new projects"); thereafter this is
+    /// authoritative. Defaults on legacy projects until populated on load.
+    #[serde(default)]
+    pub validation: crate::config::ValidationConfig,
+
     /// Transient flag (NOT persisted) — when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
@@ -423,6 +430,7 @@ impl Project {
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
             collab: None,
+            validation: crate::config::ValidationConfig::default(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             merge_adjacency_cache: HashMap::new(),
