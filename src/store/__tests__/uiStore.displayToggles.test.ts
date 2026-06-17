@@ -769,4 +769,12 @@ describe('Geometry Mode', () => {
   it('geometryMode is NOT part of DISPLAY_DEFAULTS (telemetry registry contract)', () => {
     expect('geometryMode' in DISPLAY_DEFAULTS).toBe(false);
   });
+
+  it('applyDisplaySettings resets showDevStats so it never leaks across project loads', () => {
+    // Dev stats (memory probe + map dev overlay) is session-only and absent from
+    // the backend payload; a project load must reset it, not inherit it.
+    useUIStore.setState({ showDevStats: true });
+    useUIStore.getState().applyDisplaySettings({ geometryMode: 'measured' } as never);
+    expect(useUIStore.getState().showDevStats).toBe(false);
+  });
 });

@@ -137,11 +137,12 @@ VITE_DEBUG_MACOS_LOCKUP=true pnpm tauri dev
 
 ### `MemoryProbe` panel
 
-Press **Ctrl+Shift+M** in the running app to toggle the in-window memory probe.
-It polls backend RSS and frontend feature counts on a 2 s interval, and the
-**Snapshot** button copies a JSON dump to clipboard for pasting into bug
-reports. Persistently visible via the `debug.memory_probe` config flag (see
-[`configuration.md`](configuration.md)).
+Enable **Display ▸ Dev stats** in the running app to show the in-window memory
+probe (it shares the `showDevStats` toggle with the map dev-stats overlay, and
+the toggle resets on project load). It polls backend RSS and frontend feature
+counts on a 2 s interval, and the **Snapshot** button copies a JSON dump to
+clipboard for pasting into bug reports. Also force-visible via the
+`debug.memory_probe` config flag (see [`configuration.md`](configuration.md)).
 
 The probe used to force-materialize every lazy `section.shots` on every tick
 during the SoA migration — that bug is fixed; if you add a new field that's

@@ -855,6 +855,11 @@ export const useUIStore = create<UIStore>((set) => ({
       showDepthGradient: settings.showDepthGradient ?? state.showDepthGradient,
       showStationComments: settings.showStationComments ?? state.showStationComments,
       gridSpacing: settings.gridSpacing ?? state.gridSpacing,
+      // Dev stats is a session-only developer overlay (memory probe + map dev
+      // stats), not a persisted per-project preference and absent from the
+      // backend payload. Reset it on every load so enabling it for one project
+      // can't leak the overlay — and its 2 s memory-IPC poll — into the next.
+      showDevStats: DISPLAY_DEFAULTS.showDevStats,
       // Restore the saved geometry mode ("remember last used"). The backend
       // defaults geometryMode to "measured" for projects with no saved
       // preference, so a load is authoritative and never inherits the previous
