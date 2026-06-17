@@ -1489,7 +1489,7 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
           <div className="pt-2 border-t border-border">
             <button
               onClick={() => openDialog('project-settings')}
-              className="text-sm px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
+              className="w-full text-center text-sm px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
               data-testid="open-project-settings"
             >
               {t('detailPanel.projectSettings.open')}
