@@ -2,7 +2,9 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
-use crate::models::{Project, ProjectWarning, SectionId, ShotData, ShotId};
+use crate::models::{
+    Project, ProjectWarning, SectionId, ShotData, ShotId, MULTIPLE_DATUMS_PER_MERGE_COMPONENT,
+};
 use crate::persistence::Database;
 
 use super::AppState;
@@ -127,8 +129,6 @@ impl AppState {
                     .map(|other| format!("{}:{}", other.section_id, other.station_index))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let code = "multiple_datums_per_merge_component".to_string();
-                let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &code);
                 all_warnings.push(ProjectWarning {
                     section_id: section.id,
                     shot_id: shot.id,
@@ -137,9 +137,15 @@ impl AppState {
                         "Station {}:{} has a zero datum, but its merge group is also anchored at {others}. Two GPS anchors over-constrain one rigid group; remove all but one zero datum.",
                         datum.section_id, datum.station_index
                     ),
-                    code,
+                    code: MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
                     severity: WarningSeverity::Warning,
-                    is_resolved,
+                    // Over-anchoring is a structural error, not a suppressible
+                    // nuisance: it is never "resolved" via an ignore — it clears
+                    // only when a datum is actually removed (at which point the
+                    // component is no longer over-anchored and this warning is
+                    // simply not generated). Force false so no stray resolved row
+                    // (legacy, bulk, or otherwise) can hide it.
+                    is_resolved: false,
                     shot_uuid: shot.uuid.clone(),
                     datum_station_index: Some(datum.station_index),
                 });

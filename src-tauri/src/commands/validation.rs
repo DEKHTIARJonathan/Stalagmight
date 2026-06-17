@@ -2,7 +2,7 @@ use chrono::Utc;
 use tauri::State;
 
 use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
-use crate::models::{SectionId, ShotId};
+use crate::models::{SectionId, ShotId, MULTIPLE_DATUMS_PER_MERGE_COMPONENT};
 use crate::persistence::ResolvedWarning;
 
 // Re-export ProjectWarning from models for backward compatibility
@@ -65,6 +65,18 @@ pub(crate) fn resolve_warning_impl(
     warning_code: String,
     comment: Option<String>,
 ) -> Result<(), String> {
+    // Over-anchoring is not ignorable (issue #57): refuse to persist a
+    // suppression. Returning Ok keeps callers simple — and
+    // compute_project_warnings never honors such a row regardless.
+    if warning_code == MULTIPLE_DATUMS_PER_MERGE_COMPONENT {
+        tracing::debug!(
+            warning_code = %warning_code,
+            purpose = "reject ignore of a non-ignorable warning",
+            "Ignoring of over-anchoring warnings is not allowed; not persisting"
+        );
+        return Ok(());
+    }
+
     // Key the suppression by the shot's stable UUID (issue #57) so it stays
     // bound to the same shot across inserts/deletes/reorders. After load every
     // shot has a UUID; None only if the shot vanished between the click and
@@ -110,9 +122,14 @@ pub(crate) fn resolve_all_warnings_impl(state: &AppState) -> Result<u32, String>
         None => return Ok(0),
     };
 
-    // Compute current warnings to find unresolved ones
+    // Compute current warnings to find unresolved ones. Over-anchoring is not
+    // ignorable (issue #57), so exclude it from a bulk acknowledge — it can only
+    // be cleared by removing a datum.
     let warnings = state.compute_project_warnings(&project, None);
-    let unresolved: Vec<_> = warnings.iter().filter(|w| !w.is_resolved).collect();
+    let unresolved: Vec<_> = warnings
+        .iter()
+        .filter(|w| !w.is_resolved && w.code != MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
+        .collect();
     let count = unresolved.len() as u32;
 
     if count == 0 {

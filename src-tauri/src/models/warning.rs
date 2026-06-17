@@ -10,6 +10,14 @@ use ts_rs::TS;
 use crate::core::WarningSeverity;
 use crate::models::{SectionId, ShotId};
 
+/// Warning code for a merge-connected group anchored by two or more zero datums.
+/// This is a structural over-constraint, not a tolerance the surveyor can wave
+/// off: it is **not ignorable** — the only resolutions are removing a datum or
+/// going to the station to fix it. `compute_project_warnings` therefore never
+/// marks it resolved, and `resolve_warning` refuses to persist a suppression for
+/// it. (See issue #57.)
+pub const MULTIPLE_DATUMS_PER_MERGE_COMPONENT: &str = "multiple_datums_per_merge_component";
+
 /// A project-level warning with reference to the source shot.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

@@ -145,10 +145,11 @@ export function WarningResolution({
           ignore,
         ];
       case 'multiple_datums_per_merge_component':
+        // Over-anchoring is a structural error, not a suppressible nuisance
+        // (issue #57): no Ignore — it must be fixed by removing a datum.
         return [
           { id: 'remove-datum', label: t('detailPanel.warnings.resolveOptions.removeDatum'), disabled: geometryReadOnly || warning.datumStationIndex === undefined },
           { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
-          ignore,
         ];
       default:
         return [ignore];

@@ -2227,6 +2227,93 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
 }
 
 #[test]
+fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
+    // Over-anchoring is not ignorable (issue #57): the resolve_warning command
+    // must refuse to persist a suppression for it.
+    let project = project_with_section(vec![shot_data(0.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    validation::resolve_warning(
+        state(&app),
+        0,
+        0,
+        crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
+        None,
+    )
+    .unwrap();
+
+    assert!(
+        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        "over-anchoring must never be recorded as an ignored warning"
+    );
+}
+
+#[test]
+fn test_over_anchoring_warning_is_never_suppressible() {
+    // The authoritative invariant: even a stray resolved row (legacy, bulk, or
+    // any other path) must NOT mark an over-anchoring warning resolved. It clears
+    // only by removing a datum, after which the warning is not generated at all.
+    use crate::models::{StationMerge, ZeroDatum};
+
+    let mut project = Project::new("OverAnchored".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot_data(10.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot_data(10.0)], ..Default::default() })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.rebuild_merge_adjacency();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.ensure_shot_uuids();
+
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let datum_warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
+        .expect("over-anchored merge component must raise a warning");
+    assert!(!datum_warning.is_resolved, "freshly raised, not resolved");
+
+    // Force a stray resolved row keyed exactly as the warning (as a bulk save or
+    // a legacy file could). Compute must still refuse to mark it resolved.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: datum_warning.section_id,
+            shot_id: datum_warning.shot_id,
+            warning_code: datum_warning.code.clone(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: datum_warning.shot_uuid.clone(),
+        })
+        .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
+        .expect("over-anchoring warning still present");
+    assert!(
+        !w.is_resolved,
+        "over-anchoring must never be suppressed by a resolved row"
+    );
+}
+
+#[test]
 fn test_get_project_warnings_detects_invalid_azimuth() {
     let app = app_with_state();
     create_project(&app);

@@ -61,6 +61,8 @@ async function injectWarnings(
     message: string;
     severity: 'warning' | 'error';
     isResolved: boolean;
+    datumStationIndex?: number;
+    shotUuid?: string;
   }>
 ): Promise<void> {
   await page.evaluate((w) => {
@@ -419,6 +421,39 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
     await expect(page.getByTestId('warning-resolution-progress')).toHaveText('1 of 2');
     await expect(page.getByTestId('warning-resolution-skip')).toBeVisible();
+  });
+
+  test('over-anchoring warning offers no Ignore option', async ({ page }) => {
+    await createProject(page, 'Over-anchor Resolve Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionIds = await getSectionIds(page);
+    const sectionId = sectionIds[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'multiple_datums_per_merge_component',
+        message: 'Station 1:0 has a zero datum, but its merge group is also anchored at 2:0.',
+        severity: 'warning',
+        isResolved: false,
+        datumStationIndex: 0,
+      },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+    await page.getByTestId('resolve-warning').first().click();
+
+    // Structural over-anchoring must be fixed, never suppressed (issue #57):
+    // the resolution view offers remove-datum / go-to-station but no Ignore.
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-remove-datum')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-go-to-station')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-ignore')).toHaveCount(0);
   });
 
   test('badge only counts unresolved warnings', async ({ page }) => {
