@@ -445,6 +445,33 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-ignore')).toHaveCount(0);
   });
 
+  test('inclination/depth mismatch offers use-depth and use-inclination resolutions', async ({ page }) => {
+    await createProject(page, 'Inclination Mismatch Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionId = (await getSectionIds(page))[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'INCLINATION_DEPTH_MISMATCH',
+        message: 'Shot 1:1 recorded inclination disagrees with the depth/length geometry',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+    await page.getByTestId('resolve-warning').first().click();
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-incl-from-depth')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-depth-from-incl')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
+  });
+
   test('clicking the data-table warning indicator opens Warnings and the resolve view', async ({ page }) => {
     await createProject(page, 'Table Warning Resolve Test');
     await seedProjectWithSections(page, sectionSeeds);

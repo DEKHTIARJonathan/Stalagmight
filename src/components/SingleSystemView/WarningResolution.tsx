@@ -18,6 +18,12 @@ import type { ProjectWarning } from '../../types/commands';
 /** Color for the on-map resolution preview ghost (issue #57). */
 const PREVIEW_COLOR = '#38bdf8';
 
+/** Average of the recorded pitch legs (degrees), or null if none recorded. */
+function recordedPitch(shot: Shot): number | null {
+  if (shot.pitch_in != null && shot.pitch_out != null) return (shot.pitch_in + shot.pitch_out) / 2;
+  return shot.pitch_in ?? shot.pitch_out ?? null;
+}
+
 /** What a manual option needs to render as an inline editable field. */
 type ManualKind =
   | 'azimuth' // single corrected azimuth, applied to both in & out
@@ -31,7 +37,7 @@ interface ResolutionOption {
   /** Action label (e.g. "Average"); a computed value is appended in render. */
   label: string;
   /** Optional formatted preview value shown after the label, e.g. "(57.0°)". */
-  detail?: string;
+  detail?: string | undefined;
   /** Disabled (frozen / closure-adjusted view) — applies to data fixes. */
   disabled?: boolean;
   /** Reveals an inline editor when selected. */
@@ -153,6 +159,25 @@ export function WarningResolution({
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'lrud', disabled: geometryReadOnly },
           ignore,
         ];
+      case 'LENGTH_BELOW_DEPTH_CHANGE':
+        return [
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
+          ignore,
+        ];
+      case 'INCLINATION_DEPTH_MISMATCH': {
+        const dz = shot.depth_out - shot.depth_in;
+        const horiz = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
+        const computedPitch = (Math.atan2(dz, horiz) * 180) / Math.PI;
+        const recorded = recordedPitch(shot);
+        const depthFromIncl =
+          recorded === null ? undefined : dep(shot.depth_in + shot.length * Math.sin((recorded * Math.PI) / 180));
+        return [
+          { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.useDepth'), detail: `${formatFixed(computedPitch, undefined, precision.inclination)}°`, disabled: geometryDisabled },
+          { id: 'depth-from-incl', label: t('detailPanel.warnings.resolveOptions.useInclination'), detail: depthFromIncl, disabled: geometryDisabled },
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualDepth'), manual: 'depth', disabled: geometryDisabled },
+          ignore,
+        ];
+      }
       case 'multiple_datums_per_merge_component':
         // Over-anchoring is a structural error, not a suppressible nuisance
         // (issue #57): no Ignore — it must be fixed by removing a datum.
@@ -330,6 +355,22 @@ export function WarningResolution({
         patch.azimuth_in = normalizeAzimuth(shot.azimuth_in);
         patch.azimuth_out = normalizeAzimuth(shot.azimuth_out);
         break;
+      case 'incl-from-depth': {
+        // Trust the depth: recompute the inclination from length + depth change.
+        const dz = shot.depth_out - shot.depth_in;
+        const horiz = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
+        const p = (Math.atan2(dz, horiz) * 180) / Math.PI;
+        patch.pitch_in = p;
+        patch.pitch_out = p;
+        break;
+      }
+      case 'depth-from-incl': {
+        // Trust the inclination: recompute the depth change from length + pitch.
+        const recorded = recordedPitch(shot);
+        if (recorded === null) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
+        patch.depth_out = shot.depth_in + shot.length * Math.sin((recorded * Math.PI) / 180);
+        break;
+      }
       case 'lrud-abs':
         for (const f of negativeLrud) patch[f] = Math.abs(shot[f] ?? 0);
         break;

@@ -164,6 +164,55 @@ impl Validator {
             }
         }
 
+        // Length / depth-change / inclination geometry. The slope length, the
+        // vertical change (depth_out - depth_in), and the inclination form a
+        // right triangle: |dz| = length * sin(pitch). Two checks fall out of it.
+        let dz = shot.depth_out - shot.depth_in;
+        if shot.length > 0.0 {
+            // The slope length can never be shorter than the vertical change —
+            // that would need sin(pitch) > 1. A small epsilon absorbs rounding.
+            if shot.length + 1e-6 < dz.abs() {
+                warnings.push(ValidationWarning {
+                    code: "LENGTH_BELOW_DEPTH_CHANGE".to_string(),
+                    message: format!(
+                        "Shot {}:{} length {:.2}m is shorter than its depth change {:.2}m (impossible: slope length must be at least the vertical change)",
+                        section_id,
+                        shot_index + 1,
+                        shot.length,
+                        dz.abs()
+                    ),
+                    severity: WarningSeverity::Error,
+                });
+            } else {
+                // A recorded inclination must agree with the depth/length geometry.
+                // Average the legs present; skip when no inclination was recorded
+                // (then the inclination is derived from depth and can't disagree).
+                let recorded_pitch = match (shot.pitch_in, shot.pitch_out) {
+                    (Some(a), Some(b)) => Some((a + b) / 2.0),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                };
+                if let Some(recorded) = recorded_pitch {
+                    let horizontal = (shot.length * shot.length - dz * dz).max(0.0).sqrt();
+                    let computed = dz.atan2(horizontal).to_degrees();
+                    if (computed - recorded).abs() > config.pitch_diff_threshold {
+                        warnings.push(ValidationWarning {
+                            code: "INCLINATION_DEPTH_MISMATCH".to_string(),
+                            message: format!(
+                                "Shot {}:{} recorded inclination {:.1}° disagrees with the {:.1}° implied by its length and depth change (exceeds {:.1}° threshold)",
+                                section_id,
+                                shot_index + 1,
+                                recorded,
+                                computed,
+                                config.pitch_diff_threshold
+                            ),
+                            severity: WarningSeverity::Warning,
+                        });
+                    }
+                }
+            }
+        }
+
         warnings
     }
 
@@ -688,5 +737,76 @@ mod tests {
         };
         let warnings = Validator::validate_shot(&large_diff, &lenient_config, 0, 0);
         assert!(warnings.iter().all(|w| w.code != "AZIMUTH_DEVIATION"));
+    }
+
+    /// Slope length must be >= the vertical (depth) change — otherwise the
+    /// geometry is impossible (would need sin(pitch) > 1).
+    #[test]
+    fn test_length_below_depth_change() {
+        let config = default_config();
+
+        // length 3m but a 5m drop — impossible.
+        let bad = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 3.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            ..Default::default()
+        };
+        let warnings = Validator::validate_shot(&bad, &config, 0, 0);
+        assert!(warnings.iter().any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE"));
+        assert!(Validator::has_errors(&warnings));
+
+        // Sign-agnostic: a 5m rise with a 3m slope is equally impossible.
+        let bad_up = ShotData { depth_in: 5.0, depth_out: 0.0, ..bad.clone() };
+        assert!(Validator::validate_shot(&bad_up, &config, 0, 0)
+            .iter()
+            .any(|w| w.code == "LENGTH_BELOW_DEPTH_CHANGE"));
+
+        // length == |dz| (vertical shot) is valid; length > |dz| is valid.
+        let vertical = ShotData { length: 5.0, depth_in: 0.0, depth_out: 5.0, ..bad.clone() };
+        assert!(Validator::validate_shot(&vertical, &config, 0, 0)
+            .iter()
+            .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
+        let ok = ShotData { length: 10.0, depth_in: 0.0, depth_out: 5.0, ..bad.clone() };
+        assert!(Validator::validate_shot(&ok, &config, 0, 0)
+            .iter()
+            .all(|w| w.code != "LENGTH_BELOW_DEPTH_CHANGE"));
+    }
+
+    /// A recorded inclination must agree with the inclination implied by the
+    /// length and depth change (|dz| = length * sin(pitch)).
+    #[test]
+    fn test_inclination_depth_mismatch() {
+        let config = default_config(); // pitch_diff_threshold = 5.0
+
+        // length 10, dz 5 → horizontal 8.66 → implied pitch atan2(5, 8.66) ≈ 30°.
+        let base = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 5.0,
+            ..Default::default()
+        };
+
+        // Recorded 10° vs implied ~30° → 20° apart, flagged.
+        let mismatched = ShotData { pitch_in: Some(10.0), pitch_out: Some(10.0), ..base.clone() };
+        assert!(Validator::validate_shot(&mismatched, &config, 0, 0)
+            .iter()
+            .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH"));
+
+        // Recorded ~30° matches the geometry → not flagged.
+        let consistent = ShotData { pitch_in: Some(30.0), pitch_out: Some(30.0), ..base.clone() };
+        assert!(Validator::validate_shot(&consistent, &config, 0, 0)
+            .iter()
+            .all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"));
+
+        // No recorded inclination → nothing to cross-check, not flagged.
+        let no_pitch = ShotData { pitch_in: None, pitch_out: None, ..base.clone() };
+        assert!(Validator::validate_shot(&no_pitch, &config, 0, 0)
+            .iter()
+            .all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"));
     }
 }

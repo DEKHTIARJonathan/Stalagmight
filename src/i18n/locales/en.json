@@ -1397,6 +1397,8 @@
         "clear": "Clear value",
         "removeDatum": "Remove this zero datum",
         "goToStation": "Go to station",
+        "useDepth": "Use depth (set inclination)",
+        "useInclination": "Use inclination (set depth)",
         "ignore": "Ignore (keep value, don't warn again)"
       }
     },
