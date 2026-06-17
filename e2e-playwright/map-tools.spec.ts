@@ -369,7 +369,7 @@ test.describe('Zoom Tool Click Behavior', () => {
 
     // Switch to zoom tool
     await page.keyboard.press('z');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'zoom');
 
     const canvasBox = await canvas.boundingBox();
     expect(canvasBox).not.toBeNull();
@@ -384,9 +384,13 @@ test.describe('Zoom Tool Click Behavior', () => {
         return map?.getZoom() ?? 0;
       });
 
-      // Left click should zoom in
+      // Left click should zoom in. Wait for the zoom animation to settle at
+      // a higher level (idle + changed) rather than sleeping a fixed 400ms.
       await page.mouse.click(centerX, centerY);
-      await page.waitForTimeout(400); // Wait for animation
+      await page.waitForFunction((z) => {
+        const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number; isMoving: () => boolean } }).__stalagmight_map__;
+        return Boolean(map && !map.isMoving() && map.getZoom() > z);
+      }, initialZoom, { timeout: 5000 });
 
       const zoomAfterClick = await page.evaluate(() => {
         const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
@@ -395,9 +399,13 @@ test.describe('Zoom Tool Click Behavior', () => {
 
       expect(zoomAfterClick).toBeGreaterThan(initialZoom);
 
-      // Right click should zoom out
+      // Right click should zoom out — settle before asserting it returned to
+      // ~the original level (within 0.1), so we need the full animation done.
       await page.mouse.click(centerX, centerY, { button: 'right' });
-      await page.waitForTimeout(400); // Wait for animation
+      await page.waitForFunction((z) => {
+        const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number; isMoving: () => boolean } }).__stalagmight_map__;
+        return Boolean(map && !map.isMoving() && map.getZoom() < z);
+      }, zoomAfterClick, { timeout: 5000 });
 
       const zoomAfterRightClick = await page.evaluate(() => {
         const map = (window as unknown as { __stalagmight_map__?: { getZoom: () => number } }).__stalagmight_map__;
@@ -425,7 +433,7 @@ test.describe('Zoom Tool Click Behavior', () => {
 
     // Switch to zoom tool
     await page.keyboard.press('z');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'zoom');
 
     const canvasBox = await canvas.boundingBox();
     expect(canvasBox).not.toBeNull();
@@ -464,7 +472,7 @@ test.describe('Zoom Tool Click Behavior', () => {
 
     // Switch to zoom tool
     await page.keyboard.press('z');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'zoom');
 
     // Check cursor on canvas
     const cursorStyle = await page.evaluate(() => {

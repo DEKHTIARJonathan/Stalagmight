@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { waitForActiveTool } from './helpers/app';
 
 /**
  * Helper to wait for the MapLibre map to be ready.
@@ -80,7 +81,7 @@ test.describe('Zoom Tool', () => {
     test('left-click zooms in @smoke', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -100,17 +101,17 @@ test.describe('Zoom Tool', () => {
     test('right-click zooms out @smoke', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
       expect(box).not.toBeNull();
 
-      // First zoom in a bit so we can zoom out
+      // First zoom in a bit so we can zoom out. Poll for the zoom-in to
+      // register before capturing the baseline rather than sleeping.
+      const zoomBefore = await getMapZoom(page);
       await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
-      await page.waitForTimeout(400);
-
-      const initialZoom = await getMapZoom(page);
+      const initialZoom = await waitForZoomChange(page, zoomBefore!, 'in');
       expect(initialZoom).not.toBeNull();
 
       // Right click to zoom out
@@ -124,7 +125,7 @@ test.describe('Zoom Tool', () => {
     test('right-click does not show context menu', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -151,7 +152,7 @@ test.describe('Zoom Tool', () => {
     test('click at zoom 22 (max) is ignored', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -185,7 +186,7 @@ test.describe('Zoom Tool', () => {
     test('right-click at zoom 1 (min) is ignored', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -221,7 +222,7 @@ test.describe('Zoom Tool', () => {
     test('drag draws rectangle overlay', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -243,7 +244,7 @@ test.describe('Zoom Tool', () => {
     test('escape cancels box zoom', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -281,7 +282,7 @@ test.describe('Zoom Tool', () => {
     test('small drag (<10px) treated as click', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -304,7 +305,7 @@ test.describe('Zoom Tool', () => {
     test('Ctrl+drag pans instead of box zoom', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -347,7 +348,7 @@ test.describe('Zoom Tool', () => {
     test('shows zoom-in cursor when zoom tool is active', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const cursor = await page.evaluate(() => {
         const map = (window as unknown as { __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement } }).__stalagmight_map__;
@@ -360,7 +361,7 @@ test.describe('Zoom Tool', () => {
     test('cursor stays zoom-in when hovering over map', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -417,7 +418,7 @@ test.describe('Zoom Tool', () => {
     test('keyboard zoom works regardless of active tool', async ({ page }) => {
       // Switch to select tool
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
       const initialZoom = await getMapZoom(page);
       expect(initialZoom).not.toBeNull();
@@ -435,14 +436,14 @@ test.describe('Zoom Tool', () => {
     test('Z key shortcut activates zoom tool via navigate group', async ({ page }) => {
       // First ensure we're not in zoom mode by switching to select
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
       const selectButton = page.locator('[data-testid="tool-select"]');
       await expect(selectButton).toHaveClass(/sh-tool--active/);
 
       // Activate zoom tool via keyboard shortcut (zoom is now in Navigate group)
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       // Verify navigate group is active (zoom is a subtool of navigate)
       const navGroup = page.locator('[data-testid="tool-group-navigate"]');
@@ -453,7 +454,7 @@ test.describe('Zoom Tool', () => {
     test('switching between tools via keyboard updates cursor', async ({ page }) => {
       // Start in select mode
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
       // Verify select cursor
       let cursor = await page.evaluate(() => {
@@ -464,7 +465,7 @@ test.describe('Zoom Tool', () => {
 
       // Activate zoom via keyboard (zoom is in Navigate group)
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       // Verify zoom cursor
       cursor = await page.evaluate(() => {
@@ -475,7 +476,7 @@ test.describe('Zoom Tool', () => {
 
       // Activate pan via keyboard (pan is in Navigate group)
       await page.keyboard.press('p');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'pan');
 
       // Verify pan cursor
       cursor = await page.evaluate(() => {
@@ -525,7 +526,7 @@ test.describe('Zoom Tool', () => {
 
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -607,7 +608,7 @@ test.describe('Zoom Tool', () => {
     test('respects zoom_min boundary', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -634,7 +635,7 @@ test.describe('Zoom Tool', () => {
     test('respects zoom_max boundary', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -687,7 +688,7 @@ test.describe('Zoom Tool', () => {
     test('wheel zoom works regardless of active tool', async ({ page }) => {
       // Switch to select tool
       await page.keyboard.press('s');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'select');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
@@ -710,7 +711,7 @@ test.describe('Zoom Tool', () => {
     test('click-to-zoom centers map on click location', async ({ page }) => {
       // Switch to zoom tool
       await page.keyboard.press('z');
-      await page.waitForTimeout(50);
+      await waitForActiveTool(page, 'zoom');
 
       const canvas = page.locator('canvas').first();
       const box = await canvas.boundingBox();
