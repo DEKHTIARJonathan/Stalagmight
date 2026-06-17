@@ -302,6 +302,27 @@ impl AppState {
         // load entry points can't diverge. (This legacy IPC has no production caller
         // today, but it stays registered and invokable, so harden it.)
         project.ensure_shot_uuids();
+        // Mirror do_load_project_full: upgrade legacy NULL-uuid resolved-warning
+        // rows to UUID keying now that every shot has a UUID and shot ids still
+        // match the loaded positions, so the two load entry points don't diverge
+        // (a row left position-keyed here couldn't be cleared by un-ignore, which
+        // passes the live UUID). Idempotent; non-fatal.
+        let live_shot_uuids: std::collections::HashMap<(u32, u32), String> = project
+            .sections
+            .iter()
+            .flat_map(|s| {
+                s.shots
+                    .iter()
+                    .filter_map(move |sh| sh.uuid.clone().map(|u| ((s.id, sh.id), u)))
+            })
+            .collect();
+        if let Err(e) = db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+            tracing::warn!(
+                error = %e,
+                purpose = "upgrade legacy ignores to UUID keying",
+                "open_project: failed to backfill resolved-warning UUIDs; legacy rows remain position-keyed"
+            );
+        }
         let healed_offsets = project.redrive_offsets_after_load();
         if healed_offsets > 0 {
             tracing::warn!(
@@ -616,8 +637,7 @@ impl AppState {
                     // lands a different shot on a stale UUID-keyed row's old position
                     // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
                     // warning_code)) silently delete the older shot's still-valid
-                    // ignore. A UUID-keyed row whose shot was deleted keeps its stale
-                    // id and may be harmlessly REPLACEd — that row is dead anyway.
+                    // ignore.
                     let live_positions: std::collections::HashMap<&str, (SectionId, u32)> = project
                         .sections
                         .iter()
@@ -632,19 +652,31 @@ impl AppState {
                             })
                         })
                         .collect();
-                    // Remap to live positions first, THEN drop rows whose
-                    // (possibly-updated) section no longer exists, so the FK on
-                    // section_id holds for every carried-over row.
+                    // Remap each UUID-keyed row to its shot's live position; DROP a
+                    // UUID-keyed row whose shot was deleted (UUID no longer live) — it
+                    // can never match a live shot by UUID on reload, so it is dead.
+                    // Keeping it with its stale id would let it collide (under
+                    // UNIQUE(section_id, shot_id, warning_code) + INSERT OR REPLACE)
+                    // with a live shot that a renumber moved onto that position, and
+                    // REPLACE could drop either row depending on insert order — i.e.
+                    // silently lose the live shot's still-valid ignore. Dropping dead
+                    // rows here also stops them accumulating across saves. NULL-uuid
+                    // (legacy, position-keyed) rows are kept and matched by position
+                    // (the load-time backfill upgrades the ones that map to a shot).
                     rows.into_iter()
-                        .map(|mut r| {
-                            if let Some(uuid) = r.shot_uuid.as_deref() {
-                                if let Some(&(sec, shot)) = live_positions.get(uuid) {
+                        .filter_map(|mut r| {
+                            match r.shot_uuid.as_deref() {
+                                Some(uuid) => {
+                                    let &(sec, shot) = live_positions.get(uuid)?;
                                     r.section_id = sec;
                                     r.shot_id = shot;
+                                    Some(r)
                                 }
+                                None => Some(r),
                             }
-                            r
                         })
+                        // Then drop any (legacy) row whose section no longer exists so
+                        // the FK on section_id holds for every carried-over row.
                         .filter(|r| section_ids.contains(&r.section_id))
                         .collect()
                 }

@@ -2470,6 +2470,69 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
 }
 
 #[test]
+fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
+    // Issue #57 (review regression): when a shot is deleted, its by-UUID
+    // resolved_warnings row is orphaned (delete_shot is in-memory only and never
+    // prunes the table). The surviving successor shifts down into the deleted
+    // shot's old position, so on save it re-derives to that same (section_id,
+    // shot_id). If the dead row were carried over at its stale id, the two would
+    // collide on UNIQUE(section_id, shot_id, warning_code) and INSERT OR REPLACE
+    // would — depending on insert order — drop the SURVIVOR's still-valid ignore.
+    // The carry-over must DROP the dead (UUID-not-live) row so the survivor's
+    // ignore always persists and dead rows don't accumulate.
+    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // Ignore BOTH shots' ZERO_LENGTH warnings (stored by UUID at positions 0 & 1).
+    let zero: Vec<_> = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .filter(|w| w.code == "ZERO_LENGTH")
+        .collect();
+    assert_eq!(zero.len(), 2, "expected a zero-length warning per shot");
+    for w in &zero {
+        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
+            .unwrap();
+    }
+
+    let loaded = state(&app).inner().get_project_state().unwrap();
+    let section_id = loaded.sections[0].id;
+    let shot_a_id = loaded.sections[0].shots[0].id;
+    let survivor_uuid = loaded.sections[0].shots[1]
+        .uuid
+        .clone()
+        .expect("survivor uuid");
+
+    // Delete the first shot. The successor shifts into its index/position, so the
+    // orphaned by-UUID row for the deleted shot now shares the survivor's new
+    // position. (No datums → not frozen → delete succeeds.)
+    assert_success(&shot::delete_shot(state(&app), section_id, shot_a_id));
+
+    let dir = tempfile::tempdir().unwrap();
+    let _ = save_project_to_temp(&app, &dir);
+
+    // The survivor's ignore must persist...
+    let after = validation::get_project_warnings(state(&app));
+    let survivor = after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("survivor's zero-length warning");
+    assert!(
+        survivor.is_resolved,
+        "the surviving shot's ignore must not be clobbered by the deleted shot's dead row"
+    );
+    // ...and the deleted shot's dead row must have been pruned (one row, keyed to
+    // the survivor), so dead rows don't accumulate across saves.
+    let rows = state(&app).inner().load_resolved_warnings().unwrap();
+    assert_eq!(rows.len(), 1, "the deleted shot's dead resolved row must be pruned");
+    assert_eq!(
+        rows[0].shot_uuid.as_deref(),
+        Some(survivor_uuid.as_str()),
+        "the surviving row must be the survivor's by-UUID ignore"
+    );
+}
+
+#[test]
 fn test_project_validation_drives_warnings_and_persists() {
     // Per-project validation (#57): warnings use the project's own thresholds,
     // and those thresholds survive a save into the .stalx.

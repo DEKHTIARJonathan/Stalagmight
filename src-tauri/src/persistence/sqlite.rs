@@ -2784,16 +2784,26 @@ impl Database {
     }
 
     /// Delete any resolved-warning rows matching `warning`. When a `shot_uuid`
-    /// is present we match ONLY by UUID: a moved/renumbered shot still dedups,
-    /// and we never delete a *different* shot's valid by-UUID row that happens
-    /// to now occupy the same `(section_id, shot_id)` position after a renumber.
-    /// The legacy position key is used only for NULL-uuid rows. Shared by save
+    /// is present we match its own UUID row, plus any *legacy* NULL-uuid row at
+    /// the same `(section_id, shot_id)` — but NEVER a *different* shot's valid
+    /// by-UUID row that happens to occupy that position after a renumber (the
+    /// `shot_uuid IS NULL` guard on the position branch ensures that). This lets
+    /// un-ignoring a live shot still clear a legacy position-keyed suppression of
+    /// that same shot even on a load path that did not run the backfill. When no
+    /// UUID is supplied (a legacy row), match purely by position. Shared by save
     /// (dedup) and unresolve (clear).
     fn delete_matching_resolved(conn: &Connection, warning: &ResolvedWarning) -> Result<()> {
         if let Some(uuid) = warning.shot_uuid.as_deref() {
             conn.execute(
-                "DELETE FROM resolved_warnings WHERE warning_code = ?1 AND shot_uuid = ?2",
-                params![warning.warning_code, uuid],
+                "DELETE FROM resolved_warnings WHERE warning_code = ?1 \
+                 AND (shot_uuid = ?2 \
+                      OR (shot_uuid IS NULL AND section_id = ?3 AND shot_id = ?4))",
+                params![
+                    warning.warning_code,
+                    uuid,
+                    warning.section_id,
+                    warning.shot_id
+                ],
             )?;
         } else {
             conn.execute(

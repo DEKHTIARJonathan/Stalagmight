@@ -968,6 +968,59 @@ fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
 }
 
 #[test]
+fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
+    // Issue #57 (review): un-ignore passes the LIVE shot's UUID. A legacy
+    // NULL-uuid row suppressing that same shot (e.g. on a load path that didn't
+    // run the backfill) must still be cleared — the delete's position branch is
+    // restricted to `shot_uuid IS NULL`, so it clears the legacy row WITHOUT
+    // touching a DIFFERENT shot's by-UUID row that occupies the same position.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    // Legacy NULL-uuid suppression of the shot at position (0, 1).
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    })
+    .unwrap();
+    // A DIFFERENT shot's by-UUID suppression at a distinct position (0, 2) — must
+    // NOT be deleted when we un-ignore the shot at (0, 1). (UNIQUE(section_id,
+    // shot_id, warning_code) forbids two rows sharing one position+code, so this
+    // models a different shot, not a same-position collision.)
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 2,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-other".to_string()),
+    })
+    .unwrap();
+
+    // Un-ignore the live shot at (0, 1) with ITS uuid: the uuid branch matches
+    // nothing (no "uuid-live" row), but the NULL-only position branch clears the
+    // legacy row at (0, 1).
+    db.delete_resolved_warning(0, 1, "ZERO_LENGTH", Some("uuid-live"))
+        .unwrap();
+
+    let rows = db.load_resolved_warnings().unwrap();
+    assert!(
+        !rows.iter().any(|r| r.shot_uuid.is_none()),
+        "the legacy NULL-uuid row for the same shot/position must be cleared by un-ignore"
+    );
+    assert!(
+        rows.iter().any(|r| r.shot_uuid.as_deref() == Some("uuid-other")),
+        "a different shot's by-UUID row at another position must NOT be deleted"
+    );
+}
+
+#[test]
 fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
     // Issue #57 (Item 4): legacy NULL-uuid resolved rows whose (section_id,
     // shot_id) still maps to a live shot are upgraded to UUID keying on load.
