@@ -2164,8 +2164,11 @@ impl Database {
         // Load collaboration state (None for pre-v5 projects or when off)
         let collab = self.load_collab_state()?;
 
-        // Per-project validation thresholds (#57); default for legacy projects.
-        let validation = self.load_project_validation()?;
+        // Per-project validation thresholds (#57). The DB layer has no access to
+        // the global config, so legacy projects (no row) fall back to the
+        // hardcoded default here; the AppState open paths re-check for absence
+        // and seed from the user's global config instead (see project_io.rs).
+        let validation = self.load_project_validation()?.unwrap_or_default();
 
         // Pre-populate the section_id → index lookup so callers get
         // O(1) get_section without needing rebuild_section_index().
@@ -2754,10 +2757,11 @@ impl Database {
     ///
     /// Suppression is keyed by the shot's stable `shot_uuid` (issue #57). To
     /// keep a single row per suppressed `(shot, warning_code)`, we first delete
-    /// any prior row that matches either the UUID or the legacy
-    /// `(section_id, shot_id)` position (which also backfills/upgrades a pre-v8
-    /// row to the UUID key), then insert the fresh record. Falls back to the
-    /// legacy position key when the shot has no UUID.
+    /// any prior row for the same identity (the UUID when present, else the
+    /// legacy `(section_id, shot_id)` position), then insert the fresh record.
+    /// Falls back to the legacy position key when the shot has no UUID. Legacy
+    /// NULL-uuid rows are upgraded to the UUID key by the load-time backfill
+    /// (`backfill_resolved_warning_uuids`), not here.
     pub fn save_resolved_warning(&self, warning: &ResolvedWarning) -> Result<()> {
         Self::delete_matching_resolved(&self.conn, warning)?;
         // OR REPLACE for resilience against the legacy UNIQUE(section_id,
@@ -2779,15 +2783,17 @@ impl Database {
         Ok(())
     }
 
-    /// Delete any resolved-warning rows matching `warning`, keyed by UUID when
-    /// present (so a moved/renumbered shot still dedups) plus the legacy
-    /// position. Shared by save (dedup) and unresolve (clear).
+    /// Delete any resolved-warning rows matching `warning`. When a `shot_uuid`
+    /// is present we match ONLY by UUID: a moved/renumbered shot still dedups,
+    /// and we never delete a *different* shot's valid by-UUID row that happens
+    /// to now occupy the same `(section_id, shot_id)` position after a renumber.
+    /// The legacy position key is used only for NULL-uuid rows. Shared by save
+    /// (dedup) and unresolve (clear).
     fn delete_matching_resolved(conn: &Connection, warning: &ResolvedWarning) -> Result<()> {
         if let Some(uuid) = warning.shot_uuid.as_deref() {
             conn.execute(
-                "DELETE FROM resolved_warnings WHERE warning_code = ?1 \
-                 AND (shot_uuid = ?2 OR (section_id = ?3 AND shot_id = ?4))",
-                params![warning.warning_code, uuid, warning.section_id, warning.shot_id],
+                "DELETE FROM resolved_warnings WHERE warning_code = ?1 AND shot_uuid = ?2",
+                params![warning.warning_code, uuid],
             )?;
         } else {
             conn.execute(
@@ -2797,6 +2803,39 @@ impl Database {
             )?;
         }
         Ok(())
+    }
+
+    /// Upgrade legacy NULL-uuid resolved-warning rows to UUID keying using the
+    /// supplied (section_id, shot_id) -> uuid map (issue #57, Item 4). Idempotent:
+    /// only rewrites rows whose shot_uuid IS NULL and whose (section_id, shot_id)
+    /// still maps to a live shot. A row with no live shot is left NULL so it keeps
+    /// falling back to legacy position matching and is never mis-keyed.
+    pub fn backfill_resolved_warning_uuids(
+        &self,
+        live: &HashMap<(u32, u32), String>,
+    ) -> Result<usize> {
+        let mut to_fix: Vec<(i64, String)> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, section_id, shot_id FROM resolved_warnings WHERE shot_uuid IS NULL",
+            )?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, u32>(1)?, r.get::<_, u32>(2)?))
+            })?;
+            for row in rows {
+                let (id, sec, shot) = row?;
+                if let Some(uuid) = live.get(&(sec, shot)) {
+                    to_fix.push((id, uuid.clone()));
+                }
+            }
+        }
+        for (id, uuid) in &to_fix {
+            self.conn.execute(
+                "UPDATE resolved_warnings SET shot_uuid = ?1 WHERE id = ?2",
+                params![uuid, id],
+            )?;
+        }
+        Ok(to_fix.len())
     }
 
     /// Delete a resolved warning from database (un-ignore). Matches by UUID when
@@ -2853,13 +2892,14 @@ impl Database {
         Ok(())
     }
 
-    /// Load the per-project validation config (#57). Returns the default config
-    /// for legacy projects that predate the feature (no stored row), or if the
-    /// stored JSON can't be parsed.
-    pub fn load_project_validation(&self) -> Result<crate::config::ValidationConfig> {
-        // Tolerant of a missing project_settings table: open_existing() skips
-        // migrations, and legacy .stalx files predate the table — both should
-        // fall back to the default config rather than failing the whole load.
+    /// Load the per-project validation config (#57). Returns `None` for legacy
+    /// projects that predate the feature — either no stored `validation` row, or
+    /// a project_settings table that doesn't exist at all (open_existing() skips
+    /// migrations and pre-#57 .stalx files predate the table). `None` lets the
+    /// caller seed from the live global config (the "defaults for new projects")
+    /// instead of the hardcoded ValidationConfig::default(); a present-but-
+    /// unparseable row is treated as legacy too (`None`).
+    pub fn load_project_validation(&self) -> Result<Option<crate::config::ValidationConfig>> {
         let json: Option<String> = self
             .conn
             .query_row(
@@ -2869,9 +2909,7 @@ impl Database {
             )
             .optional()
             .unwrap_or(None);
-        Ok(json
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default())
+        Ok(json.and_then(|s| serde_json::from_str(&s).ok()))
     }
 
     /// Load all display settings from database

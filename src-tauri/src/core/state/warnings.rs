@@ -31,36 +31,45 @@ impl AppState {
             // Fall back to self.database (post-finalization)
             self.load_resolved_warnings().unwrap_or_default()
         };
-        let mut resolved_by_uuid: HashSet<(String, String)> = HashSet::new();
-        let mut resolved_by_position: HashSet<(u32, u32, String)> = HashSet::new();
+        // Key the lookup sets by borrowed slices into `resolved` so the
+        // per-warning probe below allocates nothing. `resolved` outlives this
+        // closure, so the &str borrows stay valid.
+        let mut resolved_by_uuid: std::collections::HashMap<&str, HashSet<&str>> =
+            std::collections::HashMap::new();
+        let mut resolved_by_position: HashSet<(u32, u32, &str)> = HashSet::new();
         for r in &resolved {
             match &r.shot_uuid {
                 Some(uuid) => {
-                    resolved_by_uuid.insert((uuid.clone(), r.warning_code.clone()));
+                    resolved_by_uuid
+                        .entry(uuid.as_str())
+                        .or_default()
+                        .insert(r.warning_code.as_str());
                 }
                 None => {
-                    resolved_by_position.insert((r.section_id, r.shot_id, r.warning_code.clone()));
+                    resolved_by_position.insert((r.section_id, r.shot_id, r.warning_code.as_str()));
                 }
             }
         }
-        // A warning is suppressed if its shot's UUID was ignored, or if its
-        // legacy (section_id, shot_id) position was ignored. The position
-        // fallback is what keeps pre-UUID suppressions alive: a pre-v8 row, or a
-        // pre-v6 .stalx whose shots only get a UUID minted in-memory on load
-        // (so the v8 backfill saw a NULL `shots.uuid` and left the row
-        // position-keyed), is still honored even though the in-memory shot now
-        // carries a fresh UUID. Only NULL-uuid rows ever enter
-        // `resolved_by_position`, and every v8+ ignore stores a UUID, so a fresh
-        // ignore is never position-keyed and cannot suppress an unrelated shot
-        // that later reuses a stale shot_id.
+        // A warning is suppressed if its shot's UUID was ignored, or (legacy
+        // only) if its (section_id, shot_id) position was ignored. The resolve
+        // command now REFUSES a no-UUID ignore (commands/validation.rs), and
+        // load-time backfill upgrades legacy NULL-uuid rows to UUID keying when
+        // the shot still maps to a live position (issue #57). Therefore
+        // `resolved_by_position` is populated ONLY by legacy on-disk rows whose
+        // shot no longer maps to a live position (so they could not be upgraded);
+        // no fresh ignore is ever position-keyed, and a position-keyed row can
+        // never suppress an unrelated shot that later reuses a stale shot_id.
         let is_resolved_for =
             |shot_uuid: &Option<String>, section_id: u32, shot_id: u32, code: &str| -> bool {
                 if let Some(uuid) = shot_uuid {
-                    if resolved_by_uuid.contains(&(uuid.clone(), code.to_string())) {
+                    if resolved_by_uuid
+                        .get(uuid.as_str())
+                        .is_some_and(|codes| codes.contains(code))
+                    {
                         return true;
                     }
                 }
-                resolved_by_position.contains(&(section_id, shot_id, code.to_string()))
+                resolved_by_position.contains(&(section_id, shot_id, code))
             };
 
         // Per-project validation thresholds (#57): stored in the .stalx, seeded

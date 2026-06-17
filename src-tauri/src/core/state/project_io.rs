@@ -273,6 +273,23 @@ impl AppState {
 
         project.file_path = Some(path.clone());
 
+        // Same legacy-seeding as do_load_project_full: a project with no stored
+        // `validation` row gets the user's global thresholds, not the hardcoded
+        // default.
+        match db.load_project_validation() {
+            Ok(None) => {
+                project.validation = self.get_config().validation;
+            }
+            Ok(Some(_)) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "seed validation thresholds for legacy project",
+                    "open_project: could not determine stored validation thresholds; keeping loaded value"
+                );
+            }
+        }
+
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
 
@@ -589,7 +606,45 @@ impl AppState {
                     // transaction and silently drop EVERY still-valid ignore.
                     let section_ids: std::collections::HashSet<_> =
                         project.sections.iter().map(|s| s.id).collect();
+                    // Re-derive each UUID-keyed row's stored (section_id, shot_id)
+                    // from the live shot's CURRENT position so two distinct live
+                    // shots never share a (section_id, shot_id) in the fresh save
+                    // file (issue #57). save_project writes shot_id =
+                    // section_id*FEATURE_ID_STRIDE + sequence_order, so we derive
+                    // the same value from the in-memory project; load regenerates
+                    // ids with this identical formula. Without this, a renumber that
+                    // lands a different shot on a stale UUID-keyed row's old position
+                    // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
+                    // warning_code)) silently delete the older shot's still-valid
+                    // ignore. A UUID-keyed row whose shot was deleted keeps its stale
+                    // id and may be harmlessly REPLACEd — that row is dead anyway.
+                    let live_positions: std::collections::HashMap<&str, (SectionId, u32)> = project
+                        .sections
+                        .iter()
+                        .flat_map(|s| {
+                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
+                                sh.uuid.as_deref().map(|u| {
+                                    (
+                                        u,
+                                        (s.id, s.id * crate::models::FEATURE_ID_STRIDE + seq as u32),
+                                    )
+                                })
+                            })
+                        })
+                        .collect();
+                    // Remap to live positions first, THEN drop rows whose
+                    // (possibly-updated) section no longer exists, so the FK on
+                    // section_id holds for every carried-over row.
                     rows.into_iter()
+                        .map(|mut r| {
+                            if let Some(uuid) = r.shot_uuid.as_deref() {
+                                if let Some(&(sec, shot)) = live_positions.get(uuid) {
+                                    r.section_id = sec;
+                                    r.shot_id = shot;
+                                }
+                            }
+                            r
+                        })
                         .filter(|r| section_ids.contains(&r.section_id))
                         .collect()
                 }
@@ -1422,11 +1477,56 @@ impl AppState {
             }
         };
         project.file_path = Some(path.clone());
+        // Legacy projects (saved before #57) have no persisted `validation` row;
+        // load_project() filled `project.validation` with the hardcoded default.
+        // Override it with the user's GLOBAL thresholds (the "defaults for new
+        // projects"), matching create_project/merge. The choice persists on the
+        // next save (save_project writes the row), so a project is only treated
+        // as legacy until its first save under this build.
+        match db.load_project_validation() {
+            Ok(None) => {
+                project.validation = self.get_config().validation;
+            }
+            Ok(Some(_)) => {} // explicit row present — honor it as-is
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "seed validation thresholds for legacy project",
+                    "Could not determine whether project has stored validation thresholds; keeping loaded value"
+                );
+            }
+        }
         // Guarantee every shot has a stable UUID at runtime, not just after the
         // next save: pre-v6 files load shots with uuid=None, and station identity
         // (and the Ariane collaboration round-trip) anchors on the shot UUID. The
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
+        // Upgrade legacy NULL-uuid resolved-warning rows to UUID keying now that
+        // every shot has an in-memory UUID and shot ids still match the loaded
+        // positions the legacy rows were keyed against (issue #57). One-time,
+        // idempotent. Non-fatal: on failure the rows simply stay position-keyed.
+        let live_shot_uuids: std::collections::HashMap<(u32, u32), String> = project
+            .sections
+            .iter()
+            .flat_map(|s| {
+                s.shots
+                    .iter()
+                    .filter_map(move |sh| sh.uuid.clone().map(|u| ((s.id, sh.id), u)))
+            })
+            .collect();
+        match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+            Ok(n) if n > 0 => tracing::info!(
+                upgraded = n,
+                purpose = "upgrade legacy ignores to UUID keying",
+                "Backfilled resolved-warning UUIDs on load"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                purpose = "upgrade legacy ignores to UUID keying",
+                "Failed to backfill resolved-warning UUIDs; legacy rows remain position-keyed"
+            ),
+        }
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
         // Section offsets are derived state: re-solve them from the merge/datum

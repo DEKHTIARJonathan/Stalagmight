@@ -77,11 +77,21 @@ pub(crate) fn resolve_warning_impl(
         return Ok(());
     }
 
-    // Key the suppression by the shot's stable UUID (issue #57) so it stays
-    // bound to the same shot across inserts/deletes/reorders. After load every
-    // shot has a UUID; None only if the shot vanished between the click and
-    // here, in which case we still record the legacy position.
-    let shot_uuid = state.shot_uuid_for(section_id, shot_id);
+    // Policy (issue #57): UUID-keyed suppression is the only supported model for
+    // new ignores. shot_uuid_for returns None only when no project is open, the
+    // lock is poisoned, or the (section_id, shot_id) shot does not exist — in
+    // every case we cannot bind a stable identity, so refuse rather than write a
+    // position-keyed row that could later suppress an unrelated shot reusing the id.
+    let Some(shot_uuid) = state.shot_uuid_for(section_id, shot_id) else {
+        tracing::warn!(
+            section_id,
+            shot_id,
+            warning_code = %warning_code,
+            purpose = "reject ignore without stable shot identity",
+            "Refusing to resolve warning: no shot UUID"
+        );
+        return Err("Could not ignore this warning: the shot no longer exists.".to_string());
+    };
     tracing::info!(
         section_id = section_id,
         shot_id = shot_id,
@@ -95,7 +105,7 @@ pub(crate) fn resolve_warning_impl(
         warning_code,
         resolved_at: Utc::now(),
         resolved_comment: comment,
-        shot_uuid,
+        shot_uuid: Some(shot_uuid),
     };
     state.save_resolved_warning(&warning).map_err(|e| {
         tracing::error!(

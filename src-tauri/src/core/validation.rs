@@ -193,14 +193,14 @@ impl Validator {
                     (None, None) => None,
                 };
                 if let Some(recorded) = recorded_pitch {
-                    // The triangle constrains the MAGNITUDE: |dz| = length·sin(|pitch|).
-                    // The pitch SIGN is an unenforced per-source labelling convention
-                    // (the DMP device format stores its raw sign; Compass is normalised
-                    // on import; the canonical-looking pitch_from_components is test-only),
-                    // so we can't reliably know whether +pitch means up or down. Compare
-                    // the recorded inclination against the implied magnitude expressed in
-                    // the recorded value's own sign — immune to the up/down convention
-                    // while still catching a genuine magnitude disagreement.
+                    // The triangle constrains only the MAGNITUDE: |dz| = length·sin(|pitch|).
+                    // pitch_in and pitch_out are both forward (foresight) readings
+                    // (Stalagmight's canonical convention is +down; Compass is normalised
+                    // to it on import, while a DMP device's raw sign is stored verbatim).
+                    // We compare the recorded inclination against the implied magnitude
+                    // expressed in the recorded value's own sign so the check stays robust
+                    // to a source whose raw sign was not normalised on import (e.g. a raw
+                    // DMP +up reading), while still catching a genuine magnitude disagreement.
                     let implied_mag = (dz.abs() / shot.length).clamp(0.0, 1.0).asin().to_degrees();
                     let implied = if recorded < 0.0 { -implied_mag } else { implied_mag };
                     if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
@@ -800,10 +800,10 @@ mod tests {
             ..Default::default()
         };
 
-        // The check is magnitude-based and sign-convention-agnostic: a recorded
-        // inclination of ~30° magnitude is consistent regardless of whether the
-        // source labels descent as +30 (e.g. Compass, normalised) or -30 (e.g. a
-        // raw DMP device using +up). Neither must be flagged.
+        // The check compares magnitudes, so it stays robust even if a source's raw
+        // sign was not normalised on import: a recorded inclination of ~30° magnitude
+        // is consistent whether stored as +30 (the +down convention) or -30 (a raw
+        // +up reading that slipped through un-normalised). Neither must be flagged.
         for recorded in [30.0_f64, -30.0_f64] {
             let consistent = ShotData { pitch_in: Some(recorded), pitch_out: Some(recorded), ..base.clone() };
             assert!(

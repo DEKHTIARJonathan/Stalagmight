@@ -927,6 +927,104 @@ fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
     );
 }
 
+#[test]
+fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
+    // Issue #57 (Item 2): a UUID-keyed save must NOT delete a DIFFERENT shot's
+    // valid by-UUID row that occupies a different position. Before the fix the
+    // DELETE also matched `(section_id, shot_id)`, so saving uuid-Y could wipe
+    // uuid-X if Y's params happened to target X's position.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    // Shot X ignored at position shot_id=1.
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-X".to_string()),
+    })
+    .unwrap();
+    // Shot Y ignored at a DISTINCT position shot_id=2 (its own current spot).
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 2,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-Y".to_string()),
+    })
+    .unwrap();
+
+    let loaded = db.load_resolved_warnings().unwrap();
+    assert_eq!(loaded.len(), 2, "both distinct-UUID ignores must survive");
+    let uuids: std::collections::HashSet<_> =
+        loaded.iter().filter_map(|r| r.shot_uuid.as_deref()).collect();
+    assert!(uuids.contains("uuid-X"), "uuid-X's ignore must not be deleted");
+    assert!(uuids.contains("uuid-Y"), "uuid-Y's ignore must survive");
+}
+
+#[test]
+fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
+    // Issue #57 (Item 4): legacy NULL-uuid resolved rows whose (section_id,
+    // shot_id) still maps to a live shot are upgraded to UUID keying on load.
+    // Idempotent, and a row with no live shot is left NULL (never mis-keyed).
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    // Legacy row keyed by position (no UUID) that maps to a live shot.
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    })
+    .unwrap();
+    // Legacy row whose (section, shot) is NOT in the live map — must stay NULL.
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 7,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    })
+    .unwrap();
+
+    let mut live: HashMap<(u32, u32), String> = HashMap::new();
+    live.insert((0, 1), "uuid-live".to_string());
+
+    let upgraded = db.backfill_resolved_warning_uuids(&live).unwrap();
+    assert_eq!(upgraded, 1, "only the row with a live shot is upgraded");
+
+    let loaded = db.load_resolved_warnings().unwrap();
+    let mapped = loaded
+        .iter()
+        .find(|r| r.shot_id == 1 && r.warning_code == "ZERO_LENGTH")
+        .expect("the (0,1) row should still exist");
+    assert_eq!(
+        mapped.shot_uuid.as_deref(),
+        Some("uuid-live"),
+        "the live-mapped legacy row gets the shot UUID"
+    );
+    let orphan = loaded
+        .iter()
+        .find(|r| r.shot_id == 7 && r.warning_code == "SHORT_SHOT")
+        .expect("the orphan row should still exist");
+    assert_eq!(orphan.shot_uuid, None, "the unmapped legacy row stays position-keyed");
+
+    // Idempotent: a second backfill upgrades nothing.
+    let upgraded_again = db.backfill_resolved_warning_uuids(&live).unwrap();
+    assert_eq!(upgraded_again, 0, "second backfill is a no-op");
+}
+
 // === Test: Verify merged_with is populated correctly from fractal fixture ===
 #[test]
 #[ignore]

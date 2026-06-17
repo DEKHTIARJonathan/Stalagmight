@@ -2102,6 +2102,44 @@ fn test_resolve_warning_marks_resolved_in_list() {
         .find(|w| w.code == "ZERO_LENGTH")
         .expect("zero length warning");
     assert!(warning_after.is_resolved);
+
+    // Issue #57 (Item 8): a fresh ignore is always UUID-keyed (never a legacy
+    // position-only row). The persisted row must carry the shot's UUID.
+    let persisted = state(&app).inner().load_resolved_warnings().unwrap();
+    let row = persisted
+        .iter()
+        .find(|r| r.warning_code == "ZERO_LENGTH")
+        .expect("persisted resolved row");
+    assert!(row.shot_uuid.is_some(), "a fresh ignore must store a shot UUID");
+}
+
+#[test]
+fn test_resolve_warning_refuses_when_shot_missing() {
+    // Issue #57 (Item 8): with a project open, resolving a warning for a shot
+    // that does not exist must be refused (no stable identity to bind), and no
+    // position-keyed row may be written.
+    let project = project_with_section(vec![shot_data(0.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+
+    // A shot_id that does not exist in the section.
+    let result = validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id + 9999,
+        "ZERO_LENGTH".to_string(),
+        None,
+    );
+    assert!(result.is_err(), "resolving a vanished shot must be refused");
+    assert!(
+        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        "no position-keyed row may be persisted for a missing shot"
+    );
 }
 
 #[test]
@@ -2227,6 +2265,62 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
 }
 
 #[test]
+fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
+    // Issue #57 (Item 12) equivalence guard for the borrow-keyed is_resolved_for
+    // refactor in compute_project_warnings: a UUID-keyed row suppresses via the
+    // UUID branch, and a legacy NULL-uuid row suppresses via the position-fallback
+    // branch. Both branches must light up `is_resolved` and only for their shot.
+    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warnings = validation::get_project_warnings(state(&app));
+    let mut zero: Vec<_> = warnings.into_iter().filter(|w| w.code == "ZERO_LENGTH").collect();
+    assert_eq!(zero.len(), 2, "expected a zero-length warning per shot");
+    zero.sort_by_key(|w| w.shot_id);
+    let shot_uuid_hit = zero[0].clone();
+    let shot_pos_hit = zero[1].clone();
+    let uuid = shot_uuid_hit.shot_uuid.clone().expect("loaded shot has a uuid");
+
+    // UUID branch: a row carrying the shot's UUID.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: shot_uuid_hit.section_id,
+            shot_id: shot_uuid_hit.shot_id,
+            warning_code: "ZERO_LENGTH".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: Some(uuid),
+        })
+        .unwrap();
+    // Position-fallback branch: a legacy NULL-uuid row keyed by (section, shot).
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: shot_pos_hit.section_id,
+            shot_id: shot_pos_hit.shot_id,
+            warning_code: "ZERO_LENGTH".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    let a = after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH" && w.shot_id == shot_uuid_hit.shot_id)
+        .expect("uuid-keyed warning");
+    let b = after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH" && w.shot_id == shot_pos_hit.shot_id)
+        .expect("position-keyed warning");
+    assert!(a.is_resolved, "UUID-keyed row must suppress via the UUID branch");
+    assert!(b.is_resolved, "NULL-uuid row must suppress via the position-fallback branch");
+}
+
+#[test]
 fn test_resolved_warning_survives_save() {
     // Issue #57 regression: resolved (ignored) warnings live in their own table,
     // not the Project model, so the save pipeline (temp file + atomic rename)
@@ -2309,6 +2403,69 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     assert!(
         surviving.is_resolved,
         "an ignore in a surviving section must not be lost because another section was deleted"
+    );
+}
+
+#[test]
+fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_position() {
+    // Issue #57 (Item 2, same-position collision): shot A's by-UUID ignore is
+    // stored at A's old position. A renumber later moves A to a new position and
+    // lands a DIFFERENT shot B on A's old position; B then gets ignored at that
+    // stale position+code. On save, the carry-over re-derives each by-UUID row's
+    // (section_id, shot_id) from the live shot's CURRENT position, so A's ignore
+    // and B's ignore never collide on UNIQUE(section_id, shot_id, warning_code)
+    // and both survive. Without the remap, INSERT OR REPLACE would overwrite A.
+    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // The two loaded shots, each with a stable UUID.
+    let loaded = state(&app).inner().get_project_state().unwrap();
+    let shot_a = loaded.sections[0].shots[0].clone();
+    let shot_b = loaded.sections[0].shots[1].clone();
+    let section_id = loaded.sections[0].id;
+    let uuid_a = shot_a.uuid.clone().expect("shot A uuid");
+    let uuid_b = shot_b.uuid.clone().expect("shot B uuid");
+    assert_ne!(shot_a.id, shot_b.id);
+
+    // Seed the stale state directly: A's by-UUID ignore lives at A's ORIGINAL
+    // position (shot_a.id), and B's by-UUID ignore lives at B's position.
+    for (uuid, shot_id) in [(&uuid_a, shot_a.id), (&uuid_b, shot_b.id)] {
+        state(&app)
+            .inner()
+            .save_resolved_warning(&crate::persistence::ResolvedWarning {
+                section_id,
+                shot_id,
+                warning_code: "ZERO_LENGTH".to_string(),
+                resolved_at: chrono::Utc::now(),
+                resolved_comment: None,
+                shot_uuid: Some(uuid.clone()),
+            })
+            .unwrap();
+    }
+
+    // Renumber: swap the shot order so A now sits at B's old position and B at
+    // A's old position. The carry-over derives live positions from sequence
+    // order, so A's stored shot_id (== shot_a.id, now occupied by B) is stale.
+    let mut renumbered = loaded.clone();
+    renumbered.sections[0].shots.swap(0, 1);
+    state(&app).inner().set_project_for_tests(renumbered);
+
+    // Save: rebuilds the .stalx and re-applies the carried-over ignores.
+    let dir = tempfile::tempdir().unwrap();
+    let _ = save_project_to_temp(&app, &dir);
+
+    // Both by-UUID ignores must survive — neither was REPLACE-deleted.
+    let after = state(&app).inner().load_resolved_warnings().unwrap();
+    let surviving: std::collections::HashSet<_> =
+        after.iter().filter_map(|r| r.shot_uuid.as_deref()).collect();
+    assert!(
+        surviving.contains(uuid_a.as_str()),
+        "shot A's by-UUID ignore must survive the renumber-onto-its-position"
+    );
+    assert!(
+        surviving.contains(uuid_b.as_str()),
+        "shot B's by-UUID ignore must survive"
     );
 }
 
