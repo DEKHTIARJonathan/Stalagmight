@@ -411,7 +411,15 @@ export function WarningResolution({
 
     if (opt.id === 'delete-shot') {
       const result = await deleteShot(warning.sectionId, warning.shotId);
-      if (!result.success) showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
+      if (result.success) {
+        // The shot no longer exists; the resolve flow had it selected, so move
+        // the selection to its parent section — otherwise Details renders
+        // "Selection not found" for the now-dangling shot selection.
+        setSource('detail-panel');
+        setSelection({ type: 'section', sectionId: warning.sectionId });
+      } else {
+        showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
+      }
       return result.success ? 'resolved' : 'failed';
     }
 

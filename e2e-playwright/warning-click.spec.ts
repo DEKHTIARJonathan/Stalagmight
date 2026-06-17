@@ -503,6 +503,14 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.getByTestId('warning-resolution-option-manual')).toBeVisible();
     await expect(page.getByTestId('warning-resolution-option-delete-shot')).toBeVisible();
     await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
+
+    // Deleting selects the parent section (not the now-gone shot), so Details
+    // doesn't show "Selection not found".
+    await page.getByTestId('warning-resolution-option-delete-shot').click();
+    await page.getByTestId('warning-resolution-apply').click();
+    const selection = await pollSelectionState(page, (sel) => sel?.type === 'section');
+    expect(selection?.type).toBe('section');
+    expect(selection?.sectionId).toBe(sectionId);
   });
 
   test('virtualizes the warnings list (only a window of rows is in the DOM)', async ({ page }) => {
