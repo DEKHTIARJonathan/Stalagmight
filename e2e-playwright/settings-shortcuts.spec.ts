@@ -480,14 +480,12 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Press Q (new pan shortcut)
       await page.keyboard.press('Q');
-      await page.waitForTimeout(200);
 
-      // Verify pan tool is now active
-      const toolAfter = await page.evaluate(() => {
+      // Verify pan tool is now active (poll the store rather than sleeping)
+      await expect.poll(() => page.evaluate(() => {
         const stores = (window as unknown as { __E2E_TEST__?: { uiStore: { getState: () => { activeTool: string } } } }).__E2E_TEST__;
         return stores?.uiStore?.getState()?.activeTool ?? 'unknown';
-      });
-      expect(toolAfter).toBe('pan');
+      })).toBe('pan');
 
       // Verify old shortcut (P) no longer activates pan
       // Switch to select first
@@ -517,14 +515,12 @@ test.describe('Settings Dialog - Shortcuts Tab', () => {
 
       // Collapse Tools category
       await toolsToggle.click();
-      await page.waitForTimeout(100);
 
       // Actions should be hidden
       await expect(page.locator('[data-testid="shortcut-row-select"]')).not.toBeVisible();
 
       // Expand again
       await toolsToggle.click();
-      await page.waitForTimeout(100);
 
       // Actions should be visible again
       await expect(page.locator('[data-testid="shortcut-row-select"]')).toBeVisible();

@@ -4,6 +4,7 @@ import {
   createProject,
   seedProjectWithSections,
   waitForMapReady,
+  waitForActiveTool,
   type SectionSeed,
 } from './helpers/app';
 
@@ -103,7 +104,7 @@ test.describe('Non-interactive tools', () => {
   test('Pan tool prevents station selection', async ({ page }) => {
     // Switch to pan tool
     await page.keyboard.press('p');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'pan');
 
     // Get station position
     const stationPos = await getStationPosition(page);
@@ -128,7 +129,7 @@ test.describe('Non-interactive tools', () => {
   test('Pan tool prevents context menu', async ({ page }) => {
     // NOTE: Use pan, not zoom (zoom right-click does zoom-out)
     await page.keyboard.press('p');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'pan');
 
     const canvasBox = await getCanvasBoundingBox(page);
 
@@ -161,7 +162,7 @@ test.describe('Non-interactive tools', () => {
 
     // Ensure select tool is active first
     await page.keyboard.press('s');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'select');
 
     // Set hover state directly via uiStore (simulating what the SurveyLayer callback would do).
     // The MapCanvas useEffect syncs this to SurveyLayer.setHoveredStation automatically.
@@ -244,7 +245,7 @@ test.describe('Non-interactive tools', () => {
   test('Ctrl+A does nothing when pan active', async ({ page }) => {
     // Switch to pan tool
     await page.keyboard.press('p');
-    await page.waitForTimeout(100);
+    await waitForActiveTool(page, 'pan');
 
     // Press Ctrl+A
     await page.keyboard.press('Control+a');
