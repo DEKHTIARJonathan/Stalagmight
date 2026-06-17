@@ -105,6 +105,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.remove_from_recent_projects",
     "command.remove_loop_closure",
     "command.remove_zero_datum",
+    // Retained for telemetry-ID stability; the command was removed (#57). See REMOVED_COMMANDS.
+    "command.resolve_all_warnings",
     "command.resolve_warning",
     "command.restore_from_backup",
     "command.save_display_setting",
@@ -435,7 +437,7 @@ mod tests {
     /// are retained (append-only registry; frozen IDs are never relabeled or
     /// reused). They intentionally have no live handler and no frontend tracking,
     /// so the `command.*` and `undo-after.*` coverage checks skip them.
-    const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures"];
+    const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures", "resolve_all_warnings"];
 
     /// Dialog keys removed from `App.tsx` whose registry slots are likewise
     /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`
