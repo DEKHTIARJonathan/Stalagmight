@@ -2758,7 +2758,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 | Negative LRUD | Error | "Shot {section_id}:{position} has negative {direction} distance: {value}m" |
 | Invalid azimuth | Error | "Shot {section_id}:{position} has invalid azimuth_{in/out}: {value}° (must be 0-360)" |
 | Shot length < depth change | Error | "Shot {section_id}:{position} length {length}m is shorter than its depth change {dz}m (impossible: slope length must be at least the vertical change)" |
-| Recorded inclination disagrees with length/depth (> pitch_diff_threshold, default 5°) | Warning | "Shot {section_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
+| Recorded inclination disagrees with length/depth (> pitch_diff_threshold, default 10°) | Warning | "Shot {section_id}:{position} recorded inclination {pitch}° disagrees with the {computed}° implied by its length and depth change (exceeds {threshold}° threshold)" |
 | Duplicate station merge | Error | "Station is already merged with target" |
 
 ---

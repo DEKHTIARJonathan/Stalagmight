@@ -245,7 +245,7 @@ mod tests {
             warn_depth_change_per_shot_max: 10.0,
             warn_azimuth_deviation_max: 30.0,
             azimuth_diff_threshold: 20.0,
-            pitch_diff_threshold: 5.0,
+            pitch_diff_threshold: 10.0,
         }
     }
 
@@ -787,7 +787,7 @@ mod tests {
     /// length and depth change (|dz| = length * sin(pitch)).
     #[test]
     fn test_inclination_depth_mismatch() {
-        let config = default_config(); // pitch_diff_threshold = 5.0
+        let config = default_config(); // pitch_diff_threshold = 10.0
 
         // length 10, |dz| 5 → implied inclination MAGNITUDE asin(5/10) ≈ 30°.
         let base = ShotData {

@@ -820,7 +820,7 @@ fn default_azimuth_diff_threshold() -> f64 {
 }
 
 fn default_pitch_diff_threshold() -> f64 {
-    5.0
+    10.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
