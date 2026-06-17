@@ -168,7 +168,7 @@ export function WarningResolution({
           // Default: shortest valid length is the vertical change (vertical shot).
           { id: 'length-from-depth', label: t('detailPanel.warnings.resolveOptions.lengthFromDepth'), detail: len(Math.abs(dz)), disabled: geometryDisabled },
           ...(lengthFromIncl !== null
-            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.lengthFromInclination'), detail: len(lengthFromIncl), disabled: geometryDisabled }]
+            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.lengthFromInclination'), detail: `${recorded !== null ? `${formatFixed(recorded, undefined, precision.inclination)}° → ` : ''}${len(lengthFromIncl)}`, disabled: geometryDisabled }]
             : []),
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
           ignore,
@@ -192,7 +192,7 @@ export function WarningResolution({
         return [
           // Default: trust the recorded inclination, adjust the length to match.
           ...(lengthFromIncl !== null
-            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.adjustLength'), detail: len(lengthFromIncl), disabled: geometryDisabled }]
+            ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.adjustLength'), detail: `${recorded !== null ? `${formatFixed(recorded, undefined, precision.inclination)}° → ` : ''}${len(lengthFromIncl)}`, disabled: geometryDisabled }]
             : []),
           { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.adjustInclination'), detail: `${formatFixed(computedPitch, undefined, precision.inclination)}°`, disabled: geometryDisabled },
           ...(splitLength !== null && midPitch !== null
