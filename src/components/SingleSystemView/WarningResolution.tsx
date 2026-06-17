@@ -208,11 +208,11 @@ export function WarningResolution({
         const sinMid = midPitch === null ? null : Math.sin((midPitch * Math.PI) / 180);
         const splitLength = sinMid !== null && Math.abs(sinMid) > MIN_SIN_INCLINATION ? Math.abs(dz) / Math.abs(sinMid) : null;
         return [
-          // Default: trust the recorded inclination, adjust the length to match.
+          // Default (first): trust the recorded length, adjust the inclination.
+          { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.adjustInclination'), detail: `${formatFixed(implied, undefined, precision.inclination)}°`, disabled: geometryDisabled },
           ...(lengthFromIncl !== null && recorded !== null
             ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.adjustLength'), detail: len(lengthFromIncl), selectedNote: t('detailPanel.warnings.fromInclinationNote', { value: formatFixed(recorded, undefined, precision.inclination) }), disabled: geometryDisabled }]
             : []),
-          { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.adjustInclination'), detail: `${formatFixed(implied, undefined, precision.inclination)}°`, disabled: geometryDisabled },
           ...(splitLength !== null && midPitch !== null
             ? [{ id: 'split-incl-length', label: t('detailPanel.warnings.resolveOptions.splitInclLength'), detail: `${formatFixed(midPitch, undefined, precision.inclination)}° · ${len(splitLength)}`, disabled: geometryDisabled }]
             : []),
