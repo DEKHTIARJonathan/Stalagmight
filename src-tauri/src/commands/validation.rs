@@ -110,64 +110,6 @@ pub(crate) fn resolve_warning_impl(
     })
 }
 
-/// Resolve all unresolved warnings at once
-#[tauri::command]
-pub fn resolve_all_warnings(state: State<AppState>) -> Result<u32, String> {
-    resolve_all_warnings_impl(state.inner())
-}
-
-pub(crate) fn resolve_all_warnings_impl(state: &AppState) -> Result<u32, String> {
-    let project = match state.get_project_state() {
-        Some(p) => p,
-        None => return Ok(0),
-    };
-
-    // Compute current warnings to find unresolved ones. Over-anchoring is not
-    // ignorable (issue #57), so exclude it from a bulk acknowledge — it can only
-    // be cleared by removing a datum.
-    let warnings = state.compute_project_warnings(&project, None);
-    let unresolved: Vec<_> = warnings
-        .iter()
-        .filter(|w| !w.is_resolved && w.code != MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
-        .collect();
-    let count = unresolved.len() as u32;
-
-    if count == 0 {
-        return Ok(0);
-    }
-
-    tracing::info!(
-        count = count,
-        purpose = "bulk acknowledge all validation warnings",
-        "Resolving all warnings"
-    );
-
-    let now = Utc::now();
-    let resolved_warnings: Vec<_> = unresolved
-        .iter()
-        .map(|w| ResolvedWarning {
-            section_id: w.section_id,
-            shot_id: w.shot_id,
-            warning_code: w.code.clone(),
-            resolved_at: now,
-            resolved_comment: None,
-            shot_uuid: w.shot_uuid.clone(),
-        })
-        .collect();
-
-    state.save_resolved_warnings_bulk(&resolved_warnings).map_err(|e| {
-        tracing::error!(
-            count = count,
-            purpose = "bulk acknowledge all validation warnings",
-            reason = %e,
-            "Failed to resolve all warnings"
-        );
-        e.to_string()
-    })?;
-
-    Ok(count)
-}
-
 /// Unresolve a warning (remove acknowledgment)
 #[tauri::command]
 pub fn unresolve_warning(

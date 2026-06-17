@@ -210,11 +210,4 @@ impl AppState {
         let shot = section.shots.iter().find(|s| s.id == shot_id)?;
         shot.uuid.clone()
     }
-
-    /// Save multiple resolved warnings to database in bulk
-    pub fn save_resolved_warnings_bulk(&self, warnings: &[crate::persistence::ResolvedWarning]) -> Result<()> {
-        let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
-        db.save_resolved_warnings_bulk(warnings)
-    }
 }

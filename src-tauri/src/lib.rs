@@ -1224,7 +1224,6 @@ pub fn run() {
             commands::validation::check_project_integrity,
             commands::validation::repair_project_integrity,
             commands::validation::resolve_warning,
-            commands::validation::resolve_all_warnings,
             commands::validation::unresolve_warning,
             // Survey geometry
             commands::survey_geometry::get_survey_geometry,

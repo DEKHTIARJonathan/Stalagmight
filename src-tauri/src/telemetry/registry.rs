@@ -105,7 +105,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.remove_from_recent_projects",
     "command.remove_loop_closure",
     "command.remove_zero_datum",
-    "command.resolve_all_warnings",
     "command.resolve_warning",
     "command.restore_from_backup",
     "command.save_display_setting",
