@@ -3,6 +3,18 @@ import { defineConfig, devices } from '@playwright/test';
 const coverageEnabled = process.env.E2E_COVERAGE === '1';
 const devServerCommand = coverageEnabled ? 'VITE_COVERAGE=1 pnpm dev' : 'pnpm dev';
 
+// Retries: CI gets 2; locally 1, so a single timing blip under load (e.g. the
+// pre-push @smoke gate on a 1-worker headless VM) doesn't abort an otherwise-
+// green push (issue #15). PW_RETRIES overrides, but only with a validated
+// non-negative integer — anything else (PW_RETRIES=foo, -1, 1.5) falls back to
+// the default instead of becoming NaN and breaking config load.
+const defaultRetries = process.env.CI ? 2 : 1;
+const envRetries = Number(process.env.PW_RETRIES);
+const retries =
+  process.env.PW_RETRIES !== undefined && Number.isInteger(envRetries) && envRetries >= 0
+    ? envRetries
+    : defaultRetries;
+
 /**
  * Playwright configuration for fast UI tests with Tauri IPC mocking.
  * These tests run against the Vite dev server with mocked Tauri commands.
@@ -16,16 +28,8 @@ export default defineConfig({
   // Fail CI if test.only is committed
   forbidOnly: !!process.env.CI,
 
-  // Retry flaky tests. CI gets 2; locally we still retry once so a single
-  // timing blip under load — e.g. the pre-push @smoke gate on a 1-worker
-  // headless VM — doesn't abort an otherwise-green push (issue #15).
-  // Override with PW_RETRIES (e.g. PW_RETRIES=0 to fail fast during dev).
-  retries:
-    process.env.PW_RETRIES !== undefined
-      ? Number(process.env.PW_RETRIES)
-      : process.env.CI
-        ? 2
-        : 1,
+  // Derived above (validated PW_RETRIES override; CI 2 / local 1).
+  retries,
 
   // Use PW_WORKERS env var to override (Playwright accepts either an
   // integer count or a percentage of logical CPU cores, e.g. "50%").

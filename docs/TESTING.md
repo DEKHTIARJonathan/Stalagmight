@@ -1378,7 +1378,7 @@ await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 Two GitHub Actions run on every push/PR to `master`:
 
-1. **`ci.yml` (`check`)** — `pnpm tsc --noEmit` + `cargo test --features telemetry`.
+1. **`ci.yml` (`check`)** — `pnpm tsc --noEmit` + `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`.
    This is the historical merge gate. (Note: `--features telemetry` is required —
    a plain `cargo test` filters out the `registry_covers_all_*` tests, and
    `build.rs` requires `TELEMETRY_ENDPOINT` under that feature.)

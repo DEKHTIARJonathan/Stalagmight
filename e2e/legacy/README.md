@@ -4,8 +4,8 @@ These WebdriverIO specs drive the **real Tauri application** (built debug binary
 `tauri-driver`/`tauri-wd`). They are **on-demand only** — they do **not** run in
 any automated gate:
 
-- **CI** runs only `pnpm tsc --noEmit` + `cargo test --features telemetry`.
-- The **pre-push** gate runs the fast Playwright `@smoke` subset.
+- **CI** runs `pnpm tsc --noEmit`, `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`, and the Playwright `@smoke` workflow (`e2e-smoke.yml`).
+- The **pre-push** gate also runs the `@smoke` subset; the **full** Playwright suite runs nightly.
 - **Releases** do not run this suite.
 
 They live under `legacy/` because they are **15–20× slower** than the Playwright
