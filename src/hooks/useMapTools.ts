@@ -1,13 +1,37 @@
 import { useCallback, useRef, useState } from 'react';
-import { useUIStore, type Selection } from '../store/uiStore';
+import type { MapMouseEvent } from 'maplibre-gl';
+import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
-import { getErrorMessage } from '../utils/ipc';
-import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
+import { getErrorMessage, invokeIpc } from '../utils/ipc';
+import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
+import type { GpsOrigin } from '../types/config';
+import { mapCoordsToMeters } from '../utils/coordinates';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
+
+/** A measure endpoint's 3D coords (meters). For a raw `point` the fields are inline. */
+function endpointCoords(ep: MeasureEndpoint): Coordinates {
+  return ep.kind === 'point' ? { x: ep.x, y: ep.y, z: ep.z } : ep.coords;
+}
+
+/** Only stations and shot-points have a cave-line position (enable along-line + tint). */
+function isConnectable(ep: MeasureEndpoint): boolean {
+  return ep.kind !== 'point';
+}
+
+/** Map a UI measure endpoint to the backend `RulerEndpoint` (null for raw points). */
+function toRulerEndpoint(ep: MeasureEndpoint): RulerEndpoint | null {
+  if (ep.kind === 'station') {
+    return { section_id: ep.section_id, station_index: ep.station_index, shot_id: null, t: null };
+  }
+  if (ep.kind === 'shotPoint') {
+    return { section_id: ep.section_id, shot_id: ep.shot_id, t: ep.t, station_index: null };
+  }
+  return null;
+}
 
 interface MoveDragStartData {
   type: 'station' | 'segment' | 'shot';
@@ -20,11 +44,12 @@ interface MoveDragStartData {
 }
 
 interface MapToolsOptions {
-  onMeasureComplete?: (distance: number, depthDiff: number) => void;
   onMoveDragStart?: (data: MoveDragStartData) => void;
   onFeatureHover?: (isHovering: boolean) => void;
   /** Station keys ("sectionId:stationIndex") that cannot be moved (zero-datum or transitively connected) */
   immovableStationKeys?: Set<string>;
+  /** GPS origin for converting a raw map click to meters (ruler `point` endpoints). */
+  gpsOrigin?: GpsOrigin | null;
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
@@ -40,9 +65,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setMergeStationA,
     setMergeStationB,
     clearMergeStations,
-    measureStart,
     setMeasureStart,
     setMeasureEnd,
+    setMeasureDirect,
+    setMeasureAlongLine,
+    setMeasureAlongLinePending,
     clearMeasure,
     setHoveredStation,
     setHoveredShot,
@@ -79,24 +106,106 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [activeStations]
   );
 
-  // Calculate distance between two points
+  // Direct (3D straight-line) distance + depth diff between two measure endpoints.
   const calculateDistance = useCallback(
-    (a: StationRef | Coordinates, b: StationRef | Coordinates): { distance: number; depthDiff: number } | null => {
-      const coordsA = 'section_id' in a ? getStationCoordinates(a as StationRef) : (a as Coordinates);
-      const coordsB = 'section_id' in b ? getStationCoordinates(b as StationRef) : (b as Coordinates);
-
-      if (!coordsA || !coordsB) return null;
-
-      const dx = coordsB.x - coordsA.x;
-      const dy = coordsB.y - coordsA.y;
-      const dz = coordsB.z - coordsA.z;
-
+    (a: MeasureEndpoint, b: MeasureEndpoint): { distance: number; depthDiff: number } => {
+      const ca = endpointCoords(a);
+      const cb = endpointCoords(b);
+      const dx = cb.x - ca.x;
+      const dy = cb.y - ca.y;
+      const dz = cb.z - ca.z;
       return {
         distance: Math.sqrt(dx * dx + dy * dy + dz * dz),
         depthDiff: dz,
       };
     },
-    [getStationCoordinates]
+    []
+  );
+
+  // Build a shot-point endpoint from a shot id + fractional position `t`,
+  // interpolating the 3D coords from the active stations (geometry-mode aware).
+  const buildShotPointEndpoint = useCallback(
+    (sectionId: SectionId, shotId: ShotId, t: number): MeasureEndpoint | null => {
+      const section = project?.sections.find((s) => s.id === sectionId);
+      if (!section) return null;
+      const pos = section.shots.findIndex((sh) => sh.id === shotId);
+      if (pos < 0) return null;
+      const from = getStationCoordinates({ section_id: sectionId, station_index: pos });
+      const to = getStationCoordinates({ section_id: sectionId, station_index: pos + 1 });
+      if (!from || !to) return null;
+      const coords: Coordinates = {
+        x: from.x + t * (to.x - from.x),
+        y: from.y + t * (to.y - from.y),
+        z: from.z + t * (to.z - from.z),
+      };
+      return { kind: 'shotPoint', section_id: sectionId, shot_id: shotId, t, coords };
+    },
+    [project?.sections, getStationCoordinates]
+  );
+
+  // Monotonic id so a fast second measurement discards a stale along-line response.
+  const measureRequestIdRef = useRef(0);
+
+  // Query the backend for the along-cave-line distance + path shots, then store
+  // the result + tint ids (or null on disconnect / non-station endpoints).
+  const requestAlongLine = useCallback(
+    async (start: MeasureEndpoint, end: MeasureEndpoint) => {
+      const a = toRulerEndpoint(start);
+      const b = toRulerEndpoint(end);
+      if (!a || !b) {
+        setMeasureAlongLine({ alongLine: null, pathShots: [] });
+        return;
+      }
+      measureRequestIdRef.current += 1;
+      const requestId = measureRequestIdRef.current;
+      setMeasureAlongLinePending(true);
+      try {
+        const result = await invokeIpc<AlongLineResult | null>(
+          'get_along_line_distance',
+          { a, b },
+          { purpose: 'ruler along-line distance' }
+        );
+        // Discard stale responses and results that arrive after the tool changed.
+        if (requestId !== measureRequestIdRef.current) return;
+        if (useUIStore.getState().activeTool !== 'measure') return;
+        setMeasureAlongLine(
+          result
+            ? { alongLine: result.along_line, pathShots: result.path_shots }
+            : { alongLine: null, pathShots: [] }
+        );
+      } catch (e) {
+        if (requestId === measureRequestIdRef.current) {
+          console.warn('Along-line distance query failed:', getErrorMessage(e, 'unknown error'));
+          setMeasureAlongLine({ alongLine: null, pathShots: [] });
+        }
+      }
+    },
+    [setMeasureAlongLine, setMeasureAlongLinePending]
+  );
+
+  // Apply a measure click: first point starts; second finishes (direct distance +
+  // along-line query); a click on a completed measurement resets and restarts (#26).
+  const applyMeasureClick = useCallback(
+    (ep: MeasureEndpoint) => {
+      const { measureStart: start, measureEnd: end } = useUIStore.getState();
+      if (start && end) {
+        clearMeasure();
+        setMeasureStart(ep);
+        return;
+      }
+      if (!start) {
+        setMeasureStart(ep);
+        return;
+      }
+      setMeasureEnd(ep);
+      setMeasureDirect(calculateDistance(start, ep));
+      if (isConnectable(start) && isConnectable(ep)) {
+        void requestAlongLine(start, ep);
+      } else {
+        setMeasureAlongLine({ alongLine: null, pathShots: [] });
+      }
+    },
+    [calculateDistance, clearMeasure, requestAlongLine, setMeasureAlongLine, setMeasureDirect, setMeasureEnd, setMeasureStart]
   );
 
   // Check connectivity and open appropriate merge/closure dialog
@@ -213,16 +322,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'measure': {
-          if (!measureStart) {
-            setMeasureStart(ref);
-          } else {
-            setMeasureEnd(ref);
-            // Calculate and display distance
-            const result = calculateDistance(measureStart, ref);
-            if (result) {
-              options.onMeasureComplete?.(result.distance, result.depthDiff);
-            }
-            // Keep the measurement displayed but allow new measurement
+          const coords = getStationCoordinates(ref);
+          if (coords) {
+            applyMeasureClick({
+              kind: 'station',
+              section_id: ref.section_id,
+              station_index: ref.station_index,
+              coords,
+            });
           }
           break;
         }
@@ -311,17 +418,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [
       activeTool,
       addToSelection,
-      calculateDistance,
+      applyMeasureClick,
+      getStationCoordinates,
       checkAndOpenMergeDialog,
       clearMergeStations,
       isCheckingConnectivity,
-      measureStart,
       mergeStationA,
       openDialog,
       options,
       project?.sections,
-      setMeasureEnd,
-      setMeasureStart,
       setMergeStationA,
       setSelection,
       showStations,
@@ -470,14 +575,47 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           }
           break;
         }
+
+        case 'measure': {
+          // The mousemove snap gives the exact fractional point on the shot; fall
+          // back to the midpoint when snapping is disabled (#26).
+          const snap = useUIStore.getState().measureSnapShot;
+          const t = snap && snap.section_id === sectionId && snap.shot_id === shotId ? snap.t : 0.5;
+          const ep = buildShotPointEndpoint(sectionId, shotId, t);
+          if (ep) applyMeasureClick(ep);
+          break;
+        }
       }
     },
-    [activeTool, addToSelection, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
+    [activeTool, addToSelection, applyMeasureClick, buildShotPointEndpoint, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
   const handleEmptyClick = useCallback(
-    (_event: { originalEvent: MouseEvent }) => {
+    (event: MapMouseEvent) => {
+      // Measure: commit the current snap (shot-point or station) or, failing that,
+      // a raw map point. Handled before the snapped-station branch so a shot snap
+      // (no snapped station) works, and so the reset-and-restart on a fresh click
+      // applies regardless of snap state (#26).
+      if (activeTool === 'measure') {
+        const { measureSnapShot: snapShot, snappedStation: snapStation } = useUIStore.getState();
+        let ep: MeasureEndpoint | null = null;
+        if (snapShot) {
+          ep = buildShotPointEndpoint(snapShot.section_id, snapShot.shot_id, snapShot.t);
+        } else if (snapStation) {
+          const coords = getStationCoordinates(snapStation);
+          if (coords) {
+            ep = { kind: 'station', section_id: snapStation.section_id, station_index: snapStation.station_index, coords };
+          }
+        }
+        if (!ep && event.lngLat) {
+          const m = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
+          ep = { kind: 'point', x: m.x, y: m.y, z: 0 };
+        }
+        if (ep) applyMeasureClick(ep);
+        return;
+      }
+
       // If we have a snapped station, use it instead of treating as empty click
       // This enables snap functionality for merge/measure tools
       if (snappedStation) {
@@ -501,18 +639,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               } else {
                 // Check connectivity and open appropriate dialog
                 checkAndOpenMergeDialog(mergeStationA, snappedStation);
-              }
-            }
-            return;
-
-          case 'measure':
-            if (!measureStart) {
-              setMeasureStart(snappedStation);
-            } else {
-              setMeasureEnd(snappedStation);
-              const result = calculateDistance(measureStart, snappedStation);
-              if (result) {
-                options.onMeasureComplete?.(result.distance, result.depthDiff);
               }
             }
             return;
@@ -542,27 +668,21 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             clearMergeStations();
           }
           break;
-
-        case 'measure':
-          clearMeasure();
-          break;
       }
     },
     [
       activeTool,
+      applyMeasureClick,
+      buildShotPointEndpoint,
+      getStationCoordinates,
       checkAndOpenMergeDialog,
       snappedStation,
       isCheckingConnectivity,
       mergeStationA,
-      measureStart,
-      calculateDistance,
-      clearMeasure,
       clearMergeStations,
       clearSelection,
       openDialog,
       options,
-      setMeasureEnd,
-      setMeasureStart,
       setMergeStationA,
       showStations,
       showToast,

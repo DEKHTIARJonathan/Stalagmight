@@ -17,6 +17,7 @@ import {
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState } from '../../utils/distanceGradient';
+import { buildMeasuredPathIds } from '../../utils/measurePath';
 import { getBounds, metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
@@ -182,7 +183,6 @@ export default function MapCanvas() {
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
   const scaleControlAddedRef = useRef<boolean>(false);
-  const [measureResult, setMeasureResult] = useState<{ distance: number; depthDiff: number } | null>(null);
   const [boxSelect, setBoxSelect] = useState<BoxSelectState>({ start: null, end: null });
   const [zoomBox, setZoomBox] = useState<BoxSelectState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
@@ -207,6 +207,10 @@ export default function MapCanvas() {
   // Ref mirror of snappedStation — used for same-value comparison in the snap hot path
   // so checkSnapToStation doesn't depend on React state (avoids re-render in the loop)
   const snappedStationRef = useRef<StationRef | null>(null);
+  // Ref mirror of the measure shot-snap candidate (#26) + its live cursor marker,
+  // updated imperatively in the snap hot path like the station snap.
+  const measureSnapShotRef = useRef<{ section_id: number; shot_id: number; t: number; lng: number; lat: number } | null>(null);
+  const shotSnapMarkerRef = useRef<maplibregl.Marker | null>(null);
   // Pending section zoom request (stored when map not loaded, processed when it loads)
   const pendingZoomToSectionRef = useRef<number | null>(null);
   // Pending pan-to-shot request (stored when map not loaded, processed when it loads)
@@ -368,6 +372,12 @@ export default function MapCanvas() {
     mergeStationB,
     measureStart,
     measureEnd,
+    measureDirect,
+    measureAlongLine,
+    measureAlongLinePending,
+    measureSnapShot,
+    setMeasureSnapShot,
+    clearMeasure,
     addToSelection,
     clearSelection,
     clearSelectionByType,
@@ -495,12 +505,27 @@ export default function MapCanvas() {
   // indicator tracks the cursor at frame rate — same strategy as hover detection.
   const checkSnapToStation = useCallback(
     (screenX: number, screenY: number) => {
-      if (!map.current || !config || !surveyLayerRef.current) {
+      const clearStationSnap = () => {
         if (snappedStationRef.current) {
           snappedStationRef.current = null;
           surveyLayerRef.current?.setSnappedStation(null);
           startTransition(() => setSnappedStation(null));
         }
+      };
+      const clearShotSnap = () => {
+        if (shotSnapMarkerRef.current) {
+          shotSnapMarkerRef.current.remove();
+          shotSnapMarkerRef.current = null;
+        }
+        if (measureSnapShotRef.current) {
+          measureSnapShotRef.current = null;
+          startTransition(() => setMeasureSnapShot(null));
+        }
+      };
+
+      if (!map.current || !config || !surveyLayerRef.current) {
+        clearStationSnap();
+        clearShotSnap();
         return;
       }
 
@@ -512,19 +537,22 @@ export default function MapCanvas() {
         (activeTool === 'measure' && snapConfig.enabled_measure);
 
       if (!shouldSnap) {
-        if (snappedStationRef.current) {
-          snappedStationRef.current = null;
-          surveyLayerRef.current.setSnappedStation(null);
-          startTransition(() => setSnappedStation(null));
-        }
+        clearStationSnap();
+        clearShotSnap();
         return;
       }
 
       const nearestStation = surveyLayerRef.current.queryNearestStation(
         screenX, screenY, snapConfig.threshold
       );
+      // Measure (#26) also snaps to an exact point on a shot when no station is
+      // within range — stations win when both are close.
+      const nearestShot =
+        activeTool === 'measure' && !nearestStation
+          ? surveyLayerRef.current.queryNearestShotPoint(screenX, screenY, snapConfig.threshold)
+          : null;
 
-      // Update snapped station — compare via ref (no React state dependency)
+      // Station snap — compare via ref (no React state dependency in the hot path).
       const prev = snappedStationRef.current;
       if (nearestStation) {
         if (
@@ -539,13 +567,46 @@ export default function MapCanvas() {
           // synchronous React re-render from blocking the current frame's paint
           startTransition(() => setSnappedStation(nearestStation));
         }
-      } else if (prev) {
-        snappedStationRef.current = null;
-        surveyLayerRef.current.setSnappedStation(null);
-        startTransition(() => setSnappedStation(null));
+      } else {
+        clearStationSnap();
+      }
+
+      // Shot-point snap (measure only): a live cursor marker (imperative, like the
+      // station highlight) + a deferred store push for the click handler.
+      if (nearestShot) {
+        if (!shotSnapMarkerRef.current && map.current) {
+          const el = document.createElement('div');
+          el.setAttribute('data-testid', 'measure-shot-snap-marker');
+          el.style.cssText =
+            'width:11px;height:11px;border-radius:50%;background:#22d3ee;' +
+            'border:2px solid #ffffff;box-shadow:0 0 3px rgba(0,0,0,0.6);pointer-events:none;';
+          shotSnapMarkerRef.current = new maplibregl.Marker({ element: el })
+            .setLngLat([nearestShot.lng, nearestShot.lat])
+            .addTo(map.current);
+        } else {
+          shotSnapMarkerRef.current?.setLngLat([nearestShot.lng, nearestShot.lat]);
+        }
+        const prevShot = measureSnapShotRef.current;
+        if (
+          !prevShot ||
+          prevShot.section_id !== nearestShot.section_id ||
+          prevShot.shot_id !== nearestShot.shot_id ||
+          prevShot.t !== nearestShot.t
+        ) {
+          measureSnapShotRef.current = nearestShot;
+          startTransition(() =>
+            setMeasureSnapShot({
+              section_id: nearestShot.section_id,
+              shot_id: nearestShot.shot_id,
+              t: nearestShot.t,
+            })
+          );
+        }
+      } else {
+        clearShotSnap();
       }
     },
-    [activeTool, config, setSnappedStation, showStations]
+    [activeTool, config, setSnappedStation, setMeasureSnapShot, showStations]
   );
 
   // Check snap for placement mode
@@ -606,7 +667,15 @@ export default function MapCanvas() {
       snappedStationRef.current = null;
       setSnappedStation(null);
     }
-  }, [activeTool, snappedStation, setSnappedStation]);
+    // The measure shot-snap (#26) only exists for the measure tool — drop its
+    // marker + state when leaving it so a stale cyan dot can't linger.
+    if (activeTool !== 'measure' && (shotSnapMarkerRef.current || measureSnapShotRef.current)) {
+      shotSnapMarkerRef.current?.remove();
+      shotSnapMarkerRef.current = null;
+      measureSnapShotRef.current = null;
+      if (measureSnapShot) setMeasureSnapShot(null);
+    }
+  }, [activeTool, snappedStation, setSnappedStation, measureSnapShot, setMeasureSnapShot]);
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
@@ -736,14 +805,10 @@ export default function MapCanvas() {
 
   // Get map tool callbacks
   const baseToolCallbacks = useMapTools({
-    onMeasureComplete: (distance, depthDiff) => {
-      setMeasureResult({ distance, depthDiff });
-      // Clear after a few seconds
-      setTimeout(() => setMeasureResult(null), 5000);
-    },
     onMoveDragStart: handleMoveDragStart,
     onFeatureHover: setIsHoveringFeature,
     immovableStationKeys,
+    gpsOrigin,
   });
 
   // Combine with hidden feature callbacks for toast feedback
@@ -1546,7 +1611,8 @@ export default function MapCanvas() {
   // otherwise the previous project's distances paint the new project gray. (#34)
   useEffect(() => {
     setDistanceGradientOrigin(null);
-  }, [project?.created_at, setDistanceGradientOrigin]);
+    clearMeasure();
+  }, [project?.created_at, setDistanceGradientOrigin, clearMeasure]);
 
   // Distance-gradient overlay (#34): fetch the per-station distance field when the
   // overlay is on and the origin or project data changes. Distances use MEASURED
@@ -1577,6 +1643,15 @@ export default function MapCanvas() {
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
   }, [showDistanceGradient, distanceField, project, mapLoaded, surveyLayerRef]);
+
+  // Tint the measured along-line path shots (#26): push the path-shot feature ids
+  // to the SurveyLayer. Keyed on the along-line result so it applies when the IPC
+  // resolves and clears on reset (clearMeasure nulls measureAlongLine).
+  useEffect(() => {
+    if (!surveyLayerRef.current || !mapLoaded) return;
+    const ids = measureAlongLine ? buildMeasuredPathIds(measureAlongLine.pathShots) : null;
+    surveyLayerRef.current.setMeasuredPathShots(ids && ids.size > 0 ? ids : null);
+  }, [measureAlongLine, mapLoaded]);
 
   // Distance-gradient origin marker (#34): a ring on the chosen origin station.
   // A MapLibre Marker so it auto-tracks the camera and shows even when the
@@ -3139,14 +3214,33 @@ export default function MapCanvas() {
         </div>
       )}
 
-      {/* Measurement result display */}
-      {measureResult && !placementMode && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-border rounded px-3 py-2 text-sm">
-          <span className="font-medium">{t('map.measure.distance')}:</span>{' '}
-          {formatFixed(measureResult.distance, undefined, precision.length)}{t('common.units.meters')}
+      {/* Measurement result display (#26: direct + along-cave-line). Persists
+          until a reset action (next click, Escape, tool switch, …). */}
+      {measureEnd && measureDirect && !placementMode && (
+        <div
+          className="absolute top-2 left-1/2 -translate-x-1/2 bg-panel border border-border rounded px-3 py-2 text-sm"
+          data-testid="measure-readout"
+        >
+          <span className="font-medium">{t('map.measure.direct')}:</span>{' '}
+          <span data-testid="measure-direct">
+            {formatFixed(measureDirect.distance, undefined, precision.length)}{t('common.units.meters')}
+          </span>
+          <span className="mx-2">|</span>
+          <span className="font-medium">{t('map.measure.alongLine')}:</span>{' '}
+          <span data-testid="measure-along-line">
+            {measureStart?.kind === 'point' || measureEnd.kind === 'point'
+              ? '—'
+              : measureAlongLinePending
+                ? '…'
+                : measureAlongLine?.alongLine != null
+                  ? `${formatFixed(measureAlongLine.alongLine, undefined, precision.length)}${t('common.units.meters')}`
+                  : t('map.measure.noPath')}
+          </span>
           <span className="mx-2">|</span>
           <span className="font-medium">{t('map.measure.depthDiff')}:</span>{' '}
-          {formatFixed(measureResult.depthDiff, undefined, precision.depth)}{t('common.units.meters')}
+          <span data-testid="measure-depth-diff">
+            {formatFixed(measureDirect.depthDiff, undefined, precision.depth)}{t('common.units.meters')}
+          </span>
         </div>
       )}
 

@@ -35,8 +35,10 @@ import { formatFixed } from '../../i18n/format';
 import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
+import { MEASURE_TINT } from '../../utils/measurePath';
 import {
   distanceToLineSegment,
+  projectParamOnSegment,
   resolveNearestShot,
   resolveNearestStation,
 } from './surveyLayer/hitTest';
@@ -235,6 +237,10 @@ export default class SurveyLayer {
   // feature-state on every setData().
   private distanceMode: boolean = false;
   private distanceState: DistanceFeatureState | null = null;
+  // Measured along-line path shots (#26): tinted via the `measured` feature-state
+  // + a paint `case` on the shots line-color. Re-applied after setData() (which
+  // clears feature-state), and suppressed while the distance gradient owns color.
+  private measuredPathIds: Set<number> | null = null;
 
   // Theme colors for MapLibre paint properties (MapLibre cannot read CSS vars)
   // Seeded at construction so first paint uses current theme, not legacy fallbacks
@@ -1730,11 +1736,36 @@ export default class SurveyLayer {
     this.applyDistanceFeatureState();
   }
 
+  /** The shots layer's `line-color` expression. The distance gradient wins when
+   *  active; otherwise the measured along-line path (#26) tints its shots via the
+   *  `measured` feature-state; otherwise the plain per-shot color. Centralized so
+   *  the distance overlay and the measure tint never clobber each other. */
+  private shotsLineColor(): ExpressionSpecification {
+    if (this.distanceMode) {
+      return distanceColorExpression(
+        DISTANCE_NEAR,
+        DISTANCE_FAR,
+        this.distanceState?.max ?? 0,
+        this.themeColors.grayLine,
+      );
+    }
+    if (this.measuredPathIds && this.measuredPathIds.size > 0) {
+      return [
+        'case',
+        ['boolean', ['feature-state', 'measured'], false],
+        MEASURE_TINT,
+        ['get', 'color'],
+      ] as ExpressionSpecification;
+    }
+    return ['get', 'color'] as ExpressionSpecification;
+  }
+
   /** Swap shots/stations color to the distance ramp (or restore), and suspend the
    *  depth sub-segment layer so distance wins cleanly. */
   private applyDistancePaint(): void {
     if (!this.map) return;
-    const color: ExpressionSpecification = this.distanceMode
+    // Stations follow the distance ramp only (the measure tint is shots-only).
+    const stationColor: ExpressionSpecification = this.distanceMode
       ? distanceColorExpression(
           DISTANCE_NEAR,
           DISTANCE_FAR,
@@ -1743,10 +1774,10 @@ export default class SurveyLayer {
         )
       : (['get', 'color'] as ExpressionSpecification);
     if (this.map.getLayer(this.shotsLayerId)) {
-      this.map.setPaintProperty(this.shotsLayerId, 'line-color', color);
+      this.map.setPaintProperty(this.shotsLayerId, 'line-color', this.shotsLineColor());
     }
     if (this.map.getLayer(this.stationsLayerId)) {
-      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', color);
+      this.map.setPaintProperty(this.stationsLayerId, 'circle-color', stationColor);
     }
     // Depth's per-segment gradient renders above the main shot line; hide it while
     // distance is active so it can't cover the distance colors. When restoring,
@@ -1774,6 +1805,36 @@ export default class SurveyLayer {
     }
     for (const [id, dist] of this.distanceState.stations) {
       this.map.setFeatureState({ source: stationsSource, id }, { dist });
+    }
+  }
+
+  /** Tint the shots on the measured along-cave-line path (#26), or clear with
+   *  `null`. Mirrors the distance-gradient overlay: a `measured` feature-state +
+   *  a paint `case` (see `shotsLineColor`). The distance gradient still wins on
+   *  color while it's active; the tint resurfaces when it turns off. */
+  setMeasuredPathShots(ids: Set<number> | null): void {
+    const shotsSource = this.sourceId + '-shots';
+    // Clear any previous tint feature-state.
+    if (this.map && this.measuredPathIds) {
+      for (const id of this.measuredPathIds) {
+        this.map.setFeatureState({ source: shotsSource, id }, { measured: false });
+      }
+    }
+    this.measuredPathIds = ids && ids.size > 0 ? ids : null;
+    if (!this.map || !hasLiveStyle(this.map)) return;
+    if (this.map.getLayer(this.shotsLayerId)) {
+      this.map.setPaintProperty(this.shotsLayerId, 'line-color', this.shotsLineColor());
+    }
+    this.applyMeasuredPathFeatureState();
+  }
+
+  /** Push the `measured` feature-state for the tinted path shots (no-op when the
+   *  set is empty). Re-applied after setData() wipes feature-state. */
+  private applyMeasuredPathFeatureState(): void {
+    if (!this.map || !this.measuredPathIds) return;
+    const shotsSource = this.sourceId + '-shots';
+    for (const id of this.measuredPathIds) {
+      this.map.setFeatureState({ source: shotsSource, id }, { measured: true });
     }
   }
 
@@ -1965,6 +2026,52 @@ export default class SurveyLayer {
     return {
       section_id: sectionId as number,
       station_index: stationIndex as number,
+    };
+  }
+
+  /**
+   * Nearest shot to a screen point, plus the fractional position `t` ∈ [0,1]
+   * along that shot's line (#26 ruler snap-to-shot). The caller interpolates the
+   * 3D coords at `t` from the active stations (the 2D shot geometry has no z).
+   * Returns null when no shot is within `threshold` pixels.
+   */
+  queryNearestShotPoint(
+    screenX: number,
+    screenY: number,
+    threshold: number
+  ): { section_id: number; shot_id: number; t: number; lng: number; lat: number } | null {
+    const bbox: [[number, number], [number, number]] = [
+      [screenX - threshold, screenY - threshold],
+      [screenX + threshold, screenY + threshold],
+    ];
+    const features = this.map.queryRenderedFeatures(bbox, {
+      layers: [this.shotsHitboxLayerId],
+    });
+    if (features.length === 0) return null;
+
+    const fakeEvent = { point: { x: screenX, y: screenY } } as MapMouseEvent;
+    const nearest = resolveNearestShot(this.map, fakeEvent, features, threshold);
+    if (!nearest || nearest.geometry.type !== 'LineString') return null;
+
+    const { sectionId, shotId } = nearest.properties ?? {};
+    if (sectionId === undefined || shotId === undefined) return null;
+
+    const coords = nearest.geometry.coordinates;
+    const c1 = coords[0] as [number, number] | undefined;
+    const c2 = coords[coords.length - 1] as [number, number] | undefined;
+    if (!c1 || !c2) return null;
+    const p1 = this.map.project(c1);
+    const p2 = this.map.project(c2);
+    const t = projectParamOnSegment(screenX, screenY, p1.x, p1.y, p2.x, p2.y);
+    const lng = c1[0] + t * (c2[0] - c1[0]);
+    const lat = c1[1] + t * (c2[1] - c1[1]);
+
+    return {
+      section_id: sectionId as number,
+      shot_id: shotId as number,
+      t,
+      lng,
+      lat,
     };
   }
 
@@ -3797,6 +3904,10 @@ export default class SurveyLayer {
     // would tank FPS (60→10 on large surveys). (#34)
     if (this.distanceMode) {
       this.applyDistanceFeatureState();
+    }
+    // Likewise re-apply the measured along-line path tint (#26).
+    if (this.measuredPathIds) {
+      this.applyMeasuredPathFeatureState();
     }
 
     // Fire one-shot callback (used by drag commit to restore filters in the same

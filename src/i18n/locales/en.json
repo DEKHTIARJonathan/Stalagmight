@@ -1752,6 +1752,9 @@
       "title": "Measure",
       "instructions": "Click a second point to finish.",
       "distance": "Distance",
+      "direct": "Direct",
+      "alongLine": "Along line",
+      "noPath": "No connected path",
       "depthDiff": "Depth diff"
     },
     "move": {

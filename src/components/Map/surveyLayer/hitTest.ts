@@ -1,5 +1,27 @@
 import type { Map as MaplibreMap, MapMouseEvent, MapGeoJSONFeature } from 'maplibre-gl';
 
+/**
+ * Parametric position of (px,py) projected onto the segment (x1,y1)-(x2,y2),
+ * clamped to [0,1] (0 = first endpoint, 1 = second). A degenerate (zero-length)
+ * segment returns 0. Used both for hit distance and to locate the fractional
+ * point on a shot when the ruler snaps to a shot (#26).
+ */
+export function projectParamOnSegment(
+  px: number,
+  py: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number
+): number {
+  const C = x2 - x1;
+  const D = y2 - y1;
+  const lenSq = C * C + D * D;
+  if (lenSq === 0) return 0;
+  const t = ((px - x1) * C + (py - y1) * D) / lenSq;
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
 export function distanceToLineSegment(
   px: number,
   py: number,
@@ -8,28 +30,9 @@ export function distanceToLineSegment(
   x2: number,
   y2: number
 ): number {
-  const A = px - x1;
-  const B = py - y1;
-  const C = x2 - x1;
-  const D = y2 - y1;
-
-  const dot = A * C + B * D;
-  const lenSq = C * C + D * D;
-  const param = lenSq !== 0 ? dot / lenSq : -1;
-
-  let xx: number;
-  let yy: number;
-  if (param < 0) {
-    xx = x1;
-    yy = y1;
-  } else if (param > 1) {
-    xx = x2;
-    yy = y2;
-  } else {
-    xx = x1 + param * C;
-    yy = y1 + param * D;
-  }
-
+  const t = projectParamOnSegment(px, py, x1, y1, x2, y2);
+  const xx = x1 + t * (x2 - x1);
+  const yy = y1 + t * (y2 - y1);
   return Math.sqrt((px - xx) ** 2 + (py - yy) ** 2);
 }
 

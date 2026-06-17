@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackSelect, trackSelectAdd } from '../utils/telemetry';
-import type { Coordinates, DistanceField, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
   type: 'station' | 'shot';
@@ -50,6 +50,47 @@ export type ToolType =
   | 'move_shot'
   | 'comment'
   | 'move_comment';
+
+/**
+ * One endpoint of the ruler/measure tool (#26). A raw map `point` yields only the
+ * direct (straight-line) distance; a `station` or `shotPoint` also enables the
+ * along-cave-line distance + path tint. `coords` is the 3D position (meters) used
+ * for the direct distance; for a `shotPoint` it's interpolated along the shot.
+ */
+export type MeasureEndpoint =
+  | { kind: 'point'; x: number; y: number; z: number }
+  | { kind: 'station'; section_id: SectionId; station_index: number; coords: Coordinates }
+  | { kind: 'shotPoint'; section_id: SectionId; shot_id: ShotId; t: number; coords: Coordinates };
+
+/** Resolved along-cave-line query result for the current measurement. */
+export interface MeasureAlongLine {
+  /** Shortest along-cave-line distance, or null when the endpoints are disconnected. */
+  alongLine: number | null;
+  /** Shots traversed on the path (for tinting). */
+  pathShots: PathShot[];
+}
+
+/** Live shot-snap candidate while the measure tool hovers a shot (not a station).
+ *  The on-shot 3D coords are derived from `t` at click time (geometry-mode aware). */
+export interface MeasureSnapShot {
+  section_id: SectionId;
+  shot_id: ShotId;
+  t: number;
+}
+
+/**
+ * Full reset of all ruler/measure state — the single funnel spread by
+ * `clearMeasure` and every other reset trigger (tool switch, dialog open,
+ * geometry-mode change, project load…).
+ */
+const MEASURE_CLEARED = {
+  measureStart: null,
+  measureEnd: null,
+  measureDirect: null,
+  measureAlongLine: null,
+  measureAlongLinePending: false,
+  measureSnapShot: null,
+};
 
 /**
  * Placement result returned when placement mode completes.
@@ -145,10 +186,23 @@ interface UIStore {
   setMergeStationB: (ref: StationRef | null) => void;
   clearMergeStations: () => void;
 
-  measureStart: StationRef | Coordinates | null;
-  measureEnd: StationRef | Coordinates | null;
-  setMeasureStart: (point: StationRef | Coordinates | null) => void;
-  setMeasureEnd: (point: StationRef | Coordinates | null) => void;
+  measureStart: MeasureEndpoint | null;
+  measureEnd: MeasureEndpoint | null;
+  /** Direct (3D straight-line) distance + depth diff between the two endpoints. */
+  measureDirect: { distance: number; depthDiff: number } | null;
+  /** Along-cave-line result (null = not computed / not applicable). */
+  measureAlongLine: MeasureAlongLine | null;
+  /** True while the along-line IPC query is in flight. */
+  measureAlongLinePending: boolean;
+  /** Live shot-snap candidate (when the measure cursor is over a shot, not a station). */
+  measureSnapShot: MeasureSnapShot | null;
+  setMeasureStart: (point: MeasureEndpoint | null) => void;
+  setMeasureEnd: (point: MeasureEndpoint | null) => void;
+  setMeasureDirect: (direct: { distance: number; depthDiff: number } | null) => void;
+  setMeasureAlongLine: (result: MeasureAlongLine | null) => void;
+  setMeasureAlongLinePending: (pending: boolean) => void;
+  setMeasureSnapShot: (snap: MeasureSnapShot | null) => void;
+  /** Reset every piece of measure state (endpoints, results, tint, snap). */
   clearMeasure: () => void;
 
   // Panel state
@@ -432,6 +486,15 @@ export const useUIStore = create<UIStore>((set) => ({
         ? { moveCommentSource: null }
         : {};
 
+      // Clear any active ruler measurement when switching to a different tool
+      // (#26: "reset … selects a different tool"). The measure tool never holds
+      // measure state while another tool is active.
+      const clearMeasure = activeTool !== 'measure' &&
+        (state.measureStart !== null || state.measureEnd !== null ||
+         state.measureAlongLine !== null || state.measureSnapShot !== null)
+        ? MEASURE_CLEARED
+        : {};
+
       // Clear hover state when switching to non-interactive tools (pan/zoom)
       // This ensures store consistency regardless of how hover was set
       // Use explicit null checks (not truthiness) because SectionId can be 0
@@ -439,9 +502,9 @@ export const useUIStore = create<UIStore>((set) => ({
         isNonInteractiveTool(activeTool) &&
         (state.hoveredStation !== null || state.hoveredShot !== null || state.hoveredSectionId !== null)
       ) {
-        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment, ...clearMoveComment };
+        return { activeTool, lastSubtoolByGroup, hoveredStation: null, hoveredShot: null, hoveredSectionId: null, ...clearComment, ...clearMoveComment, ...clearMeasure };
       }
-      return { activeTool, lastSubtoolByGroup, ...clearComment, ...clearMoveComment };
+      return { activeTool, lastSubtoolByGroup, ...clearComment, ...clearMoveComment, ...clearMeasure };
     }),
 
   // Selection state
@@ -536,9 +599,17 @@ export const useUIStore = create<UIStore>((set) => ({
 
   measureStart: null,
   measureEnd: null,
+  measureDirect: null,
+  measureAlongLine: null,
+  measureAlongLinePending: false,
+  measureSnapShot: null,
   setMeasureStart: (measureStart) => set({ measureStart }),
   setMeasureEnd: (measureEnd) => set({ measureEnd }),
-  clearMeasure: () => set({ measureStart: null, measureEnd: null }),
+  setMeasureDirect: (measureDirect) => set({ measureDirect }),
+  setMeasureAlongLine: (measureAlongLine) => set({ measureAlongLine, measureAlongLinePending: false }),
+  setMeasureAlongLinePending: (measureAlongLinePending) => set({ measureAlongLinePending }),
+  setMeasureSnapShot: (measureSnapShot) => set({ measureSnapShot }),
+  clearMeasure: () => set({ ...MEASURE_CLEARED }),
 
 
   // Panel state
@@ -878,7 +949,8 @@ export const useUIStore = create<UIStore>((set) => ({
   setGeometryMode: (mode, source) => {
     if (useUIStore.getState().geometryMode === mode) return;
     trackAction('toggle.geometryMode', source);
-    set({ geometryMode: mode });
+    // Distances depend on the active geometry; a stale ruler readout would lie.
+    set({ geometryMode: mode, ...MEASURE_CLEARED });
     // Persist for "remember last used" across sessions (string value, like gridSpacing).
     invokeIpc(
       'save_display_setting',
@@ -949,7 +1021,8 @@ export const useUIStore = create<UIStore>((set) => ({
     }
     trackAction(`dialog.${activeDialog}`);
     setDwellState(`dialog.${activeDialog}`);
-    set({ activeDialog, dialogData, dmpImportWizardPhase: null });
+    // A ruler readout/tint shouldn't linger behind a dialog (#26 reset).
+    set({ activeDialog, dialogData, dmpImportWizardPhase: null, ...MEASURE_CLEARED });
   },
   closeDialog: () => {
     const { activeDialog: dialogName, activeTool, placementMode } = useUIStore.getState();
@@ -981,6 +1054,8 @@ export const useUIStore = create<UIStore>((set) => ({
         ...(onCancel !== undefined && { onCancel }),
         ...(additionalSections !== undefined && { additionalSections }),
       },
+      // Placement and the ruler readout both occupy top-center (#26 reset).
+      ...MEASURE_CLEARED,
     });
   },
   updatePlacementCursor: (position) =>
