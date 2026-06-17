@@ -898,6 +898,35 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
     assert!(db.load_resolved_warnings().unwrap().is_empty());
 }
 
+#[test]
+fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
+    // Issue #57 regression guard: resolve_all can hand the bulk save two
+    // warnings with the SAME (section_id, shot_id, warning_code) — e.g. a shot
+    // with both azimuths out of range yields two INVALID_AZIMUTH rows, and an
+    // over-anchored merge component can map two datums onto one shot. The bulk
+    // save must not abort on the legacy UNIQUE constraint.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    let w = ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "INVALID_AZIMUTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-1".to_string()),
+    };
+    // Two identical-key rows in one batch must not raise a UNIQUE error.
+    db.save_resolved_warnings_bulk(&[w.clone(), w.clone()]).unwrap();
+    assert_eq!(
+        db.load_resolved_warnings().unwrap().len(),
+        1,
+        "duplicate (section, shot, code) collapses to one row instead of crashing the batch"
+    );
+}
+
 // === Test: Verify merged_with is populated correctly from fractal fixture ===
 #[test]
 #[ignore]

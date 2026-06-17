@@ -29,6 +29,14 @@ describe('averageAzimuth', () => {
     expect(averageAzimuth(270, 0)).toBeCloseTo(315, 6);
   });
 
+  it('pins the ambiguous antipodal case to match Rust (floor toward -180)', () => {
+    // Rust's +540/%360-180 biases the 180°-apart case: average_azimuth(0,180)=270,
+    // average_azimuth(180,0)=90. Lock both so a "symmetric rounding" refactor can't
+    // silently diverge from the backend.
+    expect(averageAzimuth(0, 180)).toBeCloseTo(270, 6);
+    expect(averageAzimuth(180, 0)).toBeCloseTo(90, 6);
+  });
+
   it('always returns a value in [0, 360)', () => {
     for (const [a, b] of [[0, 0], [359, 1], [180, 180], [1, 359], [200, 20]]) {
       const avg = averageAzimuth(a!, b!);

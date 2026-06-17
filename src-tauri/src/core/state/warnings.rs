@@ -41,16 +41,24 @@ impl AppState {
                 }
             }
         }
-        // A warning is suppressed if its shot's UUID was ignored, or — only for
-        // shots that still lack a UUID — if its legacy position was ignored.
-        // (A UUID-bearing shot never consults the position set, so a stale
-        // pre-v8 row can't suppress an unrelated shot that later took its slot.)
+        // A warning is suppressed if its shot's UUID was ignored, or if its
+        // legacy (section_id, shot_id) position was ignored. The position
+        // fallback is what keeps pre-UUID suppressions alive: a pre-v8 row, or a
+        // pre-v6 .stalx whose shots only get a UUID minted in-memory on load
+        // (so the v8 backfill saw a NULL `shots.uuid` and left the row
+        // position-keyed), is still honored even though the in-memory shot now
+        // carries a fresh UUID. Only NULL-uuid rows ever enter
+        // `resolved_by_position`, and every v8+ ignore stores a UUID, so a fresh
+        // ignore is never position-keyed and cannot suppress an unrelated shot
+        // that later reuses a stale shot_id.
         let is_resolved_for =
             |shot_uuid: &Option<String>, section_id: u32, shot_id: u32, code: &str| -> bool {
-                match shot_uuid {
-                    Some(uuid) => resolved_by_uuid.contains(&(uuid.clone(), code.to_string())),
-                    None => resolved_by_position.contains(&(section_id, shot_id, code.to_string())),
+                if let Some(uuid) = shot_uuid {
+                    if resolved_by_uuid.contains(&(uuid.clone(), code.to_string())) {
+                        return true;
+                    }
                 }
+                resolved_by_position.contains(&(section_id, shot_id, code.to_string()))
             };
 
         let config = self.get_config();

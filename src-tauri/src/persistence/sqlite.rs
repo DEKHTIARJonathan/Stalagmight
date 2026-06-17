@@ -517,18 +517,21 @@ impl Database {
                 .execute("ALTER TABLE resolved_warnings ADD COLUMN shot_uuid TEXT", [])?;
             // Backfill the UUID for existing rows so suppressions survive the
             // migration. The legacy key stored `shot_id`, which on load is
-            // `section_id * FEATURE_ID_STRIDE + sequence_order` (stride =
-            // 100_000), so we can recover each shot's row and copy its UUID.
-            // Rows whose shot has no UUID (pre-v6 .stalx) stay NULL and keep
-            // matching by the legacy position.
+            // `section_id * FEATURE_ID_STRIDE + sequence_order`, so we can
+            // recover each shot's row and copy its UUID. Rows whose shot has no
+            // UUID yet (pre-v6 .stalx, before the lazy in-memory mint) stay NULL
+            // and fall back to legacy-position matching. The stride is
+            // interpolated from the constant so this stays correct if it changes.
             self.conn.execute(
-                "UPDATE resolved_warnings \
-                 SET shot_uuid = ( \
-                     SELECT s.uuid FROM shots s \
-                     WHERE s.section_id = resolved_warnings.section_id \
-                       AND s.sequence_order = resolved_warnings.shot_id - resolved_warnings.section_id * 100000 \
-                 ) \
-                 WHERE shot_uuid IS NULL",
+                &format!(
+                    "UPDATE resolved_warnings \
+                     SET shot_uuid = ( \
+                         SELECT s.uuid FROM shots s \
+                         WHERE s.section_id = resolved_warnings.section_id \
+                           AND s.sequence_order = resolved_warnings.shot_id - resolved_warnings.section_id * {FEATURE_ID_STRIDE} \
+                     ) \
+                     WHERE shot_uuid IS NULL"
+                ),
                 [],
             )?;
             tracing::info!("Added shot_uuid column to resolved_warnings table (schema v8)");
@@ -2731,8 +2734,12 @@ impl Database {
     /// legacy position key when the shot has no UUID.
     pub fn save_resolved_warning(&self, warning: &ResolvedWarning) -> Result<()> {
         Self::delete_matching_resolved(&self.conn, warning)?;
+        // OR REPLACE for resilience against the legacy UNIQUE(section_id,
+        // shot_id, warning_code): a shot can raise two warnings with the same
+        // code (e.g. both azimuths invalid, or several negative LRUD), so the
+        // (section_id, shot_id, code) tuple is not unique per row.
         self.conn.execute(
-            "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
+            "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 warning.section_id,
@@ -2795,8 +2802,14 @@ impl Database {
             Self::delete_matching_resolved(&tx, warning)?;
         }
         {
+            // OR REPLACE: resolve_all can hand us a batch containing two
+            // warnings with the same (section_id, shot_id, code) — e.g. a shot
+            // with both azimuths out of range yields two INVALID_AZIMUTH rows,
+            // and an over-anchored component can map two datums to one shot.
+            // A plain INSERT would trip the legacy UNIQUE and abort the whole
+            // atomic save.
             let mut stmt = tx.prepare(
-                "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
+                "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             for warning in warnings {

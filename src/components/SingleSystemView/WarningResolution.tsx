@@ -174,20 +174,29 @@ export function WarningResolution({
         down: shot.down?.toString() ?? '',
       });
     }
-    // Re-seed when the warning being resolved changes (resolve-all stepping).
-  }, [warning.sectionId, warning.shotId, warning.code, options, shot]);
+    // Re-seed only when the warning being resolved changes (resolve-all
+    // stepping). Deliberately NOT keyed on `options`/`shot` object identity: a
+    // background project refresh rebuilds those references and would otherwise
+    // wipe the user's in-progress manual edit and reset their selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [warning.sectionId, warning.shotId, warning.code]);
 
   const num = (key: string): number => parseFloat(manual[key] ?? '');
 
-  /** Apply the selected option; returns true on success. */
-  const apply = async (): Promise<boolean> => {
-    if (!shot || !section) return false;
+  /**
+   * Apply the selected option.
+   * - 'resolved': a suppression/fix was applied (advance + count).
+   * - 'navigated': the user jumped elsewhere; do not count as resolved.
+   * - 'failed': nothing applied (validation/command error); stay put.
+   */
+  const apply = async (): Promise<'resolved' | 'navigated' | 'failed'> => {
+    if (!shot || !section) return 'failed';
     const opt = options.find((o) => o.id === selected);
-    if (!opt) return false;
+    if (!opt) return 'failed';
 
     if (opt.ignore) {
       await resolveWarning(warning.sectionId, warning.shotId, warning.code);
-      return true;
+      return 'resolved';
     }
 
     if (opt.navigate) {
@@ -198,32 +207,34 @@ export function WarningResolution({
         triggerCenterOnStation(ref);
         setDetailPanelTab('details');
       }
-      return true; // exit the flow; nothing was suppressed
+      return 'navigated'; // jumped to the station; nothing was suppressed or fixed
     }
 
     if (opt.id === 'remove-datum') {
-      if (warning.datumStationIndex === undefined) return false;
+      if (warning.datumStationIndex === undefined) return 'failed';
       const result = await removeZeroDatum({ section_id: warning.sectionId, station_index: warning.datumStationIndex });
       if (!result.success) showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
-      return result.success;
+      return result.success ? 'resolved' : 'failed';
     }
 
     // Data fixes via the undoable update_shot command.
-    let patch: Partial<ShotUpdates> = {};
+    const patch: Partial<ShotUpdates> = {};
     switch (opt.id) {
       case 'use-in':
-        patch = { azimuth_out: shot.azimuth_in };
+        patch.azimuth_out = shot.azimuth_in;
         break;
       case 'use-out':
-        patch = { azimuth_in: shot.azimuth_out };
+        patch.azimuth_in = shot.azimuth_out;
         break;
       case 'average': {
         const avg = averageAzimuth(shot.azimuth_in, shot.azimuth_out);
-        patch = { azimuth_in: avg, azimuth_out: avg };
+        patch.azimuth_in = avg;
+        patch.azimuth_out = avg;
         break;
       }
       case 'normalize':
-        patch = { azimuth_in: normalizeAzimuth(shot.azimuth_in), azimuth_out: normalizeAzimuth(shot.azimuth_out) };
+        patch.azimuth_in = normalizeAzimuth(shot.azimuth_in);
+        patch.azimuth_out = normalizeAzimuth(shot.azimuth_out);
         break;
       case 'lrud-abs':
         for (const f of negativeLrud) patch[f] = Math.abs(shot[f] ?? 0);
@@ -234,21 +245,24 @@ export function WarningResolution({
       case 'manual':
         if (opt.manual === 'azimuth') {
           const v = num('azimuth');
-          if (Number.isNaN(v)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return false; }
+          if (Number.isNaN(v)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
           const n = normalizeAzimuth(v);
-          patch = { azimuth_in: n, azimuth_out: n };
+          patch.azimuth_in = n;
+          patch.azimuth_out = n;
         } else if (opt.manual === 'azimuthInOut') {
           const vi = num('azimuthIn'); const vo = num('azimuthOut');
-          if (Number.isNaN(vi) || Number.isNaN(vo)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return false; }
-          patch = { azimuth_in: normalizeAzimuth(vi), azimuth_out: normalizeAzimuth(vo) };
+          if (Number.isNaN(vi) || Number.isNaN(vo)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
+          patch.azimuth_in = normalizeAzimuth(vi);
+          patch.azimuth_out = normalizeAzimuth(vo);
         } else if (opt.manual === 'length') {
           const v = num('length');
-          if (Number.isNaN(v) || v <= 0) { showToast(t('detailPanel.warnings.resolveInvalidLength'), 'warning-resolve'); return false; }
-          patch = { length: v };
+          if (Number.isNaN(v) || v <= 0) { showToast(t('detailPanel.warnings.resolveInvalidLength'), 'warning-resolve'); return 'failed'; }
+          patch.length = v;
         } else if (opt.manual === 'depth') {
           const vi = num('depthIn'); const vo = num('depthOut');
-          if (Number.isNaN(vi) || Number.isNaN(vo)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return false; }
-          patch = { depth_in: vi, depth_out: vo };
+          if (Number.isNaN(vi) || Number.isNaN(vo)) { showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve'); return 'failed'; }
+          patch.depth_in = vi;
+          patch.depth_out = vo;
         } else if (opt.manual === 'lrud') {
           for (const f of LRUD_FIELDS) {
             const raw = manual[f]?.trim() ?? '';
@@ -256,23 +270,33 @@ export function WarningResolution({
           }
           if (LRUD_FIELDS.some((f) => patch[f] !== null && Number.isNaN(patch[f] as number))) {
             showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve');
-            return false;
+            return 'failed';
           }
         }
         break;
       default:
-        return false;
+        return 'failed';
+    }
+
+    // Guard against a no-op (e.g. lrud-abs/clear when nothing is negative after a
+    // refresh): an empty patch would still push an undo entry and report success.
+    if (Object.keys(patch).length === 0) {
+      showToast(t('detailPanel.warnings.resolveInvalid'), 'warning-resolve');
+      return 'failed';
     }
 
     const result = await updateShot(warning.sectionId, warning.shotId, patch);
     if (!result.success) showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
-    return result.success;
+    return result.success ? 'resolved' : 'failed';
   };
 
   const handleApply = async () => {
     setBusy(true);
     try {
-      if (await apply()) onResolved();
+      const result = await apply();
+      if (result === 'resolved') onResolved();
+      else if (result === 'navigated') onExit();
+      // 'failed' → stay on this warning (a toast explained why).
     } finally {
       setBusy(false);
     }

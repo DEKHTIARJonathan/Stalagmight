@@ -2185,6 +2185,48 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
 }
 
 #[test]
+fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
+    // Issue #57: a pre-v8 (or pre-v6) suppression row carries no shot_uuid and is
+    // keyed by (section_id, shot_id) position. After load the shot has a freshly
+    // minted in-memory UUID, but the legacy row must still suppress it — without
+    // the position fallback a pre-v6 file's ignores would be silently lost.
+    let mut project = project_with_section(vec![shot_data(0.0)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    assert!(warning.shot_uuid.is_some(), "loaded shot already carries a uuid");
+    assert!(!warning.is_resolved);
+
+    // Insert a LEGACY suppression row with NO shot_uuid, keyed by position only.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: warning.section_id,
+            shot_id: warning.shot_id,
+            warning_code: warning.code.clone(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    assert!(
+        w.is_resolved,
+        "a legacy position-keyed row must still suppress the now-UUID-bearing shot"
+    );
+}
+
+#[test]
 fn test_get_project_warnings_detects_invalid_azimuth() {
     let app = app_with_state();
     create_project(&app);

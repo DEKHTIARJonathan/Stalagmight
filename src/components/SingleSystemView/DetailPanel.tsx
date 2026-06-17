@@ -249,32 +249,55 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     setFlow({ kind: 'resolve', queue: unresolvedWarnings, index: 0, resolveAll: true, resolved: 0, skipped: 0 });
   };
 
-  // Live count of unresolved warnings, read from the store so it reflects the
-  // refresh that an applied fix already triggered.
-  const liveUnresolvedKeys = () =>
-    new Set(useProjectStore.getState().warnings.filter((w) => !w.isResolved).map(warningKey));
+  // Live unresolved warnings, read from the store so they reflect the refresh
+  // that an applied fix already triggered.
+  const liveUnresolved = () => useProjectStore.getState().warnings.filter((w) => !w.isResolved);
 
-  // Advance the resolve flow past the current item, skipping any queued
-  // warnings a prior fix already cleared as a side effect.
-  const advance = (resolvedInc: number, skippedInc: number) => {
+  // Find the next queue index that is still unresolved, skipping any item a
+  // prior fix cleared as a side effect.
+  const nextLiveIndex = (queue: ProjectWarning[], from: number, live: Set<string>) => {
+    let next = from;
+    while (next < queue.length && !live.has(warningKey(queue[next]!))) next++;
+    return next;
+  };
+
+  // Advance after the user applied an option. Only count it as resolved if the
+  // active warning actually cleared from the live set — a data fix can succeed
+  // yet leave the warning firing (e.g. a manual length still below the minimum),
+  // and that must not be reported as resolved.
+  const advanceAfterApply = () => {
     setFlow((f) => {
       if (f.kind !== 'resolve') return f;
-      const live = liveUnresolvedKeys();
-      let next = f.index + 1;
-      while (next < f.queue.length && !live.has(warningKey(f.queue[next]!))) next++;
-      const resolved = f.resolved + resolvedInc;
-      const skipped = f.skipped + skippedInc;
+      const liveArr = liveUnresolved();
+      const live = new Set(liveArr.map(warningKey));
+      const cleared = !live.has(warningKey(f.queue[f.index]!));
+      const resolved = f.resolved + (cleared ? 1 : 0);
+      const next = nextLiveIndex(f.queue, f.index + 1, live);
       if (next >= f.queue.length) {
-        return f.resolveAll ? { kind: 'summary', resolved, skipped, remaining: live.size } : { kind: 'list' };
+        return f.resolveAll ? { kind: 'summary', resolved, skipped: f.skipped, remaining: liveArr.length } : { kind: 'list' };
       }
-      return { ...f, index: next, resolved, skipped };
+      return { ...f, index: next, resolved };
+    });
+  };
+
+  const advanceAfterSkip = () => {
+    setFlow((f) => {
+      if (f.kind !== 'resolve') return f;
+      const liveArr = liveUnresolved();
+      const live = new Set(liveArr.map(warningKey));
+      const next = nextLiveIndex(f.queue, f.index + 1, live);
+      const skipped = f.skipped + 1;
+      if (next >= f.queue.length) {
+        return f.resolveAll ? { kind: 'summary', resolved: f.resolved, skipped, remaining: liveArr.length } : { kind: 'list' };
+      }
+      return { ...f, index: next, skipped };
     });
   };
 
   const exitFlow = () => {
     setFlow((f) =>
       f.kind === 'resolve' && f.resolveAll
-        ? { kind: 'summary', resolved: f.resolved, skipped: f.skipped, remaining: liveUnresolvedKeys().size }
+        ? { kind: 'summary', resolved: f.resolved, skipped: f.skipped, remaining: liveUnresolved().length }
         : { kind: 'list' },
     );
   };
@@ -288,8 +311,8 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
         shot={activeShot}
         position={flow.resolveAll ? { index: flow.index, total: flow.queue.length } : undefined}
         onExit={exitFlow}
-        onResolved={() => advance(1, 0)}
-        onSkip={() => advance(0, 1)}
+        onResolved={advanceAfterApply}
+        onSkip={advanceAfterSkip}
       />
     );
   }
