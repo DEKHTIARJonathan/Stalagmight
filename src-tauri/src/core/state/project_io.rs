@@ -304,18 +304,11 @@ impl AppState {
         project.ensure_shot_uuids();
         // Mirror do_load_project_full: upgrade legacy NULL-uuid resolved-warning
         // rows to UUID keying now that every shot has a UUID and shot ids still
-        // match the loaded positions, so the two load entry points don't diverge
-        // (a row left position-keyed here couldn't be cleared by un-ignore, which
-        // passes the live UUID). Idempotent; non-fatal.
-        let live_shot_uuids: std::collections::HashMap<(u32, u32), String> = project
-            .sections
-            .iter()
-            .flat_map(|s| {
-                s.shots
-                    .iter()
-                    .filter_map(move |sh| sh.uuid.clone().map(|u| ((s.id, sh.id), u)))
-            })
-            .collect();
+        // match the loaded positions (a row left position-keyed here couldn't be
+        // cleared by un-ignore, which passes the live UUID). Idempotent; non-fatal.
+        // Shared with do_load_project_full via Project::shot_uuid_by_position so the
+        // two load entry points can't diverge.
+        let live_shot_uuids = project.shot_uuid_by_position();
         if let Err(e) = db.backfill_resolved_warning_uuids(&live_shot_uuids) {
             tracing::warn!(
                 error = %e,
@@ -1537,15 +1530,9 @@ impl AppState {
         // every shot has an in-memory UUID and shot ids still match the loaded
         // positions the legacy rows were keyed against (issue #57). One-time,
         // idempotent. Non-fatal: on failure the rows simply stay position-keyed.
-        let live_shot_uuids: std::collections::HashMap<(u32, u32), String> = project
-            .sections
-            .iter()
-            .flat_map(|s| {
-                s.shots
-                    .iter()
-                    .filter_map(move |sh| sh.uuid.clone().map(|u| ((s.id, sh.id), u)))
-            })
-            .collect();
+        // Shared with open_project via Project::shot_uuid_by_position so the two
+        // load entry points can't diverge.
+        let live_shot_uuids = project.shot_uuid_by_position();
         match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
             Ok(n) if n > 0 => tracing::info!(
                 upgraded = n,

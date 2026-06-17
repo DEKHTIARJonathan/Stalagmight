@@ -54,11 +54,16 @@ impl AppState {
         // only) if its (section_id, shot_id) position was ignored. The resolve
         // command now REFUSES a no-UUID ignore (commands/validation.rs), and
         // load-time backfill upgrades legacy NULL-uuid rows to UUID keying when
-        // the shot still maps to a live position (issue #57). Therefore
-        // `resolved_by_position` is populated ONLY by legacy on-disk rows whose
-        // shot no longer maps to a live position (so they could not be upgraded);
-        // no fresh ignore is ever position-keyed, and a position-keyed row can
-        // never suppress an unrelated shot that later reuses a stale shot_id.
+        // the shot still maps to a live position (issue #57). The position
+        // fallback is what lets a pre-v8 file's ignores survive the first load.
+        // A residual edge remains (issue #57 finding #8): a legacy NULL-uuid row
+        // whose position is dead at load — the ignored shot was already gone, so
+        // the backfill cannot upgrade it (or, rarely, the backfill DB write
+        // failed) — can later suppress an unrelated shot if an in-session insert
+        // renumbers a different shot onto that stale id. It only affects pre-v8
+        // NULL-uuid rows (every fresh ignore is UUID-keyed) and clears once the
+        // position is upgraded. We keep the fallback because dropping it would
+        // silently lose every legacy ignore for the still-live shots it protects.
         let is_resolved_for =
             |shot_uuid: &Option<String>, section_id: u32, shot_id: u32, code: &str| -> bool {
                 if let Some(uuid) = shot_uuid {
@@ -99,7 +104,11 @@ impl AppState {
 
                 let warnings = Validator::validate_shot(&shot_data, &project.validation, section.id, shot_index);
                 for warning in warnings {
-                    let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &warning.code);
+                    // Errors are never ignorable (issue #57): force is_resolved
+                    // false so a stray resolved row (legacy/bulk) can't hide a
+                    // blocking problem. Only advisory warnings honor a suppression.
+                    let is_resolved = warning.severity != WarningSeverity::Error
+                        && is_resolved_for(&shot.uuid, section.id, shot.id, &warning.code);
                     all_warnings.push(ProjectWarning {
                         section_id: section.id,
                         shot_id: shot.id,
@@ -110,6 +119,7 @@ impl AppState {
                         is_resolved,
                         shot_uuid: shot.uuid.clone(),
                         datum_station_index: None,
+                        datum_refs: None,
                     });
                 }
             }
@@ -117,49 +127,50 @@ impl AppState {
 
         // Project-level: two or more zero datums in one merge-connected component
         // over-constrain the rigid group, so the offset cascade tears a merge edge
-        // apart. Surface one warning on each datum's adjacent shot so it appears in
-        // the table next to the offending anchor. (Per-shot ProjectWarning shape:
-        // anchor station 0 -> shot 0; station i -> shot i-1.)
+        // apart. Emit ONE error per component (not one per datum, which collided on
+        // the (section, shot, code) key — issue #57, finding #4), attached to the
+        // first datum's adjacent shot, carrying the FULL datum list so the Resolve
+        // view can offer "keep this one, remove the others". (Per-shot
+        // ProjectWarning shape: anchor station 0 -> shot 0; station i -> shot i-1.)
         for component in project.over_anchored_merge_components() {
-            for datum in &component {
-                let Some(section) = project.get_section(datum.section_id) else {
-                    continue;
-                };
-                let shot_index = if datum.station_index == 0 {
-                    0
-                } else {
-                    (datum.station_index - 1) as usize
-                };
-                let Some(shot) = section.shots.get(shot_index) else {
-                    continue;
-                };
-                let others = component
-                    .iter()
-                    .filter(|other| *other != datum)
-                    .map(|other| format!("{}:{}", other.section_id, other.station_index))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                all_warnings.push(ProjectWarning {
-                    section_id: section.id,
-                    shot_id: shot.id,
-                    shot_index,
-                    message: format!(
-                        "Station {}:{} has a zero datum, but its merge group is also anchored at {others}. Two GPS anchors over-constrain one rigid group; remove all but one zero datum.",
-                        datum.section_id, datum.station_index
-                    ),
-                    code: MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
-                    severity: WarningSeverity::Warning,
-                    // Over-anchoring is a structural error, not a suppressible
-                    // nuisance: it is never "resolved" via an ignore — it clears
-                    // only when a datum is actually removed (at which point the
-                    // component is no longer over-anchored and this warning is
-                    // simply not generated). Force false so no stray resolved row
-                    // (legacy, bulk, or otherwise) can hide it.
-                    is_resolved: false,
-                    shot_uuid: shot.uuid.clone(),
-                    datum_station_index: Some(datum.station_index),
-                });
-            }
+            let Some(first) = component.first() else {
+                continue;
+            };
+            let Some(section) = project.get_section(first.section_id) else {
+                continue;
+            };
+            let shot_index = if first.station_index == 0 {
+                0
+            } else {
+                (first.station_index - 1) as usize
+            };
+            let Some(shot) = section.shots.get(shot_index) else {
+                continue;
+            };
+            let anchors = component
+                .iter()
+                .map(|r| format!("{}:{}", r.section_id, r.station_index))
+                .collect::<Vec<_>>()
+                .join(", ");
+            all_warnings.push(ProjectWarning {
+                section_id: section.id,
+                shot_id: shot.id,
+                shot_index,
+                message: format!(
+                    "This merge group is anchored by {} zero datums ({anchors}). Two or more GPS anchors over-constrain one rigid group; keep one and remove the others.",
+                    component.len()
+                ),
+                code: MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
+                // An error (severity_for_code), so it is never ignorable and the
+                // generic error force-false above also covers it: it clears only
+                // when a datum is actually removed (then this warning is no longer
+                // generated at all), never via a stray resolved row.
+                severity: crate::models::severity_for_code(MULTIPLE_DATUMS_PER_MERGE_COMPONENT),
+                is_resolved: false,
+                shot_uuid: shot.uuid.clone(),
+                datum_station_index: Some(first.station_index),
+                datum_refs: Some(component.clone()),
+            });
         }
 
         // Sort by resolved (unresolved first), then severity (errors first), then by section and shot

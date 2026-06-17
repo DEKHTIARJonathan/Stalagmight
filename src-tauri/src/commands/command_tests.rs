@@ -2056,7 +2056,7 @@ fn test_resolve_warning_fails_without_db() {
         state(&app),
         0,
         0,
-        "ZERO_LENGTH".to_string(),
+        "SHORT_SHOT".to_string(),
         None,
     );
     assert!(result.is_err());
@@ -2069,22 +2069,22 @@ fn test_unresolve_warning_fails_without_db() {
         state(&app),
         0,
         0,
-        "ZERO_LENGTH".to_string(),
+        "SHORT_SHOT".to_string(),
     );
     assert!(result.is_err());
 }
 
 #[test]
 fn test_resolve_warning_marks_resolved_in_list() {
-    let project = project_with_section(vec![shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warnings = validation::get_project_warnings(state(&app));
     let warning = warnings
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(!warning.is_resolved);
 
     validation::resolve_warning(
@@ -2099,8 +2099,8 @@ fn test_resolve_warning_marks_resolved_in_list() {
     let warnings_after = validation::get_project_warnings(state(&app));
     let warning_after = warnings_after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(warning_after.is_resolved);
 
     // Issue #57 (Item 8): a fresh ignore is always UUID-keyed (never a legacy
@@ -2108,7 +2108,7 @@ fn test_resolve_warning_marks_resolved_in_list() {
     let persisted = state(&app).inner().load_resolved_warnings().unwrap();
     let row = persisted
         .iter()
-        .find(|r| r.warning_code == "ZERO_LENGTH")
+        .find(|r| r.warning_code == "SHORT_SHOT")
         .expect("persisted resolved row");
     assert!(row.shot_uuid.is_some(), "a fresh ignore must store a shot UUID");
 }
@@ -2118,21 +2118,21 @@ fn test_resolve_warning_refuses_when_shot_missing() {
     // Issue #57 (Item 8): with a project open, resolving a warning for a shot
     // that does not exist must be refused (no stable identity to bind), and no
     // position-keyed row may be written.
-    let project = project_with_section(vec![shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warning = validation::get_project_warnings(state(&app))
         .into_iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
 
     // A shot_id that does not exist in the section.
     let result = validation::resolve_warning(
         state(&app),
         warning.section_id,
         warning.shot_id + 9999,
-        "ZERO_LENGTH".to_string(),
+        "SHORT_SHOT".to_string(),
         None,
     );
     assert!(result.is_err(), "resolving a vanished shot must be refused");
@@ -2144,14 +2144,14 @@ fn test_resolve_warning_refuses_when_shot_missing() {
 
 #[test]
 fn test_unresolve_warning_clears_resolved_flag() {
-    let project = project_with_section(vec![shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warning = validation::get_project_warnings(state(&app))
         .into_iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
 
     validation::resolve_warning(
         state(&app),
@@ -2173,8 +2173,8 @@ fn test_unresolve_warning_clears_resolved_flag() {
     let warnings_after = validation::get_project_warnings(state(&app));
     let warning_after = warnings_after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(!warning_after.is_resolved);
 }
 
@@ -2183,15 +2183,15 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     // Issue #57: an ignore is keyed by the shot's stable UUID, so it stays
     // bound to the same shot even after a structural edit renumbers shot_id
     // (e.g. inserting a shot earlier in the section).
-    let mut project = project_with_section(vec![shot_data(0.0)]);
+    let mut project = project_with_section(vec![shot_data(0.1)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warning = validation::get_project_warnings(state(&app))
         .into_iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     let original_shot_id = warning.shot_id;
     let uuid = warning.shot_uuid.clone().expect("loaded shot has a uuid");
 
@@ -2205,7 +2205,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     .unwrap();
     assert!(validation::get_project_warnings(state(&app))
         .iter()
-        .any(|w| w.code == "ZERO_LENGTH" && w.is_resolved));
+        .any(|w| w.code == "SHORT_SHOT" && w.is_resolved));
 
     // Drift the unstable shot_id (mimicking an insert/reload) but keep the UUID.
     let mut renumbered = state(&app).inner().get_project_state().unwrap();
@@ -2215,8 +2215,8 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     let after = validation::get_project_warnings(state(&app));
     let w = after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert_eq!(w.shot_uuid.as_deref(), Some(uuid.as_str()));
     assert_ne!(w.shot_id, original_shot_id, "precondition: shot_id changed");
     assert!(w.is_resolved, "ignore must follow the shot UUID across an id change");
@@ -2228,15 +2228,15 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     // keyed by (section_id, shot_id) position. After load the shot has a freshly
     // minted in-memory UUID, but the legacy row must still suppress it — without
     // the position fallback a pre-v6 file's ignores would be silently lost.
-    let mut project = project_with_section(vec![shot_data(0.0)]);
+    let mut project = project_with_section(vec![shot_data(0.1)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warning = validation::get_project_warnings(state(&app))
         .into_iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(warning.shot_uuid.is_some(), "loaded shot already carries a uuid");
     assert!(!warning.is_resolved);
 
@@ -2256,8 +2256,8 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     let after = validation::get_project_warnings(state(&app));
     let w = after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(
         w.is_resolved,
         "a legacy position-keyed row must still suppress the now-UUID-bearing shot"
@@ -2270,13 +2270,13 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
     // refactor in compute_project_warnings: a UUID-keyed row suppresses via the
     // UUID branch, and a legacy NULL-uuid row suppresses via the position-fallback
     // branch. Both branches must light up `is_resolved` and only for their shot.
-    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warnings = validation::get_project_warnings(state(&app));
-    let mut zero: Vec<_> = warnings.into_iter().filter(|w| w.code == "ZERO_LENGTH").collect();
-    assert_eq!(zero.len(), 2, "expected a zero-length warning per shot");
+    let mut zero: Vec<_> = warnings.into_iter().filter(|w| w.code == "SHORT_SHOT").collect();
+    assert_eq!(zero.len(), 2, "expected a short-shot warning per shot");
     zero.sort_by_key(|w| w.shot_id);
     let shot_uuid_hit = zero[0].clone();
     let shot_pos_hit = zero[1].clone();
@@ -2288,7 +2288,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
             section_id: shot_uuid_hit.section_id,
             shot_id: shot_uuid_hit.shot_id,
-            warning_code: "ZERO_LENGTH".to_string(),
+            warning_code: "SHORT_SHOT".to_string(),
             resolved_at: chrono::Utc::now(),
             resolved_comment: None,
             shot_uuid: Some(uuid),
@@ -2300,7 +2300,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
         .save_resolved_warning(&crate::persistence::ResolvedWarning {
             section_id: shot_pos_hit.section_id,
             shot_id: shot_pos_hit.shot_id,
-            warning_code: "ZERO_LENGTH".to_string(),
+            warning_code: "SHORT_SHOT".to_string(),
             resolved_at: chrono::Utc::now(),
             resolved_comment: None,
             shot_uuid: None,
@@ -2310,11 +2310,11 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
     let after = validation::get_project_warnings(state(&app));
     let a = after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH" && w.shot_id == shot_uuid_hit.shot_id)
+        .find(|w| w.code == "SHORT_SHOT" && w.shot_id == shot_uuid_hit.shot_id)
         .expect("uuid-keyed warning");
     let b = after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH" && w.shot_id == shot_pos_hit.shot_id)
+        .find(|w| w.code == "SHORT_SHOT" && w.shot_id == shot_pos_hit.shot_id)
         .expect("position-keyed warning");
     assert!(a.is_resolved, "UUID-keyed row must suppress via the UUID branch");
     assert!(b.is_resolved, "NULL-uuid row must suppress via the position-fallback branch");
@@ -2325,15 +2325,15 @@ fn test_resolved_warning_survives_save() {
     // Issue #57 regression: resolved (ignored) warnings live in their own table,
     // not the Project model, so the save pipeline (temp file + atomic rename)
     // used to drop them. A save must carry them over so an ignore persists.
-    let mut project = project_with_section(vec![shot_data(0.0)]);
+    let mut project = project_with_section(vec![shot_data(0.1)]);
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warning = validation::get_project_warnings(state(&app))
         .into_iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     validation::resolve_warning(
         state(&app),
         warning.section_id,
@@ -2350,8 +2350,8 @@ fn test_resolved_warning_survives_save() {
     let after = validation::get_project_warnings(state(&app));
     let w = after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(w.is_resolved, "resolved/ignored warning must survive a save");
 }
 
@@ -2370,19 +2370,19 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
             color: color.to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot_data(0.0)], // zero-length → ZERO_LENGTH warning
+            shots: vec![shot_data(0.1)], // short-shot → SHORT_SHOT warning
         });
     }
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    // Ignore the ZERO_LENGTH warning in each section.
+    // Ignore the SHORT_SHOT warning in each section.
     let zero: Vec<_> = validation::get_project_warnings(state(&app))
         .into_iter()
-        .filter(|w| w.code == "ZERO_LENGTH")
+        .filter(|w| w.code == "SHORT_SHOT")
         .collect();
-    assert_eq!(zero.len(), 2, "expected a zero-length warning per section");
+    assert_eq!(zero.len(), 2, "expected a short-shot warning per section");
     for w in &zero {
         validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None).unwrap();
     }
@@ -2398,8 +2398,8 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     let after = validation::get_project_warnings(state(&app));
     let surviving = after
         .iter()
-        .find(|w| w.section_id == surviving_section && w.code == "ZERO_LENGTH")
-        .expect("surviving section's zero-length warning");
+        .find(|w| w.section_id == surviving_section && w.code == "SHORT_SHOT")
+        .expect("surviving section's short-shot warning");
     assert!(
         surviving.is_resolved,
         "an ignore in a surviving section must not be lost because another section was deleted"
@@ -2415,7 +2415,7 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
     // (section_id, shot_id) from the live shot's CURRENT position, so A's ignore
     // and B's ignore never collide on UNIQUE(section_id, shot_id, warning_code)
     // and both survive. Without the remap, INSERT OR REPLACE would overwrite A.
-    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
@@ -2436,7 +2436,7 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
             .save_resolved_warning(&crate::persistence::ResolvedWarning {
                 section_id,
                 shot_id,
-                warning_code: "ZERO_LENGTH".to_string(),
+                warning_code: "SHORT_SHOT".to_string(),
                 resolved_at: chrono::Utc::now(),
                 resolved_comment: None,
                 shot_uuid: Some(uuid.clone()),
@@ -2480,16 +2480,16 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // would — depending on insert order — drop the SURVIVOR's still-valid ignore.
     // The carry-over must DROP the dead (UUID-not-live) row so the survivor's
     // ignore always persists and dead rows don't accumulate.
-    let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    // Ignore BOTH shots' ZERO_LENGTH warnings (stored by UUID at positions 0 & 1).
+    // Ignore BOTH shots' SHORT_SHOT warnings (stored by UUID at positions 0 & 1).
     let zero: Vec<_> = validation::get_project_warnings(state(&app))
         .into_iter()
-        .filter(|w| w.code == "ZERO_LENGTH")
+        .filter(|w| w.code == "SHORT_SHOT")
         .collect();
-    assert_eq!(zero.len(), 2, "expected a zero-length warning per shot");
+    assert_eq!(zero.len(), 2, "expected a short-shot warning per shot");
     for w in &zero {
         validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
             .unwrap();
@@ -2515,8 +2515,8 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     let after = validation::get_project_warnings(state(&app));
     let survivor = after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("survivor's zero-length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("survivor's short-shot warning");
     assert!(
         survivor.is_resolved,
         "the surviving shot's ignore must not be clobbered by the deleted shot's dead row"
@@ -2621,6 +2621,48 @@ fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
     assert!(
         state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
         "over-anchoring must never be recorded as an ignored warning"
+    );
+}
+
+#[test]
+fn test_resolve_warning_refuses_error_severity_codes() {
+    // Issue #57 (Item 10/14): errors are not ignorable — one predicate
+    // (warning_is_ignorable) governs every code. Resolving an error-severity
+    // warning must persist nothing and leave it unresolved; warnings stay ignorable.
+    use crate::models::{warning_is_ignorable, MULTIPLE_DATUMS_PER_MERGE_COMPONENT};
+    assert!(!warning_is_ignorable("ZERO_LENGTH"));
+    assert!(!warning_is_ignorable("NEGATIVE_LRUD"));
+    assert!(!warning_is_ignorable("INVALID_PITCH"));
+    assert!(!warning_is_ignorable("LENGTH_BELOW_DEPTH_CHANGE"));
+    assert!(!warning_is_ignorable(MULTIPLE_DATUMS_PER_MERGE_COMPONENT));
+    assert!(warning_is_ignorable("SHORT_SHOT"));
+    assert!(warning_is_ignorable("AZIMUTH_DEVIATION"));
+    assert!(warning_is_ignorable("INCLINATION_DEPTH_MISMATCH"));
+
+    let project = project_with_section(vec![shot_data(0.0)]); // ZERO_LENGTH (error)
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+    assert!(
+        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        "an error-severity warning must never be persisted as ignored"
+    );
+    let after = validation::get_project_warnings(state(&app));
+    assert!(
+        !after.iter().find(|w| w.code == "ZERO_LENGTH").unwrap().is_resolved,
+        "an error stays unresolved even after a resolve attempt"
     );
 }
 

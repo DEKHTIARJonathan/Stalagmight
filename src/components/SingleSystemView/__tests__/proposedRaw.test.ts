@@ -27,11 +27,13 @@ function recordedPitch(shot: Shot): number | null {
   if (shot.pitch_in != null && shot.pitch_out != null) return (shot.pitch_in + shot.pitch_out) / 2;
   return shot.pitch_in ?? shot.pitch_out ?? null;
 }
+// Signed implied inclination in the +down convention (matches the production
+// helper and the backend's pitch_from_components) — issue #57, finding #7.
 function impliedInclination(shot: Shot): number {
+  if (!(shot.length > 0)) return 0;
   const dz = shot.depth_out - shot.depth_in;
-  const mag = shot.length > 0 ? (Math.asin(Math.min(1, Math.abs(dz) / shot.length)) * 180) / Math.PI : 0;
-  const recorded = recordedPitch(shot);
-  return (recorded !== null && recorded < 0 ? -1 : 1) * mag;
+  const horizontal = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
+  return (Math.atan2(dz, horizontal) * 180) / Math.PI;
 }
 
 // --- A shot fixture builder --------------------------------------------------
@@ -68,7 +70,7 @@ function negativeLrudOf(shot: Shot): LrudField[] {
 // ============================================================================
 type OldApply =
   | { patch: Partial<Record<string, number | null>> }
-  | { invalid: 'azimuth' | 'length' | 'invalid' }
+  | { invalid: 'azimuth' | 'length' | 'pitch' | 'invalid' }
   | { failed: true };
 
 function oldApplyPatch(
@@ -120,9 +122,15 @@ function oldApplyPatch(
       patch.length = Math.abs(dz) / Math.abs(sinMid);
       break;
     }
-    case 'length-from-depth':
-      patch.length = Math.abs(shot.depth_out - shot.depth_in);
+    case 'length-from-depth': {
+      // Vertical shot: also pins pitch to ±90° (+down) so it stays consistent
+      // (issue #57, finding #2).
+      const dzLfd = shot.depth_out - shot.depth_in;
+      patch.length = Math.abs(dzLfd);
+      patch.pitch_in = dzLfd >= 0 ? 90 : -90;
+      patch.pitch_out = dzLfd >= 0 ? 90 : -90;
       break;
+    }
     case 'length-from-incl': {
       const recorded = recordedPitch(shot);
       const sinP = recorded === null ? 0 : Math.sin((recorded * Math.PI) / 180);
@@ -411,6 +419,41 @@ describe('computeProposedRaw parity: preview (propAz/propHoriz) matches the old 
       }
     });
   }
+});
+
+describe('strict numeric parsing rejects trailing garbage (#57 #11)', () => {
+  const shot = makeShot();
+  it('manual length "5abc" is rejected (parseFloat would have read 5)', () => {
+    expect(computeProposedRaw('manual', 'length', shot, { length: '5abc' }, [])).toEqual({ invalid: 'length' });
+  });
+  it('a clean length still parses', () => {
+    expect(computeProposedRaw('manual', 'length', shot, { length: '7.5' }, [])).toEqual({ length: 7.5 });
+  });
+  it('manual lrud "2x" is rejected', () => {
+    expect(
+      computeProposedRaw('manual', 'lrud', shot, { left: '2x', right: '', up: '', down: '' }, []),
+    ).toEqual({ invalid: 'invalid' });
+  });
+  it('manual pitch "30deg" is rejected', () => {
+    expect(computeProposedRaw('manual', 'pitch', shot, { pitch: '30deg' }, [])).toEqual({ invalid: 'pitch' });
+  });
+  it('manual pitch out of [-90,90] is rejected', () => {
+    expect(computeProposedRaw('manual', 'pitch', shot, { pitch: '120' }, [])).toEqual({ invalid: 'pitch' });
+  });
+  it('an in-range pitch parses to both legs', () => {
+    expect(computeProposedRaw('manual', 'pitch', shot, { pitch: '-45' }, [])).toEqual({ pitchIn: -45, pitchOut: -45 });
+  });
+});
+
+describe('length-from-depth pins pitch to ±90 (#57 #2)', () => {
+  it('downward shot (dz>0) → length=|dz|, pitch +90', () => {
+    const shot = makeShot({ length: 1, depth_in: 0, depth_out: 3 });
+    expect(computeProposedRaw('length-from-depth', undefined, shot, {}, [])).toEqual({ length: 3, pitchIn: 90, pitchOut: 90 });
+  });
+  it('upward shot (dz<0) → length=|dz|, pitch -90', () => {
+    const shot = makeShot({ length: 1, depth_in: 3, depth_out: 0 });
+    expect(computeProposedRaw('length-from-depth', undefined, shot, {}, [])).toEqual({ length: 3, pitchIn: -90, pitchOut: -90 });
+  });
 });
 
 describe('pitch-only proposals (incl-from-depth) produce no ghost', () => {

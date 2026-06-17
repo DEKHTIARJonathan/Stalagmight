@@ -2,7 +2,7 @@ use chrono::Utc;
 use tauri::State;
 
 use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
-use crate::models::{SectionId, ShotId, MULTIPLE_DATUMS_PER_MERGE_COMPONENT};
+use crate::models::{warning_is_ignorable, SectionId, ShotId};
 use crate::persistence::ResolvedWarning;
 
 // Re-export ProjectWarning from models for backward compatibility
@@ -65,14 +65,17 @@ pub(crate) fn resolve_warning_impl(
     warning_code: String,
     comment: Option<String>,
 ) -> Result<(), String> {
-    // Over-anchoring is not ignorable (issue #57): refuse to persist a
-    // suppression. Returning Ok keeps callers simple — and
+    // Errors are not ignorable (issue #57): refuse to persist a suppression for
+    // any error-severity warning (over-anchoring, invalid pitch/azimuth, zero/
+    // negative length, length-below-depth, negative LRUD). One predicate —
+    // `warning_is_ignorable` — is the single policy source shared with the
+    // warnings computation. Returning Ok keeps callers simple, and
     // compute_project_warnings never honors such a row regardless.
-    if warning_code == MULTIPLE_DATUMS_PER_MERGE_COMPONENT {
+    if !warning_is_ignorable(&warning_code) {
         tracing::debug!(
             warning_code = %warning_code,
-            purpose = "reject ignore of a non-ignorable warning",
-            "Ignoring of over-anchoring warnings is not allowed; not persisting"
+            purpose = "reject ignore of a non-ignorable (error) warning",
+            "Ignoring of error-severity warnings is not allowed; not persisting"
         );
         return Ok(());
     }

@@ -29,17 +29,16 @@ function recordedPitch(shot: Shot): number | null {
   return shot.pitch_in ?? shot.pitch_out ?? null;
 }
 
-/** Inclination implied by the depth change and slope length, expressed in the
- *  recorded pitch's own sign. The geometric constraint |dz| = length·sin(|pitch|)
- *  only fixes the magnitude; pitch_in/pitch_out are both forward (foresight)
- *  readings in the +down convention, but we keep whatever sign the recorded value
- *  uses so the preview stays robust to an un-normalised source (matching the
- *  backend check). */
+/** Signed inclination implied by the depth change and slope length, in the
+ *  canonical +down convention (positive pitch = increasing depth) — the same
+ *  `dz.atan2(horizontal)` the backend's `pitch_from_components` uses, so the
+ *  proposed inclination the preview/apply produce matches what the backend
+ *  validates against (issue #57, finding #7). Returns 0 for a degenerate shot. */
 function impliedInclination(shot: Shot): number {
+  if (!(shot.length > 0)) return 0;
   const dz = shot.depth_out - shot.depth_in;
-  const mag = shot.length > 0 ? (Math.asin(Math.min(1, Math.abs(dz) / shot.length)) * 180) / Math.PI : 0;
-  const recorded = recordedPitch(shot);
-  return (recorded !== null && recorded < 0 ? -1 : 1) * mag;
+  const horizontal = Math.sqrt(Math.max(0, shot.length * shot.length - dz * dz));
+  return (Math.atan2(dz, horizontal) * 180) / Math.PI;
 }
 
 /** What a manual option needs to render as an inline editable field. */
@@ -48,6 +47,7 @@ export type ManualKind =
   | 'azimuthInOut' // separate in / out azimuths
   | 'length'
   | 'depth' // depth in / out
+  | 'pitch' // single inclination, applied to both in & out
   | 'lrud'; // L R U D
 
 interface ResolutionOption {
@@ -109,12 +109,22 @@ interface ProposedRaw {
   depthIn?: number;
   depthOut?: number;
   lrud?: Partial<Record<LrudField, number | null>>;
-  invalid?: 'azimuth' | 'length' | 'invalid';
+  invalid?: 'azimuth' | 'length' | 'pitch' | 'invalid';
 }
 
-/** parseFloat of a manual field (NaN when empty/non-numeric), like `num`. */
+/** Strict numeric parse of a manual field: NaN unless the ENTIRE trimmed string
+ *  is a finite number. Unlike parseFloat, this rejects trailing garbage such as
+ *  "5abc" (which parseFloat would silently read as 5) (issue #57, finding #11). */
+function strictNum(raw: string | undefined): number {
+  const s = (raw ?? '').trim();
+  if (s === '') return NaN;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/** Strict numeric parse of a manual field (NaN when empty/non-numeric). */
 function manualNum(manual: Record<string, string>, key: string): number {
-  return parseFloat(manual[key] ?? '');
+  return strictNum(manual[key]);
 }
 
 /**
@@ -167,8 +177,14 @@ export function computeProposedRaw(
       if (length === null) return { invalid: 'invalid' };
       return { pitchIn: mid, pitchOut: mid, length };
     }
-    case 'length-from-depth':
-      return { length: Math.abs(dz) };
+    case 'length-from-depth': {
+      // Setting length to the depth change makes the shot vertical, so also set
+      // the inclination to the matching ±90° (+down: deeper => +90) — otherwise
+      // a recorded non-vertical pitch would immediately trip a fresh
+      // INCLINATION_DEPTH_MISMATCH (issue #57, finding #2).
+      const p = dz >= 0 ? 90 : -90;
+      return { length: Math.abs(dz), pitchIn: p, pitchOut: p };
+    }
     case 'length-from-incl': {
       const recorded = recordedPitch(shot);
       const length = lengthFromInclination(dz, recorded);
@@ -201,6 +217,11 @@ export function computeProposedRaw(
         const v = manualNum(manual, 'length');
         if (Number.isNaN(v) || v <= 0) return { invalid: 'length' };
         return { length: v };
+      } else if (manualKind === 'pitch') {
+        // Inclination is only physical in [-90°, 90°] (issue #57, finding #9).
+        const v = manualNum(manual, 'pitch');
+        if (Number.isNaN(v) || v < -90 || v > 90) return { invalid: 'pitch' };
+        return { pitchIn: v, pitchOut: v };
       } else if (manualKind === 'depth') {
         const vi = manualNum(manual, 'depthIn');
         const vo = manualNum(manual, 'depthOut');
@@ -212,7 +233,8 @@ export function computeProposedRaw(
         const lrud: Partial<Record<LrudField, number | null>> = {};
         for (const f of LRUD_FIELDS) {
           const rawValue = manual[f]?.trim() ?? '';
-          lrud[f] = rawValue === '' ? null : parseFloat(rawValue);
+          // Strict parse: reject "5abc" rather than silently reading it as 5.
+          lrud[f] = rawValue === '' ? null : strictNum(rawValue);
         }
         if (LRUD_FIELDS.some((f) => lrud[f] !== null && Number.isNaN(lrud[f] as number))) {
           return { invalid: 'invalid' };
@@ -283,6 +305,10 @@ export function WarningResolution({
       label: t('detailPanel.warnings.resolveOptions.ignore'),
       ignore: true,
     };
+    // Errors are never ignorable (issue #57): offer Ignore only for advisory
+    // (warning-severity) issues. Spread this where Ignore used to be hardcoded so
+    // a single check governs every code.
+    const maybeIgnore: ResolutionOption[] = warning.severity === 'error' ? [] : [ignore];
     switch (warning.code) {
       case 'AZIMUTH_DEVIATION': {
         const avg = averageAzimuth(shot.azimuth_in, shot.azimuth_out);
@@ -291,19 +317,26 @@ export function WarningResolution({
           { id: 'use-out', label: t('detailPanel.warnings.resolveOptions.useOut'), detail: az(shot.azimuth_out), disabled: geometryDisabled },
           { id: 'average', label: t('detailPanel.warnings.resolveOptions.average'), detail: az(avg), disabled: geometryDisabled },
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'azimuth', disabled: geometryDisabled },
-          ignore,
+          ...maybeIgnore,
         ];
       }
       case 'INVALID_AZIMUTH':
         return [
           { id: 'normalize', label: t('detailPanel.warnings.resolveOptions.normalize'), detail: `${az(normalizeAzimuth(shot.azimuth_in))} / ${az(normalizeAzimuth(shot.azimuth_out))}`, disabled: geometryDisabled },
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'azimuthInOut', disabled: geometryDisabled },
-          ignore,
+          ...maybeIgnore,
+        ];
+      case 'INVALID_PITCH':
+        // An out-of-range inclination is an error (not ignorable). Correct it
+        // with a manual in-range pitch (issue #57, finding #9).
+        return [
+          { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualPitch'), manual: 'pitch', disabled: geometryDisabled },
+          ...maybeIgnore,
         ];
       case 'LONG_SHOT':
         return [
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
-          ignore,
+          ...maybeIgnore,
         ];
       case 'ZERO_LENGTH':
       case 'NEGATIVE_LENGTH':
@@ -313,19 +346,19 @@ export function WarningResolution({
         return [
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
           { id: 'delete-shot', label: t('detailPanel.warnings.resolveOptions.deleteShot'), disabled: geometryDisabled, danger: true },
-          ignore,
+          ...maybeIgnore,
         ];
       case 'LARGE_DEPTH_CHANGE':
         return [
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualDepth'), manual: 'depth', disabled: geometryDisabled },
-          ignore,
+          ...maybeIgnore,
         ];
       case 'NEGATIVE_LRUD':
         return [
           { id: 'lrud-abs', label: t('detailPanel.warnings.resolveOptions.useAbs'), disabled: geometryReadOnly },
           { id: 'lrud-clear', label: t('detailPanel.warnings.resolveOptions.clear'), disabled: geometryReadOnly },
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manual'), manual: 'lrud', disabled: geometryReadOnly },
-          ignore,
+          ...maybeIgnore,
         ];
       case 'LENGTH_BELOW_DEPTH_CHANGE': {
         const dz = shot.depth_out - shot.depth_in;
@@ -338,7 +371,7 @@ export function WarningResolution({
             ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.lengthFromInclination'), detail: len(lengthFromIncl), selectedNote: t('detailPanel.warnings.fromInclinationNote', { value: formatFixed(recorded, undefined, precision.inclination) }), disabled: geometryDisabled }]
             : []),
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
-          ignore,
+          ...maybeIgnore,
         ];
       }
       case 'INCLINATION_DEPTH_MISMATCH': {
@@ -366,20 +399,29 @@ export function WarningResolution({
             ? [{ id: 'split-incl-length', label: t('detailPanel.warnings.resolveOptions.splitInclLength'), detail: `${formatFixed(midPitch, undefined, precision.inclination)}° · ${len(splitLength)}`, disabled: geometryDisabled }]
             : []),
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
-          ignore,
+          ...maybeIgnore,
         ];
       }
-      case 'multiple_datums_per_merge_component':
+      case 'multiple_datums_per_merge_component': {
         // Over-anchoring is a structural error, not a suppressible nuisance
-        // (issue #57): no Ignore — it must be fixed by removing a datum.
+        // (issue #57): no Ignore. The component is anchored by N zero datums; the
+        // fix is to keep exactly one and remove the other N-1. Offer one "keep"
+        // option per datum, plus a jump to the representative station.
+        const refs = warning.datumRefs ?? [];
+        const keepOptions: ResolutionOption[] = refs.map((r, i) => ({
+          id: `keep-datum-${i}`,
+          label: t('detailPanel.warnings.resolveOptions.keepDatum', { station: `${r.section_id}:${r.station_index}` }),
+          disabled: geometryReadOnly || refs.length < 2,
+        }));
         return [
-          { id: 'remove-datum', label: t('detailPanel.warnings.resolveOptions.removeDatum'), disabled: geometryReadOnly || warning.datumStationIndex === undefined },
+          ...keepOptions,
           { id: 'go-to-station', label: t('detailPanel.warnings.resolveOptions.goToStation'), navigate: true },
         ];
+      }
       default:
-        return [ignore];
+        return maybeIgnore;
     }
-  }, [warning.code, warning.datumStationIndex, shot, geometryDisabled, geometryReadOnly, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, geometryReadOnly, t, precision]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered,
   // else the first enabled option (falls back to Ignore when every fix is
@@ -389,6 +431,7 @@ export function WarningResolution({
     const preferred = enabled.find((o) => o.id === 'average') ?? enabled[0] ?? options[options.length - 1];
     setSelected(preferred?.id ?? '');
     if (shot) {
+      const rp = recordedPitch(shot);
       setManual({
         azimuth: '',
         azimuthIn: shot.azimuth_in.toString(),
@@ -396,6 +439,7 @@ export function WarningResolution({
         length: shot.length > 0 ? shot.length.toString() : '',
         depthIn: shot.depth_in.toString(),
         depthOut: shot.depth_out.toString(),
+        pitch: rp !== null ? rp.toString() : '',
         left: shot.left?.toString() ?? '',
         right: shot.right?.toString() ?? '',
         up: shot.up?.toString() ?? '',
@@ -409,9 +453,11 @@ export function WarningResolution({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [warning.sectionId, warning.shotId, warning.code]);
 
-  // parseFloat of a manual field (NaN when empty/non-numeric). Used only by the
-  // proposedCreatesError memo now; the proposal math lives in computeProposedRaw.
-  const num = (key: string): number => parseFloat(manual[key] ?? '');
+  // Strict parse of a manual field (NaN when empty/non-numeric/garbage). Used
+  // only by the proposedCreatesError advisory; the proposal math lives in
+  // computeProposedRaw (which also uses strictNum), so the advisory and the apply
+  // agree on what counts as a valid number (issue #57, finding #11).
+  const num = (key: string): number => strictNum(manual[key]);
 
   // Live on-map preview of the proposed geometry as the user tries options
   // (issue #57). Anchored to the real solved endpoint so it shows just the
@@ -421,7 +467,7 @@ export function WarningResolution({
   const preview = useMemo<GeometryPreview | null>(() => {
     if (!shot) return null;
     const opt = options.find((o) => o.id === selected);
-    if (!opt || opt.ignore || opt.navigate || opt.id === 'remove-datum') return null;
+    if (!opt || opt.ignore || opt.navigate || opt.id.startsWith('keep-datum')) return null;
     if (opt.id === 'lrud-abs' || opt.id === 'lrud-clear' || opt.manual === 'lrud') return null;
 
     const stationAt = (stationIndex: number) =>
@@ -529,7 +575,13 @@ export function WarningResolution({
     if (!opt) return 'failed';
 
     if (opt.ignore) {
-      await resolveWarning(warning.sectionId, warning.shotId, warning.code);
+      // The backend can refuse (e.g. the shot no longer exists, or the code is
+      // an error): only count it resolved if it actually persisted (#57 #1).
+      const ok = await resolveWarning(warning.sectionId, warning.shotId, warning.code);
+      if (!ok) {
+        showToast(t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
+        return 'failed';
+      }
       return 'resolved';
     }
 
@@ -544,11 +596,22 @@ export function WarningResolution({
       return 'navigated'; // jumped to the station; nothing was suppressed or fixed
     }
 
-    if (opt.id === 'remove-datum') {
-      if (warning.datumStationIndex === undefined) return 'failed';
-      const result = await removeZeroDatum({ section_id: warning.sectionId, station_index: warning.datumStationIndex });
-      if (!result.success) showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
-      return result.success ? 'resolved' : 'failed';
+    if (opt.id.startsWith('keep-datum-')) {
+      // Keep the chosen datum, remove every other anchor in the component so the
+      // group is anchored by exactly one (issue #57, finding #4). Datums are keyed
+      // by station_ref, so removing one never renumbers the others.
+      const refs = warning.datumRefs ?? [];
+      const keepIdx = Number(opt.id.slice('keep-datum-'.length));
+      const toRemove = refs.filter((_, i) => i !== keepIdx);
+      if (toRemove.length === 0) return 'failed';
+      for (const ref of toRemove) {
+        const result = await removeZeroDatum({ section_id: ref.section_id, station_index: ref.station_index });
+        if (!result.success) {
+          showToast(result.error ?? t('detailPanel.warnings.resolveFailed'), 'warning-resolve');
+          return 'failed';
+        }
+      }
+      return 'resolved';
     }
 
     if (opt.id === 'delete-shot') {
@@ -576,7 +639,9 @@ export function WarningResolution({
           ? 'detailPanel.warnings.resolveInvalidAzimuth'
           : raw.invalid === 'length'
             ? 'detailPanel.warnings.resolveInvalidLength'
-            : 'detailPanel.warnings.resolveInvalid';
+            : raw.invalid === 'pitch'
+              ? 'detailPanel.warnings.resolveInvalidPitch'
+              : 'detailPanel.warnings.resolveInvalid';
       showToast(t(key), 'warning-resolve');
       return 'failed';
     }
@@ -719,6 +784,19 @@ export function WarningResolution({
                   {opt.manual === 'length' && (
                     <ManualField value={manual.length ?? ''} onChange={(v) => setManual((m) => ({ ...m, length: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.length')} testId="manual-length" />
                   )}
+                  {opt.manual === 'pitch' && (
+                    <ManualField
+                      value={manual.pitch ?? ''}
+                      onChange={(v) => setManual((m) => ({ ...m, pitch: v }))}
+                      unit="°"
+                      placeholder={t('detailPanel.labels.pitch')}
+                      testId="manual-pitch"
+                      invalid={(() => {
+                        const v = strictNum(manual.pitch);
+                        return !Number.isNaN(v) && (v < -90 || v > 90);
+                      })()}
+                    />
+                  )}
                   {opt.manual === 'depth' && (
                     <div className="grid grid-cols-2 gap-2">
                       <ManualField value={manual.depthIn ?? ''} onChange={(v) => setManual((m) => ({ ...m, depthIn: v }))} unit={t('common.units.meters')} placeholder={t('detailPanel.labels.depthIn')} testId="manual-depth-in" />
@@ -783,12 +861,15 @@ function ManualField({
   unit,
   placeholder,
   testId,
+  invalid = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   unit?: string;
   placeholder?: string;
   testId?: string;
+  /** Highlight the field red (e.g. an out-of-range pitch). */
+  invalid?: boolean;
 }) {
   return (
     <div className="flex items-center gap-1">
@@ -799,7 +880,7 @@ function ManualField({
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full"
+        className={`w-full ${invalid ? 'ring-2 ring-error' : ''}`}
         data-testid={testId}
       />
       {unit && <span className="text-xs text-text-secondary">{unit}</span>}

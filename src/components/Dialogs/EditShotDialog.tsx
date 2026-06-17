@@ -122,6 +122,14 @@ export default function EditShotDialog() {
     }
   };
 
+  // Pitch (inclination) is only valid in [-90°, 90°]; highlight the input red
+  // (matching the backend INVALID_PITCH error) when a typed value is out of range.
+  // Purely presentational — submission is not blocked on this.
+  const pitchInVal = parseFloat(pitchIn);
+  const pitchInInvalid = Number.isFinite(pitchInVal) && (pitchInVal < -90 || pitchInVal > 90);
+  const pitchOutVal = parseFloat(pitchOut);
+  const pitchOutInvalid = Number.isFinite(pitchOutVal) && (pitchOutVal < -90 || pitchOutVal > 90);
+
   // Track if form has been modified
   const isDirty = shot ? (
     azimuthIn !== shot.azimuth_in.toString() ||
@@ -235,8 +243,10 @@ export default function EditShotDialog() {
               type="number" inputMode="decimal"
               value={pitchIn}
               onChange={(e) => setPitchIn(e.target.value)}
-              className="w-full"
+              className={`w-full ${pitchInInvalid ? 'ring-2 ring-error' : ''}`}
               step="0.1"
+              min="-90"
+              max="90"
               placeholder="Optional"
               disabled={frozen}
             />
@@ -247,8 +257,10 @@ export default function EditShotDialog() {
               type="number" inputMode="decimal"
               value={pitchOut}
               onChange={(e) => setPitchOut(e.target.value)}
-              className="w-full"
+              className={`w-full ${pitchOutInvalid ? 'ring-2 ring-error' : ''}`}
               step="0.1"
+              min="-90"
+              max="90"
               placeholder="Optional"
               disabled={frozen}
             />

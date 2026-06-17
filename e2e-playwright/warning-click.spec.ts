@@ -62,6 +62,7 @@ async function injectWarnings(
     severity: 'warning' | 'error';
     isResolved: boolean;
     datumStationIndex?: number;
+    datumRefs?: Array<{ section_id: number; station_index: number }>;
     shotUuid?: string;
   }>
 ): Promise<void> {
@@ -427,20 +428,26 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
         shotId: shotIds[0]!,
         shotIndex: 0,
         code: 'multiple_datums_per_merge_component',
-        message: 'Station 1:0 has a zero datum, but its merge group is also anchored at 2:0.',
-        severity: 'warning',
+        message: 'This merge group is anchored by 2 zero datums (1:0, 2:0). Keep one and remove the others.',
+        severity: 'error',
         isResolved: false,
         datumStationIndex: 0,
+        datumRefs: [
+          { section_id: sectionId, station_index: 0 },
+          { section_id: sectionIds[1] ?? sectionId, station_index: 0 },
+        ],
       },
     ]);
 
     await page.getByTestId('detail-tab-warnings').click();
     await page.getByTestId('resolve-warning').first().click();
 
-    // Structural over-anchoring must be fixed, never suppressed (issue #57):
-    // the resolution view offers remove-datum / go-to-station but no Ignore.
+    // Structural over-anchoring is an error, never suppressed (issue #57): the
+    // resolution view offers one "keep this datum" option per anchor plus
+    // go-to-station, but no Ignore.
     await expect(page.getByTestId('warning-resolution')).toBeVisible();
-    await expect(page.getByTestId('warning-resolution-option-remove-datum')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-keep-datum-0')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-keep-datum-1')).toBeVisible();
     await expect(page.getByTestId('warning-resolution-option-go-to-station')).toBeVisible();
     await expect(page.getByTestId('warning-resolution-option-ignore')).toHaveCount(0);
   });

@@ -255,20 +255,17 @@ test.describe('GlobalView Metadata Panel', () => {
   });
 
   test.describe('Project Settings button', () => {
-    test('shows a Project Settings button above Open; collaboration toggle is gone', async ({ page }) => {
+    test('has no Project Settings button (settings live in the open project); collaboration toggle is gone', async ({ page }) => {
       const card = page.locator('[data-testid="system-card-/projects/cave-alpha.stalx"]');
       await card.click();
       await expect(page.locator('[data-testid="metadata-name"]')).toBeVisible();
 
-      const settings = page.locator('[data-testid="metadata-project-settings-button"]');
       const open = page.locator('[data-testid="metadata-open-button"]');
-      await expect(settings).toBeVisible();
       await expect(open).toBeVisible();
 
-      // Project Settings sits above Open.
-      const sBox = await settings.boundingBox();
-      const oBox = await open.boundingBox();
-      expect(sBox && oBox && sBox.y < oBox.y).toBe(true);
+      // Per-project settings require opening the project, so the recents panel
+      // no longer offers a Project Settings shortcut.
+      await expect(page.locator('[data-testid="metadata-project-settings-button"]')).toHaveCount(0);
 
       // The Ariane collaboration toggle moved into the Project Settings dialog.
       await expect(page.locator('[data-testid="metadata-toggle-collaboration"]')).toHaveCount(0);

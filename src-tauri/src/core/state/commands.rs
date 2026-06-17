@@ -1597,7 +1597,7 @@ impl AppState {
 
         // Validate resulting length (disallow zero/negative)
         if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
-            if let Some((shot_index, existing)) = section.shots.iter().enumerate().find(|(_, s)| s.id == shot_id) {
+            if let Some(existing) = section.shots.iter().find(|s| s.id == shot_id) {
                 let new_length = updates.length.unwrap_or(existing.length);
                 if new_length == 0.0 {
                     return CommandResult::failure(format!(
@@ -1616,24 +1616,10 @@ impl AppState {
                 }
 
                 // Reject geometry edits on frozen shots
-                if updates.touches_geometry() {
-                    let section_lookup = project.build_section_lookup();
-                    let merge_adj = project.build_merge_adjacency(&section_lookup);
-                    let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
-                    let datum_stations: std::collections::HashSet<_> =
-                        project.zero_datums.iter().filter_map(|d| project.resolve_key(&d.station_ref)).collect();
-                    if project.is_shot_frozen(
-                        section_id,
-                        shot_index,
-                        &section_lookup,
-                        &merge_adj,
-                        &closure_adj,
-                        &datum_stations,
-                    ) {
-                        return CommandResult::failure(
-                            "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.".to_string()
-                        );
-                    }
+                if updates.touches_geometry() && project.is_shot_frozen_by_id(section_id, shot_id) {
+                    return CommandResult::failure(
+                        "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.".to_string()
+                    );
                 }
             }
         }
@@ -1670,26 +1656,10 @@ impl AppState {
         // frozen-geometry guard; the resolve-flow UI also gates this option. Runs
         // BEFORE the shift-blocked check so a frozen shot reports the clear frozen
         // message rather than the misleading "Use split instead."
-        if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
-            if let Some(shot_index) = section.shots.iter().position(|s| s.id == shot_id) {
-                let section_lookup = project.build_section_lookup();
-                let merge_adj = project.build_merge_adjacency(&section_lookup);
-                let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
-                let datum_stations: std::collections::HashSet<_> =
-                    project.zero_datums.iter().filter_map(|d| project.resolve_key(&d.station_ref)).collect();
-                if project.is_shot_frozen(
-                    section_id,
-                    shot_index,
-                    &section_lookup,
-                    &merge_adj,
-                    &closure_adj,
-                    &datum_stations,
-                ) {
-                    return CommandResult::failure(
-                        "Cannot delete a frozen shot. This shot is part of an adjusted survey network.".to_string()
-                    );
-                }
-            }
+        if project.is_shot_frozen_by_id(section_id, shot_id) {
+            return CommandResult::failure(
+                "Cannot delete a frozen shot. This shot is part of an adjusted survey network.".to_string()
+            );
         }
 
         if let Ok(impact) = project.preview_delete_shot(section_id, shot_id) {

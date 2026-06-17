@@ -234,14 +234,6 @@ export default function GlobalView() {
     await loadProject(filePath);
   }, [loadProject]);
 
-  // Project Settings from the recent list: open the project, then (once loaded)
-  // pop its Project Settings dialog. Per-project settings live in the open
-  // project, so they require opening it (#57).
-  const handleProjectSettings = useCallback(async (filePath: string) => {
-    await loadProject(filePath);
-    openDialog('project-settings');
-  }, [loadProject, openDialog]);
-
   // Handle cancel during loading
   const handleCancelLoading = useCallback(async () => {
     await cancelLoading();
@@ -685,7 +677,6 @@ export default function GlobalView() {
             project={selectedProject}
             selectedProjects={selectedProjects}
             onOpenProject={handleProjectOpen}
-            onProjectSettings={handleProjectSettings}
             onRemoveFromRecent={handleRemoveFromRecent}
             collapsed={metadataPanelCollapsed}
             onCollapseChange={setMetadataPanelCollapsed}

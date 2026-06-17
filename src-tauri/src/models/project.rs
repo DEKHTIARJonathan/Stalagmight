@@ -583,6 +583,22 @@ impl Project {
         reminted
     }
 
+    /// Map every shot that has a UUID to its `(section_id, shot_id)` position.
+    /// Shared by both load entry points (`open_project` and
+    /// `do_load_project_full`) to feed `backfill_resolved_warning_uuids`, so the
+    /// two sites can't diverge. Shots with no UUID are skipped — call
+    /// [`ensure_shot_uuids`] first if every shot must be represented.
+    pub fn shot_uuid_by_position(&self) -> HashMap<(u32, u32), String> {
+        self.sections
+            .iter()
+            .flat_map(|s| {
+                s.shots
+                    .iter()
+                    .filter_map(move |sh| sh.uuid.clone().map(|u| ((s.id, sh.id), u)))
+            })
+            .collect()
+    }
+
     /// Rebuild the section-id → index cache from the current `sections`
     /// vector. Cheap (O(N)) and safe to call any time; call this after a
     /// bulk mutation (e.g. snapshot rollback) or before a hot lookup loop
@@ -7051,6 +7067,33 @@ impl Project {
             merge_adj,
             closure_adj,
             datum_stations,
+        )
+    }
+
+    /// Convenience wrapper around [`Self::is_shot_frozen`] that resolves the
+    /// shot's index from its id and builds the section lookup / adjacency /
+    /// datum-station structures internally. Returns `false` if the section or
+    /// shot id cannot be found. Call sites that need to check a single shot
+    /// should prefer this over hand-rolling the adjacency setup.
+    pub(crate) fn is_shot_frozen_by_id(&self, section_id: SectionId, shot_id: ShotId) -> bool {
+        let Some(section) = self.sections.iter().find(|s| s.id == section_id) else {
+            return false;
+        };
+        let Some(shot_index) = section.shots.iter().position(|s| s.id == shot_id) else {
+            return false;
+        };
+        let section_lookup = self.build_section_lookup();
+        let merge_adj = self.build_merge_adjacency(&section_lookup);
+        let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
+        let datum_stations: HashSet<StationRef> =
+            self.zero_datums.iter().filter_map(|d| self.resolve_key(&d.station_ref)).collect();
+        self.is_shot_frozen(
+            section_id,
+            shot_index,
+            &section_lookup,
+            &merge_adj,
+            &closure_adj,
+            &datum_stations,
         )
     }
 

@@ -415,7 +415,6 @@ export default function MapCanvas() {
     moveCommentSource,
     detailPanelOpen,
     detailPanelTab,
-    setIssueSeverity,
   } = useUIStore(
     // measureSnapShot is excluded: the live shot-snap `t` is rewritten on every
     // mousemove over a shot, and the cursor dot is driven imperatively via refs,
@@ -425,15 +424,23 @@ export default function MapCanvas() {
     useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
   );
 
-  // Gate the survey-layer rebuild on Issue-severity coloring. `warnings` changes
+  // Issue-severity coloring is active when the user enabled it OR while the
+  // Warnings tab is open (auto-highlight, gated by the setting). It is DERIVED,
+  // never written to the store: leaving the tab simply recomputes the colors from
+  // the persisted toggles, so no "prior coloring" snapshot can be lost and every
+  // toggle of a coloring mode just triggers a recompute (issue #57, finding #6).
+  const highlightWarningsOnTabSwitch = config?.map.highlight_warnings_on_tab_switch ?? true;
+  const effectiveIssueSeverity =
+    showIssueSeverity || (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch);
+  // Severity takes visual precedence over the depth gradient when both apply.
+  const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
+  // Gate the survey-layer rebuild on issue-severity coloring. `warnings` changes
   // identity on every refreshWarnings (each edit/resolve/ignore), but warnings
-  // only affect map geometry/colors when severity coloring is ON. Feeding the
-  // rebuild effect this memo (real warnings when ON, a stable shared [] when OFF)
-  // means warning-only refreshes no longer trigger a full GeoJSON rebuild while
-  // severity is OFF. Toggling severity flips the identity, firing one rebuild.
+  // only affect colors when severity coloring is effectively ON — feed the rebuild
+  // a stable shared [] when OFF so warning-only refreshes don't rebuild the GeoJSON.
   const severityWarnings = useMemo(
-    () => (showIssueSeverity ? warnings : EMPTY_WARNINGS),
-    [showIssueSeverity, warnings]
+    () => (effectiveIssueSeverity ? warnings : EMPTY_WARNINGS),
+    [effectiveIssueSeverity, warnings]
   );
 
   const alignedClosureIds = useMemo(() => {
@@ -1674,47 +1681,17 @@ export default function MapCanvas() {
         // resolved when some loops are still open.
         project.loop_closures,
         gpsOrigin,
-        showDepthGradient,
+        effectiveDepthGradient,
         depthRange,
         precision,
-        showIssueSeverity,
+        effectiveIssueSeverity,
         severityWarnings
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, showIssueSeverity, severityWarnings]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings]);
 
-  // Warnings-tab auto-switch (#22): opening the Warnings tab temporarily flips
-  // the map into Issue-severity coloring (gated by the global setting), then
-  // restores the prior coloring on leave. We snapshot the prior gradient flags
-  // on enter so we can put them back. Depends only on the tab signal + the
-  // setting — NOT on the coloring flags — so a manual toggle while in the tab
-  // doesn't re-fire this effect.
-  const priorColoringRef = useRef<{ depth: boolean; distance: boolean } | null>(null);
-  const highlightWarningsOnTabSwitch = config?.map.highlight_warnings_on_tab_switch ?? true;
-  useEffect(() => {
-    if (!highlightWarningsOnTabSwitch) {
-      // Setting off: release any pending auto-switch without forcing a restore
-      // (the user keeps whatever they're currently viewing).
-      priorColoringRef.current = null;
-      return;
-    }
-    const onWarnings = detailPanelOpen && detailPanelTab === 'warnings';
-    if (onWarnings && priorColoringRef.current === null) {
-      const s = useUIStore.getState();
-      priorColoringRef.current = { depth: s.showDepthGradient, distance: s.showDistanceGradient };
-      setIssueSeverity(true);
-    } else if (!onWarnings && priorColoringRef.current !== null) {
-      const prior = priorColoringRef.current;
-      priorColoringRef.current = null;
-      // Only auto-restore if issue-severity is still the active mode. If the
-      // user manually picked a different coloring while in the tab, respect it.
-      if (useUIStore.getState().showIssueSeverity) {
-        setIssueSeverity(false);
-        if (prior.depth) useUIStore.getState().toggleDisplay('showDepthGradient');
-        else if (prior.distance) useUIStore.getState().toggleDistanceGradient();
-      }
-    }
-  }, [detailPanelOpen, detailPanelTab, highlightWarningsOnTabSwitch, setIssueSeverity]);
+  // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
+  // above — no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
 
   // On a project switch (created_at changes on switch, stable across edits AND
   // saves), reset the distance origin to the entrance default and drop the stale
@@ -1775,13 +1752,14 @@ export default function MapCanvas() {
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    if (showDistanceGradient && distanceField && project) {
+    if (showDistanceGradient && !effectiveIssueSeverity && distanceField && project) {
       const state = buildDistanceFeatureState(project.sections, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
     } else {
+      // Severity coloring (incl. the Warnings-tab auto-highlight) takes precedence.
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
-  }, [showDistanceGradient, distanceField, project, mapLoaded, surveyLayerRef]);
+  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, project, mapLoaded, surveyLayerRef]);
 
   // Tint the measured along-line path's shots AND stations (#26) in the
   // user-configured color. Keyed on the along-line result so it applies when the
@@ -3318,11 +3296,11 @@ export default function MapCanvas() {
 
       {/* Depth legend when depth gradient is enabled (suppressed while the
           distance overlay is active — distance wins visually, one legend). */}
-      {showDepthGradient && !showDistanceGradient && (
+      {effectiveDepthGradient && !showDistanceGradient && (
         <DepthLegend
           minDepth={depthRange.min}
           maxDepth={depthRange.max}
-          visible={showDepthGradient}
+          visible={effectiveDepthGradient}
         />
       )}
 

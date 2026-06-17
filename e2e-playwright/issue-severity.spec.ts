@@ -240,16 +240,34 @@ test.describe('Issue Severity coloring (#22)', () => {
     expect(await isToggleOn(page, 'showDepthGradient')).toBe(false);
   });
 
-  test('switching to the Warnings tab auto-enables the mode and leaving restores it', async ({ page }) => {
+  test('switching to the Warnings tab auto-enables severity coloring and leaving reverts it', async ({ page }) => {
+    // The Warnings-tab auto-highlight is DERIVED from the tab (issue #57, finding
+    // #6) — it is never written to the store, so assert the rendered colors, not a
+    // store flag. The persisted toggle stays off throughout.
     expect(await issueSeverityFlag(page)).toBe(false);
 
-    // Opening the Warnings tab auto-switches the map into issue-severity coloring
-    // (global setting defaults on).
-    await page.getByTestId('detail-tab-warnings').click();
-    await expect.poll(() => issueSeverityFlag(page), { timeout: 3000 }).toBe(true);
+    // Baseline (Details tab): section colors, not the clear-green severity color.
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+    }, { timeout: 3000 }).toBe(true);
 
-    // Leaving restores the prior coloring (was off ⇒ back to off).
+    // Opening the Warnings tab recomputes the map into issue-severity coloring
+    // (global setting defaults on). With no warnings every shot paints clear-green.
+    await page.getByTestId('detail-tab-warnings').click();
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      const vals = Object.values(shots);
+      return vals.length > 0 && vals.every((c) => c.toLowerCase() === SEV_CLEAR);
+    }, { timeout: 3000 }).toBe(true);
+    // The persisted toggle was never mutated by the auto-highlight.
+    expect(await issueSeverityFlag(page)).toBe(false);
+
+    // Leaving recomputes from the persisted toggles (was off ⇒ section colors return).
     await page.getByTestId('detail-tab-details').click();
-    await expect.poll(() => issueSeverityFlag(page), { timeout: 3000 }).toBe(false);
+    await expect.poll(async () => {
+      const shots = await shotColorsById(page);
+      return Object.values(shots).some((c) => c.toLowerCase() !== SEV_CLEAR);
+    }, { timeout: 3000 }).toBe(true);
   });
 });

@@ -255,7 +255,7 @@ interface ProjectStore {
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
   refreshWarnings: () => Promise<void>;
-  resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
+  resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
@@ -1026,7 +1026,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string) => {
+  resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
     try {
       await invokeIpc(
         'resolve_warning',
@@ -1034,8 +1034,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
       );
       await get().refreshWarnings();
+      return true;
     } catch (e) {
+      // Surface failure to the caller (e.g. the shot no longer exists) so the
+      // resolve flow doesn't report a suppression that never persisted (#57).
       console.error('Failed to resolve warning:', e);
+      return false;
     }
   },
 

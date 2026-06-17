@@ -1,7 +1,14 @@
 use crate::config::ValidationConfig;
+use crate::models::shot::pitch_from_components;
+use crate::models::warning::severity_for_code;
 use crate::models::{SectionId, ShotData};
 
 use super::{ValidationWarning, WarningSeverity};
+
+/// Valid range for a recorded inclination/pitch, in degrees. A value outside
+/// [-90, 90] is physically impossible (issue #57).
+const PITCH_MIN: f64 = -90.0;
+const PITCH_MAX: f64 = 90.0;
 
 /// Validator for survey data
 pub struct Validator;
@@ -16,206 +23,226 @@ impl Validator {
     ) -> Vec<ValidationWarning> {
         let mut warnings = Vec::new();
 
+        // Build every warning through one helper so its severity is sourced from
+        // the single `severity_for_code` map (issue #57) — the validator, the
+        // ignore gate, and the map coloring can never disagree on a code's class.
+        let warn = |code: &str, message: String| ValidationWarning {
+            code: code.to_string(),
+            message,
+            severity: severity_for_code(code),
+        };
+
         // Check for zero length
         if shot.length == 0.0 {
-            warnings.push(ValidationWarning {
-                code: "ZERO_LENGTH".to_string(),
-                message: format!("Shot {}:{} has zero length", section_id, shot_index + 1),
-                severity: WarningSeverity::Error,
-            });
+            warnings.push(warn(
+                "ZERO_LENGTH",
+                format!("Shot {}:{} has zero length", section_id, shot_index + 1),
+            ));
         }
 
         // Check for negative length
         if shot.length < 0.0 {
-            warnings.push(ValidationWarning {
-                code: "NEGATIVE_LENGTH".to_string(),
-                message: format!("Shot {}:{} has negative length: {:.1}m", section_id, shot_index + 1, shot.length),
-                severity: WarningSeverity::Error,
-            });
+            warnings.push(warn(
+                "NEGATIVE_LENGTH",
+                format!("Shot {}:{} has negative length: {:.1}m", section_id, shot_index + 1, shot.length),
+            ));
         }
 
         // Check length thresholds
         if shot.length > 0.0 && shot.length < config.warn_shot_length_min {
-            warnings.push(ValidationWarning {
-                code: "SHORT_SHOT".to_string(),
-                message: format!(
+            warnings.push(warn(
+                "SHORT_SHOT",
+                format!(
                     "Shot {}:{} length {:.1}m below minimum threshold {:.1}m",
                     section_id,
                     shot_index + 1,
                     shot.length,
                     config.warn_shot_length_min
                 ),
-                severity: WarningSeverity::Warning,
-            });
+            ));
         }
 
         if shot.length > config.warn_shot_length_max {
-            warnings.push(ValidationWarning {
-                code: "LONG_SHOT".to_string(),
-                message: format!(
+            warnings.push(warn(
+                "LONG_SHOT",
+                format!(
                     "Shot {}:{} length {:.1}m above maximum threshold {:.1}m",
                     section_id,
                     shot_index + 1,
                     shot.length,
                     config.warn_shot_length_max
                 ),
-                severity: WarningSeverity::Warning,
-            });
+            ));
         }
 
         // Check depth change
         let depth_change = (shot.depth_out - shot.depth_in).abs();
         if depth_change > config.warn_depth_change_per_shot_max {
-            warnings.push(ValidationWarning {
-                code: "LARGE_DEPTH_CHANGE".to_string(),
-                message: format!(
+            warnings.push(warn(
+                "LARGE_DEPTH_CHANGE",
+                format!(
                     "Shot {}:{} depth change {:.1}m exceeds threshold {:.1}m",
                     section_id,
                     shot_index + 1,
                     depth_change,
                     config.warn_depth_change_per_shot_max
                 ),
-                severity: WarningSeverity::Warning,
-            });
+            ));
         }
 
         // Check azimuth range
         if shot.azimuth_in < 0.0 || shot.azimuth_in >= 360.0 {
-            warnings.push(ValidationWarning {
-                code: "INVALID_AZIMUTH".to_string(),
-                message: format!(
+            warnings.push(warn(
+                "INVALID_AZIMUTH",
+                format!(
                     "Shot {}:{} has invalid azimuth_in: {:.1}° (must be 0-360)",
                     section_id,
                     shot_index + 1,
                     shot.azimuth_in
                 ),
-                severity: WarningSeverity::Error,
-            });
+            ));
         }
 
         if shot.azimuth_out < 0.0 || shot.azimuth_out >= 360.0 {
-            warnings.push(ValidationWarning {
-                code: "INVALID_AZIMUTH".to_string(),
-                message: format!(
+            warnings.push(warn(
+                "INVALID_AZIMUTH",
+                format!(
                     "Shot {}:{} has invalid azimuth_out: {:.1}° (must be 0-360)",
                     section_id,
                     shot_index + 1,
                     shot.azimuth_out
                 ),
-                severity: WarningSeverity::Error,
-            });
+            ));
         }
 
         // Check azimuth in/out difference (both forward readings, should be similar)
         let diff = (shot.azimuth_out - shot.azimuth_in).abs();
         let angular_diff = if diff > 180.0 { 360.0 - diff } else { diff };
         if angular_diff > config.azimuth_diff_threshold {
-            warnings.push(ValidationWarning {
-                code: "AZIMUTH_DEVIATION".to_string(),
-                message: format!(
+            warnings.push(warn(
+                "AZIMUTH_DEVIATION",
+                format!(
                     "Shot {}:{} azimuth in/out difference {:.1}° exceeds threshold {:.1}°",
                     section_id,
                     shot_index + 1,
                     angular_diff,
                     config.azimuth_diff_threshold
                 ),
-                severity: WarningSeverity::Warning,
-            });
+            ));
         }
 
         // Check LRUD values are non-negative
         if let Some(left) = shot.left {
             if left < 0.0 {
-                warnings.push(ValidationWarning {
-                    code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {}:{} has negative left distance: {:.1}m", section_id, shot_index + 1, left),
-                    severity: WarningSeverity::Error,
-                });
+                warnings.push(warn(
+                    "NEGATIVE_LRUD",
+                    format!("Shot {}:{} has negative left distance: {:.1}m", section_id, shot_index + 1, left),
+                ));
             }
         }
 
         if let Some(right) = shot.right {
             if right < 0.0 {
-                warnings.push(ValidationWarning {
-                    code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {}:{} has negative right distance: {:.1}m", section_id, shot_index + 1, right),
-                    severity: WarningSeverity::Error,
-                });
+                warnings.push(warn(
+                    "NEGATIVE_LRUD",
+                    format!("Shot {}:{} has negative right distance: {:.1}m", section_id, shot_index + 1, right),
+                ));
             }
         }
 
         if let Some(up) = shot.up {
             if up < 0.0 {
-                warnings.push(ValidationWarning {
-                    code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {}:{} has negative up distance: {:.1}m", section_id, shot_index + 1, up),
-                    severity: WarningSeverity::Error,
-                });
+                warnings.push(warn(
+                    "NEGATIVE_LRUD",
+                    format!("Shot {}:{} has negative up distance: {:.1}m", section_id, shot_index + 1, up),
+                ));
             }
         }
 
         if let Some(down) = shot.down {
             if down < 0.0 {
-                warnings.push(ValidationWarning {
-                    code: "NEGATIVE_LRUD".to_string(),
-                    message: format!("Shot {}:{} has negative down distance: {:.1}m", section_id, shot_index + 1, down),
-                    severity: WarningSeverity::Error,
-                });
+                warnings.push(warn(
+                    "NEGATIVE_LRUD",
+                    format!("Shot {}:{} has negative down distance: {:.1}m", section_id, shot_index + 1, down),
+                ));
+            }
+        }
+
+        // A recorded inclination must be physically valid: outside [-90°, 90°] is
+        // nonsensical (issue #57). Flag whichever leg is out of range.
+        let leg_in_range = |p: Option<f64>| -> bool {
+            match p {
+                Some(v) => (PITCH_MIN..=PITCH_MAX).contains(&v),
+                None => true,
+            }
+        };
+        for (leg, pitch) in [("in", shot.pitch_in), ("out", shot.pitch_out)] {
+            if let Some(p) = pitch {
+                if !(PITCH_MIN..=PITCH_MAX).contains(&p) {
+                    warnings.push(warn(
+                        "INVALID_PITCH",
+                        format!(
+                            "Shot {}:{} has an out-of-range pitch_{leg}: {:.1}° (must be between -90° and 90°)",
+                            section_id,
+                            shot_index + 1,
+                            p
+                        ),
+                    ));
+                }
             }
         }
 
         // Length / depth-change / inclination geometry. The slope length, the
-        // vertical change (depth_out - depth_in), and the inclination form a
-        // right triangle: |dz| = length * sin(pitch). Two checks fall out of it.
+        // vertical change (dz = depth_out - depth_in), and the inclination form a
+        // right triangle: dz = length * sin(pitch). Two checks fall out of it.
         let dz = shot.depth_out - shot.depth_in;
         if shot.length > 0.0 {
             // The slope length can never be shorter than the vertical change —
             // that would need sin(pitch) > 1. A small epsilon absorbs rounding.
             if shot.length + 1e-6 < dz.abs() {
-                warnings.push(ValidationWarning {
-                    code: "LENGTH_BELOW_DEPTH_CHANGE".to_string(),
-                    message: format!(
+                warnings.push(warn(
+                    "LENGTH_BELOW_DEPTH_CHANGE",
+                    format!(
                         "Shot {}:{} length {:.2}m is shorter than its depth change {:.2}m (impossible: slope length must be at least the vertical change)",
                         section_id,
                         shot_index + 1,
                         shot.length,
                         dz.abs()
                     ),
-                    severity: WarningSeverity::Error,
-                });
+                ));
             } else {
-                // A recorded inclination must agree with the depth/length geometry.
-                // Average the legs present; skip when no inclination was recorded
-                // (then the inclination is derived from depth and can't disagree).
+                // A recorded inclination must agree with the depth/length geometry
+                // in BOTH magnitude AND direction. The implied inclination is the
+                // canonical `pitch_from_components` (dz.atan2(horizontal)), so it is
+                // by construction in the SAME +down convention as the stored pitch
+                // (positive pitch = increasing depth; Compass's +up is flipped to
+                // +down on import). Comparing the SIGNED values therefore also
+                // catches a reversed inclination — e.g. a shot recorded going up
+                // whose depth change says it goes down (issue #57, finding #7).
+                // Skip when a leg is out of range (already flagged INVALID_PITCH)
+                // or when no inclination was recorded (nothing to cross-check).
                 let recorded_pitch = match (shot.pitch_in, shot.pitch_out) {
                     (Some(a), Some(b)) => Some((a + b) / 2.0),
                     (Some(a), None) | (None, Some(a)) => Some(a),
                     (None, None) => None,
                 };
                 if let Some(recorded) = recorded_pitch {
-                    // The triangle constrains only the MAGNITUDE: |dz| = length·sin(|pitch|).
-                    // pitch_in and pitch_out are both forward (foresight) readings
-                    // (Stalagmight's canonical convention is +down; Compass is normalised
-                    // to it on import, while a DMP device's raw sign is stored verbatim).
-                    // We compare the recorded inclination against the implied magnitude
-                    // expressed in the recorded value's own sign so the check stays robust
-                    // to a source whose raw sign was not normalised on import (e.g. a raw
-                    // DMP +up reading), while still catching a genuine magnitude disagreement.
-                    let implied_mag = (dz.abs() / shot.length).clamp(0.0, 1.0).asin().to_degrees();
-                    let implied = if recorded < 0.0 { -implied_mag } else { implied_mag };
-                    if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
-                        warnings.push(ValidationWarning {
-                            code: "INCLINATION_DEPTH_MISMATCH".to_string(),
-                            message: format!(
-                                "Shot {}:{} recorded inclination {:.1}° disagrees with the {:.1}° implied by its length and depth change (exceeds {:.1}° threshold)",
-                                section_id,
-                                shot_index + 1,
-                                recorded,
-                                implied,
-                                config.inclination_depth_diff_threshold
-                            ),
-                            severity: WarningSeverity::Warning,
-                        });
+                    if leg_in_range(shot.pitch_in) && leg_in_range(shot.pitch_out) {
+                        let horizontal = (shot.length * shot.length - dz * dz).max(0.0).sqrt();
+                        let implied = pitch_from_components(horizontal, dz);
+                        if (recorded - implied).abs() > config.inclination_depth_diff_threshold {
+                            warnings.push(warn(
+                                "INCLINATION_DEPTH_MISMATCH",
+                                format!(
+                                    "Shot {}:{} recorded inclination {:.1}° disagrees with the {:.1}° implied by its length and depth change (exceeds {:.1}° threshold)",
+                                    section_id,
+                                    shot_index + 1,
+                                    recorded,
+                                    implied,
+                                    config.inclination_depth_diff_threshold
+                                ),
+                            ));
+                        }
                     }
                 }
             }
@@ -785,13 +812,14 @@ mod tests {
     }
 
     /// A recorded inclination must agree with the inclination implied by the
-    /// length and depth change (|dz| = length * sin(pitch)).
+    /// length and depth change in BOTH magnitude and DIRECTION
+    /// (dz = length * sin(pitch), +down convention).
     #[test]
     fn test_inclination_depth_mismatch() {
         let config = default_config(); // inclination_depth_diff_threshold = 10.0
 
-        // length 10, |dz| 5 → implied inclination MAGNITUDE asin(5/10) ≈ 30°.
-        let base = ShotData {
+        // length 10, dz +5 (depth increasing = going DOWN) → implied +30° (+down).
+        let down = ShotData {
             azimuth_in: 90.0,
             azimuth_out: 90.0,
             length: 10.0,
@@ -799,37 +827,103 @@ mod tests {
             depth_out: 5.0,
             ..Default::default()
         };
+        let has_mismatch = |s: &ShotData| {
+            Validator::validate_shot(s, &config, 0, 0)
+                .iter()
+                .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH")
+        };
 
-        // The check compares magnitudes, so it stays robust even if a source's raw
-        // sign was not normalised on import: a recorded inclination of ~30° magnitude
-        // is consistent whether stored as +30 (the +down convention) or -30 (a raw
-        // +up reading that slipped through un-normalised). Neither must be flagged.
-        for recorded in [30.0_f64, -30.0_f64] {
-            let consistent = ShotData { pitch_in: Some(recorded), pitch_out: Some(recorded), ..base.clone() };
-            assert!(
-                Validator::validate_shot(&consistent, &config, 0, 0)
-                    .iter()
-                    .all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"),
-                "recorded {recorded}° (≈30° magnitude) is geometrically consistent and must not be flagged"
-            );
+        // Recorded +30° agrees in sign and magnitude with the +30° implied.
+        let consistent = ShotData { pitch_in: Some(30.0), pitch_out: Some(30.0), ..down.clone() };
+        assert!(!has_mismatch(&consistent), "+30° matches the +30° implied for a downward shot");
+
+        // Recorded -30° has the right MAGNITUDE but the WRONG DIRECTION (says the
+        // shot goes up while the depth change says down) — now flagged (finding #7).
+        let reversed = ShotData { pitch_in: Some(-30.0), pitch_out: Some(-30.0), ..down.clone() };
+        assert!(has_mismatch(&reversed), "-30° contradicts the downward depth change and must be flagged");
+
+        // Genuine magnitude disagreement is still flagged.
+        for recorded in [10.0_f64, -10.0_f64, 80.0_f64] {
+            let mismatched = ShotData { pitch_in: Some(recorded), pitch_out: Some(recorded), ..down.clone() };
+            assert!(has_mismatch(&mismatched), "recorded {recorded}° disagrees with the ~30° implied and must be flagged");
         }
 
-        // A genuine magnitude disagreement IS flagged (10° magnitude vs ~30°),
-        // in either sign convention.
-        for recorded in [10.0_f64, -10.0_f64] {
-            let mismatched = ShotData { pitch_in: Some(recorded), pitch_out: Some(recorded), ..base.clone() };
-            assert!(
-                Validator::validate_shot(&mismatched, &config, 0, 0)
-                    .iter()
-                    .any(|w| w.code == "INCLINATION_DEPTH_MISMATCH"),
-                "recorded {recorded}° (10° magnitude) disagrees with the ~30° implied and must be flagged"
-            );
-        }
+        // Symmetry: a shot going UP (dz -5) implies -30°; -30° is consistent, +30° reversed.
+        let up = ShotData { depth_in: 5.0, depth_out: 0.0, ..down.clone() };
+        let up_consistent = ShotData { pitch_in: Some(-30.0), pitch_out: Some(-30.0), ..up.clone() };
+        assert!(!has_mismatch(&up_consistent), "-30° matches the -30° implied for an upward shot");
+        let up_reversed = ShotData { pitch_in: Some(30.0), pitch_out: Some(30.0), ..up.clone() };
+        assert!(has_mismatch(&up_reversed), "+30° contradicts the upward depth change and must be flagged");
+
+        // A vertical shot (length == |dz|) implies ±90°; recording ±90° clears it.
+        // This is exactly what the "set length to depth change" resolution does
+        // (it also sets pitch to ±90°), so that fix must not re-raise the warning.
+        let vertical = ShotData { length: 5.0, depth_in: 0.0, depth_out: 5.0, pitch_in: Some(90.0), pitch_out: Some(90.0), ..down.clone() };
+        assert!(!has_mismatch(&vertical), "a vertical downward shot with +90° pitch is consistent");
 
         // No recorded inclination → nothing to cross-check, not flagged.
-        let no_pitch = ShotData { pitch_in: None, pitch_out: None, ..base.clone() };
-        assert!(Validator::validate_shot(&no_pitch, &config, 0, 0)
-            .iter()
-            .all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"));
+        let no_pitch = ShotData { pitch_in: None, pitch_out: None, ..down.clone() };
+        assert!(!has_mismatch(&no_pitch));
+
+        // An out-of-range pitch is flagged as INVALID_PITCH, and the geometry
+        // cross-check is skipped for it (no duplicate INCLINATION_DEPTH_MISMATCH).
+        let out_of_range = ShotData { pitch_in: Some(120.0), pitch_out: Some(120.0), ..down.clone() };
+        let w = Validator::validate_shot(&out_of_range, &config, 0, 0);
+        assert!(w.iter().any(|w| w.code == "INVALID_PITCH"), "120° pitch is out of range");
+        assert!(w.iter().all(|w| w.code != "INCLINATION_DEPTH_MISMATCH"), "skip the cross-check for an invalid pitch");
+    }
+
+    /// Pitch outside [-90°, 90°] is physically impossible → INVALID_PITCH error.
+    #[test]
+    fn test_invalid_pitch_range() {
+        let config = default_config();
+        let base = ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            ..Default::default()
+        };
+
+        // In range (inclusive of the ±90° bounds): no INVALID_PITCH.
+        for p in [0.0_f64, 45.0, -45.0, 90.0, -90.0] {
+            let ok = ShotData { pitch_in: Some(p), pitch_out: Some(p), ..base.clone() };
+            assert!(
+                Validator::validate_shot(&ok, &config, 0, 0).iter().all(|w| w.code != "INVALID_PITCH"),
+                "{p}° is a valid pitch"
+            );
+        }
+
+        // Out of range on either leg → error.
+        let bad_in = ShotData { pitch_in: Some(91.0), pitch_out: Some(0.0), ..base.clone() };
+        let warnings = Validator::validate_shot(&bad_in, &config, 0, 0);
+        assert!(warnings.iter().any(|w| w.code == "INVALID_PITCH"));
+        assert!(Validator::has_errors(&warnings));
+
+        let bad_out = ShotData { pitch_in: Some(0.0), pitch_out: Some(-100.0), ..base.clone() };
+        assert!(Validator::validate_shot(&bad_out, &config, 0, 0).iter().any(|w| w.code == "INVALID_PITCH"));
+    }
+
+    /// `severity_for_code` is the single source of truth, so every warning the
+    /// validator emits must carry the severity it declares.
+    #[test]
+    fn test_validator_severity_matches_single_source() {
+        use crate::models::warning::severity_for_code;
+        let config = default_config();
+        // A shot that trips a spread of codes (errors + warnings).
+        let shot = ShotData {
+            azimuth_in: 400.0, // INVALID_AZIMUTH (error)
+            azimuth_out: 90.0,
+            length: 0.0,       // ZERO_LENGTH (error)
+            depth_in: 0.0,
+            depth_out: 0.0,
+            left: Some(-1.0),  // NEGATIVE_LRUD (error)
+            pitch_in: Some(120.0), // INVALID_PITCH (error)
+            ..Default::default()
+        };
+        for w in Validator::validate_shot(&shot, &config, 0, 0) {
+            assert_eq!(w.severity, severity_for_code(&w.code), "severity drift for {}", w.code);
+        }
     }
 }

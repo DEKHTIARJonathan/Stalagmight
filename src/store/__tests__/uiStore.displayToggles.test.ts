@@ -32,6 +32,12 @@ const getCleanTestState = () => ({
   showScaleBar: true,
   showSatellite: false,
   showDepthGradient: false,
+  // The mutually-exclusive coloring overlays must be reset too, or a test that
+  // enables one leaks it into later tests (setState merges partials) (#57 #12).
+  showDistanceGradient: false,
+  distanceGradientOrigin: null,
+  distanceField: null,
+  showIssueSeverity: false,
   gridSpacing: 10,
   toast: null,
   lastToastByKey: {},

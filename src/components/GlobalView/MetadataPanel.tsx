@@ -19,8 +19,6 @@ interface MetadataPanelProps {
   selectedProjects?: ProjectMetadata[];
   /** Callback when the user clicks Open Project */
   onOpenProject: (filePath: string) => void;
-  /** Callback when the user clicks Project Settings (opens the project, then its settings). */
-  onProjectSettings: (filePath: string) => void;
   /** Callback when the user clicks Delete (remove from recent) */
   onRemoveFromRecent: (filePath: string) => void;
   /** Whether the panel is collapsed */
@@ -37,7 +35,6 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   project,
   selectedProjects,
   onOpenProject,
-  onProjectSettings,
   onRemoveFromRecent,
   collapsed = false,
   onCollapseChange,
@@ -100,14 +97,6 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
       onRemoveFromRecent(singleProject.file_path);
     }
   }, [singleProject?.file_path, onRemoveFromRecent]);
-
-  // Project Settings (incl. Ariane collaboration) now live in the open project,
-  // so this opens the project, then its Project Settings dialog.
-  const handleProjectSettings = useCallback(() => {
-    if (singleProject?.file_path) {
-      onProjectSettings(singleProject.file_path);
-    }
-  }, [singleProject?.file_path, onProjectSettings]);
 
   // Rename the selected (not-necessarily-open) project's display name.
   const startEditName = useCallback(() => {
@@ -434,15 +423,6 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
 
             {/* Actions */}
             <div className="p-3 border-t border-border space-y-2">
-              <Button
-                onClick={handleProjectSettings}
-                variant="secondary"
-                className="w-full"
-                data-testid="metadata-project-settings-button"
-                aria-label={t('globalView.metadata.actions.projectSettingsAria', { name: singleProject.name })}
-              >
-                {t('globalView.metadata.actions.projectSettings')}
-              </Button>
               <Button
                 onClick={handleOpenProject}
                 className="w-full"

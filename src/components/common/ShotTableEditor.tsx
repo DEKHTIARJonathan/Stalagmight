@@ -186,17 +186,20 @@ export function ShotTableEditor({
 }: ShotTableEditorProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  // When no explicit thresholds are passed (e.g. import previews), fall back to
-  // the user's GLOBAL config — the "defaults for new projects" (#57) — rather
-  // than the hardcoded built-ins, so the preview matches what the imported
-  // project will be validated against. Callers editing an existing project
-  // (EditSectionDialog) pass that project's thresholds explicitly.
+  // When no explicit thresholds are passed, prefer the OPEN project's per-project
+  // validation thresholds (#57) so the inline preview matches the Warnings panel
+  // (which the backend computes from project.validation). Fall back to the user's
+  // GLOBAL config — the "defaults for new projects" — only when no project is open
+  // (e.g. a new-project import preview), then to the hardcoded built-ins. Callers
+  // editing an existing project (EditSectionDialog) pass thresholds explicitly.
+  const projectValidation = useProjectStore((s) => s.project?.validation);
   const globalValidation = useProjectStore((s) => s.config?.validation);
+  const fallback = projectValidation ?? globalValidation;
   const effectiveValidation: ValidationConfig = validationConfig ?? {
     azimuth_diff_threshold:
-      globalValidation?.azimuth_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.azimuth_diff_threshold,
+      fallback?.azimuth_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.azimuth_diff_threshold,
     pitch_diff_threshold:
-      globalValidation?.pitch_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.pitch_diff_threshold,
+      fallback?.pitch_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.pitch_diff_threshold,
   };
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
