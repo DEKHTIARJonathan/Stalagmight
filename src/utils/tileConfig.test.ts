@@ -3,10 +3,19 @@
  * Covers valid provider, unknown provider, default parameter, and returned shape.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { getTileConfig } from './tileConfig';
 
+/** Override navigator.userAgent for a single test (restored in afterEach). */
+function setUserAgent(ua: string): void {
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ua);
+}
+
 describe('getTileConfig', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('returns correct config for esri provider', () => {
     const config = getTileConfig('esri');
 
@@ -15,6 +24,18 @@ describe('getTileConfig', () => {
     expect(config.tileSize).toBe(256);
     expect(config.minZoom).toBe(0);
     expect(config.maxZoom).toBe(22);
+  });
+
+  it('uses the bare custom scheme on non-Windows platforms', () => {
+    setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
+    expect(getTileConfig('esri').tiles).toEqual(['stalagmight-tiles://esri/{z}/{y}/{x}']);
+  });
+
+  it('uses the http://<scheme>.localhost form on Windows (WebView2)', () => {
+    setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    expect(getTileConfig('esri').tiles).toEqual([
+      'http://stalagmight-tiles.localhost/esri/{z}/{y}/{x}',
+    ]);
   });
 
   it('throws on unknown provider name', () => {

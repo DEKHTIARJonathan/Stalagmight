@@ -25,6 +25,24 @@ export interface TileConfig {
   maxZoom: number;
 }
 
+/**
+ * Build the tile URL template for MapLibre, routing through the
+ * `stalagmight-tiles` custom protocol registered by the Rust backend.
+ *
+ * Platform note: WebView2 on Windows cannot navigate a bare custom scheme, so
+ * Tauri serves registered protocols at `http://<scheme>.localhost/...` there
+ * (provider moves into the path). On macOS/Linux (WRY) and Android (MapLibre
+ * addProtocol, see tileProtocol.ts) the bare `stalagmight-tiles://` scheme with
+ * the provider as host works directly. The Rust handler's parse_tile_uri
+ * accepts both forms.
+ */
+function tileUrlTemplate(provider: string): string {
+  const isWindows = navigator.userAgent.includes('Windows');
+  return isWindows
+    ? `http://stalagmight-tiles.localhost/${provider}/{z}/{y}/{x}`
+    : `stalagmight-tiles://${provider}/{z}/{y}/{x}`;
+}
+
 /** Default hardcoded values for fallback when no metadata available */
 const DEFAULT_PROVIDER_METADATA: Record<string, Omit<TileConfig, 'tiles'>> = {
   esri: {
@@ -50,7 +68,7 @@ export function getTileConfig(provider: string = 'esri', metadata?: TileProvider
   // On desktop: uses Tauri's native protocol handler (register_asynchronous_uri_scheme_protocol)
   // On Android: uses MapLibre's addProtocol with IPC-based fetching (see tileProtocol.ts)
   // Both use the same stalagmight-tiles:// URL scheme.
-  const tiles = [`stalagmight-tiles://${provider}/{z}/{y}/{x}`];
+  const tiles = [tileUrlTemplate(provider)];
 
   // If metadata provided from backend, use it (except url_template)
   if (metadata) {
