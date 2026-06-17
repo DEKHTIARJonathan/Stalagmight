@@ -7,10 +7,16 @@ import { Button } from '../common/Button';
 import { ChevronLeftIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useActiveStations } from '../../hooks/useActiveStations';
 import { normalizeAzimuth, averageAzimuth } from '../../utils/azimuth';
+import { computeGhostEnd, horizontalLength } from '../../utils/resolutionPreview';
 import { setSource } from '../../utils/telemetry';
 import type { Section, Shot, ShotUpdates } from '../../types/project';
+import type { GeometryPreview } from '../../store/uiStore';
 import type { ProjectWarning } from '../../types/commands';
+
+/** Color for the on-map resolution preview ghost (issue #57). */
+const PREVIEW_COLOR = '#38bdf8';
 
 /** What a manual option needs to render as an inline editable field. */
 type ManualKind =
@@ -72,15 +78,17 @@ export function WarningResolution({
       isShotFrozen: s.isShotFrozen,
     })),
   );
-  const { setSelection, setDetailPanelTab, triggerCenterOnStation, showToast } = useUIStore(
+  const { setSelection, setDetailPanelTab, triggerCenterOnStation, showToast, setGeometryPreview } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       triggerCenterOnStation: s.triggerCenterOnStation,
       showToast: s.showToast,
+      setGeometryPreview: s.setGeometryPreview,
     })),
   );
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  const activeStations = useActiveStations();
 
   const frozen = isShotFrozen(warning.sectionId, warning.shotIndex);
   const geometryDisabled = geometryReadOnly || frozen;
@@ -183,6 +191,80 @@ export function WarningResolution({
   }, [warning.sectionId, warning.shotId, warning.code]);
 
   const num = (key: string): number => parseFloat(manual[key] ?? '');
+
+  // Live on-map preview of the proposed geometry as the user tries options
+  // (issue #57). Anchored to the real solved endpoint so it shows just the
+  // change; returns null (no ghost) for options that don't move stations, or
+  // when our planar model can't reproduce the current endpoint (e.g. a
+  // rotated/offset section) — better to show nothing than a misleading ghost.
+  const preview = useMemo<GeometryPreview | null>(() => {
+    if (!shot) return null;
+    const opt = options.find((o) => o.id === selected);
+    if (!opt || opt.ignore || opt.navigate || opt.id === 'remove-datum') return null;
+    if (opt.id === 'lrud-abs' || opt.id === 'lrud-clear' || opt.manual === 'lrud') return null;
+
+    const stationAt = (stationIndex: number) =>
+      activeStations.find(
+        (s) => s.station_ref.section_id === warning.sectionId && s.station_ref.station_index === stationIndex,
+      )?.coordinates;
+    const start = stationAt(warning.shotIndex);
+    const end = stationAt(warning.shotIndex + 1);
+    if (!start || !end) return null;
+
+    const depthChange = shot.depth_out - shot.depth_in;
+    const currentHoriz = horizontalLength(shot.length, depthChange);
+    const currentAz = averageAzimuth(shot.azimuth_in, shot.azimuth_out);
+
+    let propAz = currentAz;
+    let propHoriz = currentHoriz;
+    switch (opt.id) {
+      case 'use-in': propAz = shot.azimuth_in; break;
+      case 'use-out': propAz = shot.azimuth_out; break;
+      case 'average': propAz = averageAzimuth(shot.azimuth_in, shot.azimuth_out); break;
+      case 'normalize':
+        propAz = averageAzimuth(normalizeAzimuth(shot.azimuth_in), normalizeAzimuth(shot.azimuth_out));
+        break;
+      case 'manual':
+        if (opt.manual === 'azimuth') {
+          const v = num('azimuth');
+          if (Number.isNaN(v)) return null;
+          propAz = normalizeAzimuth(v);
+        } else if (opt.manual === 'azimuthInOut') {
+          const vi = num('azimuthIn'); const vo = num('azimuthOut');
+          if (Number.isNaN(vi) || Number.isNaN(vo)) return null;
+          propAz = averageAzimuth(normalizeAzimuth(vi), normalizeAzimuth(vo));
+        } else if (opt.manual === 'length') {
+          const v = num('length');
+          if (Number.isNaN(v) || v <= 0) return null;
+          propHoriz = horizontalLength(v, depthChange);
+        } else if (opt.manual === 'depth') {
+          const vi = num('depthIn'); const vo = num('depthOut');
+          if (Number.isNaN(vi) || Number.isNaN(vo)) return null;
+          propHoriz = horizontalLength(shot.length, vo - vi);
+        } else {
+          return null;
+        }
+        break;
+      default:
+        return null;
+    }
+
+    const ghostEnd = computeGhostEnd(start, end, currentAz, currentHoriz, propAz, propHoriz);
+    if (!ghostEnd) return null;
+
+    return {
+      shots: [{ from: { x: start.x, y: start.y }, to: ghostEnd }],
+      stations: [ghostEnd],
+      color: PREVIEW_COLOR,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, manual, shot, options, activeStations, warning.sectionId, warning.shotIndex]);
+
+  // Push the preview to the map; clear it when leaving the resolution view.
+  useEffect(() => {
+    setGeometryPreview(preview);
+  }, [preview, setGeometryPreview]);
+  useEffect(() => () => setGeometryPreview(null), [setGeometryPreview]);
 
   /**
    * Apply the selected option.

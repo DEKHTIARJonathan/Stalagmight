@@ -39,6 +39,20 @@ export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'p
 
 export type DetailPanelTab = 'details' | 'warnings';
 
+/**
+ * A transient "ghost" geometry overlay shown on the map (in survey meters),
+ * used to preview a proposed edit before it is committed — e.g. as the user
+ * tries different warning-resolution options (issue #57). Structurally matches
+ * the map's GhostSectionData so MapCanvas can hand it straight to the survey
+ * layer's setGhostSection.
+ */
+export interface GeometryPreview {
+  shots: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
+  stations: Array<{ x: number; y: number }>;
+  color: string;
+  mergeStation?: { x: number; y: number };
+}
+
 export type ToolType =
   | 'select'
   | 'pan'
@@ -269,6 +283,10 @@ interface UIStore {
   requestCenterOnShot: { sectionId: SectionId; shotId: ShotId } | null;
   triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => void;
   clearCenterOnShotRequest: () => void;
+
+  /** Transient ghost-geometry preview on the map (null = none). */
+  geometryPreview: GeometryPreview | null;
+  setGeometryPreview: (preview: GeometryPreview | null) => void;
 
   // Display toggles
   showStations: boolean;
@@ -770,6 +788,8 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   clearCenterOnStationRequest: () => set({ requestCenterOnStation: null }),
   requestCenterOnShot: null,
+  geometryPreview: null,
+  setGeometryPreview: (geometryPreview) => set({ geometryPreview }),
   triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => {
     trackNav('center-on-shot');
     set({ requestCenterOnShot: { sectionId, shotId } });
