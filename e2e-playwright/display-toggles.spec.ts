@@ -832,3 +832,44 @@ test.describe('Display Menu State Persistence', () => {
     expect(await isToggleOn(page, 'showDepthGradient')).toBe(false);
   });
 });
+
+test.describe('Developer Stats Overlay (memory probe)', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupTauriMocks(page);
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await createProject(page, 'Dev Stats Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+  });
+
+  // The memory probe used to be a hidden Ctrl+Shift+M toggle, which collided
+  // with rebound global shortcuts. It is now revealed by the Display ▸ "Dev
+  // stats" toggle instead (showDevStats), with no keyboard side effects.
+  test('Dev stats toggle reveals and hides the memory probe panel', async ({ page }) => {
+    const probe = page.locator('[data-testid="memory-probe-panel"]');
+
+    // Hidden by default.
+    await expect(probe).toHaveCount(0);
+
+    // Enabling "Dev stats" from the Display menu reveals the probe.
+    await openDisplayMenu(page);
+    expect(await isToggleOn(page, 'showDevStats')).toBe(false);
+    await toggleDisplayOption(page, 'showDevStats');
+    await expect(probe).toBeVisible({ timeout: 2000 });
+
+    // Disabling it removes the probe again.
+    await toggleDisplayOption(page, 'showDevStats');
+    await expect(probe).toHaveCount(0);
+  });
+
+  // Guards the regression directly: Ctrl+Shift+M must no longer do anything
+  // (no preventDefault, no probe), so it can't swallow a rebound shortcut.
+  test('Ctrl+Shift+M no longer toggles the probe', async ({ page }) => {
+    const probe = page.locator('[data-testid="memory-probe-panel"]');
+    await expect(probe).toHaveCount(0);
+    await page.keyboard.press('Control+Shift+M');
+    // Give any (now-removed) handler a chance to react before asserting absence.
+    await expect(probe).toHaveCount(0);
+  });
+});
