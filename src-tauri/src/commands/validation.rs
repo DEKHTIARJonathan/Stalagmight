@@ -65,6 +65,11 @@ pub(crate) fn resolve_warning_impl(
     warning_code: String,
     comment: Option<String>,
 ) -> Result<(), String> {
+    // Key the suppression by the shot's stable UUID (issue #57) so it stays
+    // bound to the same shot across inserts/deletes/reorders. After load every
+    // shot has a UUID; None only if the shot vanished between the click and
+    // here, in which case we still record the legacy position.
+    let shot_uuid = state.shot_uuid_for(section_id, shot_id);
     tracing::info!(
         section_id = section_id,
         shot_id = shot_id,
@@ -78,6 +83,7 @@ pub(crate) fn resolve_warning_impl(
         warning_code,
         resolved_at: Utc::now(),
         resolved_comment: comment,
+        shot_uuid,
     };
     state.save_resolved_warning(&warning).map_err(|e| {
         tracing::error!(
@@ -128,6 +134,7 @@ pub(crate) fn resolve_all_warnings_impl(state: &AppState) -> Result<u32, String>
             warning_code: w.code.clone(),
             resolved_at: now,
             resolved_comment: None,
+            shot_uuid: w.shot_uuid.clone(),
         })
         .collect();
 
@@ -161,6 +168,7 @@ pub(crate) fn unresolve_warning_impl(
     shot_id: ShotId,
     warning_code: String,
 ) -> Result<(), String> {
+    let shot_uuid = state.shot_uuid_for(section_id, shot_id);
     tracing::info!(
         section_id = section_id,
         shot_id = shot_id,
@@ -169,7 +177,7 @@ pub(crate) fn unresolve_warning_impl(
         "Unresolving warning"
     );
     state
-        .delete_resolved_warning(section_id, shot_id, &warning_code)
+        .delete_resolved_warning(section_id, shot_id, &warning_code, shot_uuid.as_deref())
         .map_err(|e| {
             tracing::error!(
                 section_id = section_id,

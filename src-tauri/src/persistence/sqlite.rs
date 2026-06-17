@@ -16,7 +16,12 @@ use crate::models::{
 
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 7;
+///
+/// v8 adds a nullable `shot_uuid` column to `resolved_warnings` (issue #57):
+/// "Ignore" suppression is keyed by the shot's stable UUID so it survives shot
+/// inserts/deletes/reorders. Backfilled lazily from the legacy
+/// `(section_id, shot_id)` key — no rewrite of existing rows at migration time.
+const SCHEMA_VERSION: i32 = 8;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///
@@ -327,6 +332,7 @@ impl Database {
                 warning_code TEXT NOT NULL,
                 resolved_at TEXT NOT NULL,
                 resolved_comment TEXT,
+                shot_uuid TEXT,
                 UNIQUE(section_id, shot_id, warning_code),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             )",
@@ -489,6 +495,43 @@ impl Database {
             self.conn
                 .execute("ALTER TABLE shots ADD COLUMN uuid TEXT", [])?;
             tracing::info!("Added uuid column to shots table (schema v6)");
+        }
+
+        // Add shot_uuid column to resolved_warnings (schema v7→v8: key "Ignore"
+        // suppression by the shot's stable UUID, issue #57). Pre-v8 rows keep
+        // shot_uuid NULL and continue to match by the legacy
+        // (section_id, shot_id) key; they are backfilled lazily on the next
+        // resolve of the same shot. A single idempotent ALTER, like the shots
+        // uuid column above.
+        let has_resolved_warnings_uuid_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_resolved_warnings_uuid_column {
+            self.conn
+                .execute("ALTER TABLE resolved_warnings ADD COLUMN shot_uuid TEXT", [])?;
+            // Backfill the UUID for existing rows so suppressions survive the
+            // migration. The legacy key stored `shot_id`, which on load is
+            // `section_id * FEATURE_ID_STRIDE + sequence_order` (stride =
+            // 100_000), so we can recover each shot's row and copy its UUID.
+            // Rows whose shot has no UUID (pre-v6 .stalx) stay NULL and keep
+            // matching by the legacy position.
+            self.conn.execute(
+                "UPDATE resolved_warnings \
+                 SET shot_uuid = ( \
+                     SELECT s.uuid FROM shots s \
+                     WHERE s.section_id = resolved_warnings.section_id \
+                       AND s.sequence_order = resolved_warnings.shot_id - resolved_warnings.section_id * 100000 \
+                 ) \
+                 WHERE shot_uuid IS NULL",
+                [],
+            )?;
+            tracing::info!("Added shot_uuid column to resolved_warnings table (schema v8)");
         }
 
         tracing::debug!("Schema migration complete");
@@ -869,6 +912,7 @@ impl Database {
                 warning_code TEXT NOT NULL,
                 resolved_at TEXT NOT NULL,
                 resolved_comment TEXT,
+                shot_uuid TEXT,
                 UNIQUE(section_id, shot_id, warning_code),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -1256,6 +1300,7 @@ impl Database {
                 warning_code TEXT NOT NULL,
                 resolved_at TEXT NOT NULL,
                 resolved_comment TEXT,
+                shot_uuid TEXT,
                 UNIQUE(section_id, shot_id, warning_code),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             );
@@ -2651,7 +2696,7 @@ impl Database {
         }
 
         let mut stmt = self.conn.prepare(
-            "SELECT section_id, shot_id, warning_code, resolved_at, resolved_comment \
+            "SELECT section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid \
              FROM resolved_warnings",
         )?;
 
@@ -2664,6 +2709,8 @@ impl Database {
                 warning_code: row.get(2)?,
                 resolved_at,
                 resolved_comment: row.get(4)?,
+                // NULL for pre-v8 rows; an empty string is treated as absent too.
+                shot_uuid: row.get::<_, Option<String>>(5)?.filter(|s| !s.is_empty()),
             })
         })?;
 
@@ -2674,38 +2721,83 @@ impl Database {
         Ok(resolved)
     }
 
-    /// Save a resolved warning to database
+    /// Save a resolved warning to database.
+    ///
+    /// Suppression is keyed by the shot's stable `shot_uuid` (issue #57). To
+    /// keep a single row per suppressed `(shot, warning_code)`, we first delete
+    /// any prior row that matches either the UUID or the legacy
+    /// `(section_id, shot_id)` position (which also backfills/upgrades a pre-v8
+    /// row to the UUID key), then insert the fresh record. Falls back to the
+    /// legacy position key when the shot has no UUID.
     pub fn save_resolved_warning(&self, warning: &ResolvedWarning) -> Result<()> {
+        Self::delete_matching_resolved(&self.conn, warning)?;
         self.conn.execute(
-            "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 warning.section_id,
                 warning.shot_id,
                 warning.warning_code,
                 warning.resolved_at.to_rfc3339(),
                 warning.resolved_comment,
+                warning.shot_uuid,
             ],
         )?;
         Ok(())
     }
 
-    /// Delete a resolved warning from database
-    pub fn delete_resolved_warning(&self, section_id: u32, shot_id: u32, warning_code: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM resolved_warnings WHERE section_id = ?1 AND shot_id = ?2 AND warning_code = ?3",
-            params![section_id, shot_id, warning_code],
-        )?;
+    /// Delete any resolved-warning rows matching `warning`, keyed by UUID when
+    /// present (so a moved/renumbered shot still dedups) plus the legacy
+    /// position. Shared by save (dedup) and unresolve (clear).
+    fn delete_matching_resolved(conn: &Connection, warning: &ResolvedWarning) -> Result<()> {
+        if let Some(uuid) = warning.shot_uuid.as_deref() {
+            conn.execute(
+                "DELETE FROM resolved_warnings WHERE warning_code = ?1 \
+                 AND (shot_uuid = ?2 OR (section_id = ?3 AND shot_id = ?4))",
+                params![warning.warning_code, uuid, warning.section_id, warning.shot_id],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM resolved_warnings WHERE warning_code = ?1 \
+                 AND section_id = ?2 AND shot_id = ?3",
+                params![warning.warning_code, warning.section_id, warning.shot_id],
+            )?;
+        }
         Ok(())
+    }
+
+    /// Delete a resolved warning from database (un-ignore). Matches by UUID when
+    /// `shot_uuid` is provided (the normal case), else by the legacy position.
+    pub fn delete_resolved_warning(
+        &self,
+        section_id: u32,
+        shot_id: u32,
+        warning_code: &str,
+        shot_uuid: Option<&str>,
+    ) -> Result<()> {
+        Self::delete_matching_resolved(
+            &self.conn,
+            &ResolvedWarning {
+                section_id,
+                shot_id,
+                warning_code: warning_code.to_string(),
+                resolved_at: Utc::now(),
+                resolved_comment: None,
+                shot_uuid: shot_uuid.map(str::to_string),
+            },
+        )
     }
 
     /// Save multiple resolved warnings to database in a single transaction
     pub fn save_resolved_warnings_bulk(&self, warnings: &[ResolvedWarning]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        for warning in warnings {
+            Self::delete_matching_resolved(&tx, warning)?;
+        }
         {
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             for warning in warnings {
                 stmt.execute(params![
@@ -2714,6 +2806,7 @@ impl Database {
                     warning.warning_code,
                     warning.resolved_at.to_rfc3339(),
                     warning.resolved_comment,
+                    warning.shot_uuid,
                 ])?;
             }
         }
@@ -3118,6 +3211,13 @@ pub struct ResolvedWarning {
     pub warning_code: String,
     pub resolved_at: chrono::DateTime<Utc>,
     pub resolved_comment: Option<String>,
+    /// Stable UUID of the suppressed shot (issue #57). `Some` for all warnings
+    /// raised against shots that have a UUID (the normal case); `None` only for
+    /// pre-v8 rows or shots loaded from pre-v6 .stalx files without a UUID yet.
+    /// The suppression is matched by `(shot_uuid, warning_code)` when present,
+    /// falling back to the legacy `(section_id, shot_id, warning_code)` key
+    /// otherwise. See `AppState::compute_project_warnings`.
+    pub shot_uuid: Option<String>,
 }
 
 #[cfg(test)]

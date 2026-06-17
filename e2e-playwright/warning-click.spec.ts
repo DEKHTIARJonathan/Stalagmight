@@ -279,7 +279,7 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await setupMockedPage(page);
   });
 
-  test('X dismiss button is rendered for unresolved warnings', async ({ page }) => {
+  test('Resolve button is rendered for unresolved warnings', async ({ page }) => {
     await createProject(page, 'Dismiss Warning Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapIdle(page);
@@ -317,16 +317,14 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
     await expect(page.locator('text=Shot length below minimum')).toBeVisible();
     await expect(page.locator('text=Azimuth difference exceeds threshold')).toBeVisible();
 
-    // X dismiss buttons rendered for each unresolved warning
-    const dismissButtons = page.getByTestId('dismiss-warning');
-    await expect(dismissButtons).toHaveCount(2);
-
-    // Verify dismiss buttons have proper aria-label
-    await expect(dismissButtons.first()).toHaveAttribute('aria-label', 'Mark resolved');
+    // Resolve buttons rendered for each unresolved warning
+    const resolveButtons = page.getByTestId('resolve-warning');
+    await expect(resolveButtons).toHaveCount(2);
+    await expect(resolveButtons.first()).toHaveText('Resolve');
   });
 
-  test('Clear All button is visible when unresolved warnings exist', async ({ page }) => {
-    await createProject(page, 'Clear All Test');
+  test('Resolve all button is visible when unresolved warnings exist', async ({ page }) => {
+    await createProject(page, 'Resolve All Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapIdle(page);
 
@@ -358,10 +356,69 @@ test.describe('Validation Error Recovery (SPEC 14.5)', () => {
 
     await page.getByTestId('detail-tab-warnings').click();
 
-    // Clear All button should be visible
-    const clearAllBtn = page.getByTestId('clear-all-warnings');
-    await expect(clearAllBtn).toBeVisible();
-    await expect(clearAllBtn).toHaveText('Clear All');
+    // Resolve all button should be visible
+    const resolveAllBtn = page.getByTestId('resolve-all-warnings');
+    await expect(resolveAllBtn).toBeVisible();
+    await expect(resolveAllBtn).toHaveText('Resolve all');
+  });
+
+  test('Resolve opens the inline resolution view and Back returns to the list', async ({ page }) => {
+    await createProject(page, 'Resolve Flow Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionIds = await getSectionIds(page);
+    const sectionId = sectionIds[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+
+    await injectWarnings(page, [
+      {
+        sectionId,
+        shotId: shotIds[0]!,
+        shotIndex: 0,
+        code: 'AZIMUTH_DEVIATION',
+        message: 'Azimuth in/out difference exceeds threshold',
+        severity: 'warning',
+        isResolved: false,
+      },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+    await page.getByTestId('resolve-warning').first().click();
+
+    // The resolution view reuses this panel (issue #57) and offers the
+    // azimuth-specific options plus Ignore.
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-average')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-use-in')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-option-ignore')).toBeVisible();
+
+    // Back returns to the list.
+    await page.getByTestId('warning-resolution-back').click();
+    await expect(page.getByTestId('warnings-content')).toBeVisible();
+    await expect(page.getByTestId('resolve-warning').first()).toBeVisible();
+  });
+
+  test('Resolve all steps through warnings with a progress indicator', async ({ page }) => {
+    await createProject(page, 'Resolve All Flow Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    const sectionIds = await getSectionIds(page);
+    const sectionId = sectionIds[0]!;
+    const shotIds = await getShotIdsForSection(page, sectionId);
+
+    await injectWarnings(page, [
+      { sectionId, shotId: shotIds[0]!, shotIndex: 0, code: 'AZIMUTH_DEVIATION', message: 'Azimuth deviation', severity: 'warning', isResolved: false },
+      { sectionId, shotId: shotIds[1]!, shotIndex: 1, code: 'SHORT_SHOT', message: 'Short shot', severity: 'warning', isResolved: false },
+    ]);
+
+    await page.getByTestId('detail-tab-warnings').click();
+    await page.getByTestId('resolve-all-warnings').click();
+
+    await expect(page.getByTestId('warning-resolution')).toBeVisible();
+    await expect(page.getByTestId('warning-resolution-progress')).toHaveText('1 of 2');
+    await expect(page.getByTestId('warning-resolution-skip')).toBeVisible();
   });
 
   test('badge only counts unresolved warnings', async ({ page }) => {

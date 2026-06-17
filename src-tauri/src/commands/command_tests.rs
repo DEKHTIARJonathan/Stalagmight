@@ -2141,6 +2141,50 @@ fn test_unresolve_warning_clears_resolved_flag() {
 }
 
 #[test]
+fn test_resolved_warning_follows_shot_uuid_after_id_change() {
+    // Issue #57: an ignore is keyed by the shot's stable UUID, so it stays
+    // bound to the same shot even after a structural edit renumbers shot_id
+    // (e.g. inserting a shot earlier in the section).
+    let mut project = project_with_section(vec![shot_data(0.0)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    let original_shot_id = warning.shot_id;
+    let uuid = warning.shot_uuid.clone().expect("loaded shot has a uuid");
+
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+    assert!(validation::get_project_warnings(state(&app))
+        .iter()
+        .any(|w| w.code == "ZERO_LENGTH" && w.is_resolved));
+
+    // Drift the unstable shot_id (mimicking an insert/reload) but keep the UUID.
+    let mut renumbered = state(&app).inner().get_project_state().unwrap();
+    renumbered.sections[0].shots[0].id = original_shot_id + 1000;
+    state(&app).inner().set_project_for_tests(renumbered);
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == "ZERO_LENGTH")
+        .expect("zero length warning");
+    assert_eq!(w.shot_uuid.as_deref(), Some(uuid.as_str()));
+    assert_ne!(w.shot_id, original_shot_id, "precondition: shot_id changed");
+    assert!(w.is_resolved, "ignore must follow the shot UUID across an id change");
+}
+
+#[test]
 fn test_get_project_warnings_detects_invalid_azimuth() {
     let app = app_with_state();
     create_project(&app);

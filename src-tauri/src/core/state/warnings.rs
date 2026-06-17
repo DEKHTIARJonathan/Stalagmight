@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use crate::core::{Validator, WarningSeverity};
-use crate::models::{Project, ProjectWarning, ShotData};
+use crate::models::{Project, ProjectWarning, SectionId, ShotData, ShotId};
 use crate::persistence::Database;
 
 use super::AppState;
@@ -18,22 +18,40 @@ impl AppState {
         project: &Project,
         db: Option<&Database>,
     ) -> Vec<ProjectWarning> {
-        // Load resolved warnings from database
-        let resolved_set: HashSet<String> = if let Some(db) = db {
+        // Load resolved (ignored) warnings. Suppression is keyed by the shot's
+        // stable UUID (issue #57): an ignore stays bound to the same shot even
+        // after inserts/deletes/reorders renumber `shot_id`. Pre-v8 rows that
+        // carry no UUID fall back to the legacy (section_id, shot_id) position.
+        let resolved = if let Some(db) = db {
             // Use provided database reference (pre-finalization)
-            db.load_resolved_warnings()
-                .unwrap_or_default()
-                .iter()
-                .map(|r| format!("{}:{}:{}", r.section_id, r.shot_id, r.warning_code))
-                .collect()
+            db.load_resolved_warnings().unwrap_or_default()
         } else {
             // Fall back to self.database (post-finalization)
-            self.load_resolved_warnings()
-                .unwrap_or_default()
-                .iter()
-                .map(|r| format!("{}:{}:{}", r.section_id, r.shot_id, r.warning_code))
-                .collect()
+            self.load_resolved_warnings().unwrap_or_default()
         };
+        let mut resolved_by_uuid: HashSet<(String, String)> = HashSet::new();
+        let mut resolved_by_position: HashSet<(u32, u32, String)> = HashSet::new();
+        for r in &resolved {
+            match &r.shot_uuid {
+                Some(uuid) => {
+                    resolved_by_uuid.insert((uuid.clone(), r.warning_code.clone()));
+                }
+                None => {
+                    resolved_by_position.insert((r.section_id, r.shot_id, r.warning_code.clone()));
+                }
+            }
+        }
+        // A warning is suppressed if its shot's UUID was ignored, or — only for
+        // shots that still lack a UUID — if its legacy position was ignored.
+        // (A UUID-bearing shot never consults the position set, so a stale
+        // pre-v8 row can't suppress an unrelated shot that later took its slot.)
+        let is_resolved_for =
+            |shot_uuid: &Option<String>, section_id: u32, shot_id: u32, code: &str| -> bool {
+                match shot_uuid {
+                    Some(uuid) => resolved_by_uuid.contains(&(uuid.clone(), code.to_string())),
+                    None => resolved_by_position.contains(&(section_id, shot_id, code.to_string())),
+                }
+            };
 
         let config = self.get_config();
         let mut all_warnings = Vec::new();
@@ -61,8 +79,7 @@ impl AppState {
 
                 let warnings = Validator::validate_shot(&shot_data, &config.validation, section.id, shot_index);
                 for warning in warnings {
-                    let key = format!("{}:{}:{}", section.id, shot.id, warning.code);
-                    let is_resolved = resolved_set.contains(&key);
+                    let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &warning.code);
                     all_warnings.push(ProjectWarning {
                         section_id: section.id,
                         shot_id: shot.id,
@@ -71,6 +88,8 @@ impl AppState {
                         message: warning.message,
                         severity: warning.severity,
                         is_resolved,
+                        shot_uuid: shot.uuid.clone(),
+                        datum_station_index: None,
                     });
                 }
             }
@@ -101,8 +120,7 @@ impl AppState {
                     .collect::<Vec<_>>()
                     .join(", ");
                 let code = "multiple_datums_per_merge_component".to_string();
-                let key = format!("{}:{}:{}", section.id, shot.id, code);
-                let is_resolved = resolved_set.contains(&key);
+                let is_resolved = is_resolved_for(&shot.uuid, section.id, shot.id, &code);
                 all_warnings.push(ProjectWarning {
                     section_id: section.id,
                     shot_id: shot.id,
@@ -114,6 +132,8 @@ impl AppState {
                     code,
                     severity: WarningSeverity::Warning,
                     is_resolved,
+                    shot_uuid: shot.uuid.clone(),
+                    datum_station_index: Some(datum.station_index),
                 });
             }
         }
@@ -149,11 +169,32 @@ impl AppState {
         db.save_resolved_warning(warning)
     }
 
-    /// Delete a resolved warning from database
-    pub fn delete_resolved_warning(&self, section_id: u32, shot_id: u32, warning_code: &str) -> Result<()> {
+    /// Delete a resolved warning from database (un-ignore). `shot_uuid` keys the
+    /// deletion by stable identity when present; the legacy position is also
+    /// cleared so a pre-v8 row is removed regardless.
+    pub fn delete_resolved_warning(
+        &self,
+        section_id: u32,
+        shot_id: u32,
+        warning_code: &str,
+        shot_uuid: Option<&str>,
+    ) -> Result<()> {
         let db_guard = self.database.lock().map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
         let db = db_guard.as_ref().ok_or_else(|| anyhow::anyhow!("No database open"))?;
-        db.delete_resolved_warning(section_id, shot_id, warning_code)
+        db.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
+    }
+
+    /// Look up a shot's stable UUID by its `(section_id, shot_id)` identity in
+    /// the open project. Used by the resolve/unresolve commands to key an
+    /// "Ignore" by UUID (issue #57). After `do_load_project_full` every shot
+    /// has a UUID, so this is `Some` for any shot the user can act on; returns
+    /// `None` only if no project is open or the shot is gone.
+    pub fn shot_uuid_for(&self, section_id: SectionId, shot_id: ShotId) -> Option<String> {
+        let guard = self.project.lock().ok()?;
+        let project = guard.as_ref()?;
+        let section = project.sections.iter().find(|s| s.id == section_id)?;
+        let shot = section.shots.iter().find(|s| s.id == shot_id)?;
+        shot.uuid.clone()
     }
 
     /// Save multiple resolved warnings to database in bulk

@@ -847,6 +847,7 @@ fn test_resolved_warnings_persistence() {
         warning_code: "AZIMUTH_DIFF".to_string(),
         resolved_at: Utc::now(),
         resolved_comment: Some("Verified in field".to_string()),
+        shot_uuid: None,
     };
     db.save_resolved_warning(&warning).unwrap();
 
@@ -859,9 +860,42 @@ fn test_resolved_warnings_persistence() {
     assert_eq!(loaded[0].resolved_comment, Some("Verified in field".to_string()));
 
     // Delete resolved warning
-    db.delete_resolved_warning(0, 1, "AZIMUTH_DIFF").unwrap();
+    db.delete_resolved_warning(0, 1, "AZIMUTH_DIFF", None).unwrap();
     let loaded_after_delete = db.load_resolved_warnings().unwrap();
     assert!(loaded_after_delete.is_empty());
+}
+
+#[test]
+fn test_resolved_warning_dedup_and_delete_by_uuid() {
+    // Issue #57: suppression is keyed by the shot's stable UUID, not the
+    // renumber-prone shot_id. Two saves with the same UUID but different
+    // shot_id must collapse to a single row, and deletion by UUID must clear
+    // it regardless of the shot_id supplied.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    let base = ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-1".to_string()),
+    };
+    db.save_resolved_warning(&base).unwrap();
+    // Same UUID, drifted shot_id (as an insert-before would produce on reload).
+    db.save_resolved_warning(&ResolvedWarning { shot_id: 5, ..base.clone() }).unwrap();
+
+    let loaded = db.load_resolved_warnings().unwrap();
+    assert_eq!(loaded.len(), 1, "same UUID must dedup to a single row");
+    assert_eq!(loaded[0].shot_uuid.as_deref(), Some("uuid-1"));
+    assert_eq!(loaded[0].shot_id, 5, "latest position wins");
+
+    // Deleting by UUID clears it even with an unrelated shot_id.
+    db.delete_resolved_warning(0, 999, "ZERO_LENGTH", Some("uuid-1")).unwrap();
+    assert!(db.load_resolved_warnings().unwrap().is_empty());
 }
 
 // === Test: Verify merged_with is populated correctly from fractal fixture ===
@@ -1531,6 +1565,7 @@ fn test_resolved_warnings_round_trip() {
         warning_code: "azimuth_deviation".to_string(),
         resolved_at: Utc::now(),
         resolved_comment: Some("Verified in field".to_string()),
+        shot_uuid: None,
     };
 
     db.save_resolved_warning(&warning).unwrap();
@@ -1543,7 +1578,7 @@ fn test_resolved_warnings_round_trip() {
     assert_eq!(loaded[0].resolved_comment.as_deref(), Some("Verified in field"));
 
     // Delete it
-    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation").unwrap();
+    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation", None).unwrap();
     let remaining = db.load_resolved_warnings().unwrap();
     assert!(remaining.is_empty());
 }

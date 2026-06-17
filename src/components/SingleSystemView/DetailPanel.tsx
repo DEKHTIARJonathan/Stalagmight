@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -6,7 +6,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { Toggle } from '../common/Toggle';
-import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LinkOffIcon } from '../common/icons';
+import { WarningResolution } from './WarningResolution';
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
@@ -180,24 +181,146 @@ interface WarningsContentProps {
   onWarningClick: (warning: ProjectWarning) => void;
 }
 
+type WarningFlow =
+  | { kind: 'list' }
+  | { kind: 'resolve'; queue: ProjectWarning[]; index: number; resolveAll: boolean; resolved: number; skipped: number }
+  | { kind: 'summary'; resolved: number; skipped: number; remaining: number };
+
+const warningKey = (w: ProjectWarning) => `${w.sectionId}:${w.shotId}:${w.code}`;
+
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
-  const { resolveWarning, resolveAllWarnings, unresolveWarning } = useProjectStore();
-  const { setSelection, setDetailPanelTab, announceSelection } = useUIStore(
+  const { unresolveWarning } = useProjectStore(
+    useShallow((s) => ({ unresolveWarning: s.unresolveWarning })),
+  );
+  const { setSelection, setDetailPanelTab, announceSelection, triggerCenterOnShot } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       announceSelection: s.announceSelection,
+      triggerCenterOnShot: s.triggerCenterOnShot,
     })),
   );
   // At the Full level the location subtitle is shown as entity pills (section +
   // shot), matching the rest of the detail panel; otherwise it stays plain text.
   const showPills = syntacticLevelAtLeast(useUIStore((s) => s.syntacticLevel), 'full');
   const [showResolved, setShowResolved] = useState(false);
+  const [flow, setFlow] = useState<WarningFlow>({ kind: 'list' });
 
-  const unresolvedCount = warnings.filter((w) => !w.isResolved).length;
-  const resolvedCount = warnings.filter((w) => w.isResolved).length;
-  const displayedWarnings = showResolved ? warnings : warnings.filter((w) => !w.isResolved);
+  const unresolvedWarnings = useMemo(() => warnings.filter((w) => !w.isResolved), [warnings]);
+  const unresolvedCount = unresolvedWarnings.length;
+  const resolvedCount = warnings.length - unresolvedCount;
+  const displayedWarnings = showResolved ? warnings : unresolvedWarnings;
+
+  // The warning currently under resolution, resolved against live project data
+  // so it reflects edits applied earlier in a "Resolve all" pass.
+  const activeWarning = flow.kind === 'resolve' ? flow.queue[flow.index] : undefined;
+  const activeSection = activeWarning ? project?.sections.find((s) => s.id === activeWarning.sectionId) : undefined;
+  const activeShot = activeWarning && activeSection ? activeSection.shots.find((s) => s.id === activeWarning.shotId) : undefined;
+
+  // Zoom the map to the shot/station under resolution (issue #57). Keyed on the
+  // warning identity so it re-fires as "Resolve all" steps through the queue.
+  const activeKey = activeWarning ? warningKey(activeWarning) : undefined;
+  useEffect(() => {
+    if (activeWarning) {
+      setSource('detail-panel');
+      triggerCenterOnShot(activeWarning.sectionId, activeWarning.shotId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey]);
+
+  const getSectionName = (sectionId: number) => {
+    const section = project?.sections.find((s) => s.id === sectionId);
+    return section?.name ?? t('sections.defaultName', { id: sectionId });
+  };
+
+  const handleUndoResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
+    e.stopPropagation();
+    unresolveWarning(warning.sectionId, warning.shotId, warning.code);
+  };
+
+  const startResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
+    e.stopPropagation();
+    setFlow({ kind: 'resolve', queue: [warning], index: 0, resolveAll: false, resolved: 0, skipped: 0 });
+  };
+
+  const startResolveAll = () => {
+    if (unresolvedWarnings.length === 0) return;
+    setFlow({ kind: 'resolve', queue: unresolvedWarnings, index: 0, resolveAll: true, resolved: 0, skipped: 0 });
+  };
+
+  // Live count of unresolved warnings, read from the store so it reflects the
+  // refresh that an applied fix already triggered.
+  const liveUnresolvedKeys = () =>
+    new Set(useProjectStore.getState().warnings.filter((w) => !w.isResolved).map(warningKey));
+
+  // Advance the resolve flow past the current item, skipping any queued
+  // warnings a prior fix already cleared as a side effect.
+  const advance = (resolvedInc: number, skippedInc: number) => {
+    setFlow((f) => {
+      if (f.kind !== 'resolve') return f;
+      const live = liveUnresolvedKeys();
+      let next = f.index + 1;
+      while (next < f.queue.length && !live.has(warningKey(f.queue[next]!))) next++;
+      const resolved = f.resolved + resolvedInc;
+      const skipped = f.skipped + skippedInc;
+      if (next >= f.queue.length) {
+        return f.resolveAll ? { kind: 'summary', resolved, skipped, remaining: live.size } : { kind: 'list' };
+      }
+      return { ...f, index: next, resolved, skipped };
+    });
+  };
+
+  const exitFlow = () => {
+    setFlow((f) =>
+      f.kind === 'resolve' && f.resolveAll
+        ? { kind: 'summary', resolved: f.resolved, skipped: f.skipped, remaining: liveUnresolvedKeys().size }
+        : { kind: 'list' },
+    );
+  };
+
+  // --- Inline resolution view (reuses this panel) ---
+  if (flow.kind === 'resolve' && activeWarning) {
+    return (
+      <WarningResolution
+        warning={activeWarning}
+        section={activeSection}
+        shot={activeShot}
+        position={flow.resolveAll ? { index: flow.index, total: flow.queue.length } : undefined}
+        onExit={exitFlow}
+        onResolved={() => advance(1, 0)}
+        onSkip={() => advance(0, 1)}
+      />
+    );
+  }
+
+  // --- "Resolve all" summary ---
+  if (flow.kind === 'summary') {
+    return (
+      <div className="p-4 text-center text-text-secondary space-y-3" data-testid="warnings-resolve-summary">
+        <div className="text-3xl flex items-center justify-center">
+          <CheckCircleIcon size={28} />
+        </div>
+        <p>
+          {t('detailPanel.warnings.resolveSummary', {
+            resolved: flow.resolved,
+            skipped: flow.skipped,
+            remaining: flow.remaining,
+          })}
+        </p>
+        <div className="flex items-center justify-center gap-2">
+          {flow.remaining > 0 && (
+            <Button size="sm" onClick={startResolveAll} data-testid="warnings-resolve-remaining">
+              {t('detailPanel.warnings.resolveRemaining')}
+            </Button>
+          )}
+          <Button size="sm" variant="primary" onClick={() => setFlow({ kind: 'list' })} data-testid="warnings-resolve-done">
+            {t('detailPanel.warnings.resolveDone')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (warnings.length === 0) {
     return (
@@ -209,21 +332,6 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
       </div>
     );
   }
-
-  const getSectionName = (sectionId: number) => {
-    const section = project?.sections.find((s) => s.id === sectionId);
-    return section?.name ?? t('sections.defaultName', { id: sectionId });
-  };
-
-  const handleDismiss = (e: React.MouseEvent, warning: ProjectWarning) => {
-    e.stopPropagation();
-    resolveWarning(warning.sectionId, warning.shotId, warning.code);
-  };
-
-  const handleUndoResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
-    e.stopPropagation();
-    unresolveWarning(warning.sectionId, warning.shotId, warning.code);
-  };
 
   return (
     <div className="p-2" data-testid="warnings-content">
@@ -249,12 +357,12 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
           )}
           {unresolvedCount > 0 && (
             <button
-              onClick={() => resolveAllWarnings()}
+              onClick={startResolveAll}
               className="text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
-              data-testid="clear-all-warnings"
-              title={t('detailPanel.warnings.clearAll')}
+              data-testid="resolve-all-warnings"
+              title={t('detailPanel.warnings.resolveAll')}
             >
-              {t('detailPanel.warnings.clearAll')}
+              {t('detailPanel.warnings.resolveAll')}
             </button>
           )}
         </div>
@@ -320,13 +428,12 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 </button>
               ) : (
                 <button
-                  onClick={(e) => handleDismiss(e, warning)}
-                  className="shrink-0 p-1 rounded text-text-secondary hover:text-text-primary hover:bg-background-50"
-                  title={t('detailPanel.warnings.markResolved')}
-                  aria-label={t('detailPanel.warnings.markResolved')}
-                  data-testid="dismiss-warning"
+                  onClick={(e) => startResolve(e, warning)}
+                  className="shrink-0 text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
+                  title={t('detailPanel.warnings.resolve')}
+                  data-testid="resolve-warning"
                 >
-                  <CloseIcon size={14} />
+                  {t('detailPanel.warnings.resolve')}
                 </button>
               )}
             </div>

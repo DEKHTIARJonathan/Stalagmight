@@ -3845,12 +3845,13 @@ fn test_resolved_warning_methods_fail_when_database_lock_poisoned() {
         warning_code: "TEST".to_string(),
         resolved_at: chrono::Utc::now(),
         resolved_comment: None,
+        shot_uuid: None,
     };
 
     let err = state.save_resolved_warning(&warning).unwrap_err();
     assert_eq!(err.to_string(), "Failed to lock database");
 
-    let err = state.delete_resolved_warning(1, 2, "TEST").unwrap_err();
+    let err = state.delete_resolved_warning(1, 2, "TEST", None).unwrap_err();
     assert_eq!(err.to_string(), "Failed to lock database");
 }
 
