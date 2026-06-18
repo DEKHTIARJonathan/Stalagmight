@@ -1,41 +1,74 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
+import { useUIStore } from '../uiStore';
 import type { CommandResult } from '../../types/commands';
 
 /**
- * #92: a DMP import never marks the project dirty and a new project's initial
- * save is deferred, so the import is only persisted because the completion
- * handlers call `saveAfterImport`. These guard that action's contract: it saves,
- * and it never throws (so a save failure can't block post-import navigation).
+ * #92 + PR #104 review: a DMP import never marks the project dirty and a new
+ * project's initial save is deferred, so the import is only persisted because
+ * the completion handlers call `saveAfterImport`. These guard its contract:
+ *  - NEW project → a real save (writes the .stalx + Recent Projects entry);
+ *  - EXISTING project → only mark dirty, so unrelated pending edits aren't
+ *    silently committed (Codex review);
+ *  - a failed save → mark dirty (no phantom "saved") and signal the caller not
+ *    to dismiss the error dialog.
  */
 describe('projectStore.saveAfterImport (#92)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    useUIStore.setState({ importContext: null });
+    useProjectStore.setState({ isDirty: false });
   });
 
-  it('persists the imported project by calling saveProject (default = manual-save semantics)', async () => {
+  it('persists a NEW-project import via saveProject and lets the caller proceed', async () => {
+    useUIStore.setState({ importContext: 'new-project' });
     const saveMock = vi.fn(async (): Promise<CommandResult> => ({ success: true } as CommandResult));
-    useProjectStore.setState({ saveProject: saveMock });
+    useProjectStore.setState({ saveProject: saveMock, isDirty: false });
 
-    await useProjectStore.getState().saveAfterImport();
+    const proceed = await useProjectStore.getState().saveAfterImport();
 
     expect(saveMock).toHaveBeenCalledTimes(1);
-    // No args → a regular (non-autosave) save: writes the .stalx and adds it to
-    // Recent Projects, mirroring the manual Save users hit today.
-    expect(saveMock).toHaveBeenCalledWith();
+    expect(proceed).toBe(true);
   });
 
-  it('swallows a save failure so post-import navigation is never blocked', async () => {
+  it('only marks dirty for an EXISTING-project import (does not auto-commit prior edits)', async () => {
+    useUIStore.setState({ importContext: 'existing-project' });
+    const saveMock = vi.fn(async (): Promise<CommandResult> => ({ success: true } as CommandResult));
+    useProjectStore.setState({ saveProject: saveMock, isDirty: false });
+
+    const proceed = await useProjectStore.getState().saveAfterImport();
+
+    expect(saveMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    expect(proceed).toBe(true);
+  });
+
+  it('on a failed new-project save: marks dirty, surfaces the error, and blocks navigation', async () => {
+    useUIStore.setState({ importContext: 'new-project' });
+    const saveMock = vi.fn(
+      async (): Promise<CommandResult> => ({ success: false, error: 'disk full' } as CommandResult),
+    );
+    useProjectStore.setState({ saveProject: saveMock, isDirty: false });
+
+    const proceed = await useProjectStore.getState().saveAfterImport();
+
+    expect(proceed).toBe(false);
+    expect(useProjectStore.getState().isDirty).toBe(true);
+  });
+
+  it('never throws when saveProject rejects (navigation is blocked, project stays dirty)', async () => {
+    useUIStore.setState({ importContext: 'new-project' });
     const saveMock = vi.fn(async (): Promise<CommandResult> => {
-      throw new Error('disk full');
+      throw new Error('ipc died');
     });
-    useProjectStore.setState({ saveProject: saveMock });
+    useProjectStore.setState({ saveProject: saveMock, isDirty: false });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(useProjectStore.getState().saveAfterImport()).resolves.toBeUndefined();
+    const proceed = await useProjectStore.getState().saveAfterImport();
 
-    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(proceed).toBe(false);
+    expect(useProjectStore.getState().isDirty).toBe(true);
     expect(errSpy).toHaveBeenCalled();
   });
 });

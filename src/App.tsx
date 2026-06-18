@@ -631,6 +631,13 @@ function App() {
             }
           }}
           onComplete={async (newSectionIds?: number[]) => {
+            // Persist the freshly-imported project before anything else (#92) —
+            // including before handing off to orphan placement — so the import
+            // can never be lost. If the save failed, an error/permission dialog is
+            // now showing; leave it up instead of dismissing it via closeDialog.
+            if (!(await useProjectStore.getState().saveAfterImport())) {
+              return;
+            }
             if (newSectionIds?.length) {
               try {
                 const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
@@ -646,11 +653,6 @@ function App() {
                 // Non-fatal: proceed without orphan detection
               }
             }
-            // Persist the freshly-imported project (#92): imports bypass the
-            // dirty/save machinery and a new project's initial save is deferred,
-            // so without this the import is never written to disk or added to
-            // Recent Projects despite the UI showing "saved".
-            await useProjectStore.getState().saveAfterImport();
             closeDialog();
             setView('single');
             triggerFitToBounds();
