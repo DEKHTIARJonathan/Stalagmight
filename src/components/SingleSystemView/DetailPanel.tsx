@@ -189,7 +189,13 @@ type WarningFlow =
   | { kind: 'resolve'; queue: ProjectWarning[]; index: number; resolveAll: boolean; resolved: number; skipped: number }
   | { kind: 'summary'; resolved: number; skipped: number; remaining: number };
 
-const warningKey = (w: ProjectWarning) => `${w.sectionId}:${w.shotId}:${w.code}`;
+// Identity of a warning for queue stepping + live-set rehydration. Include the
+// datum index for over-anchoring warnings: two separate over-anchored components
+// can put their representative on the SAME shot (e.g. stations 0 and 1 both map to
+// shot 0), sharing sectionId/shotId/code but differing by datum — without this they
+// collapse and the resolve flow would act on the wrong datum (issue #57 / Codex).
+const warningKey = (w: ProjectWarning) =>
+  `${w.sectionId}:${w.shotId}:${w.code}${w.datumStationIndex !== undefined ? `:d${w.datumStationIndex}` : ''}`;
 
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();

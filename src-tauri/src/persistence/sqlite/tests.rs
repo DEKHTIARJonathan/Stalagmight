@@ -88,6 +88,70 @@ fn bulk_upsert_keeps_uuid_row_over_colliding_legacy_null_row() {
 }
 
 #[test]
+fn shot_uuid_is_persisted_reflects_the_shots_table() {
+    // A new ignore is UUID-keyed only when the shot's UUID is already on disk; a
+    // pre-v6 shot's in-memory-minted UUID isn't, so its ignore stays position-keyed
+    // to survive the next open (issue #57 / Codex).
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, uuid) \
+             VALUES (1, 0, 0, 0, 0, 1, 0, 0, 'persisted-uuid')",
+            [],
+        )
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, uuid) \
+             VALUES (2, 0, 1, 0, 0, 1, 0, 0, NULL)",
+            [],
+        )
+        .unwrap();
+    assert!(db.shot_uuid_is_persisted("persisted-uuid").unwrap());
+    assert!(!db.shot_uuid_is_persisted("transient-uuid").unwrap());
+}
+
+#[test]
+fn save_resolved_warning_collision_preserves_the_prior_ignore() {
+    // A refused collision (the requested position holds a DIFFERENT shot's ignore)
+    // must roll back the dedup-delete too, so this shot's OWN prior ignore is not
+    // dropped on the way to refusing (issue #57 / Codex).
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    let row = |shot_id: u32, uuid: &str| ResolvedWarning {
+        section_id: 0,
+        shot_id,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some(uuid.to_string()),
+    };
+    // Shot A's ignore at position 3, shot B's at position 5.
+    db.save_resolved_warning(&row(3, "aaa")).unwrap();
+    db.save_resolved_warning(&row(5, "bbb")).unwrap();
+    // Re-resolve A claiming position 5 (where B sits): refused, and A's old row stays.
+    assert!(db.save_resolved_warning(&row(5, "aaa")).is_err());
+    let mut rows = db.load_resolved_warnings().unwrap();
+    rows.sort_by_key(|r| r.shot_id);
+    assert_eq!(rows.len(), 2, "both shots' ignores survive the refused collision");
+    assert_eq!(rows[0].shot_id, 3);
+    assert_eq!(rows[0].shot_uuid.as_deref(), Some("aaa"));
+    assert_eq!(rows[1].shot_id, 5);
+    assert_eq!(rows[1].shot_uuid.as_deref(), Some("bbb"));
+}
+
+#[test]
 fn test_foreign_keys_enabled_on_open() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("fk_enabled.stalx");

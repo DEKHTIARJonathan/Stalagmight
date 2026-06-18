@@ -102,13 +102,25 @@ pub(crate) fn resolve_warning_impl(
         purpose = "acknowledge validation warning",
         "Resolving warning"
     );
+    // Key by UUID only when that UUID is already persisted on disk. A pre-v6
+    // shot's UUID is minted in memory and not written until the project is saved;
+    // keying the ignore by it would orphan the row on the next open (different
+    // UUIDs are minted), losing the ignore for a legacy file closed without saving.
+    // Fall back to a legacy position-keyed ignore for such a shot — it survives via
+    // the position fallback and the load-time backfill upgrades it once the UUID is
+    // persisted (issue #57 / Codex).
+    let shot_uuid = if state.shot_uuid_is_persisted(&shot_uuid) {
+        Some(shot_uuid)
+    } else {
+        None
+    };
     let warning = ResolvedWarning {
         section_id,
         shot_id,
         warning_code,
         resolved_at: Utc::now(),
         resolved_comment: comment,
-        shot_uuid: Some(shot_uuid),
+        shot_uuid,
     };
     state.save_resolved_warning(&warning).map_err(|e| {
         tracing::error!(

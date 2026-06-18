@@ -2763,7 +2763,6 @@ impl Database {
     /// NULL-uuid rows are upgraded to the UUID key by the load-time backfill
     /// (`backfill_resolved_warning_uuids`), not here.
     pub fn save_resolved_warning(&self, warning: &ResolvedWarning) -> Result<()> {
-        Self::delete_matching_resolved(&self.conn, warning)?;
         // The legacy UNIQUE(section_id, shot_id, warning_code) keys rows by
         // POSITION, but a UUID-keyed ignore's real identity is its shot_uuid. A
         // plain INSERT OR REPLACE would, on a positional collision, delete a
@@ -2773,7 +2772,14 @@ impl Database {
         // conditional upsert that only ever overwrites the SAME shot's row (or
         // upgrades a legacy NULL-uuid row at that position), never a different
         // shot's UUID-keyed row. `excluded` is the row we tried to insert.
-        let affected = self.conn.execute(
+        //
+        // The dedup-delete + insert run in ONE transaction: if the insert is
+        // refused (the slot is held by a different shot), dropping the transaction
+        // rolls the delete back too, so this shot's OWN prior ignore is preserved
+        // rather than dropped on the way to refusing (issue #57 / Codex).
+        let tx = self.conn.unchecked_transaction()?;
+        Self::delete_matching_resolved(&tx, warning)?;
+        let affected = tx.execute(
             "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
              ON CONFLICT(section_id, shot_id, warning_code) DO UPDATE SET \
@@ -2794,14 +2800,28 @@ impl Database {
         if affected == 0 {
             // The positional slot is held by a DIFFERENT shot's UUID-keyed ignore
             // (a stale position from a prior save, before the ids re-sync on
-            // reload). We refuse to clobber it; surface the failure so the caller
-            // can tell the user to reload and retry rather than silently dropping
-            // either ignore.
+            // reload). Roll back (drop without commit) so neither ignore is lost,
+            // and surface the failure so the caller can prompt a reload + retry.
             anyhow::bail!(
                 "could not record this ignore: its position is held by another shot's ignore — reload the project and try again"
             );
         }
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Whether `uuid` is already stored in the on-disk `shots` table. A pre-v6
+    /// shot's UUID is minted only in memory until the project is saved, so keying
+    /// a new ignore by such an unpersisted UUID would orphan the row on the next
+    /// open (different UUIDs are minted) — the resolve path keeps those ignores
+    /// position-keyed instead (issue #57 / Codex).
+    pub fn shot_uuid_is_persisted(&self, uuid: &str) -> Result<bool> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid = ?1)",
+            params![uuid],
+            |row| row.get(0),
+        )?;
+        Ok(exists)
     }
 
     /// Delete any resolved-warning rows matching `warning`. When a `shot_uuid`

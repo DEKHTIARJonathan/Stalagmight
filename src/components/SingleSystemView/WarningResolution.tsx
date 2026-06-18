@@ -280,6 +280,10 @@ export function WarningResolution({
     })),
   );
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
+  // "Ignore" persists to the project database immediately; a never-saved project
+  // (deferred initial save) has no database yet, so the suppression can't be
+  // stored. Disable Ignore until the project has been saved (issue #57 / Codex).
+  const projectSaved = useProjectStore((s) => s.project?.file_path != null);
   const activeStations = useActiveStations();
 
   const frozen = isShotFrozen(warning.sectionId, warning.shotIndex);
@@ -306,6 +310,8 @@ export function WarningResolution({
       id: 'ignore',
       label: t('detailPanel.warnings.resolveOptions.ignore'),
       ignore: true,
+      // Can't persist a suppression with no database yet (unsaved new project).
+      disabled: !projectSaved,
     };
     // Errors are never ignorable (issue #57): offer Ignore only for advisory
     // (warning-severity) issues. Spread this where Ignore used to be hardcoded so
@@ -425,7 +431,7 @@ export function WarningResolution({
       default:
         return maybeIgnore;
     }
-  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, geometryReadOnly, t, precision]);
+  }, [warning.code, warning.severity, warning.datumStationIndex, warning.datumRefs, shot, geometryDisabled, geometryReadOnly, projectSaved, t, precision]);
 
   // Default selection: prefer "Average" (the safe azimuth fix) when offered,
   // else the first enabled option (falls back to Ignore when every fix is

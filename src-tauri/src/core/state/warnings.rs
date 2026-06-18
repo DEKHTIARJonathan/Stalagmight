@@ -208,6 +208,20 @@ impl AppState {
         db.save_resolved_warning(warning)
     }
 
+    /// Whether a shot UUID is already persisted on disk (see
+    /// `Database::shot_uuid_is_persisted`). Returns false when no database is open
+    /// or the lookup fails — the safe default, which keeps a new ignore
+    /// position-keyed rather than binding it to an unpersisted UUID (issue #57).
+    pub fn shot_uuid_is_persisted(&self, uuid: &str) -> bool {
+        let Ok(db_guard) = self.database.lock() else {
+            return false;
+        };
+        let Some(db) = db_guard.as_ref() else {
+            return false;
+        };
+        db.shot_uuid_is_persisted(uuid).unwrap_or(false)
+    }
+
     /// Delete a resolved warning from database (un-ignore). `shot_uuid` keys the
     /// deletion by stable identity when present; the legacy position is also
     /// cleared so a pre-v8 row is removed regardless.
