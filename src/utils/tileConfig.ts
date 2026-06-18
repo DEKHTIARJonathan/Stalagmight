@@ -37,7 +37,12 @@ export interface TileConfig {
  * accepts both forms.
  */
 function tileUrlTemplate(provider: string): string {
-  const isWindows = navigator.userAgent.includes('Windows');
+  // `navigator` exists in the WebView at runtime, but this module is also
+  // imported by unit tests under a Node environment where `navigator` may be
+  // undefined (Node <21 has no global `navigator`). Guard the access so
+  // getTileConfig() never throws a ReferenceError outside the browser.
+  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const isWindows = userAgent.includes('Windows');
   return isWindows
     ? `http://stalagmight-tiles.localhost/${provider}/{z}/{y}/{x}`
     : `stalagmight-tiles://${provider}/{z}/{y}/{x}`;

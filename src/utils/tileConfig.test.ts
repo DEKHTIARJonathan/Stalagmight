@@ -6,13 +6,18 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { getTileConfig } from './tileConfig';
 
-/** Override navigator.userAgent for a single test (restored in afterEach). */
+/**
+ * Override navigator.userAgent for a single test (restored in afterEach).
+ * Uses stubGlobal rather than spyOn so it works even when the Node test
+ * environment has no global `navigator` to spy on.
+ */
 function setUserAgent(ua: string): void {
-  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ua);
+  vi.stubGlobal('navigator', { userAgent: ua });
 }
 
 describe('getTileConfig', () => {
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
