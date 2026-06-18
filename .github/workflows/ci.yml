@@ -32,6 +32,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm tsc --noEmit
+      # vitest unit + component tests (issue #107). `vitest` auto-detects CI
+      # (CI=true) and runs once instead of watching.
+      - run: pnpm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
