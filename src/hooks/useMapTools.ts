@@ -202,15 +202,18 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           { purpose: 'ruler along-line distance' }
         );
         // Discard the response if a newer request superseded it, or if the
-        // measurement it belongs to is gone. Every reset funnel — Escape/clearMeasure,
-        // tool switch, dialog open, geometry-mode change, project load, and the
-        // reset-and-restart third click — clears the endpoints through the store and
-        // can't bump this hook-local request ref, so we re-check live store state
-        // here. Without the endpoint check a late response would resurrect a stale
-        // readout + path tint after the user already reset (#26).
+        // Discard the response unless the EXACT measurement it was issued for is
+        // still live. We compare the live endpoints by reference against the ones
+        // this request was made for: every new click builds fresh endpoint objects,
+        // so a reset/restart — or a different completed measurement that never calls
+        // requestAlongLine (e.g. a non-connectable station→raw-point one, which
+        // leaves this hook-local request ref untouched) — fails the check. Without
+        // it, a late reply would resurrect a stale readout/path tint over an
+        // unrelated measurement (#26, Codex). The project check additionally guards
+        // a switch landing before the MapCanvas clearMeasure effect runs.
         const ui = useUIStore.getState();
         if (requestId !== measureRequestIdRef.current) return;
-        if (ui.activeTool !== 'measure' || !ui.measureStart || !ui.measureEnd) return;
+        if (ui.activeTool !== 'measure' || ui.measureStart !== start || ui.measureEnd !== end) return;
         if ((useProjectStore.getState().project?.created_at ?? null) !== requestProjectId) return;
         setMeasureAlongLine(
           result
@@ -649,7 +652,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       if (activeTool === 'measure') {
         const { measureSnapShot: snapShot, snappedStation: snapStation } = useUIStore.getState();
         let ep: MeasureEndpoint | null = null;
-        if (snapShot) {
+        // Ignore a (possibly stale) shot snap while Shots are hidden — shot
+        // interaction is disabled, so a hidden shot must not feed the click (#26, Codex).
+        if (snapShot && showShots) {
           ep = buildShotPointEndpoint(snapShot.section_id, snapShot.shot_id, snapShot.t);
         } else if (snapStation) {
           const coords = getStationCoordinates(snapStation);
@@ -733,6 +738,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       openDialog,
       options,
       setMergeStationA,
+      showShots,
       showStations,
       showToast,
     ]

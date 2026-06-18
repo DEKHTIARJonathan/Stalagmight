@@ -2143,6 +2143,11 @@ export default class SurveyLayer {
     if (!c1 || !c2) return null;
     const p1 = this.map.project(c1);
     const p2 = this.map.project(c2);
+    // resolveNearestShot skips the distance check for a lone candidate, and the
+    // square bbox can include a shot up to ~√2·threshold away at a corner — enforce
+    // the (circular) snap threshold against the actual segment so a click that isn't
+    // close enough doesn't snap to a shot (#26, Codex).
+    if (distanceToLineSegment(screenX, screenY, p1.x, p1.y, p2.x, p2.y) > threshold) return null;
     const t = projectParamOnSegment(screenX, screenY, p1.x, p1.y, p2.x, p2.y);
     const lng = c1[0] + t * (c2[0] - c1[0]);
     const lat = c1[1] + t * (c2[1] - c1[1]);

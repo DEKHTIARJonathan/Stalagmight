@@ -696,6 +696,13 @@ export default function MapCanvas() {
     }
   }, [hasMeasureSnap]);
 
+  // Hiding Shots disables shot interaction, so drop any live measure shot-snap:
+  // clears the store value (the effect above then removes the cyan marker + ref) so
+  // a stale snap can't linger or feed the next click while shots are hidden (#26, Codex).
+  useEffect(() => {
+    if (!showShots && useUIStore.getState().measureSnapShot) setMeasureSnapShot(null);
+  }, [showShots, setMeasureSnapShot]);
+
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
     (data: { type: 'station' | 'segment' | 'shot'; sectionId?: number; stationRef?: { section_id: number; station_index: number }; shotIndex?: number; screenX?: number; screenY?: number }) => {
