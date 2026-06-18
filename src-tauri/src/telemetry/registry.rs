@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 325);
+        assert_eq!(EVENT_NAMES.len(), 326);
     }
 
     #[test]
