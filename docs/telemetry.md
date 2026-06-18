@@ -39,7 +39,7 @@ payload is msgpack-encoded.
 ```
 {
   v: 2,                          // version
-  a: "0.8.0",                   // app_version
+  a: "0.8.0-9f3c1a2b",          // app_version (carries the build's commit; "-dev-" for local builds)
   o: "linux",                   // os
   s: <16 bytes>,                // session_id (binary UUID)
   d: 3600,                      // duration_secs
@@ -65,7 +65,7 @@ Used for on-disk buffering and backward compatibility. Sent with
 ```json
 {
   "v": 1,
-  "app_version": "0.8.0",
+  "app_version": "0.8.0-9f3c1a2b",
   "os": "linux",
   "session_id": "a1b2c3d4-...",
   "duration_secs": 3600,
