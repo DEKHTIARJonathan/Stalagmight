@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, sta
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
-import type { BatchCommand } from '../../types/commands';
+import type { BatchCommand, ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
@@ -42,6 +42,11 @@ import { debugLog } from '../../utils/debugLog';
 
 // Tools that support temporary panning overrides (Ctrl+drag or middle-drag)
 const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'move_shot', 'move_segment', 'comment', 'move_comment'];
+
+// Stable empty warnings array fed to the survey-layer rebuild effect when
+// Issue-severity coloring is OFF. Module-level so its identity never changes
+// across renders — a per-render [] would defeat the rebuild-gating memo below.
+const EMPTY_WARNINGS: ProjectWarning[] = [];
 
 interface BoxSelectState {
   start: { x: number; y: number } | null;
@@ -246,7 +251,7 @@ export default function MapCanvas() {
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
   const { t } = useTranslation();
 
-  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
+  const { project, stations, surveyData, stationsAdjusted, surveyDataAdjusted, adjustedLoading, loadAdjustedGeometry, config, warnings, moveStation, moveSegment, getConnectedSectionIds, getAnchoredSectionIds, executeBatch } = useProjectStore();
   const logMapInteractions = config?.debug?.map?.log_hit_detection ?? false;
 
   // Geometry display mode (measured vs read-only closure-adjusted).
@@ -362,6 +367,7 @@ export default function MapCanvas() {
     showReferenceShots,
     showDepthGradient,
     showDistanceGradient,
+    showIssueSeverity,
     distanceGradientOrigin,
     distanceField,
     setDistanceField,
@@ -402,8 +408,13 @@ export default function MapCanvas() {
     clearCenterOnStationRequest,
     requestCenterOnShot,
     clearCenterOnShotRequest,
+    requestZoomToShot,
+    clearZoomToShotRequest,
+    geometryPreview,
     resolvedTheme,
     moveCommentSource,
+    detailPanelOpen,
+    detailPanelTab,
   } = useUIStore(
     // measureSnapShot is excluded: the live shot-snap `t` is rewritten on every
     // mousemove over a shot, and the cursor dot is driven imperatively via refs,
@@ -411,6 +422,25 @@ export default function MapCanvas() {
     // leave-tool cleanup below reads it via getState() instead.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest)
+  );
+
+  // Issue-severity coloring is active when the user enabled it OR while the
+  // Warnings tab is open (auto-highlight, gated by the setting). It is DERIVED,
+  // never written to the store: leaving the tab simply recomputes the colors from
+  // the persisted toggles, so no "prior coloring" snapshot can be lost and every
+  // toggle of a coloring mode just triggers a recompute (issue #57, finding #6).
+  const highlightWarningsOnTabSwitch = config?.map.highlight_warnings_on_tab_switch ?? true;
+  const effectiveIssueSeverity =
+    showIssueSeverity || (detailPanelOpen && detailPanelTab === 'warnings' && highlightWarningsOnTabSwitch);
+  // Severity takes visual precedence over the depth gradient when both apply.
+  const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
+  // Gate the survey-layer rebuild on issue-severity coloring. `warnings` changes
+  // identity on every refreshWarnings (each edit/resolve/ignore), but warnings
+  // only affect colors when severity coloring is effectively ON — feed the rebuild
+  // a stable shared [] when OFF so warning-only refreshes don't rebuild the GeoJSON.
+  const severityWarnings = useMemo(
+    () => (effectiveIssueSeverity ? warnings : EMPTY_WARNINGS),
+    [effectiveIssueSeverity, warnings]
   );
 
   const alignedClosureIds = useMemo(() => {
@@ -1651,12 +1681,17 @@ export default function MapCanvas() {
         // resolved when some loops are still open.
         project.loop_closures,
         gpsOrigin,
-        showDepthGradient,
+        effectiveDepthGradient,
         depthRange,
-        precision
+        precision,
+        effectiveIssueSeverity,
+        severityWarnings
       );
     }
-  }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
+  }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings]);
+
+  // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
+  // above — no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
 
   // On a project switch (created_at changes on switch, stable across edits AND
   // saves), reset the distance origin to the entrance default and drop the stale
@@ -1717,13 +1752,14 @@ export default function MapCanvas() {
   // from the rebuild path so re-rooting never triggers a feature rebuild.
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
-    if (showDistanceGradient && distanceField && project) {
+    if (showDistanceGradient && !effectiveIssueSeverity && distanceField && project) {
       const state = buildDistanceFeatureState(project.sections, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
     } else {
+      // Severity coloring (incl. the Warnings-tab auto-highlight) takes precedence.
       surveyLayerRef.current.setDistanceGradient(false, null);
     }
-  }, [showDistanceGradient, distanceField, project, mapLoaded, surveyLayerRef]);
+  }, [showDistanceGradient, effectiveIssueSeverity, distanceField, project, mapLoaded, surveyLayerRef]);
 
   // Tint the measured along-line path's shots AND stations (#26) in the
   // user-configured color. Keyed on the along-line result so it applies when the
@@ -1751,7 +1787,9 @@ export default function MapCanvas() {
   useEffect(() => {
     originMarkerRef.current?.remove();
     originMarkerRef.current = null;
-    if (!map.current || !mapLoaded || !showDistanceGradient || !distanceGradientOrigin) {
+    // Suppressed while issue-severity owns the paint (the distance overlay isn't
+    // drawn then), so the picked-origin ring doesn't linger over a severity map.
+    if (!map.current || !mapLoaded || !showDistanceGradient || effectiveIssueSeverity || !distanceGradientOrigin) {
       return undefined;
     }
     const originStation = activeStations.find(
@@ -1778,7 +1816,7 @@ export default function MapCanvas() {
       originMarkerRef.current?.remove();
       originMarkerRef.current = null;
     };
-  }, [showDistanceGradient, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
+  }, [showDistanceGradient, effectiveIssueSeverity, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
@@ -2748,6 +2786,39 @@ export default function MapCanvas() {
     [project, activeStations, config, gpsOrigin]
   );
 
+  // Progressive zoom-in centered on a shot's midpoint: each call recenters and
+  // zooms one step closer (capped at zoom_max). Drives the resolve view's zoom
+  // button (#57) — clicking repeatedly closes in on the problematic shot.
+  const zoomToShotMidpoint = useCallback(
+    (sectionId: SectionId, shotId: ShotId) => {
+      if (!map.current || !config || !project) return;
+      const section = project.sections.find((s) => s.id === sectionId);
+      if (!section) return;
+      const shotIndex = section.shots.findIndex((s) => s.id === shotId);
+      if (shotIndex === -1) return;
+      const fromStation = activeStations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === shotIndex,
+      );
+      const toStation = activeStations.find(
+        (s) => s.station_ref.section_id === sectionId && s.station_ref.station_index === shotIndex + 1,
+      );
+      if (!fromStation || !toStation) return;
+      const midpointX = (fromStation.coordinates.x + toStation.coordinates.x) / 2;
+      const midpointY = (fromStation.coordinates.y + toStation.coordinates.y) / 2;
+      const mapCoords = metersToMapCoords(midpointX, midpointY, gpsOrigin);
+      const currentZoom = map.current.getZoom();
+      const targetZoom = Math.min(zoomMax, currentZoom + zoomStep);
+      const animationConfig = config.map.animation;
+      const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
+      map.current.easeTo({
+        center: mapCoords as [number, number],
+        zoom: targetZoom,
+        duration: animationDuration,
+      });
+    },
+    [project, activeStations, config, gpsOrigin, zoomMax, zoomStep],
+  );
+
   // Center on a station (used by DetailLink)
   // Returns true if centering was performed, false if prerequisites not met
   const fitToStation = useCallback(
@@ -2949,6 +3020,24 @@ export default function MapCanvas() {
       }
     }
   }, [requestCenterOnShot, mapLoaded, clearCenterOnShotRequest, fitToShot]);
+
+  // Render the transient geometry preview (issue #57): the warning-resolution
+  // flow pushes a proposed ghost shot here as the user tries options, drawn via
+  // the survey layer's ghost overlay (setGhostSection).
+  useEffect(() => {
+    if (!mapLoaded) return;
+    surveyLayerRef.current?.setGhostSection(geometryPreview ?? null);
+  }, [geometryPreview, mapLoaded]);
+
+  // Progressive zoom-in onto a shot (resolve view's zoom button, #57). Each
+  // request recenters and zooms one step closer.
+  useEffect(() => {
+    if (requestZoomToShot !== null) {
+      const { sectionId, shotId } = requestZoomToShot;
+      clearZoomToShotRequest();
+      if (mapLoaded) zoomToShotMidpoint(sectionId, shotId);
+    }
+  }, [requestZoomToShot, mapLoaded, clearZoomToShotRequest, zoomToShotMidpoint]);
 
   // Process pending center-on-shot request when map loads
   useEffect(() => {
@@ -3209,21 +3298,23 @@ export default function MapCanvas() {
 
       {/* Depth legend when depth gradient is enabled (suppressed while the
           distance overlay is active — distance wins visually, one legend). */}
-      {showDepthGradient && !showDistanceGradient && (
+      {effectiveDepthGradient && !showDistanceGradient && (
         <DepthLegend
           minDepth={depthRange.min}
           maxDepth={depthRange.max}
-          visible={showDepthGradient}
+          visible={effectiveDepthGradient}
         />
       )}
 
-      {/* Distance legend (#34): color key + "which overlay" cue. */}
-      {showDistanceGradient && distanceField && (
+      {/* Distance legend (#34): color key + "which overlay" cue. Hidden while
+          issue-severity owns the paint (e.g. the Warnings tab) so the legend
+          matches the visible overlay (#57 / Codex). */}
+      {showDistanceGradient && !effectiveIssueSeverity && distanceField && (
         <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
       )}
       {/* While the field is being (re)computed — first toggle / re-root — show a
           lightweight cue so a slow closure solve doesn't look frozen. */}
-      {showDistanceGradient && !distanceField && (
+      {showDistanceGradient && !effectiveIssueSeverity && !distanceField && (
         <div
           data-testid="distance-legend-loading"
           style={{

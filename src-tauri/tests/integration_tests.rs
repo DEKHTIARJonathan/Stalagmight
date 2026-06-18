@@ -1575,6 +1575,7 @@ fn default_validation_config() -> ValidationConfig {
         warn_azimuth_deviation_max: 30.0,
         azimuth_diff_threshold: 20.0,
         pitch_diff_threshold: 5.0,
+        inclination_depth_diff_threshold: 10.0,
     }
 }
 

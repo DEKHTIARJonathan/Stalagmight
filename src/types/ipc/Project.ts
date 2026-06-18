@@ -3,6 +3,7 @@ import type { CollabState } from "./CollabState";
 import type { LoopClosure } from "./LoopClosure";
 import type { Section } from "./Section";
 import type { StationMerge } from "./StationMerge";
+import type { ValidationConfig } from "./ValidationConfig";
 import type { ZeroDatum } from "./ZeroDatum";
 
-export interface Project { name: string, location: string | null, created_at: string, modified_at: string, sections: Array<Section>, station_merges: Array<StationMerge>, zero_datums: Array<ZeroDatum>, loop_closures: Array<LoopClosure>, file_path: string | null, next_section_id: number, section_offsets: Record<number, [number, number]>, imported_file_hashes: Array<string>, imported_section_hashes: Array<string>, next_closure_id: bigint, collab: CollabState | null, }
+export interface Project { name: string, location: string | null, created_at: string, modified_at: string, sections: Array<Section>, station_merges: Array<StationMerge>, zero_datums: Array<ZeroDatum>, loop_closures: Array<LoopClosure>, file_path: string | null, next_section_id: number, section_offsets: Record<number, [number, number]>, imported_file_hashes: Array<string>, imported_section_hashes: Array<string>, next_closure_id: bigint, collab: CollabState | null, validation: ValidationConfig, }

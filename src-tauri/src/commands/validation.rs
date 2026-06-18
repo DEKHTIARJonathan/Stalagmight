@@ -2,7 +2,7 @@ use chrono::Utc;
 use tauri::State;
 
 use crate::core::{AppState, IntegrityCheckResult, IntegrityRepairResult};
-use crate::models::{SectionId, ShotId};
+use crate::models::{warning_is_ignorable, SectionId, ShotId};
 use crate::persistence::ResolvedWarning;
 
 // Re-export ProjectWarning from models for backward compatibility
@@ -65,6 +65,36 @@ pub(crate) fn resolve_warning_impl(
     warning_code: String,
     comment: Option<String>,
 ) -> Result<(), String> {
+    // Errors are not ignorable (issue #57): refuse to persist a suppression for
+    // any error-severity warning (over-anchoring, invalid pitch/azimuth, zero/
+    // negative length, length-below-depth, negative LRUD). One predicate —
+    // `warning_is_ignorable` — is the single policy source shared with the
+    // warnings computation. Returning Ok keeps callers simple, and
+    // compute_project_warnings never honors such a row regardless.
+    if !warning_is_ignorable(&warning_code) {
+        tracing::debug!(
+            warning_code = %warning_code,
+            purpose = "reject ignore of a non-ignorable (error) warning",
+            "Ignoring of error-severity warnings is not allowed; not persisting"
+        );
+        return Ok(());
+    }
+
+    // Policy (issue #57): UUID-keyed suppression is the only supported model for
+    // new ignores. shot_uuid_for returns None only when no project is open, the
+    // lock is poisoned, or the (section_id, shot_id) shot does not exist — in
+    // every case we cannot bind a stable identity, so refuse rather than write a
+    // position-keyed row that could later suppress an unrelated shot reusing the id.
+    let Some(shot_uuid) = state.shot_uuid_for(section_id, shot_id) else {
+        tracing::warn!(
+            section_id,
+            shot_id,
+            warning_code = %warning_code,
+            purpose = "reject ignore without stable shot identity",
+            "Refusing to resolve warning: no shot UUID"
+        );
+        return Err("Could not ignore this warning: the shot no longer exists.".to_string());
+    };
     tracing::info!(
         section_id = section_id,
         shot_id = shot_id,
@@ -72,12 +102,25 @@ pub(crate) fn resolve_warning_impl(
         purpose = "acknowledge validation warning",
         "Resolving warning"
     );
+    // Key by UUID only when that UUID is already persisted on disk. A pre-v6
+    // shot's UUID is minted in memory and not written until the project is saved;
+    // keying the ignore by it would orphan the row on the next open (different
+    // UUIDs are minted), losing the ignore for a legacy file closed without saving.
+    // Fall back to a legacy position-keyed ignore for such a shot — it survives via
+    // the position fallback and the load-time backfill upgrades it once the UUID is
+    // persisted (issue #57 / Codex).
+    let shot_uuid = if state.shot_uuid_is_persisted(&shot_uuid) {
+        Some(shot_uuid)
+    } else {
+        None
+    };
     let warning = ResolvedWarning {
         section_id,
         shot_id,
         warning_code,
         resolved_at: Utc::now(),
         resolved_comment: comment,
+        shot_uuid,
     };
     state.save_resolved_warning(&warning).map_err(|e| {
         tracing::error!(
@@ -90,58 +133,6 @@ pub(crate) fn resolve_warning_impl(
         );
         e.to_string()
     })
-}
-
-/// Resolve all unresolved warnings at once
-#[tauri::command]
-pub fn resolve_all_warnings(state: State<AppState>) -> Result<u32, String> {
-    resolve_all_warnings_impl(state.inner())
-}
-
-pub(crate) fn resolve_all_warnings_impl(state: &AppState) -> Result<u32, String> {
-    let project = match state.get_project_state() {
-        Some(p) => p,
-        None => return Ok(0),
-    };
-
-    // Compute current warnings to find unresolved ones
-    let warnings = state.compute_project_warnings(&project, None);
-    let unresolved: Vec<_> = warnings.iter().filter(|w| !w.is_resolved).collect();
-    let count = unresolved.len() as u32;
-
-    if count == 0 {
-        return Ok(0);
-    }
-
-    tracing::info!(
-        count = count,
-        purpose = "bulk acknowledge all validation warnings",
-        "Resolving all warnings"
-    );
-
-    let now = Utc::now();
-    let resolved_warnings: Vec<_> = unresolved
-        .iter()
-        .map(|w| ResolvedWarning {
-            section_id: w.section_id,
-            shot_id: w.shot_id,
-            warning_code: w.code.clone(),
-            resolved_at: now,
-            resolved_comment: None,
-        })
-        .collect();
-
-    state.save_resolved_warnings_bulk(&resolved_warnings).map_err(|e| {
-        tracing::error!(
-            count = count,
-            purpose = "bulk acknowledge all validation warnings",
-            reason = %e,
-            "Failed to resolve all warnings"
-        );
-        e.to_string()
-    })?;
-
-    Ok(count)
 }
 
 /// Unresolve a warning (remove acknowledgment)
@@ -161,6 +152,7 @@ pub(crate) fn unresolve_warning_impl(
     shot_id: ShotId,
     warning_code: String,
 ) -> Result<(), String> {
+    let shot_uuid = state.shot_uuid_for(section_id, shot_id);
     tracing::info!(
         section_id = section_id,
         shot_id = shot_id,
@@ -169,7 +161,7 @@ pub(crate) fn unresolve_warning_impl(
         "Unresolving warning"
     );
     state
-        .delete_resolved_warning(section_id, shot_id, &warning_code)
+        .delete_resolved_warning(section_id, shot_id, &warning_code, shot_uuid.as_deref())
         .map_err(|e| {
             tracing::error!(
                 section_id = section_id,

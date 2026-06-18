@@ -39,6 +39,20 @@ export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'p
 
 export type DetailPanelTab = 'details' | 'warnings';
 
+/**
+ * A transient "ghost" geometry overlay shown on the map (in survey meters),
+ * used to preview a proposed edit before it is committed — e.g. as the user
+ * tries different warning-resolution options (issue #57). Structurally matches
+ * the map's GhostSectionData so MapCanvas can hand it straight to the survey
+ * layer's setGhostSection.
+ */
+export interface GeometryPreview {
+  shots: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
+  stations: Array<{ x: number; y: number }>;
+  color: string;
+  mergeStation?: { x: number; y: number };
+}
+
 export type ToolType =
   | 'select'
   | 'pan'
@@ -270,6 +284,22 @@ interface UIStore {
   triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => void;
   clearCenterOnShotRequest: () => void;
 
+  /** Transient ghost-geometry preview on the map (null = none). */
+  geometryPreview: GeometryPreview | null;
+  setGeometryPreview: (preview: GeometryPreview | null) => void;
+
+  /** Request to open the Warnings tab and start resolving a shot's issue
+   *  (e.g. clicking the warning indicator in the data table). */
+  requestResolveWarning: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => void;
+  clearResolveWarningRequest: () => void;
+
+  /** Progressive zoom-in centered on a shot: each request recenters and zooms
+   *  one step closer (used by the resolve view's zoom button, #57). */
+  requestZoomToShot: { sectionId: SectionId; shotId: ShotId } | null;
+  triggerZoomToShot: (sectionId: SectionId, shotId: ShotId) => void;
+  clearZoomToShotRequest: () => void;
+
   // Display toggles
   showStations: boolean;
   showShots: boolean;
@@ -306,6 +336,16 @@ interface UIStore {
   toggleDistanceGradient: () => void;
   setDistanceGradientOrigin: (ref: StationRef | null) => void;
   setDistanceField: (field: DistanceField | null) => void;
+
+  // Issue-severity coloring overlay (#22). Runtime-only — like
+  // showDistanceGradient it is NOT a DisplayToggleKey and is never persisted
+  // (off on every load; the Warnings-tab auto-switch drives it transiently).
+  showIssueSeverity: boolean;
+  /** Toggle issue-severity coloring (mutually exclusive with depth/distance). */
+  toggleIssueSeverity: () => void;
+  /** Set issue-severity coloring explicitly (used by the Warnings-tab
+   *  auto-switch). Enabling turns off both gradients. */
+  setIssueSeverity: (on: boolean) => void;
 
   // Geometry display mode (measured vs non-destructive closure-adjusted)
   geometryMode: GeometryMode;
@@ -770,6 +810,26 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   clearCenterOnStationRequest: () => set({ requestCenterOnStation: null }),
   requestCenterOnShot: null,
+  geometryPreview: null,
+  setGeometryPreview: (geometryPreview) => set({ geometryPreview }),
+  requestResolveWarning: null,
+  triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => {
+    // Make sure the resolve view will actually mount and be visible before
+    // requesting it: section-focus and data-table fullscreen hide/cover the
+    // detail panel, and the panel may simply be collapsed. WarningsContent only
+    // consumes the request while mounted (detailPanelOpen && tab === 'warnings'),
+    // so open the panel on the Warnings tab here. (Otherwise the click would be
+    // a no-op and the request would sit stale and fire on a later tab switch.)
+    const s = useUIStore.getState();
+    if (s.focusedSectionId !== null) s.exitSectionFocus();
+    if (s.dataTableFullScreen) s.exitDataTableFullScreen();
+    set({ requestResolveWarning: { sectionId, shotId }, detailPanelOpen: true, detailPanelTab: 'warnings' });
+  },
+  clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
+  requestZoomToShot: null,
+  triggerZoomToShot: (sectionId: SectionId, shotId: ShotId) =>
+    set({ requestZoomToShot: { sectionId, shotId } }),
+  clearZoomToShotRequest: () => set({ requestZoomToShot: null }),
   triggerCenterOnShot: (sectionId: SectionId, shotId: ShotId) => {
     trackNav('center-on-shot');
     set({ requestCenterOnShot: { sectionId, shotId } });
@@ -807,8 +867,41 @@ export const useUIStore = create<UIStore>((set) => ({
     // re-enabling starts fresh at the entrance (zero-datum) default.
     set(
       on
-        ? { showDistanceGradient: true, showDepthGradient: false }
+        ? { showDistanceGradient: true, showDepthGradient: false, showIssueSeverity: false }
         : { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
+    );
+  },
+  // Issue-severity coloring (#22) — runtime-only, never persisted.
+  showIssueSeverity: false,
+  toggleIssueSeverity: () => {
+    const on = !useUIStore.getState().showIssueSeverity;
+    // Mutually exclusive with both gradients — all three paint the shots/stations
+    // layer. Flip depth's *runtime* flag only (don't persist), and clear the
+    // distance overlay's origin/field like toggleDistanceGradient does.
+    set(
+      on
+        ? {
+            showIssueSeverity: true,
+            showDepthGradient: false,
+            showDistanceGradient: false,
+            distanceGradientOrigin: null,
+            distanceField: null,
+          }
+        : { showIssueSeverity: false }
+    );
+  },
+  setIssueSeverity: (on) => {
+    if (useUIStore.getState().showIssueSeverity === on) return;
+    set(
+      on
+        ? {
+            showIssueSeverity: true,
+            showDepthGradient: false,
+            showDistanceGradient: false,
+            distanceGradientOrigin: null,
+            distanceField: null,
+          }
+        : { showIssueSeverity: false }
     );
   },
   setDistanceGradientOrigin: (distanceGradientOrigin) =>
@@ -820,11 +913,16 @@ export const useUIStore = create<UIStore>((set) => ({
     trackAction(`toggle.${key}`);
     const state = useUIStore.getState();
     const newValue = !state[key];
-    // Enabling the depth gradient turns off the (runtime-only) distance gradient —
-    // the two are mutually exclusive since both paint the shots layer (#34).
+    // Enabling the depth gradient turns off the (runtime-only) distance gradient
+    // and issue-severity overlays — all three paint the shots layer (#34, #22).
     const exclusive =
-      key === 'showDepthGradient' && newValue && state.showDistanceGradient
-        ? { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
+      key === 'showDepthGradient' && newValue
+        ? {
+            showDistanceGradient: false,
+            distanceGradientOrigin: null,
+            distanceField: null,
+            showIssueSeverity: false,
+          }
         : {};
     set({ [key]: newValue, ...exclusive });
     // Persist the setting asynchronously via the helper
@@ -943,6 +1041,11 @@ export const useUIStore = create<UIStore>((set) => ({
       // backend payload. Reset it on every load so enabling it for one project
       // can't leak the overlay — and its 2 s memory-IPC poll — into the next.
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
+      // Issue-severity coloring is a runtime-only overlay (never persisted); reset
+      // it on every load so a manual enable in one project doesn't leak the
+      // traffic-light coloring into the next (issue #57 / Codex). The Warnings-tab
+      // auto-switch re-derives it transiently via effectiveIssueSeverity.
+      showIssueSeverity: false,
       // Restore the saved geometry mode ("remember last used"). The backend
       // defaults geometryMode to "measured" for projects with no saved
       // preference, so a load is authoritative and never inherits the previous

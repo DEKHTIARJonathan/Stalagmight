@@ -149,7 +149,8 @@ impl AppState {
             // that geometry change — an asymmetric undo.
             | SetStationComment { .. }
             | MoveComment { .. }
-            | RepairIntegrity => INERT,
+            | RepairIntegrity
+            | UpdateProjectSettings => INERT,
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
             // section behind a sole-bridge closure.
@@ -554,6 +555,10 @@ impl AppState {
             // exhaustiveness.
             Command::RepairIntegrity => CommandResult::failure(
                 "RepairIntegrity is applied via repair_project_integrity, not execute()"
+                    .to_string(),
+            ),
+            Command::UpdateProjectSettings => CommandResult::failure(
+                "UpdateProjectSettings is applied via update_project_settings, not execute()"
                     .to_string(),
             ),
         };
@@ -1371,8 +1376,6 @@ impl AppState {
     }
 
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
-        let config = self.config.lock().ok();
-
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -1416,9 +1419,8 @@ impl AppState {
                     shot.length
                 ));
             }
-            if let Some(ref cfg) = config {
-                warnings.extend(Validator::validate_shot(shot, &cfg.validation, section_id_for_validation, i));
-            }
+            // Per-project thresholds (#57) so create-time warnings match the panel.
+            warnings.extend(Validator::validate_shot(shot, &project.validation, section_id_for_validation, i));
         }
 
         let section = project.add_section(data);
@@ -1492,8 +1494,6 @@ impl AppState {
             return CommandResult::failure("Shot has a non-finite (NaN/inf) value".to_string());
         }
 
-        let config = self.config.lock().ok();
-
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -1546,9 +1546,8 @@ impl AppState {
         }
 
         let mut warnings = Vec::new();
-        if let Some(ref cfg) = config {
-            warnings.extend(Validator::validate_shot(&data, &cfg.validation, section_id, shot_index));
-        }
+        // Per-project thresholds (#57) so create-time warnings match the panel.
+        warnings.extend(Validator::validate_shot(&data, &project.validation, section_id, shot_index));
 
         let shot = if let Some(before_id) = before_shot_id {
             project.insert_shot_before(section_id, before_id, data, None, None)
@@ -1598,7 +1597,7 @@ impl AppState {
 
         // Validate resulting length (disallow zero/negative)
         if let Some(section) = project.sections.iter().find(|s| s.id == section_id) {
-            if let Some((shot_index, existing)) = section.shots.iter().enumerate().find(|(_, s)| s.id == shot_id) {
+            if let Some(existing) = section.shots.iter().find(|s| s.id == shot_id) {
                 let new_length = updates.length.unwrap_or(existing.length);
                 if new_length == 0.0 {
                     return CommandResult::failure(format!(
@@ -1617,24 +1616,10 @@ impl AppState {
                 }
 
                 // Reject geometry edits on frozen shots
-                if updates.touches_geometry() {
-                    let section_lookup = project.build_section_lookup();
-                    let merge_adj = project.build_merge_adjacency(&section_lookup);
-                    let closure_adj = project.build_aligned_closure_adjacency(&section_lookup);
-                    let datum_stations: std::collections::HashSet<_> =
-                        project.zero_datums.iter().filter_map(|d| project.resolve_key(&d.station_ref)).collect();
-                    if project.is_shot_frozen(
-                        section_id,
-                        shot_index,
-                        &section_lookup,
-                        &merge_adj,
-                        &closure_adj,
-                        &datum_stations,
-                    ) {
-                        return CommandResult::failure(
-                            "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.".to_string()
-                        );
-                    }
+                if updates.touches_geometry() && project.is_shot_frozen_by_id(section_id, shot_id) {
+                    return CommandResult::failure(
+                        "Cannot edit geometry of a frozen shot. This shot is part of an adjusted survey network.".to_string()
+                    );
                 }
             }
         }
@@ -1665,6 +1650,17 @@ impl AppState {
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
         };
+
+        // Defense-in-depth: refuse to delete a frozen shot (collaborator-locked
+        // geometry anchored to an adjusted survey network). Mirrors update_shot's
+        // frozen-geometry guard; the resolve-flow UI also gates this option. Runs
+        // BEFORE the shift-blocked check so a frozen shot reports the clear frozen
+        // message rather than the misleading "Use split instead."
+        if project.is_shot_frozen_by_id(section_id, shot_id) {
+            return CommandResult::failure(
+                "Cannot delete a frozen shot. This shot is part of an adjusted survey network.".to_string()
+            );
+        }
 
         if let Ok(impact) = project.preview_delete_shot(section_id, shot_id) {
             if impact.shift_blocked {

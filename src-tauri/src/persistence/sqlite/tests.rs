@@ -5,6 +5,153 @@ use crate::models::StationRef;
 use tempfile::TempDir;
 
 #[test]
+fn load_project_validation_returns_none_when_table_absent() {
+    // A legacy .stalx predating `project_settings`, opened read-only (which does
+    // NOT migrate), must not error: load_project_validation returns Ok(None) so
+    // get_survey_geometry_for_file's preview load still works (Codex). Simulate the
+    // missing table by dropping it, then confirm no error is propagated.
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute("DROP TABLE IF EXISTS project_settings", [])
+        .unwrap();
+    let result = db.load_project_validation();
+    assert!(result.is_ok(), "a missing project_settings table must not error");
+    assert!(result.unwrap().is_none(), "absent validation resolves to None");
+}
+
+#[test]
+fn save_resolved_warning_never_clobbers_a_different_shots_uuid_row() {
+    // The legacy positional UNIQUE must not let one shot's ignore delete another
+    // shot's UUID-keyed ignore sharing the (section, shot_id) slot — which can
+    // happen transiently when in-memory ids diverge from saved positions after a
+    // save (issue #57 / Codex). The conditional upsert preserves the existing row
+    // and reports the collision rather than silently dropping either ignore.
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    let mk = |uuid: &str| ResolvedWarning {
+        section_id: 0,
+        shot_id: 5,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some(uuid.to_string()),
+    };
+    db.save_resolved_warning(&mk("aaa")).unwrap();
+    // A second shot's ignore landing on the same stale position is refused, not silent.
+    assert!(
+        db.save_resolved_warning(&mk("bbb")).is_err(),
+        "a colliding different-shot ignore must be reported, not silently applied"
+    );
+    let rows = db.load_resolved_warnings().unwrap();
+    assert_eq!(rows.len(), 1, "the first shot's ignore must be preserved");
+    assert_eq!(rows[0].shot_uuid.as_deref(), Some("aaa"));
+}
+
+#[test]
+fn bulk_upsert_keeps_uuid_row_over_colliding_legacy_null_row() {
+    // On the save carry-over a legacy NULL-uuid row can collide with a remapped
+    // UUID row at the same position; the UUID row must win regardless of insert
+    // order, never downgrading the survivor to position-keying (issue #57 / Codex).
+    let uuid_row = ResolvedWarning {
+        section_id: 0,
+        shot_id: 7,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("ccc".to_string()),
+    };
+    let null_row = ResolvedWarning {
+        shot_uuid: None,
+        ..uuid_row.clone()
+    };
+    for batch in [
+        vec![null_row.clone(), uuid_row.clone()],
+        vec![uuid_row.clone(), null_row.clone()],
+    ] {
+        let db = Database::in_memory().unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        db.save_resolved_warnings_bulk(&batch).unwrap();
+        let rows = db.load_resolved_warnings().unwrap();
+        assert_eq!(rows.len(), 1, "the colliding rows collapse to one");
+        assert_eq!(rows[0].shot_uuid.as_deref(), Some("ccc"), "the UUID row wins");
+    }
+}
+
+#[test]
+fn shot_uuid_is_persisted_reflects_the_shots_table() {
+    // A new ignore is UUID-keyed only when the shot's UUID is already on disk; a
+    // pre-v6 shot's in-memory-minted UUID isn't, so its ignore stays position-keyed
+    // to survive the next open (issue #57 / Codex).
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, uuid) \
+             VALUES (1, 0, 0, 0, 0, 1, 0, 0, 'persisted-uuid')",
+            [],
+        )
+        .unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, uuid) \
+             VALUES (2, 0, 1, 0, 0, 1, 0, 0, NULL)",
+            [],
+        )
+        .unwrap();
+    assert!(db.shot_uuid_is_persisted("persisted-uuid").unwrap());
+    assert!(!db.shot_uuid_is_persisted("transient-uuid").unwrap());
+}
+
+#[test]
+fn save_resolved_warning_collision_preserves_the_prior_ignore() {
+    // A refused collision (the requested position holds a DIFFERENT shot's ignore)
+    // must roll back the dedup-delete too, so this shot's OWN prior ignore is not
+    // dropped on the way to refusing (issue #57 / Codex).
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    let row = |shot_id: u32, uuid: &str| ResolvedWarning {
+        section_id: 0,
+        shot_id,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some(uuid.to_string()),
+    };
+    // Shot A's ignore at position 3, shot B's at position 5.
+    db.save_resolved_warning(&row(3, "aaa")).unwrap();
+    db.save_resolved_warning(&row(5, "bbb")).unwrap();
+    // Re-resolve A claiming position 5 (where B sits): refused, and A's old row stays.
+    assert!(db.save_resolved_warning(&row(5, "aaa")).is_err());
+    let mut rows = db.load_resolved_warnings().unwrap();
+    rows.sort_by_key(|r| r.shot_id);
+    assert_eq!(rows.len(), 2, "both shots' ignores survive the refused collision");
+    assert_eq!(rows[0].shot_id, 3);
+    assert_eq!(rows[0].shot_uuid.as_deref(), Some("aaa"));
+    assert_eq!(rows[1].shot_id, 5);
+    assert_eq!(rows[1].shot_uuid.as_deref(), Some("bbb"));
+}
+
+#[test]
 fn test_foreign_keys_enabled_on_open() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("fk_enabled.stalx");
@@ -847,6 +994,7 @@ fn test_resolved_warnings_persistence() {
         warning_code: "AZIMUTH_DIFF".to_string(),
         resolved_at: Utc::now(),
         resolved_comment: Some("Verified in field".to_string()),
+        shot_uuid: None,
     };
     db.save_resolved_warning(&warning).unwrap();
 
@@ -859,9 +1007,222 @@ fn test_resolved_warnings_persistence() {
     assert_eq!(loaded[0].resolved_comment, Some("Verified in field".to_string()));
 
     // Delete resolved warning
-    db.delete_resolved_warning(0, 1, "AZIMUTH_DIFF").unwrap();
+    db.delete_resolved_warning(0, 1, "AZIMUTH_DIFF", None).unwrap();
     let loaded_after_delete = db.load_resolved_warnings().unwrap();
     assert!(loaded_after_delete.is_empty());
+}
+
+#[test]
+fn test_resolved_warning_dedup_and_delete_by_uuid() {
+    // Issue #57: suppression is keyed by the shot's stable UUID, not the
+    // renumber-prone shot_id. Two saves with the same UUID but different
+    // shot_id must collapse to a single row, and deletion by UUID must clear
+    // it regardless of the shot_id supplied.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    let base = ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-1".to_string()),
+    };
+    db.save_resolved_warning(&base).unwrap();
+    // Same UUID, drifted shot_id (as an insert-before would produce on reload).
+    db.save_resolved_warning(&ResolvedWarning { shot_id: 5, ..base.clone() }).unwrap();
+
+    let loaded = db.load_resolved_warnings().unwrap();
+    assert_eq!(loaded.len(), 1, "same UUID must dedup to a single row");
+    assert_eq!(loaded[0].shot_uuid.as_deref(), Some("uuid-1"));
+    assert_eq!(loaded[0].shot_id, 5, "latest position wins");
+
+    // Deleting by UUID clears it even with an unrelated shot_id.
+    db.delete_resolved_warning(0, 999, "ZERO_LENGTH", Some("uuid-1")).unwrap();
+    assert!(db.load_resolved_warnings().unwrap().is_empty());
+}
+
+#[test]
+fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
+    // Issue #57 regression guard: resolve_all can hand the bulk save two
+    // warnings with the SAME (section_id, shot_id, warning_code) — e.g. a shot
+    // with both azimuths out of range yields two INVALID_AZIMUTH rows, and an
+    // over-anchored merge component can map two datums onto one shot. The bulk
+    // save must not abort on the legacy UNIQUE constraint.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    let w = ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "INVALID_AZIMUTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-1".to_string()),
+    };
+    // Two identical-key rows in one batch must not raise a UNIQUE error.
+    db.save_resolved_warnings_bulk(&[w.clone(), w.clone()]).unwrap();
+    assert_eq!(
+        db.load_resolved_warnings().unwrap().len(),
+        1,
+        "duplicate (section, shot, code) collapses to one row instead of crashing the batch"
+    );
+}
+
+#[test]
+fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
+    // Issue #57 (Item 2): a UUID-keyed save must NOT delete a DIFFERENT shot's
+    // valid by-UUID row that occupies a different position. Before the fix the
+    // DELETE also matched `(section_id, shot_id)`, so saving uuid-Y could wipe
+    // uuid-X if Y's params happened to target X's position.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    // Shot X ignored at position shot_id=1.
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-X".to_string()),
+    })
+    .unwrap();
+    // Shot Y ignored at a DISTINCT position shot_id=2 (its own current spot).
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 2,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-Y".to_string()),
+    })
+    .unwrap();
+
+    let loaded = db.load_resolved_warnings().unwrap();
+    assert_eq!(loaded.len(), 2, "both distinct-UUID ignores must survive");
+    let uuids: std::collections::HashSet<_> =
+        loaded.iter().filter_map(|r| r.shot_uuid.as_deref()).collect();
+    assert!(uuids.contains("uuid-X"), "uuid-X's ignore must not be deleted");
+    assert!(uuids.contains("uuid-Y"), "uuid-Y's ignore must survive");
+}
+
+#[test]
+fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
+    // Issue #57 (review): un-ignore passes the LIVE shot's UUID. A legacy
+    // NULL-uuid row suppressing that same shot (e.g. on a load path that didn't
+    // run the backfill) must still be cleared — the delete's position branch is
+    // restricted to `shot_uuid IS NULL`, so it clears the legacy row WITHOUT
+    // touching a DIFFERENT shot's by-UUID row that occupies the same position.
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    // Legacy NULL-uuid suppression of the shot at position (0, 1).
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    })
+    .unwrap();
+    // A DIFFERENT shot's by-UUID suppression at a distinct position (0, 2) — must
+    // NOT be deleted when we un-ignore the shot at (0, 1). (UNIQUE(section_id,
+    // shot_id, warning_code) forbids two rows sharing one position+code, so this
+    // models a different shot, not a same-position collision.)
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 2,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("uuid-other".to_string()),
+    })
+    .unwrap();
+
+    // Un-ignore the live shot at (0, 1) with ITS uuid: the uuid branch matches
+    // nothing (no "uuid-live" row), but the NULL-only position branch clears the
+    // legacy row at (0, 1).
+    db.delete_resolved_warning(0, 1, "ZERO_LENGTH", Some("uuid-live"))
+        .unwrap();
+
+    let rows = db.load_resolved_warnings().unwrap();
+    assert!(
+        !rows.iter().any(|r| r.shot_uuid.is_none()),
+        "the legacy NULL-uuid row for the same shot/position must be cleared by un-ignore"
+    );
+    assert!(
+        rows.iter().any(|r| r.shot_uuid.as_deref() == Some("uuid-other")),
+        "a different shot's by-UUID row at another position must NOT be deleted"
+    );
+}
+
+#[test]
+fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
+    // Issue #57 (Item 4): legacy NULL-uuid resolved rows whose (section_id,
+    // shot_id) still maps to a live shot are upgraded to UUID keying on load.
+    // Idempotent, and a row with no live shot is left NULL (never mis-keyed).
+    let mut db = Database::in_memory().unwrap();
+    let mut project = Project::new("Test".to_string(), None);
+    project.add_section(SectionData { color: "#000".to_string(), ..Default::default() });
+    db.save_project(&project).unwrap();
+
+    // Legacy row keyed by position (no UUID) that maps to a live shot.
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 1,
+        warning_code: "ZERO_LENGTH".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    })
+    .unwrap();
+    // Legacy row whose (section, shot) is NOT in the live map — must stay NULL.
+    db.save_resolved_warning(&ResolvedWarning {
+        section_id: 0,
+        shot_id: 7,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: None,
+    })
+    .unwrap();
+
+    let mut live: HashMap<(u32, u32), String> = HashMap::new();
+    live.insert((0, 1), "uuid-live".to_string());
+
+    let upgraded = db.backfill_resolved_warning_uuids(&live).unwrap();
+    assert_eq!(upgraded, 1, "only the row with a live shot is upgraded");
+
+    let loaded = db.load_resolved_warnings().unwrap();
+    let mapped = loaded
+        .iter()
+        .find(|r| r.shot_id == 1 && r.warning_code == "ZERO_LENGTH")
+        .expect("the (0,1) row should still exist");
+    assert_eq!(
+        mapped.shot_uuid.as_deref(),
+        Some("uuid-live"),
+        "the live-mapped legacy row gets the shot UUID"
+    );
+    let orphan = loaded
+        .iter()
+        .find(|r| r.shot_id == 7 && r.warning_code == "SHORT_SHOT")
+        .expect("the orphan row should still exist");
+    assert_eq!(orphan.shot_uuid, None, "the unmapped legacy row stays position-keyed");
+
+    // Idempotent: a second backfill upgrades nothing.
+    let upgraded_again = db.backfill_resolved_warning_uuids(&live).unwrap();
+    assert_eq!(upgraded_again, 0, "second backfill is a no-op");
 }
 
 // === Test: Verify merged_with is populated correctly from fractal fixture ===
@@ -1531,6 +1892,7 @@ fn test_resolved_warnings_round_trip() {
         warning_code: "azimuth_deviation".to_string(),
         resolved_at: Utc::now(),
         resolved_comment: Some("Verified in field".to_string()),
+        shot_uuid: None,
     };
 
     db.save_resolved_warning(&warning).unwrap();
@@ -1543,7 +1905,7 @@ fn test_resolved_warnings_round_trip() {
     assert_eq!(loaded[0].resolved_comment.as_deref(), Some("Verified in field"));
 
     // Delete it
-    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation").unwrap();
+    db.delete_resolved_warning(section_id, shot_id, "azimuth_deviation", None).unwrap();
     let remaining = db.load_resolved_warnings().unwrap();
     assert!(remaining.is_empty());
 }

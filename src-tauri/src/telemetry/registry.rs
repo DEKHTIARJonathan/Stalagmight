@@ -105,6 +105,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.remove_from_recent_projects",
     "command.remove_loop_closure",
     "command.remove_zero_datum",
+    // Retained for telemetry-ID stability; the command was removed (#57). See REMOVED_COMMANDS.
     "command.resolve_all_warnings",
     "command.resolve_warning",
     "command.restore_from_backup",
@@ -384,6 +385,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_raw_table",
     // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
     "command.get_along_line_distance",
+    // Per-project settings: validation thresholds stored in the .stalx (#57).
+    "command.update_project_settings",
+    // Project Settings dialog (#57).
+    "action.dialog.project-settings",
+    "dialog-cancel.project-settings",
+    "dwell.dialog.project-settings",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -436,7 +443,7 @@ mod tests {
     /// are retained (append-only registry; frozen IDs are never relabeled or
     /// reused). They intentionally have no live handler and no frontend tracking,
     /// so the `command.*` and `undo-after.*` coverage checks skip them.
-    const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures"];
+    const REMOVED_COMMANDS: &[&str] = &["adjust_loop_closures", "resolve_all_warnings"];
 
     /// Dialog keys removed from `App.tsx` whose registry slots are likewise
     /// retained. The `action.dialog.*` / `dialog-cancel.*` / `dwell.dialog.*`
@@ -522,7 +529,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 322);
+        assert_eq!(EVENT_NAMES.len(), 326);
     }
 
     #[test]

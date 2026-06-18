@@ -162,6 +162,7 @@ fn get_command_type(command: &Command) -> String {
         Command::MergeProjects { .. } => "merge_projects".to_string(),
         Command::ApplyCollabChanges => "apply_collab_changes".to_string(),
         Command::RepairIntegrity => "repair_integrity".to_string(),
+        Command::UpdateProjectSettings => "update_project_settings".to_string(),
     }
 }
 

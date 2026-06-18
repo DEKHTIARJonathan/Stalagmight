@@ -1119,6 +1119,7 @@ pub fn run() {
             commands::cache::get_tile_providers,
             // Project commands
             commands::project::create_project,
+            commands::project::update_project_settings,
             commands::project::open_project,
             commands::project::save_project,
             commands::project::close_project,
@@ -1224,7 +1225,6 @@ pub fn run() {
             commands::validation::check_project_integrity,
             commands::validation::repair_project_integrity,
             commands::validation::resolve_warning,
-            commands::validation::resolve_all_warnings,
             commands::validation::unresolve_warning,
             // Survey geometry
             commands::survey_geometry::get_survey_geometry,
@@ -2207,6 +2207,7 @@ mod tests {
             shot: config::ShotConfig::default(),
             snap: config::MapSnapConfig::default(),
             animation: config::MapAnimationConfig::default(),
+            highlight_warnings_on_tab_switch: true,
         };
         map_config.normalize();
         assert_eq!(map_config.satellite_provider, "esri");
@@ -2234,6 +2235,7 @@ mod tests {
             shot: config::ShotConfig::default(),
             snap: config::MapSnapConfig::default(),
             animation: config::MapAnimationConfig::default(),
+            highlight_warnings_on_tab_switch: true,
         };
         map_config.normalize();
         assert_eq!(map_config.satellite_provider, "esri");

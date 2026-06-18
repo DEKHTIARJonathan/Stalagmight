@@ -452,6 +452,7 @@
     },
     "validation": {
       "title": "Validation",
+      "defaultsNote": "These are the defaults for newly created projects. Each project stores its own thresholds (in its .stalx) — edit them per project under Project Settings.",
       "sections": {
         "shotLength": "Shot Length Warnings",
         "depth": "Depth Warnings",
@@ -486,12 +487,18 @@
         "help": "Warn when forward/back pitch differs by more than this (0-90 degrees)",
         "aria": "Pitch in/out difference threshold"
       },
+      "inclinationDepthDiff": {
+        "label": "Inclination vs depth",
+        "help": "Warn when the recorded inclination differs from the inclination implied by the shot's length and depth change by more than this (0-90 degrees)",
+        "aria": "Inclination versus depth/length threshold"
+      },
       "validation": {
         "minShotLength": "Minimum shot length warning must be >= 0",
         "maxShotLength": "Maximum shot length warning must be greater than minimum",
         "depthChange": "Depth change warning threshold must be positive",
         "azimuthDiff": "Azimuth difference threshold must be between 0 and 180",
-        "pitchDiff": "Pitch difference threshold must be between 0 and 90"
+        "pitchDiff": "Pitch difference threshold must be between 0 and 90",
+        "inclinationDepthDiff": "Inclination vs depth threshold must be between 0 and 90"
       }
     },
     "export": {
@@ -865,7 +872,13 @@
         "station": "Station Appearance",
         "shot": "Shot Appearance",
         "snap": "Snap-to-Station",
-        "animation": "Animation"
+        "animation": "Animation",
+        "warnings": "Warnings"
+      },
+      "highlightWarnings": {
+        "label": "Switching to warnings tab highlights issues on the map",
+        "help": "When you open the Warnings tab, color shots and stations by validation severity (red = error, yellow = warning, green = clear), then restore the previous coloring when you leave.",
+        "aria": "Highlight issues on the map when switching to the warnings tab"
       },
       "satellite": {
         "provider": {
@@ -1037,6 +1050,20 @@
   "dialogs": {
     "settings": {
       "title": "Settings"
+    },
+    "projectSettings": {
+      "title": "Project Settings",
+      "noProject": "No project is open.",
+      "saveFailed": "Failed to save project settings.",
+      "tabs": {
+        "general": "General",
+        "validation": "Validation",
+        "experimental": "Experimental"
+      },
+      "name": {
+        "label": "Project name",
+        "help": "The name of this cave system / project."
+      }
     },
     "collabReview": {
       "title": "Review Collaborator Changes",
@@ -1365,10 +1392,50 @@
       "hideResolved": "Hide resolved",
       "showResolved": "Show resolved",
       "location": "Section {{section}} - Shot {{shot}}",
-      "markResolved": "Mark resolved",
       "markUnresolved": "Mark unresolved",
       "resolve": "Resolve",
-      "clearAll": "Clear All"
+      "openShotDetails": "Open shot {{shot}} details",
+      "resolveAll": "Resolve all",
+      "resolveTitle": "Resolve warning",
+      "resolveBack": "Back",
+      "resolveExit": "Exit",
+      "resolvePosition": "{{index}} of {{total}}",
+      "resolveApply": "Apply",
+      "resolveApplyNext": "Apply / Next",
+      "resolveSkip": "Skip",
+      "resolveDone": "Done",
+      "resolveRemaining": "Resolve remaining",
+      "resolveSummary": "Resolved {{resolved}}, skipped {{skipped}} — {{remaining}} remaining.",
+      "resolveFailed": "Could not apply the fix.",
+      "resolveInvalid": "Enter a valid number.",
+      "resolveInvalidLength": "Length must be greater than 0.",
+      "resolveInvalidAzimuth": "Azimuth must be between -360° and 360°.",
+      "resolveInvalidPitch": "Pitch must be between -90° and 90°.",
+      "azimuthLabel": "Azimuth",
+      "fromInclinationNote": "From recorded inclination {{value}}°",
+      "proposedImpossibleGeometry": "These values make the shot shorter than its depth change, so applying will raise an error.",
+      "zoomToShot": "Zoom to the shot",
+      "resolveOptions": {
+        "useIn": "Use azimuth in",
+        "useOut": "Use azimuth out",
+        "average": "Average",
+        "manual": "Manual correction",
+        "manualLength": "Set length",
+        "manualDepth": "Set depths",
+        "manualPitch": "Set inclination",
+        "deleteShot": "Delete this shot",
+        "normalize": "Normalize to 0–360°",
+        "useAbs": "Use absolute value",
+        "clear": "Clear value",
+        "keepDatum": "Keep {{station}}, remove the others",
+        "goToStation": "Go to station",
+        "adjustLength": "Use inclination — adjust length",
+        "adjustInclination": "Use length — adjust inclination",
+        "splitInclLength": "Split — adjust inclination & length",
+        "lengthFromDepth": "Set length to depth change",
+        "lengthFromInclination": "Set length from inclination",
+        "ignore": "Ignore (keep value, don't warn again)"
+      }
     },
     "labels": {
       "id": "ID",
@@ -1385,6 +1452,7 @@
       "rightShort": "R",
       "upShort": "U",
       "downShort": "D",
+      "pitch": "Pitch",
       "pitchIn": "Pitch (in)",
       "pitchOut": "Pitch (out)",
       "comment": "Comment",
@@ -1462,6 +1530,9 @@
       "stationMerges": "Station merges",
       "zeroDatums": "Zero datums"
     },
+    "projectSettings": {
+      "open": "Project Settings"
+    },
     "collaboration": {
       "title": "Collaboration",
       "enable": "Ariane collaboration",
@@ -1514,6 +1585,7 @@
       "satellite": "Satellite",
       "depthGradient": "Depth Gradient",
       "distanceGradient": "Distance Gradient",
+      "issueSeverity": "Issue severity",
       "devStats": "Dev stats"
     },
     "descriptions": {
@@ -1531,6 +1603,7 @@
       "satellite": "Show satellite imagery",
       "depthGradient": "Color by depth",
       "distanceGradient": "Color by along-cave distance from the entrance (click a station to re-root)",
+      "issueSeverity": "Color shots and stations by validation issues (red = error, yellow = warning, green = clear)",
       "devStats": "Show developer stats overlay"
     }
   },

@@ -5,7 +5,8 @@ import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import { isFieldChanged, createNumericHandler } from './types';
-import { defaultConfig } from '../../../types/config';
+import { defaultConfig, type Config } from '../../../types/config';
+import { validateValidationConfig } from '../../../utils/validation';
 
 /**
  * Validation settings category content.
@@ -18,42 +19,27 @@ export function ValidationSettings({
   changedFields,
   onValidationError,
   panelIdBase,
-}: SettingsCategoryProps) {
+  scope = 'global',
+  // Baseline for "reset to default" / is-default. The global dialog uses the
+  // built-in defaults; the project dialog passes the user's GLOBAL config (the
+  // "defaults for new projects", #57) so reset matches that mental model.
+  defaults = defaultConfig.validation,
+}: SettingsCategoryProps & { scope?: 'global' | 'project'; defaults?: Config['validation'] }) {
   const { t } = useTranslation();
   // Validation state
   const hasErrorRef = useRef(false);
 
-  // Validate on mount and when config changes
+  // Validate on mount and when config changes (shared rules, see
+  // utils/validation). Per-field messages were never rendered in this panel;
+  // only the boolean is reported via onValidationError.
   useEffect(() => {
-    const errors: string[] = [];
-
-    // Validate shot length thresholds
-    if (config.validation.warn_shot_length_min < 0) {
-      errors.push(t('settings.validation.validation.minShotLength'));
-    }
-    if (config.validation.warn_shot_length_max <= config.validation.warn_shot_length_min) {
-      errors.push(t('settings.validation.validation.maxShotLength'));
-    }
-
-    // Validate depth change threshold
-    if (config.validation.warn_depth_change_per_shot_max <= 0) {
-      errors.push(t('settings.validation.validation.depthChange'));
-    }
-
-    // Validate diff thresholds (0 means disabled)
-    if (config.validation.azimuth_diff_threshold < 0 || config.validation.azimuth_diff_threshold > 180) {
-      errors.push(t('settings.validation.validation.azimuthDiff'));
-    }
-    if (config.validation.pitch_diff_threshold < 0 || config.validation.pitch_diff_threshold > 90) {
-      errors.push(t('settings.validation.validation.pitchDiff'));
-    }
-
-    const hasError = errors.length > 0;
+    const errs = validateValidationConfig(config.validation);
+    const hasError = Object.values(errs).some((e) => e !== null);
     if (hasError !== hasErrorRef.current) {
       hasErrorRef.current = hasError;
       onValidationError('validation', hasError);
     }
-  }, [config.validation, onValidationError, t]);
+  }, [config.validation, onValidationError]);
 
   const handleShotLengthMinChange = createNumericHandler(onChange,
     (n) => ({ validation: { ...config.validation, warn_shot_length_min: n } }));
@@ -65,6 +51,8 @@ export function ValidationSettings({
     (n) => ({ validation: { ...config.validation, azimuth_diff_threshold: n } }));
   const handlePitchDiffChange = createNumericHandler(onChange,
     (n) => ({ validation: { ...config.validation, pitch_diff_threshold: n } }));
+  const handleInclinationDepthDiffChange = createNumericHandler(onChange,
+    (n) => ({ validation: { ...config.validation, inclination_depth_diff_threshold: n } }));
 
   return (
     <div
@@ -73,15 +61,18 @@ export function ValidationSettings({
       aria-labelledby={getTabId(panelIdBase, 'validation')}
       data-testid="settings-panel-validation"
     >
-      <h2 className="text-lg font-medium mb-4">{t('settings.validation.title')}</h2>
+      <h2 className="text-lg font-medium mb-1">{t('settings.validation.title')}</h2>
+      {scope === 'global' && (
+        <p className="text-xs text-text-secondary mb-4">{t('settings.validation.defaultsNote')}</p>
+      )}
 
       <SettingsSection title={t('settings.validation.sections.shotLength')} data-testid="section-shot-length">
         <SettingRow
           label={t('settings.validation.shotLength.min.label')}
           helpText={t('settings.validation.shotLength.min.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_shot_length_min')}
-          onReset={() => onChange({ validation: { ...config.validation, warn_shot_length_min: defaultConfig.validation.warn_shot_length_min } })}
-          isDefault={config.validation.warn_shot_length_min === defaultConfig.validation.warn_shot_length_min}
+          onReset={() => onChange({ validation: { ...config.validation, warn_shot_length_min: defaults.warn_shot_length_min } })}
+          isDefault={config.validation.warn_shot_length_min === defaults.warn_shot_length_min}
           data-testid="setting-shot-length-min"
         >
           <input
@@ -100,8 +91,8 @@ export function ValidationSettings({
           label={t('settings.validation.shotLength.max.label')}
           helpText={t('settings.validation.shotLength.max.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_shot_length_max')}
-          onReset={() => onChange({ validation: { ...config.validation, warn_shot_length_max: defaultConfig.validation.warn_shot_length_max } })}
-          isDefault={config.validation.warn_shot_length_max === defaultConfig.validation.warn_shot_length_max}
+          onReset={() => onChange({ validation: { ...config.validation, warn_shot_length_max: defaults.warn_shot_length_max } })}
+          isDefault={config.validation.warn_shot_length_max === defaults.warn_shot_length_max}
           data-testid="setting-shot-length-max"
         >
           <input
@@ -122,8 +113,8 @@ export function ValidationSettings({
           label={t('settings.validation.depth.max.label')}
           helpText={t('settings.validation.depth.max.help')}
           isChanged={isFieldChanged(changedFields, 'validation.warn_depth_change_per_shot_max')}
-          onReset={() => onChange({ validation: { ...config.validation, warn_depth_change_per_shot_max: defaultConfig.validation.warn_depth_change_per_shot_max } })}
-          isDefault={config.validation.warn_depth_change_per_shot_max === defaultConfig.validation.warn_depth_change_per_shot_max}
+          onReset={() => onChange({ validation: { ...config.validation, warn_depth_change_per_shot_max: defaults.warn_depth_change_per_shot_max } })}
+          isDefault={config.validation.warn_depth_change_per_shot_max === defaults.warn_depth_change_per_shot_max}
           data-testid="setting-depth-change-max"
         >
           <input
@@ -144,8 +135,8 @@ export function ValidationSettings({
           label={t('settings.validation.azimuthDiff.label')}
           helpText={t('settings.validation.azimuthDiff.help')}
           isChanged={isFieldChanged(changedFields, 'validation.azimuth_diff_threshold')}
-          onReset={() => onChange({ validation: { ...config.validation, azimuth_diff_threshold: defaultConfig.validation.azimuth_diff_threshold } })}
-          isDefault={config.validation.azimuth_diff_threshold === defaultConfig.validation.azimuth_diff_threshold}
+          onReset={() => onChange({ validation: { ...config.validation, azimuth_diff_threshold: defaults.azimuth_diff_threshold } })}
+          isDefault={config.validation.azimuth_diff_threshold === defaults.azimuth_diff_threshold}
           data-testid="setting-azimuth-diff"
         >
           <input
@@ -165,8 +156,8 @@ export function ValidationSettings({
           label={t('settings.validation.pitchDiff.label')}
           helpText={t('settings.validation.pitchDiff.help')}
           isChanged={isFieldChanged(changedFields, 'validation.pitch_diff_threshold')}
-          onReset={() => onChange({ validation: { ...config.validation, pitch_diff_threshold: defaultConfig.validation.pitch_diff_threshold } })}
-          isDefault={config.validation.pitch_diff_threshold === defaultConfig.validation.pitch_diff_threshold}
+          onReset={() => onChange({ validation: { ...config.validation, pitch_diff_threshold: defaults.pitch_diff_threshold } })}
+          isDefault={config.validation.pitch_diff_threshold === defaults.pitch_diff_threshold}
           data-testid="setting-pitch-diff"
         >
           <input
@@ -179,6 +170,27 @@ export function ValidationSettings({
             className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
             aria-label={t('settings.validation.pitchDiff.aria')}
             data-testid="input-pitch-diff"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.validation.inclinationDepthDiff.label')}
+          helpText={t('settings.validation.inclinationDepthDiff.help')}
+          isChanged={isFieldChanged(changedFields, 'validation.inclination_depth_diff_threshold')}
+          onReset={() => onChange({ validation: { ...config.validation, inclination_depth_diff_threshold: defaults.inclination_depth_diff_threshold } })}
+          isDefault={config.validation.inclination_depth_diff_threshold === defaults.inclination_depth_diff_threshold}
+          data-testid="setting-inclination-depth-diff"
+        >
+          <input
+            type="number" inputMode="decimal"
+            step={1}
+            min={0}
+            max={90}
+            value={config.validation.inclination_depth_diff_threshold}
+            onChange={(e) => handleInclinationDepthDiffChange(e.target.value)}
+            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
+            aria-label={t('settings.validation.inclinationDepthDiff.aria')}
+            data-testid="input-inclination-depth-diff"
           />
         </SettingRow>
       </SettingsSection>

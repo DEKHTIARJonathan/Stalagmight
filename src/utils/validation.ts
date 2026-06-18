@@ -17,6 +17,67 @@ export type { ValidationConfig };
 export const DEFAULT_VALIDATION_CONFIG: ValidationConfig = defaultConfig.validation;
 
 /**
+ * Per-field validation errors for a ValidationConfig: each field maps to its
+ * i18n error key, or null when valid.
+ *
+ * NOTE: this intentionally OMITS `warn_azimuth_deviation_max` — none of the
+ * three call sites (the global Settings dialog, the per-project settings
+ * dialog, and the ValidationSettings panel) range-check that field, so the
+ * record is a partial view of ValidationConfig by design. Do not assume it is
+ * exhaustive.
+ */
+export type ValidationConfigErrors = {
+  warn_shot_length_min: string | null;
+  warn_shot_length_max: string | null;
+  warn_depth_change_per_shot_max: string | null;
+  azimuth_diff_threshold: string | null;
+  pitch_diff_threshold: string | null;
+  inclination_depth_diff_threshold: string | null;
+};
+
+/**
+ * Single source of truth for the per-field range rules shared by the global
+ * Settings dialog, the per-project settings dialog, and the ValidationSettings
+ * panel. Returns a record of i18n error *keys* (not translated strings) so the
+ * module stays free of react-i18next hooks; callers translate as needed.
+ *
+ * The bounds reproduce the three original copies exactly: `min >= 0`,
+ * `max > min` (so `max <= min` is invalid), `depth change > 0`, and inclusive
+ * `[0, 180]` / `[0, 90]` bounds for the diff thresholds.
+ */
+export function validateValidationConfig(v: ValidationConfig): ValidationConfigErrors {
+  return {
+    warn_shot_length_min:
+      v.warn_shot_length_min < 0 ? 'settings.validation.validation.minShotLength' : null,
+    warn_shot_length_max:
+      v.warn_shot_length_max <= v.warn_shot_length_min
+        ? 'settings.validation.validation.maxShotLength'
+        : null,
+    warn_depth_change_per_shot_max:
+      v.warn_depth_change_per_shot_max <= 0
+        ? 'settings.validation.validation.depthChange'
+        : null,
+    azimuth_diff_threshold:
+      v.azimuth_diff_threshold < 0 || v.azimuth_diff_threshold > 180
+        ? 'settings.validation.validation.azimuthDiff'
+        : null,
+    pitch_diff_threshold:
+      v.pitch_diff_threshold < 0 || v.pitch_diff_threshold > 90
+        ? 'settings.validation.validation.pitchDiff'
+        : null,
+    inclination_depth_diff_threshold:
+      v.inclination_depth_diff_threshold < 0 || v.inclination_depth_diff_threshold > 90
+        ? 'settings.validation.validation.inclinationDepthDiff'
+        : null,
+  };
+}
+
+/** True when the config passes every range rule. */
+export function isValidationConfigValid(v: ValidationConfig): boolean {
+  return Object.values(validateValidationConfig(v)).every((e) => e === null);
+}
+
+/**
  * Severity levels for validation issues.
  * - error: Blocks import
  * - warning: Can be bypassed with acknowledgement

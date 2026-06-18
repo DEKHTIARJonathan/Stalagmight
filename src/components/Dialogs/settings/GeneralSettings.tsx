@@ -320,6 +320,7 @@ export function GeneralSettings({
         </SettingRow>
       </SettingsSection>
 
+
       <SettingsSection title={t('settings.general.sections.startup')} data-testid="section-startup">
         <SettingRow
           label={t('settings.general.splashScreen.label')}

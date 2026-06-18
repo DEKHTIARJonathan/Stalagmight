@@ -127,14 +127,18 @@ export const defaultConfig: Config = {
       duration: 300,
       point_zoom: 18,
     },
+    highlight_warnings_on_tab_switch: true,
   },
   validation: {
-    warn_shot_length_min: 0.1,
+    // Keep in sync with the Rust ValidationConfig default
+    // (src-tauri/src/config/defaults.rs): flag shots under 0.3 m.
+    warn_shot_length_min: 0.3,
     warn_shot_length_max: 50.0,
     warn_depth_change_per_shot_max: 10.0,
     warn_azimuth_deviation_max: 30.0,
     azimuth_diff_threshold: 20.0,
-    pitch_diff_threshold: 5.0,
+    pitch_diff_threshold: 10.0,
+    inclination_depth_diff_threshold: 15.0,
   },
   closure_adjustment: {
     base_sigma_length_m: 0.05,

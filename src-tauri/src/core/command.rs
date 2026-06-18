@@ -177,6 +177,11 @@ pub enum Command {
     /// undo entry; this variant exists only to LABEL that entry in the undo
     /// history and is never run through `execute()`.
     RepairIntegrity,
+    /// Per-project settings change (name + validation thresholds, #57). Like
+    /// RepairIntegrity, applied via `update_project_settings` which records its
+    /// own snapshot-pair undo entry; this variant only LABELS that entry and is
+    /// never run through `execute()`.
+    UpdateProjectSettings,
 }
 
 /// Result of command execution
@@ -428,6 +433,7 @@ impl Command {
             }
             Command::ApplyCollabChanges => "Apply collaborator changes".to_string(),
             Command::RepairIntegrity => "Repair integrity".to_string(),
+            Command::UpdateProjectSettings => "Update project settings".to_string(),
         }
     }
 }

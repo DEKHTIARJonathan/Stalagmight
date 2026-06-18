@@ -148,6 +148,14 @@ function parseLoadError(e: unknown): LoadError {
 interface ProjectStore {
   // State
   project: Project | null;
+  /**
+   * Whether the open project is backed by an on-disk database. A new project
+   * created with a deferred initial save reserves `project.file_path` but leaves
+   * the backend database unopened until the first save, so DB-backed actions
+   * (e.g. persisting an ignored warning) can't run yet — gate them on this, not
+   * on `file_path` alone (issue #57 / Codex).
+   */
+  databaseOpen: boolean;
   stations: Station[];
   /**
    * Struct-of-Arrays representation of the loaded project's bulk
@@ -270,8 +278,7 @@ interface ProjectStore {
   /** Dismiss the integrity warning without repairing. */
   dismissIntegrityIssues: () => void;
   refreshWarnings: () => Promise<void>;
-  resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<void>;
-  resolveAllWarnings: () => Promise<number>;
+  resolveWarning: (sectionId: number, shotId: number, warningCode: string, comment?: string) => Promise<boolean>;
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
@@ -326,6 +333,8 @@ interface ProjectStore {
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  // Per-project settings (#57): name + validation thresholds, stored in the .stalx
+  updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
   // Collaboration mode
   setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
   setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
@@ -426,6 +435,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   return {
   // Initial state
   project: null,
+  databaseOpen: false,
   stations: [],
   surveyData: null,
   stationsAdjusted: null,
@@ -622,6 +632,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           surveyDataAdjusted: null,
           stats: result.stats,
           warnings: result.warnings,
+          // Populate from the load result so the resolve flow's frozen-shot gating
+          // is correct immediately, not stale from the previous project until the
+          // first command triggers refreshProjectState (issue #57 / Codex).
+          frozenShots: result.frozen_shots,
+          // A loaded project is backed by its on-disk database.
+          databaseOpen: true,
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
           // previous project can never carry over and suppress this one's banner.
@@ -762,6 +778,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     await get().cancelLoading();
 
     const clientOpId = get().startLoading(name, '');
+    // A deferred initial save reserves file_path but leaves the backend database
+    // unopened, so DB-backed actions (e.g. ignoring a warning) can't run yet.
+    const deferred = options?.deferInitialSave ?? !options?.savePath;
 
     try {
       const result = await invokeIpc<CreateProjectFullResult>(
@@ -771,7 +790,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           projectLocation,
           saveDirectory: options?.saveDirectory,
           savePath: options?.savePath,
-          deferInitialSave: options?.deferInitialSave ?? !options?.savePath,
+          deferInitialSave: deferred,
         },
         { purpose: 'create new project workspace', fields: { name } }
       );
@@ -788,6 +807,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // stations yet, so `surveyData` starts as an empty SoA.
       set({
         project: result.project,
+        // A deferred new project has no on-disk database until the first save.
+        databaseOpen: !deferred,
         stations: [],
         stationsAdjusted: null,
         surveyDataAdjusted: null,
@@ -847,7 +868,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Fit map to show all stations
         useUIStore.getState().triggerFitToBounds();
         useUIStore.getState().setView('single');
-        set({ isDirty: false });
+        // An opened project is backed by its on-disk database.
+        set({ isDirty: false, databaseOpen: true });
         get().resetLoading();
       } else {
         get().setLoadingError(result.error ?? 'Failed to open project');
@@ -903,7 +925,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Lightweight: just refresh undo/redo availability
       await get().refreshUndoState();
-      set({ isDirty: false });
+      // The first successful save opens the on-disk database for a deferred project
+      // — UNLESS the backend saved the file but couldn't reopen the DB (it clears
+      // the handle and flags DATABASE_NOT_REOPENED). In that case keep
+      // databaseOpen=false so DB-backed actions stay disabled (issue #57 / Codex).
+      const dbNotReopened = result.warnings?.some((w) => w.code === 'DATABASE_NOT_REOPENED') ?? false;
+      set({ isDirty: false, databaseOpen: !dbNotReopened });
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file — refresh so the
@@ -1023,7 +1050,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
+        set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
       }
       return result;
     } finally {
@@ -1083,7 +1110,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string) => {
+  resolveWarning: async (sectionId: number, shotId: number, warningCode: string, comment?: string): Promise<boolean> => {
     try {
       await invokeIpc(
         'resolve_warning',
@@ -1091,23 +1118,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'acknowledge validation warning', fields: { sectionId, shotId, warningCode } }
       );
       await get().refreshWarnings();
+      return true;
     } catch (e) {
+      // Surface failure to the caller (e.g. the shot no longer exists) so the
+      // resolve flow doesn't report a suppression that never persisted (#57).
       console.error('Failed to resolve warning:', e);
-    }
-  },
-
-  resolveAllWarnings: async () => {
-    try {
-      const count = await invokeIpc<number>(
-        'resolve_all_warnings',
-        {},
-        { purpose: 'bulk acknowledge all validation warnings' }
-      );
-      await get().refreshWarnings();
-      return count;
-    } catch (e) {
-      console.error('Failed to resolve all warnings:', e);
-      return 0;
+      return false;
     }
   },
 
@@ -1661,6 +1677,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   // Collaboration mode
+  updateProjectSettings: async (name: string, validation: Config['validation']) => {
+    return executeCommand(
+      'update_project_settings',
+      { name, validation },
+      { purpose: 'update per-project settings' }
+    );
+  },
+
   setCollabEnabled: async (enabled: boolean) => {
     return executeCommand(
       'set_collab_enabled',

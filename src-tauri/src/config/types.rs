@@ -820,7 +820,11 @@ fn default_azimuth_diff_threshold() -> f64 {
 }
 
 fn default_pitch_diff_threshold() -> f64 {
-    5.0
+    10.0
+}
+
+fn default_inclination_depth_diff_threshold() -> f64 {
+    15.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -869,6 +873,10 @@ pub struct MapConfig {
     /// Animation settings for map focus transitions
     #[serde(default)]
     pub animation: MapAnimationConfig,
+    /// When true, switching the detail panel to the Warnings tab auto-enables the
+    /// map's Issue-severity coloring (restored on leaving the tab).
+    #[serde(default = "default_true")]
+    pub highlight_warnings_on_tab_switch: bool,
 }
 
 impl MapConfig {
@@ -914,7 +922,7 @@ pub struct MapControlsConfig {
     pub invert_scroll: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ValidationConfig {
     pub warn_shot_length_min: f64,
     pub warn_shot_length_max: f64,
@@ -924,9 +932,16 @@ pub struct ValidationConfig {
     /// If abs(diff - 180) > threshold, show warning.
     #[serde(default = "default_azimuth_diff_threshold")]
     pub azimuth_diff_threshold: f64,
-    /// Threshold for pitch in/out difference warning (degrees).
+    /// Threshold for pitch in/out difference warning (degrees) — compares the
+    /// two recorded inclination legs against each other.
     #[serde(default = "default_pitch_diff_threshold")]
     pub pitch_diff_threshold: f64,
+    /// Threshold (degrees) for the INCLINATION_DEPTH_MISMATCH warning: how far
+    /// the recorded inclination may differ from the inclination implied by the
+    /// shot's length and depth change before it is flagged. Distinct from
+    /// `pitch_diff_threshold` (which compares the in/out legs to each other).
+    #[serde(default = "default_inclination_depth_diff_threshold")]
+    pub inclination_depth_diff_threshold: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

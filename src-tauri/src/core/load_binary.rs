@@ -142,6 +142,9 @@ pub struct ProjectHeaderBinary {
     /// `result.project.collab` is undefined and the load-time collab
     /// detection (collab-mode `loadProject` hook) silently never runs.
     pub collab: Option<crate::models::CollabState>,
+    /// Per-project validation thresholds (#57), so binary-loaded projects keep
+    /// their own config instead of falling back to the global defaults.
+    pub validation: crate::config::ValidationConfig,
 }
 
 #[derive(Serialize)]
@@ -171,6 +174,12 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         warnings,
         display_settings,
     } = result;
+
+    // Compute the frozen shots while the whole project is still in scope (its
+    // fields are moved into project_header below). The binary envelope used to
+    // ship an empty list, leaving the frontend's frozen-shot gating stale on a
+    // binary load until the next get_project_state refresh (issue #57 / Codex).
+    let frozen_shots = project.compute_frozen_shots();
 
     // Sum shot count up front so we can pre-allocate exactly.
     let shot_count: usize = project.sections.iter().map(|s| s.shots.len()).sum();
@@ -337,6 +346,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         imported_file_hashes: project.imported_file_hashes,
         imported_section_hashes: project.imported_section_hashes,
         collab: project.collab,
+        validation: project.validation,
     };
 
     let result = LoadProjectFullBinaryResult {
@@ -359,7 +369,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         stats,
         warnings,
         display_settings,
-        frozen_shots: Vec::new(), // filled in by caller (frozen shots arrive via different path)
+        frozen_shots,
     };
 
     let t_pack = start.elapsed();

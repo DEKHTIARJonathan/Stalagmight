@@ -130,7 +130,7 @@ describe('validateShot', () => {
   });
 
   it('flags very short length as warning', () => {
-    const shot = makeShot({ length: 0.05 }); // below default 0.1 min
+    const shot = makeShot({ length: 0.05 }); // below default 0.4 min
     const issues = validateShot(shot, [shot], 0);
     expect(issues.some((i) => i.field === 'length' && i.severity === 'warning')).toBe(true);
   });

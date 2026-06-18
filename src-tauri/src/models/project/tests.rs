@@ -9553,3 +9553,22 @@ fn production_matches_gama_golden() {
         }
     }
 }
+
+#[test]
+fn project_ipc_serializes_validation_field() {
+    // Guard against the data-loss bug (#57): the hand-written ProjectIpc
+    // serializer (used by get_project_state and the load results) must emit
+    // `validation`, or the frontend loses per-project thresholds after any
+    // command refresh and a later save clobbers them back to defaults.
+    let mut p = Project::new("Guard".to_string(), None);
+    p.validation.warn_shot_length_min = 2.5;
+    let value = serialize_project_ipc(&p, serde_json::value::Serializer).unwrap();
+    assert_eq!(
+        value
+            .get("validation")
+            .and_then(|v| v.get("warn_shot_length_min"))
+            .and_then(|n| n.as_f64()),
+        Some(2.5),
+        "ProjectIpc must serialize the validation field"
+    );
+}

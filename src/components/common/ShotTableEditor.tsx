@@ -4,6 +4,7 @@ import type { TFunction } from 'i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import type { Shot } from '../../types/project';
 import { defaultConfig } from '../../types/config';
+import { useProjectStore } from '../../store/projectStore';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { hasAzimuthDiscrepancy, hasPitchDiscrepancy, validateEditableShot } from '../../utils/validation';
 import { applyAzimuthEdit, getAzimuthAverage } from '../../utils/shotTable';
@@ -175,7 +176,7 @@ export function ShotTableEditor({
   onDeleteShot,
   onInsertBefore,
   onInsertAfter,
-  validationConfig = DEFAULT_VALIDATION_CONFIG,
+  validationConfig,
   readOnly = false,
   showAddButton = true,
   maxHeight = '16rem',
@@ -185,6 +186,21 @@ export function ShotTableEditor({
 }: ShotTableEditorProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
+  // When no explicit thresholds are passed, prefer the OPEN project's per-project
+  // validation thresholds (#57) so the inline preview matches the Warnings panel
+  // (which the backend computes from project.validation). Fall back to the user's
+  // GLOBAL config — the "defaults for new projects" — only when no project is open
+  // (e.g. a new-project import preview), then to the hardcoded built-ins. Callers
+  // editing an existing project (EditSectionDialog) pass thresholds explicitly.
+  const projectValidation = useProjectStore((s) => s.project?.validation);
+  const globalValidation = useProjectStore((s) => s.config?.validation);
+  const fallback = projectValidation ?? globalValidation;
+  const effectiveValidation: ValidationConfig = validationConfig ?? {
+    azimuth_diff_threshold:
+      fallback?.azimuth_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.azimuth_diff_threshold,
+    pitch_diff_threshold:
+      fallback?.pitch_diff_threshold ?? DEFAULT_VALIDATION_CONFIG.pitch_diff_threshold,
+  };
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -456,7 +472,7 @@ export function ShotTableEditor({
           <tbody {...longPressHandlers}>
             {visibleShots.map((shot, visibleIdx) => {
               const actualIndex = getActualIndex(visibleIdx);
-              const warnings = getShotWarnings(shot, validationConfig, t);
+              const warnings = getShotWarnings(shot, effectiveValidation, t);
               const errors = getShotErrors(shot, actualIndex);
               const hasErrors = errors.length > 0;
               const warningMessages = warnings.map((w) => w.message);

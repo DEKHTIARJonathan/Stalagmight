@@ -123,6 +123,15 @@ export interface BuildSurveyFeaturesOptions {
    *  crosses the threshold. Defaults to `true` for callers that don't
    *  care (tests, etc.). */
   buildLabels?: boolean;
+  /** Issue-severity coloring mode (#22). When true, shots and stations are
+   *  colored by validation severity (green/yellow/red) instead of depth /
+   *  section color. Mutually exclusive with `showDepthGradient` (the caller
+   *  guarantees depth is off in this mode). */
+  showIssueSeverity?: boolean;
+  /** Per global shot/station severity (0=clear, 1=warning, 2=error), aligned
+   *  to this `SurveyData`. Produced by `computeIssueSeverity`. Required when
+   *  `showIssueSeverity` is true. */
+  issueSeverity?: { shotSeverity: Uint8Array; stationSeverity: Uint8Array } | undefined;
 }
 
 /**
@@ -147,6 +156,18 @@ export function buildSurveyFeatures(
   options: BuildSurveyFeaturesOptions = {}
 ): SurveyFeatureSets {
   const buildLabels = options.buildLabels ?? true;
+  // Issue-severity coloring (#22). `sevShot`/`sevStation` are aligned to the
+  // global shot/station indices iterated below. `sevColor` maps 2→red, 1→yellow,
+  // else→green. The caller guarantees `showDepthGradient` is false in this mode.
+  const showIssueSeverity = (options.showIssueSeverity ?? false) && !!options.issueSeverity;
+  const sevShot = options.issueSeverity?.shotSeverity;
+  const sevStation = options.issueSeverity?.stationSeverity;
+  const sevColor = (s: number | undefined): string =>
+    s === 2
+      ? themeColors.severityError
+      : s === 1
+        ? themeColors.severityWarning
+        : themeColors.severityClear;
   // Theme colors (resolved from CSS variables by the caller)
   const depthShallow = themeColors.depthShallow;
   const depthDeep = themeColors.depthDeep;
@@ -229,7 +250,9 @@ export function buildSurveyFeatures(
       const depthColor = showDepthGradient
         ? getDepthColor(avgDepth, depthShallow, depthDeep, depthRange.min, depthRange.max)
         : null;
-      const shotColor = depthColor ?? section.color;
+      const shotColor = showIssueSeverity
+        ? sevColor(sevShot![shotGlobalIdx]!)
+        : (depthColor ?? section.color);
       const shotFeatureId = encodeFeatureId(section.id, shotId);
 
       const fromXYZ = stationXYZ(fromGlobal);
@@ -337,7 +360,11 @@ export function buildSurveyFeatures(
     const xyz = stationXYZ(g);
 
     let color: string;
-    if (showDepthGradient) {
+    if (showIssueSeverity) {
+      // Severity fill overrides depth/section/zero-datum coloring; the
+      // zero-datum size/stroke below is preserved.
+      color = sevColor(sevStation![g]!);
+    } else if (showDepthGradient) {
       color =
         getDepthColor(xyz.z, depthShallow, depthDeep, depthRange.min, depthRange.max) ??
         sectionColor;

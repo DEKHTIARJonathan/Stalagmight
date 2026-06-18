@@ -9,12 +9,13 @@ import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import type { Shot, ShotData } from '../../types/project';
 import type { DeleteShotImpact } from '../../types/commands';
+import { defaultConfig } from '../../types/config';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 export default function EditSectionDialog() {
   const { closeDialog, dialogData, openDialog } = useUIStore();
-  const { updateSection, createShot, updateShot, deleteShot, project, config, isShotFrozen } = useProjectStore();
+  const { updateSection, createShot, updateShot, deleteShot, project, isShotFrozen } = useProjectStore();
 
   const sectionId = dialogData.sectionId as number | undefined;
   const section = project?.sections.find((s) => s.id === sectionId);
@@ -371,10 +372,14 @@ export default function EditSectionDialog() {
     })
   ) : false;
 
-  // Validation config from app config
+  // Per-project validation thresholds (#57) so inline warnings match the
+  // Warnings panel. project.validation is a non-null ValidationConfig (seeded
+  // from the global config on load), so read it directly; fall back to the
+  // shared TS defaults only when no project is open.
+  const validation = project?.validation ?? defaultConfig.validation;
   const validationConfig = {
-    azimuth_diff_threshold: config?.validation?.azimuth_diff_threshold ?? 20,
-    pitch_diff_threshold: config?.validation?.pitch_diff_threshold ?? 5,
+    azimuth_diff_threshold: validation.azimuth_diff_threshold,
+    pitch_diff_threshold: validation.pitch_diff_threshold,
   };
 
   if (!section) {

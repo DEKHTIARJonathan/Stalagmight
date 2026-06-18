@@ -1,12 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type Selection } from '../../store/uiStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
-import { Toggle } from '../common/Toggle';
-import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, LinkOffIcon } from '../common/icons';
+import { WarningResolution } from './WarningResolution';
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
@@ -65,13 +67,15 @@ export default function DetailPanel() {
             warnings={warnings}
             project={project}
             onWarningClick={(warning) => {
+              // Selecting the row highlights the problematic geometry on the map
+              // but stays on the Warnings tab (the entity pills are the way to
+              // jump to Details).
               setSource('detail-panel');
               setSelection({
                 type: 'shot',
                 sectionId: warning.sectionId,
                 shotId: warning.shotId,
               });
-              setDetailPanelTab('details');
             }}
           />
         )}
@@ -180,24 +184,215 @@ interface WarningsContentProps {
   onWarningClick: (warning: ProjectWarning) => void;
 }
 
+type WarningFlow =
+  | { kind: 'list' }
+  | { kind: 'resolve'; queue: ProjectWarning[]; index: number; resolveAll: boolean; resolved: number; skipped: number }
+  | { kind: 'summary'; resolved: number; skipped: number; remaining: number };
+
+// Identity of a warning for queue stepping + live-set rehydration. Include the
+// datum index for over-anchoring warnings: two separate over-anchored components
+// can put their representative on the SAME shot (e.g. stations 0 and 1 both map to
+// shot 0), sharing sectionId/shotId/code but differing by datum — without this they
+// collapse and the resolve flow would act on the wrong datum (issue #57 / Codex).
+const warningKey = (w: ProjectWarning) =>
+  `${w.sectionId}:${w.shotId}:${w.code}${w.datumStationIndex !== undefined ? `:d${w.datumStationIndex}` : ''}`;
+
 function WarningsContent({ warnings, project, onWarningClick }: WarningsContentProps) {
   const { t } = useTranslation();
-  const { resolveWarning, resolveAllWarnings, unresolveWarning } = useProjectStore();
-  const { setSelection, setDetailPanelTab, announceSelection } = useUIStore(
+  const { unresolveWarning } = useProjectStore(
+    useShallow((s) => ({ unresolveWarning: s.unresolveWarning })),
+  );
+  const { setSelection, setDetailPanelTab, announceSelection, triggerCenterOnShot, triggerPanToShot, requestResolveWarning, clearResolveWarningRequest } = useUIStore(
     useShallow((s) => ({
       setSelection: s.setSelection,
       setDetailPanelTab: s.setDetailPanelTab,
       announceSelection: s.announceSelection,
+      triggerCenterOnShot: s.triggerCenterOnShot,
+      triggerPanToShot: s.triggerPanToShot,
+      requestResolveWarning: s.requestResolveWarning,
+      clearResolveWarningRequest: s.clearResolveWarningRequest,
     })),
   );
   // At the Full level the location subtitle is shown as entity pills (section +
   // shot), matching the rest of the detail panel; otherwise it stays plain text.
   const showPills = syntacticLevelAtLeast(useUIStore((s) => s.syntacticLevel), 'full');
   const [showResolved, setShowResolved] = useState(false);
+  const [flow, setFlow] = useState<WarningFlow>({ kind: 'list' });
 
-  const unresolvedCount = warnings.filter((w) => !w.isResolved).length;
-  const resolvedCount = warnings.filter((w) => w.isResolved).length;
-  const displayedWarnings = showResolved ? warnings : warnings.filter((w) => !w.isResolved);
+  const unresolvedWarnings = useMemo(() => warnings.filter((w) => !w.isResolved), [warnings]);
+  const unresolvedCount = unresolvedWarnings.length;
+  const resolvedCount = warnings.length - unresolvedCount;
+  const displayedWarnings = showResolved ? warnings : unresolvedWarnings;
+
+  // Virtualize the list so a large warning set (hundreds+) doesn't mount every
+  // row — only the visible window renders, and a refreshWarnings() after each
+  // resolve step reconciles a handful of rows instead of the whole list.
+  const listParentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: displayedWarnings.length,
+    getScrollElement: () => listParentRef.current,
+    estimateSize: () => 56,
+    overscan: 8,
+  });
+
+  // The warning currently under resolution. Rehydrate it from the LIVE warnings
+  // (matched by identity) so its shotIndex — which WarningResolution uses for
+  // frozen-shot gating and the on-map preview endpoints — reflects edits an
+  // earlier "Resolve all" step applied (e.g. a delete-shot renumbers later shots'
+  // indices). Falls back to the queued copy if it's no longer present (#57 / Codex).
+  const queuedWarning = flow.kind === 'resolve' ? flow.queue[flow.index] : undefined;
+  const activeWarning = useMemo(() => {
+    if (!queuedWarning) return undefined;
+    const key = warningKey(queuedWarning);
+    return warnings.find((w) => warningKey(w) === key) ?? queuedWarning;
+  }, [queuedWarning, warnings]);
+  const activeSection = activeWarning ? project?.sections.find((s) => s.id === activeWarning.sectionId) : undefined;
+  const activeShot = activeWarning && activeSection ? activeSection.shots.find((s) => s.id === activeWarning.shotId) : undefined;
+
+  // Full focus on the shot under resolution (issue #57), for both a single
+  // Resolve and every step of Resolve all. Selecting it does what clicking its
+  // geometry link does anywhere else (highlight on the map + focus the details,
+  // sections and data panels); centering brings it into view on the map. Keyed
+  // on the warning identity so it re-fires as the queue steps. (The zoom button
+  // lets the user close in further.)
+  const activeKey = activeWarning ? warningKey(activeWarning) : undefined;
+  useEffect(() => {
+    if (activeWarning) {
+      setSource('detail-panel');
+      setSelection({ type: 'shot', sectionId: activeWarning.sectionId, shotId: activeWarning.shotId });
+      triggerCenterOnShot(activeWarning.sectionId, activeWarning.shotId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey]);
+
+  // Open the resolve flow when requested from outside (e.g. clicking the warning
+  // indicator in the data table opens this tab and jumps straight to resolving
+  // that shot's first outstanding issue).
+  useEffect(() => {
+    if (!requestResolveWarning) return;
+    const { sectionId, shotId } = requestResolveWarning;
+    clearResolveWarningRequest();
+    const target = warnings.find((w) => w.sectionId === sectionId && w.shotId === shotId && !w.isResolved);
+    if (target) {
+      setFlow({ kind: 'resolve', queue: [target], index: 0, resolveAll: false, resolved: 0, skipped: 0 });
+    }
+  }, [requestResolveWarning, warnings, clearResolveWarningRequest]);
+
+  const getSectionName = (sectionId: number) => {
+    const section = project?.sections.find((s) => s.id === sectionId);
+    return section?.name ?? t('sections.defaultName', { id: sectionId });
+  };
+
+  const handleUndoResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
+    e.stopPropagation();
+    unresolveWarning(warning.sectionId, warning.shotId, warning.code);
+  };
+
+  const startResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
+    e.stopPropagation();
+    setFlow({ kind: 'resolve', queue: [warning], index: 0, resolveAll: false, resolved: 0, skipped: 0 });
+  };
+
+  const startResolveAll = () => {
+    if (unresolvedWarnings.length === 0) return;
+    setFlow({ kind: 'resolve', queue: unresolvedWarnings, index: 0, resolveAll: true, resolved: 0, skipped: 0 });
+  };
+
+  // Live unresolved warnings, read from the store so they reflect the refresh
+  // that an applied fix already triggered.
+  const liveUnresolved = () => useProjectStore.getState().warnings.filter((w) => !w.isResolved);
+
+  // Find the next queue index that is still unresolved, skipping any item a
+  // prior fix cleared as a side effect.
+  const nextLiveIndex = (queue: ProjectWarning[], from: number, live: Set<string>) => {
+    let next = from;
+    while (next < queue.length && !live.has(warningKey(queue[next]!))) next++;
+    return next;
+  };
+
+  // Advance after the user applied an option. Only count it as resolved if the
+  // active warning actually cleared from the live set — a data fix can succeed
+  // yet leave the warning firing (e.g. a manual length still below the minimum),
+  // and that must not be reported as resolved.
+  const advanceAfterApply = () => {
+    setFlow((f) => {
+      if (f.kind !== 'resolve') return f;
+      const liveArr = liveUnresolved();
+      const live = new Set(liveArr.map(warningKey));
+      const cleared = !live.has(warningKey(f.queue[f.index]!));
+      const resolved = f.resolved + (cleared ? 1 : 0);
+      const next = nextLiveIndex(f.queue, f.index + 1, live);
+      if (next >= f.queue.length) {
+        return f.resolveAll ? { kind: 'summary', resolved, skipped: f.skipped, remaining: liveArr.length } : { kind: 'list' };
+      }
+      return { ...f, index: next, resolved };
+    });
+  };
+
+  const advanceAfterSkip = () => {
+    setFlow((f) => {
+      if (f.kind !== 'resolve') return f;
+      const liveArr = liveUnresolved();
+      const live = new Set(liveArr.map(warningKey));
+      const next = nextLiveIndex(f.queue, f.index + 1, live);
+      const skipped = f.skipped + 1;
+      if (next >= f.queue.length) {
+        return f.resolveAll ? { kind: 'summary', resolved: f.resolved, skipped, remaining: liveArr.length } : { kind: 'list' };
+      }
+      return { ...f, index: next, skipped };
+    });
+  };
+
+  const exitFlow = () => {
+    setFlow((f) =>
+      f.kind === 'resolve' && f.resolveAll
+        ? { kind: 'summary', resolved: f.resolved, skipped: f.skipped, remaining: liveUnresolved().length }
+        : { kind: 'list' },
+    );
+  };
+
+  // --- Inline resolution view (reuses this panel) ---
+  if (flow.kind === 'resolve' && activeWarning) {
+    return (
+      <WarningResolution
+        warning={activeWarning}
+        section={activeSection}
+        shot={activeShot}
+        position={flow.resolveAll ? { index: flow.index, total: flow.queue.length } : undefined}
+        onExit={exitFlow}
+        onResolved={advanceAfterApply}
+        onSkip={advanceAfterSkip}
+      />
+    );
+  }
+
+  // --- "Resolve all" summary ---
+  if (flow.kind === 'summary') {
+    return (
+      <div className="p-4 text-center text-text-secondary space-y-3" data-testid="warnings-resolve-summary">
+        <div className="text-3xl flex items-center justify-center">
+          <CheckCircleIcon size={28} />
+        </div>
+        <p>
+          {t('detailPanel.warnings.resolveSummary', {
+            resolved: flow.resolved,
+            skipped: flow.skipped,
+            remaining: flow.remaining,
+          })}
+        </p>
+        <div className="flex items-center justify-center gap-2">
+          {flow.remaining > 0 && (
+            <Button size="sm" onClick={startResolveAll} data-testid="warnings-resolve-remaining">
+              {t('detailPanel.warnings.resolveRemaining')}
+            </Button>
+          )}
+          <Button size="sm" variant="primary" onClick={() => setFlow({ kind: 'list' })} data-testid="warnings-resolve-done">
+            {t('detailPanel.warnings.resolveDone')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (warnings.length === 0) {
     return (
@@ -210,128 +405,174 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     );
   }
 
-  const getSectionName = (sectionId: number) => {
-    const section = project?.sections.find((s) => s.id === sectionId);
-    return section?.name ?? t('sections.defaultName', { id: sectionId });
-  };
-
-  const handleDismiss = (e: React.MouseEvent, warning: ProjectWarning) => {
-    e.stopPropagation();
-    resolveWarning(warning.sectionId, warning.shotId, warning.code);
-  };
-
-  const handleUndoResolve = (e: React.MouseEvent, warning: ProjectWarning) => {
-    e.stopPropagation();
-    unresolveWarning(warning.sectionId, warning.shotId, warning.code);
-  };
-
   return (
-    <div className="p-2" data-testid="warnings-content">
-      <div className="flex items-center justify-between mb-2 px-2">
-        <span className="text-sm text-text-secondary">
-          {t('detailPanel.warnings.count', {
-            count: unresolvedCount,
-            countFormatted: formatNumber(unresolvedCount),
-          })}
-          {resolvedCount > 0 && ` ${t('detailPanel.warnings.resolvedCount', {
-            count: resolvedCount,
-            countFormatted: formatNumber(resolvedCount),
-          })}`}
-        </span>
-        <div className="flex items-center gap-2">
-          {resolvedCount > 0 && (
-            <button
-              onClick={() => setShowResolved(!showResolved)}
-              className="text-xs text-accent hover:underline"
+    <div className="p-2 h-full flex flex-col" data-testid="warnings-content">
+      {(() => {
+        const countText = (
+          <span className="text-sm text-text-secondary">
+            {t('detailPanel.warnings.count', {
+              count: unresolvedCount,
+              countFormatted: formatNumber(unresolvedCount),
+            })}
+            {resolvedCount > 0 && ` ${t('detailPanel.warnings.resolvedCount', {
+              count: resolvedCount,
+              countFormatted: formatNumber(resolvedCount),
+            })}`}
+          </span>
+        );
+        const actions = (
+          <>
+            {resolvedCount > 0 && (
+              <button
+                onClick={() => setShowResolved(!showResolved)}
+                className="text-xs text-accent hover:underline"
+              >
+                {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
+              </button>
+            )}
+            {unresolvedCount > 0 && (
+              <button
+                onClick={startResolveAll}
+                className="text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
+                data-testid="resolve-all-warnings"
+                title={t('detailPanel.warnings.resolveAll')}
+              >
+                {t('detailPanel.warnings.resolveAll')}
+              </button>
+            )}
+          </>
+        );
+        // When a "Show resolved" toggle is present, give the actions their own
+        // row below the count so they don't crowd it; otherwise keep them inline.
+        return resolvedCount > 0 ? (
+          <div className="mb-2 px-2 shrink-0">
+            <div>{countText}</div>
+            <div className="flex items-center gap-2 mt-1">{actions}</div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between mb-2 px-2 shrink-0">
+            {countText}
+            <div className="flex items-center gap-2">{actions}</div>
+          </div>
+        );
+      })()}
+      <div ref={listParentRef} className="flex-1 min-h-0 overflow-auto" role="list" aria-label={t('detailPanel.tabs.warnings')}>
+        <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+          {rowVirtualizer.getVirtualItems().map((vItem) => {
+            const warning = displayedWarnings[vItem.index]!;
+            const index = vItem.index;
+            return (
+            <div
+              key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
+              data-index={index}
+              ref={rowVirtualizer.measureElement}
+              role="listitem"
+              className="absolute left-0 w-full pb-1"
+              style={{ transform: `translateY(${vItem.start}px)` }}
             >
-              {showResolved ? t('detailPanel.warnings.hideResolved') : t('detailPanel.warnings.showResolved')}
-            </button>
-          )}
-          {unresolvedCount > 0 && (
-            <button
-              onClick={() => resolveAllWarnings()}
-              className="text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
-              data-testid="clear-all-warnings"
-              title={t('detailPanel.warnings.clearAll')}
-            >
-              {t('detailPanel.warnings.clearAll')}
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="space-y-1" role="list" aria-label={t('detailPanel.tabs.warnings')}>
-        {displayedWarnings.map((warning, index) => (
-          <div
-            key={`${warning.sectionId}-${warning.shotId}-${warning.code}-${index}`}
-            role="listitem"
-            className={`
-              p-2 rounded transition-colors
+            <div
+              className={`
+              p-2 rounded transition-colors flow-root
               ${warning.isResolved ? 'opacity-50' : ''}
               hover:bg-background-50
             `}
-          >
-            <div className="flex items-start gap-2">
+            >
+            {/* Action button floats right so the warning text wraps around it
+                (issue #57) instead of the button reserving its own column. */}
+            {warning.isResolved ? (
               <button
-                onClick={() => onWarningClick(warning)}
-                className="flex-1 text-left"
+                onClick={(e) => handleUndoResolve(e, warning)}
+                className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-secondary"
+                title={t('detailPanel.warnings.markUnresolved')}
               >
-                <div className="flex items-start gap-2">
-                  <span className={warning.severity === 'error' ? 'text-error' : 'text-warning'}>
-                    {warning.isResolved
-                      ? <CheckCircleIcon size={14} />
-                      : (warning.severity === 'error' ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />)}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
-                      {(() => {
-                        // Messages start with "Shot <sectionId>:<position> …"; at the
-                        // Full level swap that leading reference for the shot pill.
-                        const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
-                        if (!m) return warning.message;
-                        return (
-                          <>
-                            <EntityBlob entity="shot">
-                              {formatShotId(warning.sectionId, warning.shotIndex + 1)}
-                            </EntityBlob>
-                            {' '}
-                            {warning.message.slice(m[0].length)}
-                          </>
-                        );
-                      })()}
-                    </div>
-                    {!showPills && (
-                      <div className="text-xs text-text-secondary mt-0.5">
-                        {t('detailPanel.warnings.location', {
-                          section: getSectionName(warning.sectionId),
+                {t('common.actions.undo')}
+              </button>
+            ) : (
+              <button
+                onClick={(e) => startResolve(e, warning)}
+                className="float-right ml-2 text-xs px-2 py-0.5 rounded bg-background-50 hover:bg-background text-text-primary"
+                title={t('detailPanel.warnings.resolve')}
+                data-testid="resolve-warning"
+              >
+                {t('detailPanel.warnings.resolve')}
+              </button>
+            )}
+            {/* Clickable message: single-click selects the shot, double-click
+                pans to it. With pills (Full level) it stays a plain <div> so the
+                inline shot pill <button> isn't nested in another interactive
+                element; without pills there is no pill, so it becomes keyboard-
+                operable (role=button + Enter/Space) to preserve select-by-keyboard.
+                Either way it stays normal flow so the text wraps around the
+                floated action button. */}
+            {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
+            <div
+              {...(showPills
+                ? {}
+                : {
+                    role: 'button' as const,
+                    tabIndex: 0,
+                    onKeyDown: (e: ReactKeyboardEvent) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onWarningClick(warning);
+                      }
+                    },
+                  })}
+              onClick={() => onWarningClick(warning)}
+              onDoubleClick={() => triggerPanToShot(warning.sectionId, warning.shotId)}
+              className={`text-left cursor-pointer rounded${showPills ? '' : ' focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset'}`}
+              data-testid="warning-message"
+            >
+              <span className={`mr-1.5 align-text-bottom inline-block ${warning.severity === 'error' ? 'text-error' : 'text-warning'}`}>
+                {warning.isResolved
+                  ? <CheckCircleIcon size={14} />
+                  : (warning.severity === 'error' ? <AlertCircleIcon size={14} /> : <AlertTriangleIcon size={14} />)}
+              </span>
+              <span className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
+                {(() => {
+                  // Messages start with "Shot <sectionId>:<position> …"; at the
+                  // Full level swap that leading reference for the shot pill.
+                  const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
+                  if (!m) return warning.message;
+                  return (
+                    <>
+                      {/* The shot pill navigates to Details (select + switch tab),
+                          its prior behaviour; stopPropagation keeps the row's
+                          select-only handler from also firing. */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSource('detail-panel');
+                          setSelection({ type: 'shot', sectionId: warning.sectionId, shotId: warning.shotId });
+                          setDetailPanelTab('details');
+                        }}
+                        className="inline align-middle p-0 cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset"
+                        aria-label={t('detailPanel.warnings.openShotDetails', {
                           shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
                         })}
-                      </div>
-                    )}
-                  </div>
+                      >
+                        <EntityBlob entity="shot">
+                          {formatShotId(warning.sectionId, warning.shotIndex + 1)}
+                        </EntityBlob>
+                      </button>
+                      {' '}
+                      {warning.message.slice(m[0].length)}
+                    </>
+                  );
+                })()}
+              </span>
+              {!showPills && (
+                <div className="text-xs text-text-secondary mt-0.5">
+                  {t('detailPanel.warnings.location', {
+                    section: getSectionName(warning.sectionId),
+                    shot: formatShotId(warning.sectionId, warning.shotIndex + 1),
+                  })}
                 </div>
-              </button>
-              {warning.isResolved ? (
-                <button
-                  onClick={(e) => handleUndoResolve(e, warning)}
-                  className="text-xs px-2 py-1 rounded bg-background-50 hover:bg-background text-text-secondary"
-                  title={t('detailPanel.warnings.markUnresolved')}
-                >
-                  {t('common.actions.undo')}
-                </button>
-              ) : (
-                <button
-                  onClick={(e) => handleDismiss(e, warning)}
-                  className="shrink-0 p-1 rounded text-text-secondary hover:text-text-primary hover:bg-background-50"
-                  title={t('detailPanel.warnings.markResolved')}
-                  aria-label={t('detailPanel.warnings.markResolved')}
-                  data-testid="dismiss-warning"
-                >
-                  <CloseIcon size={14} />
-                </button>
               )}
             </div>
             {showPills && (
-              <div className="mt-1 pl-6 flex items-center gap-1.5 flex-wrap">
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap clear-both">
                 <DetailLink
                   type="section"
                   target={{ sectionId: warning.sectionId }}
@@ -345,8 +586,11 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                 />
               </div>
             )}
-          </div>
-        ))}
+            </div>
+            </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -1146,6 +1390,7 @@ interface ProjectStatsProps {
 function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
+  const openDialog = useUIStore((s) => s.openDialog);
   if (!project || !stats) {
     return (
       <div className="p-4 text-center text-text-secondary">
@@ -1253,91 +1498,21 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
             </div>
           </div>
 
-          {/* Collaboration mode (per-project Ariane .tml round-trip) */}
-          <CollaborationSection project={project} />
+          {/* Per-project settings: name, validation, and Ariane collaboration
+              (Experimental tab) — all stored in the .stalx. */}
+          <div className="pt-2 border-t border-border">
+            <button
+              onClick={() => openDialog('project-settings')}
+              className="w-full text-center text-sm px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
+              data-testid="open-project-settings"
+            >
+              {t('detailPanel.projectSettings.open')}
+            </button>
+          </div>
         </div>
       </Panel>
     </div>
   );
-}
-
-interface CollaborationSectionProps {
-  project: Project;
-}
-
-/**
- * Per-project collaboration toggle: keeps a sibling Ariane `.tml` next to the
- * `.stalx` and reconciles external Ariane edits on open. Lives here (Project
- * details) rather than Settings because it is project-scoped, not global.
- */
-function CollaborationSection({ project }: CollaborationSectionProps) {
-  const { t } = useTranslation();
-  const setCollabEnabled = useProjectStore((s) => s.setCollabEnabled);
-  const showToast = useUIStore((s) => s.showToast);
-  const [busy, setBusy] = useState(false);
-
-  const enabled = project.collab?.enabled ?? false;
-  const siblingName =
-    project.collab?.sibling_tml_relative ?? deriveSiblingName(project.file_path);
-
-  const handleToggle = async (next: boolean) => {
-    setBusy(true);
-    try {
-      const result = await setCollabEnabled(next);
-      if (!result.success) {
-        showToast(
-          result.error ?? t('detailPanel.collaboration.toggleFailed', 'Failed to change collaboration mode'),
-          'collab-toggle'
-        );
-      }
-    } catch (e) {
-      showToast(String(e), 'collab-toggle');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="space-y-2 pt-2 border-t border-border" data-testid="collaboration-section">
-      <h4 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
-        {t('detailPanel.collaboration.title', 'Collaboration')}
-      </h4>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="text-sm text-text-primary">
-            {t('detailPanel.collaboration.enable', 'Ariane collaboration')}
-          </div>
-          <div className="text-xs text-text-secondary mt-0.5">
-            {t(
-              'detailPanel.collaboration.help',
-              'Saves a companion Ariane file (.tml) on every save and merges external Ariane edits when you reopen the project.'
-            )}
-          </div>
-        </div>
-        <Toggle
-          checked={enabled}
-          onChange={handleToggle}
-          disabled={busy}
-          aria-label={t('detailPanel.collaboration.aria', 'Toggle Ariane collaboration mode')}
-          data-testid="toggle-collaboration"
-        />
-      </div>
-      {enabled && siblingName && (
-        <div className="text-xs text-text-tertiary" data-testid="collaboration-sibling-path">
-          {t('detailPanel.collaboration.companion', 'Companion file')}: <code className="break-all">{siblingName}</code>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Derive `<stem>.tml` from a project's `.stalx` path for display. */
-function deriveSiblingName(filePath: string | null | undefined): string | null {
-  if (!filePath) return null;
-  const base = filePath.replace(/^.*[\\/]/, '');
-  const dot = base.lastIndexOf('.');
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  return `${stem}.tml`;
 }
 
 interface ClosuresSectionProps {

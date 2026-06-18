@@ -227,7 +227,7 @@ fn test_get_config_defaults_validation() {
     with_config_lock(|| {
         let app = app_with_state();
         let cfg = config::get_config(state(&app));
-        assert_eq!(cfg.validation.warn_shot_length_min, 0.1);
+        assert_eq!(cfg.validation.warn_shot_length_min, 0.3);
         assert_eq!(cfg.validation.warn_shot_length_max, 50.0);
     });
 }
@@ -2129,7 +2129,7 @@ fn test_resolve_warning_fails_without_db() {
         state(&app),
         0,
         0,
-        "ZERO_LENGTH".to_string(),
+        "SHORT_SHOT".to_string(),
         None,
     );
     assert!(result.is_err());
@@ -2142,22 +2142,22 @@ fn test_unresolve_warning_fails_without_db() {
         state(&app),
         0,
         0,
-        "ZERO_LENGTH".to_string(),
+        "SHORT_SHOT".to_string(),
     );
     assert!(result.is_err());
 }
 
 #[test]
 fn test_resolve_warning_marks_resolved_in_list() {
-    let project = project_with_section(vec![shot_data(0.0)]);
+    let project = project_with_section(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warnings = validation::get_project_warnings(state(&app));
     let warning = warnings
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(!warning.is_resolved);
 
     validation::resolve_warning(
@@ -2172,21 +2172,59 @@ fn test_resolve_warning_marks_resolved_in_list() {
     let warnings_after = validation::get_project_warnings(state(&app));
     let warning_after = warnings_after
         .iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
     assert!(warning_after.is_resolved);
+
+    // Issue #57 (Item 8): a fresh ignore is always UUID-keyed (never a legacy
+    // position-only row). The persisted row must carry the shot's UUID.
+    let persisted = state(&app).inner().load_resolved_warnings().unwrap();
+    let row = persisted
+        .iter()
+        .find(|r| r.warning_code == "SHORT_SHOT")
+        .expect("persisted resolved row");
+    assert!(row.shot_uuid.is_some(), "a fresh ignore must store a shot UUID");
 }
 
 #[test]
-fn test_unresolve_warning_clears_resolved_flag() {
-    let project = project_with_section(vec![shot_data(0.0)]);
+fn test_resolve_warning_refuses_when_shot_missing() {
+    // Issue #57 (Item 8): with a project open, resolving a warning for a shot
+    // that does not exist must be refused (no stable identity to bind), and no
+    // position-keyed row may be written.
+    let project = project_with_section(vec![shot_data(0.1)]);
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
     let warning = validation::get_project_warnings(state(&app))
         .into_iter()
-        .find(|w| w.code == "ZERO_LENGTH")
-        .expect("zero length warning");
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+
+    // A shot_id that does not exist in the section.
+    let result = validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id + 9999,
+        "SHORT_SHOT".to_string(),
+        None,
+    );
+    assert!(result.is_err(), "resolving a vanished shot must be refused");
+    assert!(
+        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        "no position-keyed row may be persisted for a missing shot"
+    );
+}
+
+#[test]
+fn test_unresolve_warning_clears_resolved_flag() {
+    let project = project_with_section(vec![shot_data(0.1)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
 
     validation::resolve_warning(
         state(&app),
@@ -2208,9 +2246,641 @@ fn test_unresolve_warning_clears_resolved_flag() {
     let warnings_after = validation::get_project_warnings(state(&app));
     let warning_after = warnings_after
         .iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+    assert!(!warning_after.is_resolved);
+}
+
+#[test]
+fn test_resolved_warning_follows_shot_uuid_after_id_change() {
+    // Issue #57: an ignore is keyed by the shot's stable UUID, so it stays
+    // bound to the same shot even after a structural edit renumbers shot_id
+    // (e.g. inserting a shot earlier in the section).
+    let mut project = project_with_section(vec![shot_data(0.1)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+    let original_shot_id = warning.shot_id;
+    let uuid = warning.shot_uuid.clone().expect("loaded shot has a uuid");
+
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+    assert!(validation::get_project_warnings(state(&app))
+        .iter()
+        .any(|w| w.code == "SHORT_SHOT" && w.is_resolved));
+
+    // Drift the unstable shot_id (mimicking an insert/reload) but keep the UUID.
+    let mut renumbered = state(&app).inner().get_project_state().unwrap();
+    renumbered.sections[0].shots[0].id = original_shot_id + 1000;
+    state(&app).inner().set_project_for_tests(renumbered);
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+    assert_eq!(w.shot_uuid.as_deref(), Some(uuid.as_str()));
+    assert_ne!(w.shot_id, original_shot_id, "precondition: shot_id changed");
+    assert!(w.is_resolved, "ignore must follow the shot UUID across an id change");
+}
+
+#[test]
+fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
+    // Issue #57: a pre-v8 (or pre-v6) suppression row carries no shot_uuid and is
+    // keyed by (section_id, shot_id) position. After load the shot has a freshly
+    // minted in-memory UUID, but the legacy row must still suppress it — without
+    // the position fallback a pre-v6 file's ignores would be silently lost.
+    let mut project = project_with_section(vec![shot_data(0.1)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+    assert!(warning.shot_uuid.is_some(), "loaded shot already carries a uuid");
+    assert!(!warning.is_resolved);
+
+    // Insert a LEGACY suppression row with NO shot_uuid, keyed by position only.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: warning.section_id,
+            shot_id: warning.shot_id,
+            warning_code: warning.code.clone(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+    assert!(
+        w.is_resolved,
+        "a legacy position-keyed row must still suppress the now-UUID-bearing shot"
+    );
+}
+
+#[test]
+fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
+    // Issue #57 (Item 12) equivalence guard for the borrow-keyed is_resolved_for
+    // refactor in compute_project_warnings: a UUID-keyed row suppresses via the
+    // UUID branch, and a legacy NULL-uuid row suppresses via the position-fallback
+    // branch. Both branches must light up `is_resolved` and only for their shot.
+    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warnings = validation::get_project_warnings(state(&app));
+    let mut zero: Vec<_> = warnings.into_iter().filter(|w| w.code == "SHORT_SHOT").collect();
+    assert_eq!(zero.len(), 2, "expected a short-shot warning per shot");
+    zero.sort_by_key(|w| w.shot_id);
+    let shot_uuid_hit = zero[0].clone();
+    let shot_pos_hit = zero[1].clone();
+    let uuid = shot_uuid_hit.shot_uuid.clone().expect("loaded shot has a uuid");
+
+    // UUID branch: a row carrying the shot's UUID.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: shot_uuid_hit.section_id,
+            shot_id: shot_uuid_hit.shot_id,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: Some(uuid),
+        })
+        .unwrap();
+    // Position-fallback branch: a legacy NULL-uuid row keyed by (section, shot).
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: shot_pos_hit.section_id,
+            shot_id: shot_pos_hit.shot_id,
+            warning_code: "SHORT_SHOT".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    let a = after
+        .iter()
+        .find(|w| w.code == "SHORT_SHOT" && w.shot_id == shot_uuid_hit.shot_id)
+        .expect("uuid-keyed warning");
+    let b = after
+        .iter()
+        .find(|w| w.code == "SHORT_SHOT" && w.shot_id == shot_pos_hit.shot_id)
+        .expect("position-keyed warning");
+    assert!(a.is_resolved, "UUID-keyed row must suppress via the UUID branch");
+    assert!(b.is_resolved, "NULL-uuid row must suppress via the position-fallback branch");
+}
+
+#[test]
+fn test_resolved_warning_survives_save() {
+    // Issue #57 regression: resolved (ignored) warnings live in their own table,
+    // not the Project model, so the save pipeline (temp file + atomic rename)
+    // used to drop them. A save must carry them over so an ignore persists.
+    let mut project = project_with_section(vec![shot_data(0.1)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+
+    // Save rebuilds the .stalx and reopens the DB at the new file.
+    let dir = tempfile::tempdir().unwrap();
+    let _saved = save_project_to_temp(&app, &dir);
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("short shot warning");
+    assert!(w.is_resolved, "resolved/ignored warning must survive a save");
+}
+
+#[test]
+fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
+    // Regression (#57 review): a resolved_warnings row for a deleted section is
+    // orphaned in the DB (delete_section is in-memory and never prunes the
+    // table). The save carry-over must skip it instead of letting one FK-violating
+    // row abort the whole transaction and silently drop every other ignore.
+    let mut project = Project::new("Test Cave".to_string(), None);
+    for (name, color) in [("A", "#4ecdc4"), ("B", "#ff6b6b")] {
+        project.add_section(SectionData {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: color.to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(0.1)], // short-shot → SHORT_SHOT warning
+        });
+    }
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // Ignore the SHORT_SHOT warning in each section.
+    let zero: Vec<_> = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .filter(|w| w.code == "SHORT_SHOT")
+        .collect();
+    assert_eq!(zero.len(), 2, "expected a short-shot warning per section");
+    for w in &zero {
+        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None).unwrap();
+    }
+    let surviving_section = zero[1].section_id;
+
+    // Delete the first section — its resolved_warnings row is now orphaned.
+    assert_success(&section::delete_section(state(&app), zero[0].section_id));
+
+    // Save, then confirm the surviving section's ignore is still resolved.
+    let dir = tempfile::tempdir().unwrap();
+    let _ = save_project_to_temp(&app, &dir);
+
+    let after = validation::get_project_warnings(state(&app));
+    let surviving = after
+        .iter()
+        .find(|w| w.section_id == surviving_section && w.code == "SHORT_SHOT")
+        .expect("surviving section's short-shot warning");
+    assert!(
+        surviving.is_resolved,
+        "an ignore in a surviving section must not be lost because another section was deleted"
+    );
+}
+
+#[test]
+fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_position() {
+    // Issue #57 (Item 2, same-position collision): shot A's by-UUID ignore is
+    // stored at A's old position. A renumber later moves A to a new position and
+    // lands a DIFFERENT shot B on A's old position; B then gets ignored at that
+    // stale position+code. On save, the carry-over re-derives each by-UUID row's
+    // (section_id, shot_id) from the live shot's CURRENT position, so A's ignore
+    // and B's ignore never collide on UNIQUE(section_id, shot_id, warning_code)
+    // and both survive. Without the remap, INSERT OR REPLACE would overwrite A.
+    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // The two loaded shots, each with a stable UUID.
+    let loaded = state(&app).inner().get_project_state().unwrap();
+    let shot_a = loaded.sections[0].shots[0].clone();
+    let shot_b = loaded.sections[0].shots[1].clone();
+    let section_id = loaded.sections[0].id;
+    let uuid_a = shot_a.uuid.clone().expect("shot A uuid");
+    let uuid_b = shot_b.uuid.clone().expect("shot B uuid");
+    assert_ne!(shot_a.id, shot_b.id);
+
+    // Seed the stale state directly: A's by-UUID ignore lives at A's ORIGINAL
+    // position (shot_a.id), and B's by-UUID ignore lives at B's position.
+    for (uuid, shot_id) in [(&uuid_a, shot_a.id), (&uuid_b, shot_b.id)] {
+        state(&app)
+            .inner()
+            .save_resolved_warning(&crate::persistence::ResolvedWarning {
+                section_id,
+                shot_id,
+                warning_code: "SHORT_SHOT".to_string(),
+                resolved_at: chrono::Utc::now(),
+                resolved_comment: None,
+                shot_uuid: Some(uuid.clone()),
+            })
+            .unwrap();
+    }
+
+    // Renumber: swap the shot order so A now sits at B's old position and B at
+    // A's old position. The carry-over derives live positions from sequence
+    // order, so A's stored shot_id (== shot_a.id, now occupied by B) is stale.
+    let mut renumbered = loaded.clone();
+    renumbered.sections[0].shots.swap(0, 1);
+    state(&app).inner().set_project_for_tests(renumbered);
+
+    // Save: rebuilds the .stalx and re-applies the carried-over ignores.
+    let dir = tempfile::tempdir().unwrap();
+    let _ = save_project_to_temp(&app, &dir);
+
+    // Both by-UUID ignores must survive — neither was REPLACE-deleted.
+    let after = state(&app).inner().load_resolved_warnings().unwrap();
+    let surviving: std::collections::HashSet<_> =
+        after.iter().filter_map(|r| r.shot_uuid.as_deref()).collect();
+    assert!(
+        surviving.contains(uuid_a.as_str()),
+        "shot A's by-UUID ignore must survive the renumber-onto-its-position"
+    );
+    assert!(
+        surviving.contains(uuid_b.as_str()),
+        "shot B's by-UUID ignore must survive"
+    );
+}
+
+#[test]
+fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
+    // Issue #57 (review regression): when a shot is deleted, its by-UUID
+    // resolved_warnings row is orphaned (delete_shot is in-memory only and never
+    // prunes the table). The surviving successor shifts down into the deleted
+    // shot's old position, so on save it re-derives to that same (section_id,
+    // shot_id). If the dead row were carried over at its stale id, the two would
+    // collide on UNIQUE(section_id, shot_id, warning_code) and INSERT OR REPLACE
+    // would — depending on insert order — drop the SURVIVOR's still-valid ignore.
+    // The carry-over must DROP the dead (UUID-not-live) row so the survivor's
+    // ignore always persists and dead rows don't accumulate.
+    let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // Ignore BOTH shots' SHORT_SHOT warnings (stored by UUID at positions 0 & 1).
+    let zero: Vec<_> = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .filter(|w| w.code == "SHORT_SHOT")
+        .collect();
+    assert_eq!(zero.len(), 2, "expected a short-shot warning per shot");
+    for w in &zero {
+        validation::resolve_warning(state(&app), w.section_id, w.shot_id, w.code.clone(), None)
+            .unwrap();
+    }
+
+    let loaded = state(&app).inner().get_project_state().unwrap();
+    let section_id = loaded.sections[0].id;
+    let shot_a_id = loaded.sections[0].shots[0].id;
+    let survivor_uuid = loaded.sections[0].shots[1]
+        .uuid
+        .clone()
+        .expect("survivor uuid");
+
+    // Delete the first shot. The successor shifts into its index/position, so the
+    // orphaned by-UUID row for the deleted shot now shares the survivor's new
+    // position. (No datums → not frozen → delete succeeds.)
+    assert_success(&shot::delete_shot(state(&app), section_id, shot_a_id));
+
+    let dir = tempfile::tempdir().unwrap();
+    let _ = save_project_to_temp(&app, &dir);
+
+    // The survivor's ignore must persist...
+    let after = validation::get_project_warnings(state(&app));
+    let survivor = after
+        .iter()
+        .find(|w| w.code == "SHORT_SHOT")
+        .expect("survivor's short-shot warning");
+    assert!(
+        survivor.is_resolved,
+        "the surviving shot's ignore must not be clobbered by the deleted shot's dead row"
+    );
+    // ...and the deleted shot's dead row must have been pruned (one row, keyed to
+    // the survivor), so dead rows don't accumulate across saves.
+    let rows = state(&app).inner().load_resolved_warnings().unwrap();
+    assert_eq!(rows.len(), 1, "the deleted shot's dead resolved row must be pruned");
+    assert_eq!(
+        rows[0].shot_uuid.as_deref(),
+        Some(survivor_uuid.as_str()),
+        "the surviving row must be the survivor's by-UUID ignore"
+    );
+}
+
+#[test]
+fn test_project_validation_drives_warnings_and_persists() {
+    // Per-project validation (#57): warnings use the project's own thresholds,
+    // and those thresholds survive a save into the .stalx.
+    let mut project = project_with_section(vec![shot_data(1.0)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    // A 1.0 m shot is not short under the default 0.3 m minimum.
+    assert!(validation::get_project_warnings(state(&app))
+        .iter()
+        .all(|w| w.code != "SHORT_SHOT"));
+
+    // Raise the project's minimum length to 2.0 m via the settings command.
+    let validation_cfg = crate::config::ValidationConfig {
+        warn_shot_length_min: 2.0,
+        ..crate::config::ValidationConfig::default()
+    };
+    assert_success(&project::update_project_settings(
+        state(&app),
+        "Renamed Cave".to_string(),
+        validation_cfg,
+    ));
+
+    // Now it's flagged — warnings use the PROJECT's thresholds, not the global.
+    assert!(validation::get_project_warnings(state(&app))
+        .iter()
+        .any(|w| w.code == "SHORT_SHOT"));
+
+    // Save, then reopen the .stalx fresh: the thresholds (and name) persisted.
+    let dir = tempfile::tempdir().unwrap();
+    let saved = save_project_to_temp(&app, &dir);
+    let reopened = Database::open(&saved).unwrap().load_project().unwrap();
+    assert_eq!(reopened.validation.warn_shot_length_min, 2.0);
+    assert_eq!(reopened.name, "Renamed Cave");
+}
+
+#[test]
+fn test_update_project_settings_is_undoable() {
+    // The settings change must be its own undo entry (#57 review). Otherwise
+    // undoing an unrelated edit made earlier would silently revert the
+    // name/validation back to whatever the edit's snapshot captured.
+    let mut project = project_with_section(vec![shot_data(1.0)]);
+    project.ensure_shot_uuids();
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let validation_cfg = crate::config::ValidationConfig {
+        warn_shot_length_min: 2.0,
+        ..crate::config::ValidationConfig::default()
+    };
+    assert_success(&project::update_project_settings(
+        state(&app),
+        "Renamed Cave".to_string(),
+        validation_cfg,
+    ));
+    assert!(history::can_undo(state(&app)), "settings change must be undoable");
+    let applied = state(&app).get_project_state().unwrap();
+    assert_eq!(applied.name, "Renamed Cave");
+    assert_eq!(applied.validation.warn_shot_length_min, 2.0);
+
+    // Undo reverts the settings change instead of leaving it stranded.
+    assert_success(&history::undo(state(&app)));
+    let reverted = state(&app).get_project_state().unwrap();
+    assert_eq!(reverted.name, "Test Cave");
+    assert_eq!(reverted.validation.warn_shot_length_min, 0.3);
+}
+
+#[test]
+fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
+    // Over-anchoring is not ignorable (issue #57): the resolve_warning command
+    // must refuse to persist a suppression for it.
+    let project = project_with_section(vec![shot_data(0.0)]);
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    validation::resolve_warning(
+        state(&app),
+        0,
+        0,
+        crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT.to_string(),
+        None,
+    )
+    .unwrap();
+
+    assert!(
+        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        "over-anchoring must never be recorded as an ignored warning"
+    );
+}
+
+#[test]
+fn test_resolve_warning_refuses_error_severity_codes() {
+    // Issue #57 (Item 10/14): errors are not ignorable — one predicate
+    // (warning_is_ignorable) governs every code. Resolving an error-severity
+    // warning must persist nothing and leave it unresolved; warnings stay ignorable.
+    use crate::models::{warning_is_ignorable, MULTIPLE_DATUMS_PER_MERGE_COMPONENT};
+    assert!(!warning_is_ignorable("ZERO_LENGTH"));
+    assert!(!warning_is_ignorable("NEGATIVE_LRUD"));
+    assert!(!warning_is_ignorable("INVALID_PITCH"));
+    assert!(!warning_is_ignorable("LENGTH_BELOW_DEPTH_CHANGE"));
+    assert!(!warning_is_ignorable(MULTIPLE_DATUMS_PER_MERGE_COMPONENT));
+    assert!(warning_is_ignorable("SHORT_SHOT"));
+    assert!(warning_is_ignorable("AZIMUTH_DEVIATION"));
+    assert!(warning_is_ignorable("INCLINATION_DEPTH_MISMATCH"));
+
+    let project = project_with_section(vec![shot_data(0.0)]); // ZERO_LENGTH (error)
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warning = validation::get_project_warnings(state(&app))
+        .into_iter()
         .find(|w| w.code == "ZERO_LENGTH")
         .expect("zero length warning");
-    assert!(!warning_after.is_resolved);
+    validation::resolve_warning(
+        state(&app),
+        warning.section_id,
+        warning.shot_id,
+        warning.code.clone(),
+        None,
+    )
+    .unwrap();
+    assert!(
+        state(&app).inner().load_resolved_warnings().unwrap().is_empty(),
+        "an error-severity warning must never be persisted as ignored"
+    );
+    let after = validation::get_project_warnings(state(&app));
+    assert!(
+        !after.iter().find(|w| w.code == "ZERO_LENGTH").unwrap().is_resolved,
+        "an error stays unresolved even after a resolve attempt"
+    );
+}
+
+#[test]
+fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
+    // ensure_unique_shot_uuids only de-dups WITHIN a section, so two sections can
+    // legally share a shot UUID. Ignoring a warning on one shot must NOT suppress
+    // the same code on the other section's shot (issue #57 / Codex) — suppression
+    // is keyed by (section_id, uuid, code), not the UUID alone.
+    let mut project = Project::new("Dup UUID".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot_data(0.1)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot_data(0.1)], ..Default::default() })
+        .id;
+    // Force the same (cross-section) UUID on both shots — a legal duplicate.
+    for section in &mut project.sections {
+        section.shots[0].uuid = Some("shared-uuid".to_string());
+    }
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warnings = validation::get_project_warnings(state(&app));
+    let a_warning = warnings
+        .iter()
+        .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
+        .expect("section A short-shot warning");
+    assert!(warnings.iter().any(|w| w.section_id == b && w.code == "SHORT_SHOT"));
+
+    validation::resolve_warning(
+        state(&app),
+        a_warning.section_id,
+        a_warning.shot_id,
+        "SHORT_SHOT".to_string(),
+        None,
+    )
+    .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    assert!(
+        after.iter().find(|w| w.section_id == a && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section A's ignore is recorded"
+    );
+    assert!(
+        !after.iter().find(|w| w.section_id == b && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section B's shot shares the UUID but a different section — it must NOT be suppressed"
+    );
+
+    // Now ignore B too, then un-ignore A: B's suppression must SURVIVE, because the
+    // delete is also keyed by (section_id, uuid) — un-ignoring A's shared-UUID shot
+    // must not clear B's row (issue #57 / Codex round 7).
+    let b_warning = after
+        .iter()
+        .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
+        .unwrap()
+        .clone();
+    validation::resolve_warning(
+        state(&app),
+        b_warning.section_id,
+        b_warning.shot_id,
+        "SHORT_SHOT".to_string(),
+        None,
+    )
+    .unwrap();
+    validation::unresolve_warning(
+        state(&app),
+        a_warning.section_id,
+        a_warning.shot_id,
+        "SHORT_SHOT".to_string(),
+    )
+    .unwrap();
+    let cleared = validation::get_project_warnings(state(&app));
+    assert!(
+        !cleared.iter().find(|w| w.section_id == a && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section A was un-ignored"
+    );
+    assert!(
+        cleared.iter().find(|w| w.section_id == b && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section B's ignore (same UUID, different section) must survive A's un-ignore"
+    );
+}
+
+#[test]
+fn test_over_anchoring_warning_is_never_suppressible() {
+    // The authoritative invariant: even a stray resolved row (legacy, bulk, or
+    // any other path) must NOT mark an over-anchoring warning resolved. It clears
+    // only by removing a datum, after which the warning is not generated at all.
+    use crate::models::{StationMerge, ZeroDatum};
+
+    let mut project = Project::new("OverAnchored".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot_data(10.0)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot_data(10.0)], ..Default::default() })
+        .id;
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(a, 1).into(),
+        station_b: StationRef::new(b, 0).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.rebuild_merge_adjacency();
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b, 0).into(),
+        gps: GpsCoordinates::new(45.0, -90.0, 0.0).unwrap(),
+    });
+    project.ensure_shot_uuids();
+
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let datum_warning = validation::get_project_warnings(state(&app))
+        .into_iter()
+        .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
+        .expect("over-anchored merge component must raise a warning");
+    assert!(!datum_warning.is_resolved, "freshly raised, not resolved");
+
+    // Force a stray resolved row keyed exactly as the warning (as a bulk save or
+    // a legacy file could). Compute must still refuse to mark it resolved.
+    state(&app)
+        .inner()
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id: datum_warning.section_id,
+            shot_id: datum_warning.shot_id,
+            warning_code: datum_warning.code.clone(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: datum_warning.shot_uuid.clone(),
+        })
+        .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    let w = after
+        .iter()
+        .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
+        .expect("over-anchoring warning still present");
+    assert!(
+        !w.is_resolved,
+        "over-anchoring must never be suppressed by a resolved row"
+    );
 }
 
 #[test]

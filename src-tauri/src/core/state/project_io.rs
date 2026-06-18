@@ -155,7 +155,10 @@ impl AppState {
     }
 
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
-        let project = Project::new(name, location);
+        let mut project = Project::new(name, location);
+        // Seed per-project validation thresholds from the global config — the
+        // "defaults for new projects" (#57). Authoritative in the .stalx after.
+        project.validation = self.get_config().validation;
 
         tracing::info!(
             project_name = %project.name,
@@ -175,6 +178,59 @@ impl AppState {
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
 
+        CommandResult::success()
+    }
+
+    /// Update per-project settings (#57): the project name and validation
+    /// thresholds. Persisted into the .stalx on the next save; warnings recompute
+    /// from the new thresholds on the next get_project_warnings.
+    ///
+    /// Undoable via a snapshot pair (mirrors repair_open_project_integrity) so an
+    /// unrelated undo can't silently revert a settings change: without its own
+    /// undo entry, undoing an edit made BEFORE the settings change would restore a
+    /// snapshot carrying the old name/validation.
+    pub fn update_project_settings(
+        &self,
+        name: String,
+        validation: crate::config::ValidationConfig,
+    ) -> CommandResult {
+        // Serialize against execute()/undo()/redo() so the before/after pair is
+        // consistent (same rationale as repair_open_project_integrity).
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        let before_snapshot = self.capture_project_snapshot().ok();
+        {
+            let mut guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let Some(project) = guard.as_mut() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            // No-op when nothing actually changed: touch() would still bump
+            // modified_at, marking the project dirty and pushing a misleading
+            // "Update project settings" undo entry for a save that changed nothing
+            // (Codex). Compare before mutating.
+            if project.name == name && project.validation == validation {
+                return CommandResult::success();
+            }
+            project.name = name;
+            project.validation = validation;
+            project.touch();
+        }
+        // Record an undo entry (before -> after) so the change is on the stack.
+        if let Some(before_json) = before_snapshot {
+            if let Ok(after_json) = self.capture_project_snapshot() {
+                if before_json != after_json {
+                    self.push_snapshot_undo(
+                        crate::core::Command::UpdateProjectSettings,
+                        before_json,
+                        after_json,
+                    );
+                }
+            }
+        }
         CommandResult::success()
     }
 
@@ -224,6 +280,23 @@ impl AppState {
 
         project.file_path = Some(path.clone());
 
+        // Same legacy-seeding as do_load_project_full: a project with no stored
+        // `validation` row gets the user's global thresholds, not the hardcoded
+        // default.
+        match db.load_project_validation() {
+            Ok(None) => {
+                project.validation = self.get_config().validation;
+            }
+            Ok(Some(_)) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "seed validation thresholds for legacy project",
+                    "open_project: could not determine stored validation thresholds; keeping loaded value"
+                );
+            }
+        }
+
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
 
@@ -235,7 +308,24 @@ impl AppState {
         // UUIDs, then re-anchor (Index→AfterShot) and re-solve offsets, so the two
         // load entry points can't diverge. (This legacy IPC has no production caller
         // today, but it stays registered and invokable, so harden it.)
+        // Upgrade legacy NULL-uuid resolved-warning rows to UUID keying. Build the
+        // map BEFORE minting so it contains only shots whose UUID is already
+        // PERSISTED in the file: backfilling a freshly-minted, not-yet-saved UUID
+        // would write it to resolved_warnings on open, and if the user then closes
+        // WITHOUT saving, the next open mints a DIFFERENT UUID and orphans the
+        // ignore (issue #57 / Codex). Pre-v6 shots keep position-keyed ignores
+        // until a save persists their UUIDs and the save carry-over re-keys them.
+        // Shared with do_load_project_full via Project::shot_uuid_by_position so the
+        // two load entry points can't diverge. Idempotent; non-fatal.
+        let live_shot_uuids = project.shot_uuid_by_position();
         project.ensure_shot_uuids();
+        if let Err(e) = db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+            tracing::warn!(
+                error = %e,
+                purpose = "upgrade legacy ignores to UUID keying",
+                "open_project: failed to backfill resolved-warning UUIDs; legacy rows remain position-keyed"
+            );
+        }
         let healed_offsets = project.redrive_offsets_after_load();
         if healed_offsets > 0 {
             tracing::warn!(
@@ -537,6 +627,134 @@ impl AppState {
             }
         };
 
+        // Resolved (ignored) warnings live in their own table, not in the Project
+        // model, so save_project() won't carry them. Snapshot them from the
+        // current database and re-apply to the fresh save file below, otherwise
+        // every save would drop the user's "Ignore" acknowledgements (issue #57).
+        let resolved_warnings = {
+            // Recover a poisoned lock rather than silently dropping every ignore.
+            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
+            let loaded = db_guard.as_ref().map(|db| db.load_resolved_warnings());
+            match loaded {
+                Some(Ok(rows)) => {
+                    // Drop rows whose section no longer exists. resolved_warnings has
+                    // a FOREIGN KEY on section_id and the carry-over re-inserts in a
+                    // single transaction — one orphaned row (e.g. a section deleted
+                    // after a warning on it was ignored; delete_section is in-memory
+                    // only and never prunes this table) would abort the whole
+                    // transaction and silently drop EVERY still-valid ignore.
+                    let section_ids: std::collections::HashSet<_> =
+                        project.sections.iter().map(|s| s.id).collect();
+                    // Re-derive each UUID-keyed row's stored (section_id, shot_id)
+                    // from the live shot's CURRENT position so two distinct live
+                    // shots never share a (section_id, shot_id) in the fresh save
+                    // file (issue #57). save_project writes shot_id =
+                    // section_id*FEATURE_ID_STRIDE + sequence_order, so we derive
+                    // the same value from the in-memory project; load regenerates
+                    // ids with this identical formula. Without this, a renumber that
+                    // lands a different shot on a stale UUID-keyed row's old position
+                    // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
+                    // warning_code)) silently delete the older shot's still-valid
+                    // ignore.
+                    // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
+                    // only de-dups within a section, so two sections can share a shot
+                    // UUID and a uuid-only key would collapse both live shots into one
+                    // entry — remapping section A's ignore to whichever section won the
+                    // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
+                    let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> = project
+                        .sections
+                        .iter()
+                        .flat_map(|s| {
+                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
+                                sh.uuid.as_deref().map(|u| {
+                                    (
+                                        (s.id, u),
+                                        (s.id, s.id * crate::models::FEATURE_ID_STRIDE + seq as u32),
+                                    )
+                                })
+                            })
+                        })
+                        .collect();
+                    // Index live shots by their CURRENT (section_id, shot_id) → (uuid,
+                    // saved position). A position-keyed (NULL-uuid) row written before
+                    // its shot's UUID was persisted (resolve_warning on a pre-v6 or
+                    // not-yet-saved shot) is upgraded here: THIS save persists every
+                    // shot's UUID, so we re-key such a row to the shot's saved position
+                    // AND its now-persisted UUID. Without this, its stale in-memory
+                    // shot_id could point at a different shot (or none) after an
+                    // insert/delete on the next load (issue #57 / Codex).
+                    let live_by_id: std::collections::HashMap<(SectionId, u32), (&str, (SectionId, u32))> = project
+                        .sections
+                        .iter()
+                        .flat_map(|s| {
+                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
+                                sh.uuid.as_deref().map(|u| {
+                                    (
+                                        (s.id, sh.id),
+                                        (u, (s.id, s.id * crate::models::FEATURE_ID_STRIDE + seq as u32)),
+                                    )
+                                })
+                            })
+                        })
+                        .collect();
+                    // Remap each UUID-keyed row to its shot's live position; DROP a
+                    // UUID-keyed row whose shot was deleted (UUID no longer live) — it
+                    // can never match a live shot by UUID on reload, so it is dead.
+                    // Keeping it with its stale id would let it collide (under
+                    // UNIQUE(section_id, shot_id, warning_code) + INSERT OR REPLACE)
+                    // with a live shot that a renumber moved onto that position, and
+                    // REPLACE could drop either row depending on insert order — i.e.
+                    // silently lose the live shot's still-valid ignore. Dropping dead
+                    // rows here also stops them accumulating across saves. NULL-uuid
+                    // (legacy, position-keyed) rows are kept and matched by position
+                    // (the load-time backfill upgrades the ones that map to a shot).
+                    rows.into_iter()
+                        .filter_map(|mut r| {
+                            match r.shot_uuid.as_deref() {
+                                Some(uuid) => {
+                                    // Look up by (section_id, uuid): a UUID-keyed row's
+                                    // section_id is its shot's section, so this targets the
+                                    // right shot even when another section shares the UUID.
+                                    let &(sec, shot) = live_positions.get(&(r.section_id, uuid))?;
+                                    r.section_id = sec;
+                                    r.shot_id = shot;
+                                    Some(r)
+                                }
+                                None => {
+                                    // Upgrade a position-keyed row to its shot's saved
+                                    // position + now-persisted UUID when its (section_id,
+                                    // shot_id) still maps to a live shot. A row that maps
+                                    // to NO live shot is DEAD (its shot was deleted) — DROP
+                                    // it: carrying it forward would let the load-time
+                                    // position backfill re-attach it to whatever shot now
+                                    // occupies that saved position, suppressing an
+                                    // unrelated shot's warning (issue #57 / Codex).
+                                    let &(uuid, (sec, shot)) =
+                                        live_by_id.get(&(r.section_id, r.shot_id))?;
+                                    r.shot_uuid = Some(uuid.to_string());
+                                    r.section_id = sec;
+                                    r.shot_id = shot;
+                                    Some(r)
+                                }
+                            }
+                        })
+                        // Then drop any (legacy) row whose section no longer exists so
+                        // the FK on section_id holds for every carried-over row.
+                        .filter(|r| section_ids.contains(&r.section_id))
+                        .collect()
+                }
+                Some(Err(e)) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "carry resolved warnings across save",
+                        "Failed to read resolved warnings; ignores may not be preserved on this save"
+                    );
+                    Vec::new()
+                }
+                None => Vec::new(),
+            }
+        };
+
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
@@ -572,6 +790,17 @@ impl AppState {
                     error = %e,
                     purpose = "preserve display settings on save",
                     "Failed to copy display setting"
+                );
+            }
+        }
+
+        // Carry over resolved (ignored) warnings so they survive the save.
+        if !resolved_warnings.is_empty() {
+            if let Err(e) = db.save_resolved_warnings_bulk(&resolved_warnings) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve resolved warnings on save",
+                    "Failed to copy resolved warnings"
                 );
             }
         }
@@ -643,8 +872,16 @@ impl AppState {
                 if let Ok(mut database) = self.database.lock() {
                     *database = None;
                 }
-                return CommandResult::success()
-                    .with_warning("File saved, but database could not be reopened. Some features may not work until the project is reopened.");
+                // Distinct code (not the generic "SYSTEM") so the frontend can keep
+                // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
+                // disabled until the project is reopened (issue #57 / Codex).
+                let mut result = CommandResult::success();
+                result.warnings.push(crate::core::ValidationWarning {
+                    code: "DATABASE_NOT_REOPENED".to_string(),
+                    message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
+                    severity: crate::core::WarningSeverity::Warning,
+                });
+                return result;
             }
         };
 
@@ -906,8 +1143,10 @@ impl AppState {
             }
         }
 
-        // Create a new merged project
+        // Create a new merged project; seed validation from the global config
+        // (the "defaults for new projects", #57) rather than the hardcoded default.
         let mut merged_project = Project::new(output_name, None);
+        merged_project.validation = self.get_config().validation;
 
         // Track section ID remapping: (old_project_idx, old_section_id) -> new_section_id
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
@@ -1170,6 +1409,10 @@ impl AppState {
             return save_failure("Failed to save merged project", &output_path, &e);
         }
 
+        // Resolved (ignored) warnings are intentionally NOT carried into the
+        // merged output: it is a fresh artifact with re-derived offsets and
+        // reassigned closure ids, so warnings are re-evaluated from scratch.
+
         // Close database before rename
         drop(db);
 
@@ -1343,11 +1586,51 @@ impl AppState {
             }
         };
         project.file_path = Some(path.clone());
+        // Legacy projects (saved before #57) have no persisted `validation` row;
+        // load_project() filled `project.validation` with the hardcoded default.
+        // Override it with the user's GLOBAL thresholds (the "defaults for new
+        // projects"), matching create_project/merge. The choice persists on the
+        // next save (save_project writes the row), so a project is only treated
+        // as legacy until its first save under this build.
+        match db.load_project_validation() {
+            Ok(None) => {
+                project.validation = self.get_config().validation;
+            }
+            Ok(Some(_)) => {} // explicit row present — honor it as-is
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "seed validation thresholds for legacy project",
+                    "Could not determine whether project has stored validation thresholds; keeping loaded value"
+                );
+            }
+        }
+        // Upgrade legacy NULL-uuid resolved-warning rows to UUID keying. Build the
+        // map BEFORE minting so it only contains shots whose UUID is already
+        // PERSISTED: a freshly-minted, not-yet-saved UUID written into
+        // resolved_warnings on open would be orphaned if the user closes without
+        // saving (the next open mints a different UUID) — issue #57 / Codex. Pre-v6
+        // shots keep position-keyed ignores until a save persists their UUIDs and
+        // the carry-over re-keys them. Shared with open_project. Idempotent; non-fatal.
+        let live_shot_uuids = project.shot_uuid_by_position();
         // Guarantee every shot has a stable UUID at runtime, not just after the
         // next save: pre-v6 files load shots with uuid=None, and station identity
         // (and the Ariane collaboration round-trip) anchors on the shot UUID. The
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
+        match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
+            Ok(n) if n > 0 => tracing::info!(
+                upgraded = n,
+                purpose = "upgrade legacy ignores to UUID keying",
+                "Backfilled resolved-warning UUIDs on load"
+            ),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                purpose = "upgrade legacy ignores to UUID keying",
+                "Failed to backfill resolved-warning UUIDs; legacy rows remain position-keyed"
+            ),
+        }
         // Assign IDs to any legacy closures that have id=0
         project.assign_closure_ids();
         // Section offsets are derived state: re-solve them from the merge/datum
@@ -1667,6 +1950,9 @@ impl AppState {
         // === PHASE 1: Initializing project (40%) ===
         progress.start_phase(LoadingPhase::InitializingProject);
         let mut project = Project::new(name.clone(), project_location);
+        // Seed per-project validation from the global config (the "defaults for
+        // new projects", #57). This is the path the New Project UI actually uses.
+        project.validation = self.get_config().validation;
         project.file_path = Some(db_path.clone());
 
         if let Some(ref mut database) = db {

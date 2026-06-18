@@ -144,12 +144,13 @@ describe('defaultConfig structure', () => {
 
   describe('validation config', () => {
     it('has correct validation defaults', () => {
-      expect(defaultConfig.validation.warn_shot_length_min).toBe(0.1);
+      expect(defaultConfig.validation.warn_shot_length_min).toBe(0.3);
       expect(defaultConfig.validation.warn_shot_length_max).toBe(50.0);
       expect(defaultConfig.validation.warn_depth_change_per_shot_max).toBe(10.0);
       expect(defaultConfig.validation.warn_azimuth_deviation_max).toBe(30.0);
       expect(defaultConfig.validation.azimuth_diff_threshold).toBe(20.0);
-      expect(defaultConfig.validation.pitch_diff_threshold).toBe(5.0);
+      expect(defaultConfig.validation.pitch_diff_threshold).toBe(10.0);
+      expect(defaultConfig.validation.inclination_depth_diff_threshold).toBe(15.0);
     });
   });
 

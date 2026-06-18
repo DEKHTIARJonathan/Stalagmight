@@ -189,6 +189,13 @@ pub struct Project {
     #[serde(default)]
     pub collab: Option<CollabState>,
 
+    /// Per-project validation thresholds (#57). Stored in the `.stalx` so they
+    /// travel with the file between collaborators. New projects are seeded from
+    /// the global config (the "defaults for new projects"); thereafter this is
+    /// authoritative. Defaults on legacy projects until populated on load.
+    #[serde(default)]
+    pub validation: crate::config::ValidationConfig,
+
     /// Transient flag (NOT persisted) — when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
@@ -368,9 +375,9 @@ impl Serialize for ProjectIpc<'_> {
         let zero_datums: Vec<_> = p.zero_datums.iter().filter_map(|z| p.datum_to_wire(z)).collect();
         let loop_closures: Vec<_> = p.loop_closures.iter().filter_map(|c| p.closure_to_wire(c)).collect();
         // Field set + order MUST stay in lockstep with the generated Project.ts
-        // (15 ts-exported fields). Adding a ts-exported field to `Project`
+        // (16 ts-exported fields). Adding a ts-exported field to `Project`
         // requires adding it here too, or it silently drops off the IPC payload.
-        let mut st = serializer.serialize_struct("Project", 15)?;
+        let mut st = serializer.serialize_struct("Project", 16)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
         st.serialize_field("created_at", &p.created_at)?;
@@ -386,6 +393,7 @@ impl Serialize for ProjectIpc<'_> {
         st.serialize_field("imported_section_hashes", &p.imported_section_hashes)?;
         st.serialize_field("next_closure_id", &p.next_closure_id)?;
         st.serialize_field("collab", &p.collab)?;
+        st.serialize_field("validation", &p.validation)?;
         st.end()
     }
 }
@@ -423,6 +431,7 @@ impl Project {
             imported_section_hashes: Vec::new(),
             next_closure_id: 1,
             collab: None,
+            validation: crate::config::ValidationConfig::default(),
             cascade_deferred: false,
             section_index_cache: HashMap::new(),
             merge_adjacency_cache: HashMap::new(),
@@ -572,6 +581,22 @@ impl Project {
             self.touch();
         }
         reminted
+    }
+
+    /// Map every shot that has a UUID to its `(section_id, shot_id)` position.
+    /// Shared by both load entry points (`open_project` and
+    /// `do_load_project_full`) to feed `backfill_resolved_warning_uuids`, so the
+    /// two sites can't diverge. Shots with no UUID are skipped — call
+    /// [`ensure_shot_uuids`] first if every shot must be represented.
+    pub fn shot_uuid_by_position(&self) -> HashMap<(u32, u32), String> {
+        self.sections
+            .iter()
+            .flat_map(|s| {
+                s.shots
+                    .iter()
+                    .filter_map(move |sh| sh.uuid.clone().map(|u| ((s.id, sh.id), u)))
+            })
+            .collect()
     }
 
     /// Rebuild the section-id → index cache from the current `sections`
@@ -7042,6 +7067,33 @@ impl Project {
             merge_adj,
             closure_adj,
             datum_stations,
+        )
+    }
+
+    /// Convenience wrapper around [`Self::is_shot_frozen`] that resolves the
+    /// shot's index from its id and builds the section lookup / adjacency /
+    /// datum-station structures internally. Returns `false` if the section or
+    /// shot id cannot be found. Call sites that need to check a single shot
+    /// should prefer this over hand-rolling the adjacency setup.
+    pub(crate) fn is_shot_frozen_by_id(&self, section_id: SectionId, shot_id: ShotId) -> bool {
+        let Some(section) = self.sections.iter().find(|s| s.id == section_id) else {
+            return false;
+        };
+        let Some(shot_index) = section.shots.iter().position(|s| s.id == shot_id) else {
+            return false;
+        };
+        let section_lookup = self.build_section_lookup();
+        let merge_adj = self.build_merge_adjacency(&section_lookup);
+        let closure_adj = self.build_aligned_closure_adjacency(&section_lookup);
+        let datum_stations: HashSet<StationRef> =
+            self.zero_datums.iter().filter_map(|d| self.resolve_key(&d.station_ref)).collect();
+        self.is_shot_frozen(
+            section_id,
+            shot_index,
+            &section_lookup,
+            &merge_adj,
+            &closure_adj,
+            &datum_stations,
         )
     }
 

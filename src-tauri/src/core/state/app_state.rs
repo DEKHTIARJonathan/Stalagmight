@@ -428,8 +428,22 @@ impl AppState {
     /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
     #[must_use]
     pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
+        // A snapshot persisted by a build predating the per-project `validation`
+        // field (#57) has no "validation" key, so serde (the field is
+        // #[serde(default)]) fills ValidationConfig::default() — silently changing
+        // the project's thresholds and its warnings when an undo/redo of a legacy
+        // persisted entry is restored. Detect that legacy blob and carry the CURRENT
+        // project's validation across instead. Undo of a real settings change always
+        // serializes the key, so it still restores the intended thresholds (Codex).
+        let snapshot_has_validation = snapshot.contains("\"validation\":");
+        let current_validation = slot.as_ref().map(|p| p.validation.clone());
         match serde_json::from_str::<Project>(snapshot) {
             Ok(mut restored) => {
+                if !snapshot_has_validation {
+                    if let Some(validation) = current_validation {
+                        restored.validation = validation;
+                    }
+                }
                 restored.rebuild_section_index();
                 restored.rebuild_merge_adjacency();
                 // A snapshot blob persisted by a PRE-ANCHOR build can carry

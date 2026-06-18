@@ -1,4 +1,5 @@
 import { themeTokens } from '../theme/tokens';
+import { SEVERITY_GREEN, SEVERITY_YELLOW, SEVERITY_RED } from './colors';
 
 /**
  * Theme color utilities for reading CSS custom properties at runtime.
@@ -19,6 +20,14 @@ import { themeTokens } from '../theme/tokens';
 const FALLBACK_MAP: Record<string, string> = { ...themeTokens.dark };
 const DARK_DEPTH_SHALLOW = themeTokens.dark['--cc-depth-shallow'];
 const DARK_DEPTH_DEEP = themeTokens.dark['--cc-depth-deep'];
+
+// Issue-severity ("traffic light") colors for the map's Issue-severity Display
+// mode. Fixed (not theme-derived), like the depth-gradient endpoints, so
+// severity reads identically across UI themes. Single-sourced from
+// src/utils/colors.ts (same palette as getErrorColor).
+const SEVERITY_CLEAR = SEVERITY_GREEN;
+const SEVERITY_WARNING = SEVERITY_YELLOW;
+const SEVERITY_ERROR = SEVERITY_RED;
 
 /**
  * Read a CSS custom property value from the document root.
@@ -54,6 +63,10 @@ export interface MapThemeColors {
   snapColor: string;
   hoverHighlight: string;
   selectHighlight: string;
+  /** Issue-severity coloring (fixed across themes). */
+  severityClear: string;
+  severityWarning: string;
+  severityError: string;
 }
 
 /**
@@ -81,5 +94,8 @@ export function getMapThemeColors(): MapThemeColors {
     snapColor: getThemeColor('--cc-snap-color'),
     hoverHighlight: getThemeColor('--cc-hover-highlight'),
     selectHighlight: getThemeColor('--cc-select-highlight'),
+    severityClear: SEVERITY_CLEAR,
+    severityWarning: SEVERITY_WARNING,
+    severityError: SEVERITY_ERROR,
   };
 }

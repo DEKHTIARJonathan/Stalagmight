@@ -2843,6 +2843,203 @@ fn test_delete_shot_rewires_merges() {
     assert!(has_merge_bc, "Expected replacement merge between B:0 and C:0");
 }
 
+#[test]
+fn test_delete_shot_rejects_frozen_shot() {
+    // Issue #57 (Item 3): a frozen shot (collaborator-locked geometry anchored to
+    // an adjusted survey network) must not be deletable via the resolve flow.
+    // Build a two-section loop with a datum at each end so every shot between the
+    // datums is frozen, then assert DeleteShot is refused and the shot survives.
+    //
+    // The loop topology (a:0<->b:0 and a:2<->b:2, two datums) is built in memory
+    // directly — the command-level MergeStations validation refuses merging two
+    // stations already in the same connected component, which the second
+    // end-to-end merge would be. The real delete_shot command guard is still
+    // exercised below.
+    let mut project = Project::new("Frozen".to_string(), None);
+    let sec_a = project.add_section(SectionData {
+        color: "#ff0000".to_string(),
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+        ],
+        ..Default::default()
+    }).id;
+    let sec_b = project.add_section(SectionData {
+        color: "#00ff00".to_string(),
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+        ],
+        ..Default::default()
+    }).id;
+
+    // Close the loop: both ends of A merged onto both ends of B.
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(sec_a, 0).into(),
+        station_b: StationRef::new(sec_b, 0).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    project.station_merges.push(StationMerge {
+        station_a: StationRef::new(sec_a, 2).into(),
+        station_b: StationRef::new(sec_b, 2).into(),
+        merged_at: chrono::Utc::now(),
+    });
+    // Two datums, one per section head, freeze every shot in the loop.
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: StationRef::new(sec_a, 0).into(),
+        gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
+    });
+    project.zero_datums.push(crate::models::ZeroDatum {
+        station_ref: StationRef::new(sec_b, 0).into(),
+        gps: GpsCoordinates::new(46.0, -74.0, 110.0).unwrap(),
+    });
+    project.rebuild_merge_adjacency();
+
+    // SELF-VERIFY the chosen shot is genuinely frozen before asserting the
+    // rejection, so the test fails loudly if the setup didn't freeze it.
+    let frozen = project.compute_frozen_shots();
+    assert!(
+        frozen.iter().any(|f| f.section_id == sec_a && f.shot_index == 0),
+        "precondition: sec_a shot[0] must be frozen by the loop+two-datum setup"
+    );
+    let target_shot_id = project
+        .sections
+        .iter()
+        .find(|s| s.id == sec_a)
+        .unwrap()
+        .shots[0]
+        .id;
+    let shots_before = project
+        .sections
+        .iter()
+        .find(|s| s.id == sec_a)
+        .unwrap()
+        .shots
+        .len();
+
+    let state = AppState::new().unwrap();
+    state.set_project_for_tests(project);
+
+    // The delete must be refused with a clear frozen message.
+    let result = state.execute(Command::DeleteShot {
+        section_id: sec_a,
+        shot_id: target_shot_id,
+    });
+    assert!(!result.success, "deleting a frozen shot must be refused");
+    assert!(
+        result.error.as_deref().unwrap_or("").contains("frozen"),
+        "error must mention the shot is frozen, got: {:?}",
+        result.error
+    );
+
+    // The shot still exists — nothing was removed.
+    let after = state.get_project_state().unwrap();
+    let shots_after = after
+        .sections
+        .iter()
+        .find(|s| s.id == sec_a)
+        .unwrap()
+        .shots
+        .len();
+    assert_eq!(shots_after, shots_before, "the frozen shot must still exist");
+}
+
+#[test]
+fn test_legacy_project_seeds_validation_from_global_config() {
+    // Issue #57 (Item 5): a legacy project saved before per-project validation
+    // (no `validation` row in project_settings) must open with the user's GLOBAL
+    // thresholds — the "defaults for new projects" — not the hardcoded
+    // ValidationConfig::default(). A project that DOES carry an explicit row keeps
+    // its own thresholds.
+    crate::test_helpers::with_isolated_config(|| {
+        let dir = TempDir::new().unwrap();
+
+        // A 1.0 m shot is fine under the hardcoded default (warn_shot_length_min
+        // = 0.3) but SHORT under a raised global minimum.
+        let custom = crate::config::ValidationConfig {
+            warn_shot_length_min: 5.0,
+            ..crate::config::ValidationConfig::default()
+        };
+
+        // --- Legacy file: saved, then strip the validation row to simulate a
+        //     project written before the feature existed. ---
+        let legacy_path = dir.path().join("legacy.stalx");
+        {
+            let mut project = Project::new("Legacy".to_string(), None);
+            project.add_section(SectionData {
+                shots: vec![test_shot_data(1.0)],
+                ..Default::default()
+            });
+            let mut db = Database::open(&legacy_path).unwrap();
+            db.save_project(&project).unwrap();
+            drop(db);
+            let conn = rusqlite::Connection::open(&legacy_path).unwrap();
+            conn.execute("DELETE FROM project_settings WHERE key = 'validation'", [])
+                .unwrap();
+            drop(conn);
+        }
+        // Sanity: the file now looks legacy (no stored validation row).
+        assert!(
+            Database::open_existing(&legacy_path)
+                .unwrap()
+                .load_project_validation()
+                .unwrap()
+                .is_none(),
+            "precondition: legacy file has no stored validation row"
+        );
+
+        // Open via the production command path on a fresh AppState whose GLOBAL
+        // config carries the customized threshold.
+        let state = AppState::new().unwrap();
+        let mut config = state.get_config();
+        config.validation = custom.clone();
+        state.update_config(config).unwrap();
+
+        assert!(state.open_project(legacy_path).success, "open must succeed");
+
+        let opened = state.get_project_state().unwrap();
+        assert_eq!(
+            opened.validation.warn_shot_length_min, custom.warn_shot_length_min,
+            "legacy project must inherit the user's global thresholds"
+        );
+        // The customized threshold actually drives warnings: the 1.0 m shot is now SHORT.
+        assert!(
+            state
+                .compute_project_warnings(&opened, None)
+                .iter()
+                .any(|w| w.code == "SHORT_SHOT"),
+            "the seeded global threshold must produce the SHORT_SHOT warning"
+        );
+
+        // --- Explicit-row file: a project that carries its OWN validation row
+        //     (different from global) must NOT be overridden on open. ---
+        let explicit_path = dir.path().join("explicit.stalx");
+        {
+            let mut project = Project::new("Explicit".to_string(), None);
+            project.validation = crate::config::ValidationConfig {
+                warn_shot_length_min: 0.1,
+                ..crate::config::ValidationConfig::default()
+            };
+            project.add_section(SectionData {
+                shots: vec![test_shot_data(1.0)],
+                ..Default::default()
+            });
+            let mut db = Database::open(&explicit_path).unwrap();
+            db.save_project(&project).unwrap();
+        }
+        let state2 = AppState::new().unwrap();
+        let mut config2 = state2.get_config();
+        config2.validation = custom.clone();
+        state2.update_config(config2).unwrap();
+        assert!(state2.open_project(explicit_path).success);
+        let opened2 = state2.get_project_state().unwrap();
+        assert_eq!(
+            opened2.validation.warn_shot_length_min, 0.1,
+            "a project with an explicit validation row keeps its own thresholds"
+        );
+    });
+}
+
 // === #41 synthetic repro: deleting a shot must not shift unrelated/upstream geometry ===
 //
 // "On macOS, deleting a shot sometimes causes an erroneous geometry shift — the
@@ -3845,12 +4042,13 @@ fn test_resolved_warning_methods_fail_when_database_lock_poisoned() {
         warning_code: "TEST".to_string(),
         resolved_at: chrono::Utc::now(),
         resolved_comment: None,
+        shot_uuid: None,
     };
 
     let err = state.save_resolved_warning(&warning).unwrap_err();
     assert_eq!(err.to_string(), "Failed to lock database");
 
-    let err = state.delete_resolved_warning(1, 2, "TEST").unwrap_err();
+    let err = state.delete_resolved_warning(1, 2, "TEST", None).unwrap_err();
     assert_eq!(err.to_string(), "Failed to lock database");
 }
 
