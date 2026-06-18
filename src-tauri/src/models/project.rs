@@ -6750,6 +6750,17 @@ impl Project {
         chain.reverse();
         let mut path_shots: Vec<PathShot> = Vec::new();
         for w in chain.windows(2) {
+            // Skip a step that actually traversed a zero-cost merge/closure tie. When
+            // a closure runs PARALLEL to a real shot (same station pair) `shot_edge`
+            // maps the pair to the shot, but a ~0-cost step means Dijkstra took the
+            // tie, not the shot — tinting it would be wrong. This also drops a
+            // zero-length same-shot measurement (ta≈tb), whose direct edge has weight
+            // 0, leaving an empty path like identical station endpoints (#26, Codex).
+            // `w[0]` is the predecessor of `w[1]`, so the step weight is exactly the
+            // distance delta.
+            if dist[w[1]] - dist[w[0]] <= EPS {
+                continue;
+            }
             if let Some(ps) = shot_edge.get(&(w[0], w[1])) {
                 if path_shots.last() != Some(ps) {
                     path_shots.push(*ps);

@@ -1867,6 +1867,54 @@ fn along_line_same_shot_prefers_shorter_route_around() {
 
     let r = project.along_line_between(&stations, ep_shot(a, s0, 0.1), ep_shot(a, s0, 0.9));
     assert!((r.along_line.unwrap() - 20.0).abs() < 1e-6, "should route around, got {:?}", r.along_line);
+    // The end-legs of the shot are traversed (v→A.0 and A.1→v), but the middle
+    // A.0→A.1 leg uses the closure, not the shot — still exactly one shot entry.
+    assert_eq!(r.path_shots, vec![PathShot { section_id: a, shot_id: s0 }]);
+}
+
+#[test]
+fn along_line_parallel_closure_does_not_tint_shot() {
+    // A loop closure parallel to a real shot (same station pair): measuring between
+    // the two stations routes via the zero-cost closure, so the shot — which the
+    // path did NOT traverse — must not be tinted (#26, Codex).
+    let mut project = Project::new("ParallelClosure".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    project.loop_closures.push(LoopClosure {
+        id: project.next_closure_id,
+        station_a: StationRef::new(a, 0).into(),
+        station_b: StationRef::new(a, 1).into(),
+        path_length: 0.0,
+        misclosure_distance: 0.0,
+        error_percentage: 0.0,
+        horizontal_misclosure: 0.0,
+        vertical_misclosure: 0.0,
+        strategy: ClosureStrategy::default(),
+        is_aligned: false,
+    });
+    project.next_closure_id += 1;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_station(a, 0), ep_station(a, 1));
+    assert_eq!(r.along_line, Some(0.0), "routes via the 0-cost closure");
+    assert!(r.path_shots.is_empty(), "the parallel shot must not be tinted: {:?}", r.path_shots);
+}
+
+#[test]
+fn along_line_zero_length_same_shot_has_empty_path() {
+    // Both endpoints are the exact same point on a shot: distance 0 and NO tint,
+    // matching identical station endpoints (#26, Codex).
+    let mut project = Project::new("ZeroLenShot".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], ..Default::default() })
+        .id;
+    let s0 = project.get_section(a).unwrap().shots[0].id;
+    let stations = project.compute_station_coordinates();
+
+    let r = project.along_line_between(&stations, ep_shot(a, s0, 0.5), ep_shot(a, s0, 0.5));
+    assert_eq!(r.along_line, Some(0.0), "got {:?}", r.along_line);
+    assert!(r.path_shots.is_empty(), "zero-length same-shot must not tint: {:?}", r.path_shots);
 }
 
 #[test]

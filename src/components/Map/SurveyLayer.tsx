@@ -2092,6 +2092,15 @@ export default class SurveyLayer {
     const nearest = resolveNearestStation(this.map, fakeEvent, features, threshold);
     if (!nearest) return null;
 
+    // resolveNearestStation skips the distance check for a lone candidate, and the
+    // square bbox reaches ~√2·threshold at a corner — enforce the circular snap
+    // threshold so a corner station doesn't snap (and, in measure mode, doesn't
+    // suppress a closer shot snap) (#26, Codex).
+    if (nearest.geometry.type === 'Point') {
+      const p = this.map.project(nearest.geometry.coordinates as [number, number]);
+      if (Math.hypot(p.x - screenX, p.y - screenY) > threshold) return null;
+    }
+
     const { sectionId, stationIndex } = nearest.properties ?? {};
     if (sectionId === undefined || stationIndex === undefined) return null;
 

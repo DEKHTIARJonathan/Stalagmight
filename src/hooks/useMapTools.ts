@@ -189,11 +189,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       }
       measureRequestIdRef.current += 1;
       const requestId = measureRequestIdRef.current;
-      // Capture the project identity so a response landing after a project switch
-      // is discarded directly, without depending on the MapCanvas clearMeasure
-      // effect having already run (it nulls the endpoints, but only after the
-      // project-change render commits) (#26).
-      const requestProjectId = useProjectStore.getState().project?.created_at ?? null;
+      // Capture the project identity so a response landing after the project
+      // changed is discarded directly, without depending on the MapCanvas reset
+      // effects having already run (they null the endpoints, but only after the
+      // change's render commits). Includes modified_at so an edit/undo/redo to the
+      // SAME project (which changes the topology/geometry but not created_at) also
+      // invalidates an in-flight request (#26, Codex).
+      const reqProject = useProjectStore.getState().project;
+      const requestProjectKey = `${reqProject?.created_at ?? ''}|${reqProject?.modified_at ?? ''}`;
       setMeasureAlongLinePending(true);
       try {
         const result = await invokeIpc<AlongLineResult | null>(
@@ -201,7 +204,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           { a, b },
           { purpose: 'ruler along-line distance' }
         );
-        // Discard the response if a newer request superseded it, or if the
         // Discard the response unless the EXACT measurement it was issued for is
         // still live. We compare the live endpoints by reference against the ones
         // this request was made for: every new click builds fresh endpoint objects,
@@ -214,7 +216,8 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         const ui = useUIStore.getState();
         if (requestId !== measureRequestIdRef.current) return;
         if (ui.activeTool !== 'measure' || ui.measureStart !== start || ui.measureEnd !== end) return;
-        if ((useProjectStore.getState().project?.created_at ?? null) !== requestProjectId) return;
+        const liveProject = useProjectStore.getState().project;
+        if (`${liveProject?.created_at ?? ''}|${liveProject?.modified_at ?? ''}` !== requestProjectKey) return;
         setMeasureAlongLine(
           result
             ? { alongLine: result.along_line, pathShots: result.path_shots, pathStations: result.path_stations }
