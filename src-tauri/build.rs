@@ -5,10 +5,19 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CI");
     println!("cargo::rerun-if-env-changed=TELEMETRY_ENDPOINT");
 
-    // Append "-dev" to the version for local builds (CI env var is not set).
+    // Embed the exact commit in the version: `x.y.z-<shorthash>` for CI/release
+    // builds and `x.y.z-dev-<shorthash>` for local builds (CI env var not set).
+    // Falls back to `unknown` when git is unavailable (e.g. a source tarball).
     let pkg_version = std::env::var("CARGO_PKG_VERSION").unwrap();
-    let suffix = if std::env::var("CI").is_ok() { "" } else { "-dev" };
-    println!("cargo::rustc-env=APP_VERSION={pkg_version}{suffix}");
+    let short_hash = git_short_hash();
+    let app_version = if std::env::var("CI").is_ok() {
+        format!("{pkg_version}-{short_hash}")
+    } else {
+        format!("{pkg_version}-dev-{short_hash}")
+    };
+    println!("cargo::rustc-env=APP_VERSION={app_version}");
+    // Re-run build.rs when the checked-out commit changes so the hash stays current.
+    emit_git_rerun();
 
     // Windows: let `cargo test` harness binaries start up.
     //
@@ -43,5 +52,50 @@ fn main() {
         let endpoint = std::env::var("TELEMETRY_ENDPOINT")
             .expect("TELEMETRY_ENDPOINT must be set when building with --features telemetry");
         println!("cargo::rustc-env=TELEMETRY_ENDPOINT={endpoint}");
+    }
+}
+
+/// Short hash of the checked-out commit, or `unknown` when git is unavailable
+/// (e.g. building from a source tarball with no `.git`).
+fn git_short_hash() -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Ask cargo to re-run build.rs when HEAD — or the branch it points to — changes,
+/// so `APP_VERSION`'s embedded hash tracks the checked-out commit instead of going
+/// stale across commits. Best-effort: emits nothing when git/`.git` is unavailable.
+fn emit_git_rerun() {
+    let Some(git_dir) = std::process::Command::new("git")
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| std::path::PathBuf::from(s.trim()))
+    else {
+        return;
+    };
+    let head = git_dir.join("HEAD");
+    if !head.exists() {
+        return;
+    }
+    println!("cargo::rerun-if-changed={}", head.display());
+    // HEAD is normally a symbolic ref (`ref: refs/heads/<branch>`) — also watch that
+    // ref file so a new commit on the current branch retriggers the build.
+    if let Ok(contents) = std::fs::read_to_string(&head) {
+        if let Some(reference) = contents.strip_prefix("ref: ") {
+            println!(
+                "cargo::rerun-if-changed={}",
+                git_dir.join(reference.trim()).display()
+            );
+        }
     }
 }
