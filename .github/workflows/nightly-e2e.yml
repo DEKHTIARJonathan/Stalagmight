@@ -10,9 +10,15 @@ name: Nightly E2E Regression
 # e2e/legacy/README.md.
 on:
   schedule:
-    # 07:00 UTC daily — overnight in the Americas, morning in CET.
-    - cron: '0 7 * * *'
+    # Mondays 07:00 UTC (weekly) — overnight in the Americas, morning in CET.
+    # Weekly, not daily, to conserve Actions minutes (#114); run any time on
+    # demand via workflow_dispatch.
+    - cron: '0 7 * * 1'
   workflow_dispatch: {}
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   full:
@@ -28,7 +34,21 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
+      - name: Install Playwright browsers + system deps
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright system deps (browser restored from cache)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
       - run: pnpm test:ui
         env:
           PW_REPORTER: github
