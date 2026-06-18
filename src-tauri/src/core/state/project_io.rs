@@ -282,6 +282,9 @@ impl AppState {
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
+        // Opened an existing project from disk — its initial save is not deferred.
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Clear display settings cache (settings will be loaded from DB by frontend)
         self.clear_display_settings_cache();
@@ -328,36 +331,16 @@ impl AppState {
         CommandResult::success()
     }
 
-    /// True when the open project's initial save is still deferred — it has never
-    /// been written to disk (no database handle), so it has no `.stalx` file and
-    /// no Recent Projects entry yet. Used to durably persist a brand-new project
-    /// on its first import (#92), at the command every import path funnels
-    /// through, so the fix survives changes to the import UI.
+    /// True when the open project's initial save is still deferred — it was created
+    /// with no save path and has never been written to disk, so it has no `.stalx`
+    /// file and no Recent Projects entry yet. Used to durably persist a brand-new
+    /// project on its first import (#92), at the command every import path funnels
+    /// through, so the fix survives changes to the import UI. Backed by an explicit
+    /// flag (set at deferred creation, cleared on save/open/load) rather than
+    /// inferred from the DB handle or file existence, both of which are ambiguous.
     pub(crate) fn initial_save_deferred(&self) -> bool {
-        // A missing database handle is necessary but not sufficient: `save_project`
-        // also drops the handle after a successful write when reopening the saved
-        // DB fails (see the `database` reset on the save path). That project IS
-        // persisted, so also require that no `.stalx` exists on disk before treating
-        // it as a never-saved deferred project — otherwise the next import would
-        // force-save unrelated pending edits into an already-persisted project.
-        let has_db = self
-            .database
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some();
-        if has_db {
-            return false;
-        }
-        match self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(|p| p.file_path.clone())
-        {
-            Some(path) => !path.exists(),
-            None => true,
-        }
+        self.initial_save_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(super) fn save_project(&self, path: Option<PathBuf>, is_autosave: bool) -> CommandResult {
@@ -714,6 +697,10 @@ impl AppState {
                 }
             }
         }
+
+        // The project now exists on disk — its initial save is no longer deferred.
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         let save_path_str = save_path.display().to_string();
         tracing::info!(
@@ -1469,6 +1456,9 @@ impl AppState {
 
         // Commit 2: Database handle mutation
         *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
+        // Loaded an existing project from disk — its initial save is not deferred.
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Commit 3: Display settings cache clear
         self.clear_display_settings_cache();
@@ -1705,6 +1695,11 @@ impl AppState {
 
         // Commit 3: Clear undo stack (new project)
         self.undo_stack.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+
+        // Track whether the initial save is still pending: a deferred new project
+        // has no file on disk yet, so its first import must durably persist it.
+        self.initial_save_deferred
+            .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
 
         // Commit 4: Display settings cache
         if defer_initial_save {

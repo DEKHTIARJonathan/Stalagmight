@@ -18,4 +18,10 @@ impl AppState {
             *guard = Some(db);
         }
     }
+
+    #[cfg(test)]
+    pub fn set_initial_save_deferred_for_tests(&self, deferred: bool) {
+        self.initial_save_deferred
+            .store(deferred, std::sync::atomic::Ordering::Relaxed);
+    }
 }

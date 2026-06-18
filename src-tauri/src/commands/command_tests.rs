@@ -970,6 +970,7 @@ fn test_import_sections_persists_deferred_new_project() {
         let mut project = Project::new("New Import".to_string(), None);
         project.file_path = Some(project_path.clone());
         state(&app).inner().set_project_for_tests(project);
+        state(&app).inner().set_initial_save_deferred_for_tests(true);
         assert!(
             state(&app).initial_save_deferred(),
             "precondition: project must be deferred (never saved)"
@@ -1006,25 +1007,24 @@ fn test_import_sections_persists_deferred_new_project() {
     });
 }
 
-// #104 review: a missing DB handle alone must NOT mean "deferred" — save_project
-// can drop the handle after a successful write if reopening fails. Such a project
-// has a .stalx on disk and is persisted, so importing into it must not force-save.
+// #104 review: "deferred" is tracked by an explicit flag, not inferred from the DB
+// handle or file existence (both ambiguous — dropped handles after a save, and
+// reserved-path collisions). A persisted project must never read as deferred; a
+// freshly-created deferred one must.
 #[test]
-fn test_initial_save_deferred_false_when_stalx_exists() {
+fn test_initial_save_deferred_uses_explicit_flag() {
     let app = app_with_state();
-    let dir = TempDir::new().unwrap();
-    let project_path = dir.path().join("already-saved.stalx");
-    fs::write(&project_path, b"db").unwrap();
+    state(&app)
+        .inner()
+        .set_project_for_tests(Project::new("P".to_string(), None));
 
-    let mut project = Project::new("Saved".to_string(), None);
-    project.file_path = Some(project_path);
-    state(&app).inner().set_project_for_tests(project);
+    // Persisted (flag cleared) — not deferred, even with no DB handle.
+    state(&app).inner().set_initial_save_deferred_for_tests(false);
+    assert!(!state(&app).initial_save_deferred());
 
-    // database handle is None (e.g. dropped after a save), but the file exists.
-    assert!(
-        !state(&app).initial_save_deferred(),
-        "a persisted project with a dropped DB handle must not be treated as deferred"
-    );
+    // Deferred new project (flag set) — deferred.
+    state(&app).inner().set_initial_save_deferred_for_tests(true);
+    assert!(state(&app).initial_save_deferred());
 }
 
 #[test]

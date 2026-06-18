@@ -123,9 +123,11 @@ pub fn check_section_hashes(
 /// first import. Already-persisted projects are left untouched, so their unrelated
 /// pending edits are never force-committed.
 ///
-/// A failed deferred save is propagated rather than swallowed: the imported data is
-/// in the project but never reached disk, so callers must not treat the import as
-/// fully persisted.
+/// A failed deferred save is surfaced as a partial success — the import keeps its
+/// `success` (so the frontend still refreshes and marks the project dirty, keeping
+/// the in-memory import under the close-guard) but carries a warning about the
+/// failed save. Returning a hard failure here would make the UI treat the import as
+/// failed, never mark dirty, and silently lose the imported data on exit.
 fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> CommandResult {
     if !import_result.success || !state.initial_save_deferred() {
         return import_result;
@@ -137,7 +139,11 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
             purpose = "persist new project after first import",
             "Deferred-save resolution failed after import"
         );
-        return saved;
+        let detail = saved.error.unwrap_or_else(|| "unknown error".to_string());
+        return import_result.with_warning(&format!(
+            "Imported, but could not save the new project to disk: {detail}. \
+             Your changes are unsaved — please save manually."
+        ));
     }
     import_result
 }
