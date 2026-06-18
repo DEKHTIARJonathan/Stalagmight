@@ -910,8 +910,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Lightweight: just refresh undo/redo availability
       await get().refreshUndoState();
-      // The first successful save opens the on-disk database for a deferred project.
-      set({ isDirty: false, databaseOpen: true });
+      // The first successful save opens the on-disk database for a deferred project
+      // — UNLESS the backend saved the file but couldn't reopen the DB (it clears
+      // the handle and flags DATABASE_NOT_REOPENED). In that case keep
+      // databaseOpen=false so DB-backed actions stay disabled (issue #57 / Codex).
+      const dbNotReopened = result.warnings?.some((w) => w.code === 'DATABASE_NOT_REOPENED') ?? false;
+      set({ isDirty: false, databaseOpen: !dbNotReopened });
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file — refresh so the

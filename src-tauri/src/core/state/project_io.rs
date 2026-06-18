@@ -700,15 +700,17 @@ impl AppState {
                                 None => {
                                     // Upgrade a position-keyed row to its shot's saved
                                     // position + now-persisted UUID when its (section_id,
-                                    // shot_id) still maps to a live shot; otherwise keep
-                                    // it as a legacy/dead row (filtered by section below).
-                                    if let Some(&(uuid, (sec, shot))) =
-                                        live_by_id.get(&(r.section_id, r.shot_id))
-                                    {
-                                        r.shot_uuid = Some(uuid.to_string());
-                                        r.section_id = sec;
-                                        r.shot_id = shot;
-                                    }
+                                    // shot_id) still maps to a live shot. A row that maps
+                                    // to NO live shot is DEAD (its shot was deleted) — DROP
+                                    // it: carrying it forward would let the load-time
+                                    // position backfill re-attach it to whatever shot now
+                                    // occupies that saved position, suppressing an
+                                    // unrelated shot's warning (issue #57 / Codex).
+                                    let &(uuid, (sec, shot)) =
+                                        live_by_id.get(&(r.section_id, r.shot_id))?;
+                                    r.shot_uuid = Some(uuid.to_string());
+                                    r.section_id = sec;
+                                    r.shot_id = shot;
                                     Some(r)
                                 }
                             }
@@ -841,8 +843,16 @@ impl AppState {
                 if let Ok(mut database) = self.database.lock() {
                     *database = None;
                 }
-                return CommandResult::success()
-                    .with_warning("File saved, but database could not be reopened. Some features may not work until the project is reopened.");
+                // Distinct code (not the generic "SYSTEM") so the frontend can keep
+                // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
+                // disabled until the project is reopened (issue #57 / Codex).
+                let mut result = CommandResult::success();
+                result.warnings.push(crate::core::ValidationWarning {
+                    code: "DATABASE_NOT_REOPENED".to_string(),
+                    message: "File saved, but database could not be reopened. Some features may not work until the project is reopened.".to_string(),
+                    severity: crate::core::WarningSeverity::Warning,
+                });
+                return result;
             }
         };
 

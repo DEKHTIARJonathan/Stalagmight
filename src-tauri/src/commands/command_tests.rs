@@ -2667,6 +2667,53 @@ fn test_resolve_warning_refuses_error_severity_codes() {
 }
 
 #[test]
+fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
+    // ensure_unique_shot_uuids only de-dups WITHIN a section, so two sections can
+    // legally share a shot UUID. Ignoring a warning on one shot must NOT suppress
+    // the same code on the other section's shot (issue #57 / Codex) — suppression
+    // is keyed by (section_id, uuid, code), not the UUID alone.
+    let mut project = Project::new("Dup UUID".to_string(), None);
+    let a = project
+        .add_section(SectionData { shots: vec![shot_data(0.1)], ..Default::default() })
+        .id;
+    let b = project
+        .add_section(SectionData { shots: vec![shot_data(0.1)], ..Default::default() })
+        .id;
+    // Force the same (cross-section) UUID on both shots — a legal duplicate.
+    for section in &mut project.sections {
+        section.shots[0].uuid = Some("shared-uuid".to_string());
+    }
+    let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
+    let app = app_with_custom_state(app_state);
+
+    let warnings = validation::get_project_warnings(state(&app));
+    let a_warning = warnings
+        .iter()
+        .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
+        .expect("section A short-shot warning");
+    assert!(warnings.iter().any(|w| w.section_id == b && w.code == "SHORT_SHOT"));
+
+    validation::resolve_warning(
+        state(&app),
+        a_warning.section_id,
+        a_warning.shot_id,
+        "SHORT_SHOT".to_string(),
+        None,
+    )
+    .unwrap();
+
+    let after = validation::get_project_warnings(state(&app));
+    assert!(
+        after.iter().find(|w| w.section_id == a && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section A's ignore is recorded"
+    );
+    assert!(
+        !after.iter().find(|w| w.section_id == b && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section B's shot shares the UUID but a different section — it must NOT be suppressed"
+    );
+}
+
+#[test]
 fn test_over_anchoring_warning_is_never_suppressible() {
     // The authoritative invariant: even a stray resolved row (legacy, bulk, or
     // any other path) must NOT mark an over-anchoring warning resolved. It clears

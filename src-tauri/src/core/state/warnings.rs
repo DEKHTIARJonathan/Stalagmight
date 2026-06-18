@@ -34,14 +34,20 @@ impl AppState {
         // Key the lookup sets by borrowed slices into `resolved` so the
         // per-warning probe below allocates nothing. `resolved` outlives this
         // closure, so the &str borrows stay valid.
-        let mut resolved_by_uuid: std::collections::HashMap<&str, HashSet<&str>> =
+        // Key UUID-suppression by (section_id, uuid): `ensure_unique_shot_uuids`
+        // only de-dups WITHIN a section, so two sections can legitimately carry the
+        // same shot UUID. Keying by UUID alone would let an ignore on one cross-
+        // suppress the same code on the other section's shot (issue #57 / Codex).
+        // section_id is stable per shot (it doesn't change when shot_id renumbers),
+        // so this keeps the position-independence the UUID keying was added for.
+        let mut resolved_by_uuid: std::collections::HashMap<(u32, &str), HashSet<&str>> =
             std::collections::HashMap::new();
         let mut resolved_by_position: HashSet<(u32, u32, &str)> = HashSet::new();
         for r in &resolved {
             match &r.shot_uuid {
                 Some(uuid) => {
                     resolved_by_uuid
-                        .entry(uuid.as_str())
+                        .entry((r.section_id, uuid.as_str()))
                         .or_default()
                         .insert(r.warning_code.as_str());
                 }
@@ -68,7 +74,7 @@ impl AppState {
             |shot_uuid: &Option<String>, section_id: u32, shot_id: u32, code: &str| -> bool {
                 if let Some(uuid) = shot_uuid {
                     if resolved_by_uuid
-                        .get(uuid.as_str())
+                        .get(&(section_id, uuid.as_str()))
                         .is_some_and(|codes| codes.contains(code))
                     {
                         return true;

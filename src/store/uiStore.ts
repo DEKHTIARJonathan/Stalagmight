@@ -1041,6 +1041,11 @@ export const useUIStore = create<UIStore>((set) => ({
       // backend payload. Reset it on every load so enabling it for one project
       // can't leak the overlay — and its 2 s memory-IPC poll — into the next.
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
+      // Issue-severity coloring is a runtime-only overlay (never persisted); reset
+      // it on every load so a manual enable in one project doesn't leak the
+      // traffic-light coloring into the next (issue #57 / Codex). The Warnings-tab
+      // auto-switch re-derives it transiently via effectiveIssueSeverity.
+      showIssueSeverity: false,
       // Restore the saved geometry mode ("remember last used"). The backend
       // defaults geometryMode to "measured" for projects with no saved
       // preference, so a load is authoritative and never inherits the previous
