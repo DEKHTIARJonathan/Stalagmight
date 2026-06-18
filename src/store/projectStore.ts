@@ -147,6 +147,14 @@ function parseLoadError(e: unknown): LoadError {
 interface ProjectStore {
   // State
   project: Project | null;
+  /**
+   * Whether the open project is backed by an on-disk database. A new project
+   * created with a deferred initial save reserves `project.file_path` but leaves
+   * the backend database unopened until the first save, so DB-backed actions
+   * (e.g. persisting an ignored warning) can't run yet — gate them on this, not
+   * on `file_path` alone (issue #57 / Codex).
+   */
+  databaseOpen: boolean;
   stations: Station[];
   /**
    * Struct-of-Arrays representation of the loaded project's bulk
@@ -412,6 +420,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   return {
   // Initial state
   project: null,
+  databaseOpen: false,
   stations: [],
   surveyData: null,
   stationsAdjusted: null,
@@ -612,6 +621,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // is correct immediately, not stale from the previous project until the
           // first command triggers refreshProjectState (issue #57 / Codex).
           frozenShots: result.frozen_shots,
+          // A loaded project is backed by its on-disk database.
+          databaseOpen: true,
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
           // previous project can never carry over and suppress this one's banner.
@@ -752,6 +763,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     await get().cancelLoading();
 
     const clientOpId = get().startLoading(name, '');
+    // A deferred initial save reserves file_path but leaves the backend database
+    // unopened, so DB-backed actions (e.g. ignoring a warning) can't run yet.
+    const deferred = options?.deferInitialSave ?? !options?.savePath;
 
     try {
       const result = await invokeIpc<CreateProjectFullResult>(
@@ -761,7 +775,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           projectLocation,
           saveDirectory: options?.saveDirectory,
           savePath: options?.savePath,
-          deferInitialSave: options?.deferInitialSave ?? !options?.savePath,
+          deferInitialSave: deferred,
         },
         { purpose: 'create new project workspace', fields: { name } }
       );
@@ -778,6 +792,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // stations yet, so `surveyData` starts as an empty SoA.
       set({
         project: result.project,
+        // A deferred new project has no on-disk database until the first save.
+        databaseOpen: !deferred,
         stations: [],
         stationsAdjusted: null,
         surveyDataAdjusted: null,
@@ -837,7 +853,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Fit map to show all stations
         useUIStore.getState().triggerFitToBounds();
         useUIStore.getState().setView('single');
-        set({ isDirty: false });
+        // An opened project is backed by its on-disk database.
+        set({ isDirty: false, databaseOpen: true });
         get().resetLoading();
       } else {
         get().setLoadingError(result.error ?? 'Failed to open project');
@@ -893,7 +910,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Lightweight: just refresh undo/redo availability
       await get().refreshUndoState();
-      set({ isDirty: false });
+      // The first successful save opens the on-disk database for a deferred project.
+      set({ isDirty: false, databaseOpen: true });
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
       // frontend's shots/stations are now stale vs the saved file — refresh so the
@@ -970,7 +988,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         purpose: 'close project and release resources',
       });
       if (result.success) {
-        set({ project: null, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
+        set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
       }
       return result;
     } finally {

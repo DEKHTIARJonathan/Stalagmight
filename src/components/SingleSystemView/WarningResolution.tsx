@@ -281,9 +281,10 @@ export function WarningResolution({
   );
   const geometryReadOnly = useUIStore((s) => s.geometryMode === 'closureAdjusted');
   // "Ignore" persists to the project database immediately; a never-saved project
-  // (deferred initial save) has no database yet, so the suppression can't be
-  // stored. Disable Ignore until the project has been saved (issue #57 / Codex).
-  const projectSaved = useProjectStore((s) => s.project?.file_path != null);
+  // (deferred initial save) reserves file_path but has no open database yet, so the
+  // suppression can't be stored. Gate Ignore on the database actually being open,
+  // not on file_path (which is set even for a deferred project) (issue #57 / Codex).
+  const projectSaved = useProjectStore((s) => s.databaseOpen);
   const activeStations = useActiveStations();
 
   const frozen = isShotFrozen(warning.sectionId, warning.shotIndex);

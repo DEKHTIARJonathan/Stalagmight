@@ -99,6 +99,22 @@ export function computeIssueSeverity(
     }
   }
 
+  // (3b) Over-anchoring warnings (`multiple_datums_per_merge_component`) carry
+  //      every zero datum of the bad component in `datumRefs` but are attached to
+  //      a single representative shot. Color each datum's station directly: a
+  //      non-representative datum can sit in a DIFFERENT merge group than the
+  //      representative shot's endpoints, so step (4) alone wouldn't reach it, and
+  //      those datums are exactly the anchors the user may need to remove
+  //      (issue #57 / Codex).
+  for (const w of warnings) {
+    if (w.isResolved || !w.datumRefs) continue;
+    const sev = w.severity === 'error' ? SEV_ERROR : SEV_WARNING;
+    for (const ref of w.datumRefs) {
+      const g = stationLookup.get(ref.section_id)?.get(ref.station_index);
+      if (g !== undefined && sev > stationSeverity[g]!) stationSeverity[g] = sev;
+    }
+  }
+
   // (4) Propagate per-station severity across each station's transitive merge
   //     group. One sweep with a visited guard: collect the group's members,
   //     take the group max once, write it to all. A station with no shots and

@@ -189,6 +189,28 @@ describe('computeIssueSeverity', () => {
     expect(stationSeverity[2]).toBe(SEV_CLEAR);
   });
 
+  it('over-anchoring colors every datum station, not just the representative shot', () => {
+    // The warning is attached to one representative shot (101 → g0/g1) but its
+    // datumRefs include section 2 station 0 (g3), which is not on that shot and
+    // (here) not merged with it. Both datum stations must still be colored (#57).
+    const w: ProjectWarning = {
+      sectionId: 1,
+      shotId: 101,
+      shotIndex: 0,
+      code: 'multiple_datums_per_merge_component',
+      message: 'm',
+      severity: 'error',
+      isResolved: false,
+      datumRefs: [
+        { section_id: 1, station_index: 0 },
+        { section_id: 2, station_index: 0 },
+      ],
+    };
+    const { stationSeverity } = computeIssueSeverity(fixture(), [w]);
+    expect(stationSeverity[0]).toBe(SEV_ERROR); // representative datum
+    expect(stationSeverity[3]).toBe(SEV_ERROR); // the other datum, off the representative shot
+  });
+
   it('ignores warnings for shots not present in the SoA without throwing', () => {
     expect(() => computeIssueSeverity(fixture(), [warn(999, 999, 'error')])).not.toThrow();
     const { shotSeverity, stationSeverity } = computeIssueSeverity(fixture(), [

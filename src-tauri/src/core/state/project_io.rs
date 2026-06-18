@@ -655,6 +655,28 @@ impl AppState {
                             })
                         })
                         .collect();
+                    // Index live shots by their CURRENT (section_id, shot_id) → (uuid,
+                    // saved position). A position-keyed (NULL-uuid) row written before
+                    // its shot's UUID was persisted (resolve_warning on a pre-v6 or
+                    // not-yet-saved shot) is upgraded here: THIS save persists every
+                    // shot's UUID, so we re-key such a row to the shot's saved position
+                    // AND its now-persisted UUID. Without this, its stale in-memory
+                    // shot_id could point at a different shot (or none) after an
+                    // insert/delete on the next load (issue #57 / Codex).
+                    let live_by_id: std::collections::HashMap<(SectionId, u32), (&str, (SectionId, u32))> = project
+                        .sections
+                        .iter()
+                        .flat_map(|s| {
+                            s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
+                                sh.uuid.as_deref().map(|u| {
+                                    (
+                                        (s.id, sh.id),
+                                        (u, (s.id, s.id * crate::models::FEATURE_ID_STRIDE + seq as u32)),
+                                    )
+                                })
+                            })
+                        })
+                        .collect();
                     // Remap each UUID-keyed row to its shot's live position; DROP a
                     // UUID-keyed row whose shot was deleted (UUID no longer live) — it
                     // can never match a live shot by UUID on reload, so it is dead.
@@ -675,7 +697,20 @@ impl AppState {
                                     r.shot_id = shot;
                                     Some(r)
                                 }
-                                None => Some(r),
+                                None => {
+                                    // Upgrade a position-keyed row to its shot's saved
+                                    // position + now-persisted UUID when its (section_id,
+                                    // shot_id) still maps to a live shot; otherwise keep
+                                    // it as a legacy/dead row (filtered by section below).
+                                    if let Some(&(uuid, (sec, shot))) =
+                                        live_by_id.get(&(r.section_id, r.shot_id))
+                                    {
+                                        r.shot_uuid = Some(uuid.to_string());
+                                        r.section_id = sec;
+                                        r.shot_id = shot;
+                                    }
+                                    Some(r)
+                                }
                             }
                         })
                         // Then drop any (legacy) row whose section no longer exists so
