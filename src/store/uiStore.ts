@@ -459,7 +459,13 @@ export const useUIStore = create<UIStore>((set) => ({
     // controls it lives only in SingleSystemView, but <MemoryProbe/> is mounted
     // app-wide. Reset it on the way back to GlobalView so the probe (and its 2 s
     // memory-IPC poll) can't strand there with no in-view way to hide it.
-    set(view === 'global' ? { view, showDevStats: DISPLAY_DEFAULTS.showDevStats } : { view });
+    //
+    // The ruler readout/tint now lives in this global store, but is a single-view,
+    // map-only interaction — clear it on any view switch so it can't be resurrected
+    // when MapCanvas remounts on return (#26, Codex).
+    set(view === 'global'
+      ? { view, showDevStats: DISPLAY_DEFAULTS.showDevStats, ...MEASURE_CLEARED }
+      : { view, ...MEASURE_CLEARED });
   },
 
   // Tool state

@@ -645,10 +645,25 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'measure': {
-          // The click landed on this shot — derive t directly from the click
-          // position rather than the RAF/deferred snap store (which can still hold a
-          // stale shot/t if the cursor moved before the snap update ran), falling
-          // back to the midpoint only if it can't be projected (#26, Codex).
+          // A station within the snap threshold wins even when the click landed on a
+          // shot's hitbox (the snap threshold can exceed the station hit area), so
+          // re-check the fresh snap first (#26, Codex).
+          const snap = options.querySnapAtPoint?.(event.point.x, event.point.y) ?? null;
+          if (snap?.kind === 'station') {
+            const coords = getStationCoordinates(snap.station);
+            if (coords) {
+              applyMeasureClick({
+                kind: 'station',
+                section_id: snap.station.section_id,
+                station_index: snap.station.station_index,
+                coords,
+              });
+              break;
+            }
+          }
+          // Otherwise derive t directly from the click position on this shot, rather
+          // than the RAF/deferred snap store (which can hold a stale shot/t), falling
+          // back to the midpoint only if it can't be projected.
           const t = clickShotParam(sectionId, shotId, event) ?? 0.5;
           const ep = buildShotPointEndpoint(sectionId, shotId, t);
           if (ep) applyMeasureClick(ep);

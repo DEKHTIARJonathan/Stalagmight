@@ -696,12 +696,20 @@ export default function MapCanvas() {
     }
   }, [hasMeasureSnap]);
 
-  // Hiding Shots disables shot interaction, so drop any live measure shot-snap:
-  // clears the store value (the effect above then removes the cyan marker + ref) so
-  // a stale snap can't linger or feed the next click while shots are hidden (#26, Codex).
+  // Hiding Shots disables shot interaction; hiding only Reference Shots disables it
+  // for reference legs. Drop a live measure shot-snap in either case (when the snap
+  // is on a now-hidden reference leg), so the cyan marker doesn't linger on hidden
+  // geometry — the null-ness effect above then removes the marker + ref (#26, Codex).
   useEffect(() => {
-    if (!showShots && useUIStore.getState().measureSnapShot) setMeasureSnapShot(null);
-  }, [showShots, setMeasureSnapShot]);
+    const snap = useUIStore.getState().measureSnapShot;
+    if (!snap) return;
+    const onHiddenReferenceLeg =
+      !showReferenceShots &&
+      (project?.sections
+        .find((s) => s.id === snap.section_id)
+        ?.shots.find((sh) => sh.id === snap.shot_id)?.is_reference ?? false);
+    if (!showShots || onHiddenReferenceLeg) setMeasureSnapShot(null);
+  }, [showShots, showReferenceShots, project?.sections, setMeasureSnapShot]);
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
@@ -1676,6 +1684,16 @@ export default function MapCanvas() {
   useEffect(() => {
     clearMeasure();
   }, [project?.modified_at, clearMeasure]);
+
+  // In closureAdjusted mode the map first renders the measured fallback, then swaps
+  // in the adjusted geometry when it finishes loading (async, with no modified_at
+  // change). A measurement captured against the fallback would then describe the old
+  // geometry, so clear it when the active adjusted geometry changes. Gated on the
+  // adjusted mode so a background adjusted (in)validation can't clear a measurement
+  // taken in the measured view (#26, Codex).
+  useEffect(() => {
+    if (geometryMode === 'closureAdjusted') clearMeasure();
+  }, [stationsAdjusted, surveyDataAdjusted, geometryMode, clearMeasure]);
 
   // Distance-gradient overlay (#34): fetch the per-station distance field when the
   // overlay is on and the origin or project data changes. Distances use MEASURED
