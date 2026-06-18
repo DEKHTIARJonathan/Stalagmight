@@ -133,18 +133,22 @@ impl AppState {
         // view can offer "keep this one, remove the others". (Per-shot
         // ProjectWarning shape: anchor station 0 -> shot 0; station i -> shot i-1.)
         for component in project.over_anchored_merge_components() {
-            let Some(first) = component.first() else {
-                continue;
-            };
-            let Some(section) = project.get_section(first.section_id) else {
-                continue;
-            };
-            let shot_index = if first.station_index == 0 {
-                0
-            } else {
-                (first.station_index - 1) as usize
-            };
-            let Some(shot) = section.shots.get(shot_index) else {
+            // Attach the warning to the first datum that maps to a real shot. The
+            // first datum may sit at station 0 of an empty section (no shot there);
+            // skipping on it alone would silently drop the whole component's error
+            // even when another datum in the component IS attachable (Codex). Fall
+            // through the component to the first datum with a shot.
+            let representative = component.iter().find_map(|d| {
+                let section = project.get_section(d.section_id)?;
+                let shot_index = if d.station_index == 0 {
+                    0
+                } else {
+                    (d.station_index - 1) as usize
+                };
+                let shot = section.shots.get(shot_index)?;
+                Some((d, section, shot_index, shot))
+            });
+            let Some((first, section, shot_index, shot)) = representative else {
                 continue;
             };
             let anchors = component

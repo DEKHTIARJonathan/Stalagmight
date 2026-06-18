@@ -208,6 +208,13 @@ impl AppState {
             let Some(project) = guard.as_mut() else {
                 return CommandResult::failure("No project open".to_string());
             };
+            // No-op when nothing actually changed: touch() would still bump
+            // modified_at, marking the project dirty and pushing a misleading
+            // "Update project settings" undo entry for a save that changed nothing
+            // (Codex). Compare before mutating.
+            if project.name == name && project.validation == validation {
+                return CommandResult::success();
+            }
             project.name = name;
             project.validation = validation;
             project.touch();
@@ -301,14 +308,17 @@ impl AppState {
         // UUIDs, then re-anchor (Index→AfterShot) and re-solve offsets, so the two
         // load entry points can't diverge. (This legacy IPC has no production caller
         // today, but it stays registered and invokable, so harden it.)
-        project.ensure_shot_uuids();
-        // Mirror do_load_project_full: upgrade legacy NULL-uuid resolved-warning
-        // rows to UUID keying now that every shot has a UUID and shot ids still
-        // match the loaded positions (a row left position-keyed here couldn't be
-        // cleared by un-ignore, which passes the live UUID). Idempotent; non-fatal.
+        // Upgrade legacy NULL-uuid resolved-warning rows to UUID keying. Build the
+        // map BEFORE minting so it contains only shots whose UUID is already
+        // PERSISTED in the file: backfilling a freshly-minted, not-yet-saved UUID
+        // would write it to resolved_warnings on open, and if the user then closes
+        // WITHOUT saving, the next open mints a DIFFERENT UUID and orphans the
+        // ignore (issue #57 / Codex). Pre-v6 shots keep position-keyed ignores
+        // until a save persists their UUIDs and the save carry-over re-keys them.
         // Shared with do_load_project_full via Project::shot_uuid_by_position so the
-        // two load entry points can't diverge.
+        // two load entry points can't diverge. Idempotent; non-fatal.
         let live_shot_uuids = project.shot_uuid_by_position();
+        project.ensure_shot_uuids();
         if let Err(e) = db.backfill_resolved_warning_uuids(&live_shot_uuids) {
             tracing::warn!(
                 error = %e,
@@ -1521,18 +1531,19 @@ impl AppState {
                 );
             }
         }
+        // Upgrade legacy NULL-uuid resolved-warning rows to UUID keying. Build the
+        // map BEFORE minting so it only contains shots whose UUID is already
+        // PERSISTED: a freshly-minted, not-yet-saved UUID written into
+        // resolved_warnings on open would be orphaned if the user closes without
+        // saving (the next open mints a different UUID) — issue #57 / Codex. Pre-v6
+        // shots keep position-keyed ignores until a save persists their UUIDs and
+        // the carry-over re-keys them. Shared with open_project. Idempotent; non-fatal.
+        let live_shot_uuids = project.shot_uuid_by_position();
         // Guarantee every shot has a stable UUID at runtime, not just after the
         // next save: pre-v6 files load shots with uuid=None, and station identity
         // (and the Ariane collaboration round-trip) anchors on the shot UUID. The
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
-        // Upgrade legacy NULL-uuid resolved-warning rows to UUID keying now that
-        // every shot has an in-memory UUID and shot ids still match the loaded
-        // positions the legacy rows were keyed against (issue #57). One-time,
-        // idempotent. Non-fatal: on failure the rows simply stay position-keyed.
-        // Shared with open_project via Project::shot_uuid_by_position so the two
-        // load entry points can't diverge.
-        let live_shot_uuids = project.shot_uuid_by_position();
         match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
             Ok(n) if n > 0 => tracing::info!(
                 upgraded = n,

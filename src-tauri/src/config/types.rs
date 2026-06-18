@@ -922,7 +922,7 @@ pub struct MapControlsConfig {
     pub invert_scroll: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ValidationConfig {
     pub warn_shot_length_min: f64,
     pub warn_shot_length_max: f64,

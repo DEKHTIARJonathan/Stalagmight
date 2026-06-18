@@ -13,6 +13,7 @@ import {
   computeGhostEnd,
   horizontalLength,
   lengthFromInclination,
+  lengthFixableFromInclination,
   exceedsSlopeLength,
 } from '../../utils/resolutionPreview';
 import { setSource } from '../../utils/telemetry';
@@ -368,7 +369,10 @@ export function WarningResolution({
         return [
           // Default: shortest valid length is the vertical change (vertical shot).
           { id: 'length-from-depth', label: t('detailPanel.warnings.resolveOptions.lengthFromDepth'), detail: len(Math.abs(dz)), disabled: geometryDisabled },
-          ...(lengthFromIncl !== null && recorded !== null
+          // Only when the recorded inclination points the same way as the depth
+          // change (a positive length can satisfy it); withheld for a reversed
+          // pitch sign, which no length can fix (issue #57 / Codex).
+          ...(lengthFromIncl !== null && recorded !== null && lengthFixableFromInclination(dz, recorded)
             ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.lengthFromInclination'), detail: len(lengthFromIncl), selectedNote: t('detailPanel.warnings.fromInclinationNote', { value: formatFixed(recorded, undefined, precision.inclination) }), disabled: geometryDisabled }]
             : []),
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
@@ -376,14 +380,13 @@ export function WarningResolution({
         ];
       }
       case 'INCLINATION_DEPTH_MISMATCH': {
-        // Depth gauges are trusted, so the depth change is never altered here.
-        // The geometric constraint is on the inclination MAGNITUDE (|dz| =
-        // length·sin|pitch|). pitch_in/pitch_out are both forward (foresight)
-        // readings in the +down convention, but the implied inclination keeps the
-        // recorded value's sign so it stays robust to an un-normalised source
-        // (matching the backend check). Offer to adjust the length (keep the
-        // recorded inclination), the inclination (keep the recorded length), or
-        // split the correction between them.
+        // Depth gauges are trusted, so the depth change is never altered here. The
+        // implied inclination is signed in the +up convention (DetailPanel's
+        // computeInclination), matching the recorded pitch and the backend check.
+        // Offer to adjust the inclination (keep the recorded length — always works,
+        // also fixes a reversed sign), adjust the length (keep the recorded
+        // inclination — only when its sign points the same way as the depth change,
+        // else withheld), or split between them.
         const dz = shot.depth_out - shot.depth_in;
         const implied = impliedInclination(shot);
         const recorded = recordedPitch(shot);
@@ -393,10 +396,10 @@ export function WarningResolution({
         return [
           // Default (first): trust the recorded length, adjust the inclination.
           { id: 'incl-from-depth', label: t('detailPanel.warnings.resolveOptions.adjustInclination'), detail: `${formatFixed(implied, undefined, precision.inclination)}°`, disabled: geometryDisabled },
-          ...(lengthFromIncl !== null && recorded !== null
+          ...(lengthFromIncl !== null && recorded !== null && lengthFixableFromInclination(dz, recorded)
             ? [{ id: 'length-from-incl', label: t('detailPanel.warnings.resolveOptions.adjustLength'), detail: len(lengthFromIncl), selectedNote: t('detailPanel.warnings.fromInclinationNote', { value: formatFixed(recorded, undefined, precision.inclination) }), disabled: geometryDisabled }]
             : []),
-          ...(splitLength !== null && midPitch !== null
+          ...(splitLength !== null && midPitch !== null && lengthFixableFromInclination(dz, midPitch)
             ? [{ id: 'split-incl-length', label: t('detailPanel.warnings.resolveOptions.splitInclLength'), detail: `${formatFixed(midPitch, undefined, precision.inclination)}° · ${len(splitLength)}`, disabled: geometryDisabled }]
             : []),
           { id: 'manual', label: t('detailPanel.warnings.resolveOptions.manualLength'), manual: 'length', disabled: geometryDisabled },
