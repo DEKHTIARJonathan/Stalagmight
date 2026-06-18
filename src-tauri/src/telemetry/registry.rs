@@ -384,6 +384,68 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.get_raw_table",
     // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
     "command.get_along_line_distance",
+    // Map-tile consumption per provider (#31): `tile.fetch.<provider>` = tiles pulled
+    // fresh from the provider over the network; `tile.cache.<provider>` = tiles served
+    // from the local cache. Add a `tile.fetch.<p>` + `tile.cache.<p>` pair here (and in
+    // the worker registry) when a new provider is added to tile_providers.rs;
+    // unregistered providers still report, via the overflow map.
+    "tile.fetch.esri",
+    "tile.cache.esri",
+    // Active-dwell mirror of every dwell state (#31): like `dwell.<state>` but
+    // only accumulates while the user interacted within the last 15s (active vs
+    // merely open). Keep one per dwell entry (the mirror is asserted by a test).
+    "active-dwell.tool.comment",
+    "active-dwell.tool.delete",
+    "active-dwell.tool.draw",
+    "active-dwell.tool.measure",
+    "active-dwell.tool.merge",
+    "active-dwell.tool.move_comment",
+    "active-dwell.tool.move_segment",
+    "active-dwell.tool.move_shot",
+    "active-dwell.tool.move_station",
+    "active-dwell.tool.pan",
+    "active-dwell.tool.select",
+    "active-dwell.tool.zoom",
+    "active-dwell.dialog.adjust-closures",
+    "active-dwell.dialog.closure",
+    "active-dwell.dialog.confirm-delete",
+    "active-dwell.dialog.confirm-overwrite",
+    "active-dwell.dialog.context-menu",
+    "active-dwell.dialog.corruption-recovery",
+    "active-dwell.dialog.debug",
+    "active-dwell.dialog.dmp-import-new",
+    "active-dwell.dialog.dmp-selection",
+    "active-dwell.dialog.draw-shot",
+    "active-dwell.dialog.edit-section",
+    "active-dwell.dialog.edit-shot",
+    "active-dwell.dialog.edit-station",
+    "active-dwell.dialog.error",
+    "active-dwell.dialog.export",
+    "active-dwell.dialog.gpx-placement",
+    "active-dwell.dialog.gpx-selection",
+    "active-dwell.dialog.import",
+    "active-dwell.dialog.keyboard-shortcuts",
+    "active-dwell.dialog.merge",
+    "active-dwell.dialog.merge-projects",
+    "active-dwell.dialog.new-project",
+    "active-dwell.dialog.new-project-for-import",
+    "active-dwell.dialog.orphan-placement",
+    "active-dwell.dialog.remove-closure",
+    "active-dwell.dialog.section-adjust",
+    "active-dwell.dialog.settings",
+    "active-dwell.dialog.split-section",
+    "active-dwell.dialog.swap-comments",
+    "active-dwell.dialog.tml-import",
+    "active-dwell.dialog.unmerge-stations",
+    "active-dwell.dialog.unsaved-changes",
+    "active-dwell.dialog.zero-datum-config",
+    "active-dwell.dialog.zero-datum-selection",
+    "active-dwell.global-view",
+    "active-dwell.placement",
+    "active-dwell.dialog.delete-shot-choice",
+    "active-dwell.dialog.compass-import",
+    "active-dwell.dialog.collab-review",
+    "active-dwell.dialog.save-permission",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -522,7 +584,42 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 322);
+        assert_eq!(EVENT_NAMES.len(), 376);
+    }
+
+    /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
+    /// must be a matching `active-dwell.<key>`. Catches a dwell state added without
+    /// its active-dwell twin (which would otherwise silently land in the overflow map).
+    #[test]
+    fn active_dwell_mirrors_dwell() {
+        for name in EVENT_NAMES {
+            if let Some(key) = name.strip_prefix("dwell.") {
+                let mirror = format!("active-dwell.{key}");
+                assert!(
+                    EVENT_NAMES.iter().any(|&e| e == mirror),
+                    "dwell state '{name}' has no '{mirror}' — add it here and in \
+                     telemetry-worker/src/registry.ts"
+                );
+            }
+        }
+    }
+
+    /// Every tile provider must have its per-provider consumption events registered
+    /// (#31), so tile counts land as registered events rather than the overflow map.
+    /// Catches "added a provider but forgot the telemetry events".
+    #[test]
+    fn every_tile_provider_has_consumption_events() {
+        for info in crate::tile_providers::get_all_provider_info() {
+            for kind in ["fetch", "cache"] {
+                let event = format!("tile.{kind}.{}", info.name);
+                assert!(
+                    EVENT_NAMES.iter().any(|&e| e == event),
+                    "provider '{}' missing telemetry event '{event}' — add it to EVENT_NAMES \
+                     here and in telemetry-worker/src/registry.ts",
+                    info.name
+                );
+            }
+        }
     }
 
     #[test]

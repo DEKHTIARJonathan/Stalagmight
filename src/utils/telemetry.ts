@@ -15,6 +15,20 @@ const FLUSH_INTERVAL_MS = 60_000;
 /** How often (ms) to flush dwell time to Rust so the backend's 10-min dwell-only flush works. */
 const DWELL_FLUSH_INTERVAL_MS = 60_000;
 
+/** Active-dwell window (#31): active dwell only accrues while the user interacted
+ *  within this span — it pauses when the app sits idle, unlike plain dwell. */
+const ACTIVE_DWELL_WINDOW_MS = 15_000;
+
+/** Throttle for the global interaction listener (≪ the 15s window, so it keeps the
+ *  active window fresh without per-mousemove work). */
+const INTERACTION_THROTTLE_MS = 1_000;
+
+/** User-input events that count as "interaction" for active dwell. */
+const INTERACTION_EVENTS = [
+  'pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'scroll',
+] as const;
+const INTERACTION_LISTENER_OPTS = { passive: true, capture: true } as const;
+
 /** In-memory event counters. */
 const counts: Record<string, number> = {};
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -39,6 +53,16 @@ let _projectSeq = 0;
 
 /** Current workflow state for dwell time tracking. */
 let _dwellState: { key: string; since: number } | null = null;
+
+/** Active-dwell state (#31), mirroring `_dwellState`. `accruedMs` holds active
+ *  milliseconds not yet emitted as whole seconds; `lastTick` is the cursor up to
+ *  which active time has been counted. */
+let _activeDwell: { key: string; accruedMs: number; lastTick: number } | null = null;
+/** Timestamp (ms) of the last user interaction; 0 = none yet (idle). */
+let _lastInteraction = 0;
+/** Last time the throttled interaction mark ran. */
+let _lastInteractionMark = 0;
+let _interactionAttached = false;
 
 /** Last undoable command — for regret detection. */
 let _lastUndoable: { command: string; time: number } | null = null;
@@ -180,16 +204,81 @@ export function setDwellState(key: string): void {
     }
   }
   _dwellState = { key, since: now };
+  // Active-dwell mirror (#31): settle the old state's active time, start the new one.
+  accrueActiveDwell(now);
+  emitActiveDwell();
+  _activeDwell = { key, accruedMs: 0, lastTick: now };
+}
+
+/** Credit active milliseconds for the current state up to `now`, capped at the end
+ *  of the active window (last interaction + 15s). A no-op while idle (#31). */
+function accrueActiveDwell(now: number): void {
+  if (!_activeDwell) return;
+  const end = Math.min(now, _lastInteraction + ACTIVE_DWELL_WINDOW_MS);
+  if (end > _activeDwell.lastTick) {
+    _activeDwell.accruedMs += end - _activeDwell.lastTick;
+    _activeDwell.lastTick = end;
+  }
+}
+
+/** Emit accrued active-dwell as whole seconds, carrying the sub-second remainder. */
+function emitActiveDwell(): void {
+  if (!_activeDwell) return;
+  const secs = Math.floor(_activeDwell.accruedMs / 1000);
+  if (secs > 0) {
+    const key = `active-dwell.${_activeDwell.key}`;
+    counts[key] = (counts[key] || 0) + secs;
+    _activeDwell.accruedMs -= secs * 1000;
+  }
+}
+
+/** Register a user interaction (#31): credit active time up to now, open a fresh 15s
+ *  window, and skip the idle gap that preceded this interaction so it isn't counted. */
+function markInteraction(): void {
+  if (!_enabled) return;
+  const now = Date.now();
+  accrueActiveDwell(now);
+  _lastInteraction = now;
+  if (_activeDwell) _activeDwell.lastTick = now;
+}
+
+/** Throttled window listener — keeps the active window fresh without per-event work. */
+function onInteraction(): void {
+  if (!_enabled) return;
+  const now = Date.now();
+  if (now - _lastInteractionMark < INTERACTION_THROTTLE_MS) return;
+  _lastInteractionMark = now;
+  markInteraction();
+}
+
+function attachInteractionListeners(): void {
+  if (_interactionAttached || typeof window === 'undefined') return;
+  _interactionAttached = true;
+  for (const ev of INTERACTION_EVENTS) {
+    window.addEventListener(ev, onInteraction, INTERACTION_LISTENER_OPTS);
+  }
+}
+
+function detachInteractionListeners(): void {
+  if (!_interactionAttached || typeof window === 'undefined') return;
+  _interactionAttached = false;
+  for (const ev of INTERACTION_EVENTS) {
+    window.removeEventListener(ev, onInteraction, INTERACTION_LISTENER_OPTS);
+  }
 }
 
 /** Flush the current dwell state's accumulated time (e.g., before app close). */
 function flushDwell(): void {
   if (!_dwellState) return;
-  const secs = Math.round((Date.now() - _dwellState.since) / 1000);
+  const now = Date.now();
+  const secs = Math.round((now - _dwellState.since) / 1000);
   if (secs > 0) {
     counts[`dwell.${_dwellState.key}`] = (counts[`dwell.${_dwellState.key}`] || 0) + secs;
   }
-  _dwellState = { ..._dwellState, since: Date.now() };
+  _dwellState = { ..._dwellState, since: now };
+  // Active-dwell (#31): settle accrued active time without resetting the state.
+  accrueActiveDwell(now);
+  emitActiveDwell();
 }
 
 /** Track a user action with source. */
@@ -297,6 +386,7 @@ function scheduleFlush(): void {
 /** Start the periodic dwell flush interval. */
 function startDwellInterval(): void {
   if (dwellFlushInterval) return;
+  attachInteractionListeners();
   dwellFlushInterval = setInterval(() => {
     flushDwell();
     if (Object.keys(counts).length > 0) {
@@ -307,6 +397,7 @@ function startDwellInterval(): void {
 
 /** Stop the periodic dwell flush interval. */
 function stopDwellInterval(): void {
+  detachInteractionListeners();
   if (dwellFlushInterval !== null) {
     clearInterval(dwellFlushInterval);
     dwellFlushInterval = null;
@@ -341,6 +432,8 @@ export function setTelemetryEnabled(enabled: boolean): void {
       delete counts[key];
     }
     _dwellState = null;
+    _activeDwell = null;
+    _lastInteraction = 0;
     if (flushTimer !== null) {
       clearTimeout(flushTimer);
       flushTimer = null;
