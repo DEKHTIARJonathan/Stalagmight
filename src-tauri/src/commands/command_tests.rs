@@ -2711,6 +2711,39 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
         !after.iter().find(|w| w.section_id == b && w.code == "SHORT_SHOT").unwrap().is_resolved,
         "section B's shot shares the UUID but a different section — it must NOT be suppressed"
     );
+
+    // Now ignore B too, then un-ignore A: B's suppression must SURVIVE, because the
+    // delete is also keyed by (section_id, uuid) — un-ignoring A's shared-UUID shot
+    // must not clear B's row (issue #57 / Codex round 7).
+    let b_warning = after
+        .iter()
+        .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
+        .unwrap()
+        .clone();
+    validation::resolve_warning(
+        state(&app),
+        b_warning.section_id,
+        b_warning.shot_id,
+        "SHORT_SHOT".to_string(),
+        None,
+    )
+    .unwrap();
+    validation::unresolve_warning(
+        state(&app),
+        a_warning.section_id,
+        a_warning.shot_id,
+        "SHORT_SHOT".to_string(),
+    )
+    .unwrap();
+    let cleared = validation::get_project_warnings(state(&app));
+    assert!(
+        !cleared.iter().find(|w| w.section_id == a && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section A was un-ignored"
+    );
+    assert!(
+        cleared.iter().find(|w| w.section_id == b && w.code == "SHORT_SHOT").unwrap().is_resolved,
+        "section B's ignore (same UUID, different section) must survive A's un-ignore"
+    );
 }
 
 #[test]

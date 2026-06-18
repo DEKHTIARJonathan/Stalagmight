@@ -641,14 +641,19 @@ impl AppState {
                     // would let INSERT OR REPLACE (against UNIQUE(section_id, shot_id,
                     // warning_code)) silently delete the older shot's still-valid
                     // ignore.
-                    let live_positions: std::collections::HashMap<&str, (SectionId, u32)> = project
+                    // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
+                    // only de-dups within a section, so two sections can share a shot
+                    // UUID and a uuid-only key would collapse both live shots into one
+                    // entry — remapping section A's ignore to whichever section won the
+                    // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
+                    let live_positions: std::collections::HashMap<(SectionId, &str), (SectionId, u32)> = project
                         .sections
                         .iter()
                         .flat_map(|s| {
                             s.shots.iter().enumerate().filter_map(move |(seq, sh)| {
                                 sh.uuid.as_deref().map(|u| {
                                     (
-                                        u,
+                                        (s.id, u),
                                         (s.id, s.id * crate::models::FEATURE_ID_STRIDE + seq as u32),
                                     )
                                 })
@@ -692,7 +697,10 @@ impl AppState {
                         .filter_map(|mut r| {
                             match r.shot_uuid.as_deref() {
                                 Some(uuid) => {
-                                    let &(sec, shot) = live_positions.get(uuid)?;
+                                    // Look up by (section_id, uuid): a UUID-keyed row's
+                                    // section_id is its shot's section, so this targets the
+                                    // right shot even when another section shares the UUID.
+                                    let &(sec, shot) = live_positions.get(&(r.section_id, uuid))?;
                                     r.section_id = sec;
                                     r.shot_id = shot;
                                     Some(r)
