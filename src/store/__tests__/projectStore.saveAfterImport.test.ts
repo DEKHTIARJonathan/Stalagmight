@@ -15,10 +15,14 @@ import type { CommandResult } from '../../types/commands';
  *    to dismiss the error dialog.
  */
 describe('projectStore.saveAfterImport (#92)', () => {
+  // Capture the real action so overwriting it via setState in each test never
+  // leaks the mock into other test files (execution-order independence).
+  const realSaveProject = useProjectStore.getState().saveProject;
+
   afterEach(() => {
     vi.restoreAllMocks();
+    useProjectStore.setState({ saveProject: realSaveProject, isDirty: false });
     useUIStore.setState({ importContext: null });
-    useProjectStore.setState({ isDirty: false });
   });
 
   it('persists a NEW-project import via saveProject and lets the caller proceed', async () => {

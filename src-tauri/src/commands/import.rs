@@ -131,7 +131,34 @@ pub fn import_sections(
         purpose = "batch import with overlap updates",
         "import_sections called",
     );
-    state.execute_import_sections(sections, Vec::new(), file_hash, section_hashes.unwrap_or_default(), updates)
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        file_hash,
+        section_hashes.unwrap_or_default(),
+        updates,
+    );
+
+    // #92: durably persist a newly-imported project. A project whose initial save
+    // is still deferred (created with no save path, never written) has no `.stalx`
+    // and no Recent Projects entry, so importing into it would otherwise be
+    // invisible and lost on close — regardless of how the import UI is structured.
+    // Resolving the deferred save HERE, at the command every import path funnels
+    // through, guarantees the project becomes real on disk + in recents on its
+    // first import. Already-persisted projects are left untouched, so their
+    // unrelated pending edits are never force-committed.
+    if result.success && state.initial_save_deferred() {
+        let saved = crate::commands::project::save_project_impl(state.inner(), None, false);
+        if !saved.success {
+            tracing::warn!(
+                error = ?saved.error,
+                purpose = "persist new project after first import",
+                "Deferred-save resolution failed after import"
+            );
+        }
+    }
+
+    result
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.

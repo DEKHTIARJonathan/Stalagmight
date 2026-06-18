@@ -328,6 +328,18 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// True when the open project's initial save is still deferred — it has never
+    /// been written to disk (no database handle), so it has no `.stalx` file and
+    /// no Recent Projects entry yet. Used to durably persist a brand-new project
+    /// on its first import (#92), at the command every import path funnels
+    /// through, so the fix survives changes to the import UI.
+    pub(crate) fn initial_save_deferred(&self) -> bool {
+        self.database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none()
+    }
+
     pub(super) fn save_project(&self, path: Option<PathBuf>, is_autosave: bool) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());

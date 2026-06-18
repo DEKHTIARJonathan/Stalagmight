@@ -964,18 +964,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
     // New project: the initial save is deferred, so the import is invisible until
     // a real save writes the .stalx and adds it to Recent Projects. Do that now.
-    let result: CommandResult | undefined;
+    // (The backend import_sections command also resolves this as a durable
+    // safety net; this gives the immediate, complete save with correct dirty state.)
+    let result: CommandResult;
     try {
       result = await get().saveProject();
     } catch (e) {
+      // A reject (e.g. IPC transport failure) carries no CommandResult — convert
+      // it so surfaceSaveFailure can show an actionable message rather than a no-op.
       console.error('[import] save after import failed:', e);
+      result = emptyCommandResult(false, e instanceof Error ? e.message : String(e));
     }
-    if (!result?.success) {
+    if (!result.success) {
       // The import isn't on disk: reflect the unsaved state (not a phantom
       // "saved") and surface the actionable error. Signal the caller NOT to close
       // the dialog, so it doesn't dismiss the error/permission guidance.
       set({ isDirty: true });
-      surfaceSaveFailure(result?.error, useUIStore.getState().openDialog);
+      surfaceSaveFailure(
+        result.error ?? 'Failed to save the imported project.',
+        useUIStore.getState().openDialog,
+      );
       return false;
     }
     return true;

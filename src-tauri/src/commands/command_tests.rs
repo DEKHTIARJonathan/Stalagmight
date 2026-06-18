@@ -954,6 +954,58 @@ fn test_save_project_fails_when_output_is_directory() {
     });
 }
 
+// #92: importing into a never-saved (deferred) project must durably persist it —
+// write the .stalx and add it to Recent Projects — at the `import_sections`
+// command every import path funnels through, so the fix survives changes to the
+// import UI. Guards the backend chokepoint (PR #104).
+#[test]
+fn test_import_sections_persists_deferred_new_project() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let project_path = dir.path().join("new-import.stalx");
+
+        // A deferred project: its save path is known but it has never been written
+        // (the AppState database handle stays None).
+        let mut project = Project::new("New Import".to_string(), None);
+        project.file_path = Some(project_path.clone());
+        state(&app).inner().set_project_for_tests(project);
+        assert!(
+            state(&app).initial_save_deferred(),
+            "precondition: project must be deferred (never saved)"
+        );
+        assert!(!project_path.exists(), "precondition: .stalx must not exist yet");
+
+        // Import one origin-placed section through the command.
+        let sections = vec![crate::models::ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+        let result = import::import_sections(state(&app), sections, None, None, None);
+        assert_success(&result);
+
+        // The command resolved the deferred save: file on disk + in Recent Projects.
+        assert!(
+            project_path.exists(),
+            "import must write the deferred project to disk"
+        );
+        let cfg = config::get_config(state(&app));
+        assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
+        assert!(
+            !state(&app).initial_save_deferred(),
+            "project should no longer be deferred after the import-triggered save"
+        );
+    });
+}
+
 #[test]
 fn test_list_recent_projects_includes_saved() {
     with_config_lock(|| {
