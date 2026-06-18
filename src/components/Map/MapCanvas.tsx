@@ -830,11 +830,29 @@ export default function MapCanvas() {
   );
 
   // Get map tool callbacks
+  // Re-query the measure snap fresh at a screen point (stations win, else a shot
+  // point), respecting snap config + layer visibility. Used at click time so the
+  // committed endpoint matches the actual click, not the RAF/deferred snap store (#26).
+  const querySnapAtPoint = useCallback(
+    (screenX: number, screenY: number) => {
+      const snapConfig = config?.map.snap;
+      if (!snapConfig?.enabled_measure || !surveyLayerRef.current) return null;
+      const station = surveyLayerRef.current.queryNearestStation(screenX, screenY, snapConfig.threshold);
+      if (station) return { kind: 'station' as const, station };
+      const shot = surveyLayerRef.current.queryNearestShotPoint(screenX, screenY, snapConfig.threshold);
+      return shot
+        ? { kind: 'shot' as const, section_id: shot.section_id, shot_id: shot.shot_id, t: shot.t }
+        : null;
+    },
+    [config?.map.snap]
+  );
+
   const baseToolCallbacks = useMapTools({
     onMoveDragStart: handleMoveDragStart,
     onFeatureHover: setIsHoveringFeature,
     immovableStationKeys,
     gpsOrigin,
+    querySnapAtPoint,
   });
 
   // Combine with hidden feature callbacks for toast feedback
@@ -1632,13 +1650,23 @@ export default function MapCanvas() {
     }
   }, [project, activeStations, mapLoaded, gpsOrigin, showDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted]);
 
-  // On a project switch (created_at is stable across edits, changes on switch),
-  // reset the distance origin to the entrance default and drop the stale field —
-  // otherwise the previous project's distances paint the new project gray. (#34)
+  // On a project switch (created_at changes on switch, stable across edits AND
+  // saves), reset the distance origin to the entrance default and drop the stale
+  // field — otherwise the previous project's distances paint the new project gray
+  // (#34). Keyed on created_at alone so Save As (a file_path change) does NOT move
+  // the origin.
   useEffect(() => {
     setDistanceGradientOrigin(null);
+  }, [project?.created_at, setDistanceGradientOrigin]);
+
+  // Reset the ruler on a switch too, but keyed on file_path + created_at so opening
+  // a distinct file that happens to share created_at — e.g. a duplicated project —
+  // still clears stale ruler state (#26, Codex). (Save As also clears the ruler,
+  // which is harmless; the modified_at effect below covers same-file edits.)
+  const projectSwitchKey = `${project?.file_path ?? ''}|${project?.created_at ?? ''}`;
+  useEffect(() => {
     clearMeasure();
-  }, [project?.created_at, setDistanceGradientOrigin, clearMeasure]);
+  }, [projectSwitchKey, clearMeasure]);
 
   // Also reset the ruler when the SAME project's geometry/data changes (undo/redo
   // or any edit bumps modified_at): a persisted readout + path tint computed from

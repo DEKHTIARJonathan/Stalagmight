@@ -2378,6 +2378,7 @@ export default class SurveyLayer {
       this.map.setFilter(this.shotsLayerId, null);
       this.map.setFilter(this.shotGradientsLayerId, null);
       this.map.setFilter(this.measurePathLayerId, null);
+      this.map.setFilter(this.shotsHitboxLayerId, null);
       this.map.setFilter(this.stationsLayerId, null);
       this.map.setFilter(this.stationsHitboxLayerId, null);
       this.map.setFilter(this.shotLabelsLayerId, this.shotLabelsBaseFilter);
@@ -2388,6 +2389,9 @@ export default class SurveyLayer {
       this.map.setFilter(this.shotsLayerId, notReference);
       this.map.setFilter(this.shotGradientsLayerId, notReference);
       this.map.setFilter(this.measurePathLayerId, notReference);
+      // Also filter the hitbox so a hidden reference shot can't be clicked/snapped
+      // (e.g. the ruler snapping to an invisible reference leg) (#26, Codex).
+      this.map.setFilter(this.shotsHitboxLayerId, notReference);
       this.map.setFilter(this.shotLabelsLayerId,
         this.shotLabelsBaseFilter
           ? ['all', this.shotLabelsBaseFilter, notReference] as maplibregl.FilterSpecification

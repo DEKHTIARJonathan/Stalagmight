@@ -18,6 +18,15 @@ function endpointCoords(ep: MeasureEndpoint): Coordinates {
   return ep.kind === 'point' ? { x: ep.x, y: ep.y, z: ep.z } : ep.coords;
 }
 
+/** Stable identity for ruler state: a distinct project file — even a duplicate
+ *  sharing created_at/modified_at — and any edit (modified_at) yield a different
+ *  key, so an in-flight along-line reply can't bleed across them (#26). */
+function projectIdentityKey(
+  project: { created_at?: string; modified_at?: string; file_path?: string | null } | null | undefined
+): string {
+  return `${project?.created_at ?? ''}|${project?.modified_at ?? ''}|${project?.file_path ?? ''}`;
+}
+
 /** Only stations and shot-points have a cave-line position (enable along-line + tint). */
 function isConnectable(ep: MeasureEndpoint): boolean {
   return ep.kind !== 'point';
@@ -51,6 +60,16 @@ interface MapToolsOptions {
   immovableStationKeys?: Set<string>;
   /** GPS origin for converting a raw map click to meters (ruler `point` endpoints). */
   gpsOrigin?: GpsOrigin | null;
+  /** Re-query the measure snap (station, else shot-point) at a screen point, fresh,
+   *  respecting snap config + layer visibility. Used at click time so the endpoint
+   *  matches the actual click rather than the RAF/deferred snap store (#26). */
+  querySnapAtPoint?: (
+    screenX: number,
+    screenY: number
+  ) =>
+    | { kind: 'station'; station: StationRef }
+    | { kind: 'shot'; section_id: SectionId; shot_id: ShotId; t: number }
+    | null;
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
@@ -193,10 +212,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // changed is discarded directly, without depending on the MapCanvas reset
       // effects having already run (they null the endpoints, but only after the
       // change's render commits). Includes modified_at so an edit/undo/redo to the
-      // SAME project (which changes the topology/geometry but not created_at) also
-      // invalidates an in-flight request (#26, Codex).
-      const reqProject = useProjectStore.getState().project;
-      const requestProjectKey = `${reqProject?.created_at ?? ''}|${reqProject?.modified_at ?? ''}`;
+      // SAME project also invalidates the request, and file_path so opening a
+      // distinct file that happens to share created_at/modified_at (e.g. a
+      // duplicated project) can't inherit an in-flight reply (#26, Codex).
+      const requestProjectKey = projectIdentityKey(useProjectStore.getState().project);
       setMeasureAlongLinePending(true);
       try {
         const result = await invokeIpc<AlongLineResult | null>(
@@ -216,8 +235,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         const ui = useUIStore.getState();
         if (requestId !== measureRequestIdRef.current) return;
         if (ui.activeTool !== 'measure' || ui.measureStart !== start || ui.measureEnd !== end) return;
-        const liveProject = useProjectStore.getState().project;
-        if (`${liveProject?.created_at ?? ''}|${liveProject?.modified_at ?? ''}` !== requestProjectKey) return;
+        if (projectIdentityKey(useProjectStore.getState().project) !== requestProjectKey) return;
         setMeasureAlongLine(
           result
             ? { alongLine: result.along_line, pathShots: result.path_shots, pathStations: result.path_stations }
@@ -627,15 +645,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'measure': {
-          // Prefer the live mousemove snap; when snapping is disabled (no snap),
-          // derive t from the actual click position so a click near an end of a long
-          // shot isn't recorded as the midpoint, then fall back to the midpoint only
-          // if the click can't be projected (#26, Codex).
-          const snap = useUIStore.getState().measureSnapShot;
-          const t =
-            snap && snap.section_id === sectionId && snap.shot_id === shotId
-              ? snap.t
-              : clickShotParam(sectionId, shotId, event) ?? 0.5;
+          // The click landed on this shot — derive t directly from the click
+          // position rather than the RAF/deferred snap store (which can still hold a
+          // stale shot/t if the cursor moved before the snap update ran), falling
+          // back to the midpoint only if it can't be projected (#26, Codex).
+          const t = clickShotParam(sectionId, shotId, event) ?? 0.5;
           const ep = buildShotPointEndpoint(sectionId, shotId, t);
           if (ep) applyMeasureClick(ep);
           break;
@@ -653,17 +667,20 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
       // (no snapped station) works, and so the reset-and-restart on a fresh click
       // applies regardless of snap state (#26).
       if (activeTool === 'measure') {
-        const { measureSnapShot: snapShot, snappedStation: snapStation } = useUIStore.getState();
         let ep: MeasureEndpoint | null = null;
-        // Ignore a (possibly stale) shot snap while Shots are hidden — shot
-        // interaction is disabled, so a hidden shot must not feed the click (#26, Codex).
-        if (snapShot && showShots) {
-          ep = buildShotPointEndpoint(snapShot.section_id, snapShot.shot_id, snapShot.t);
-        } else if (snapStation) {
-          const coords = getStationCoordinates(snapStation);
+        // Re-derive the snap from the ACTUAL click position rather than the
+        // RAF/deferred snap store, which can still hold the previous shot/t if the
+        // cursor moved or left the shot just before the click. The fresh query keeps
+        // the "stations win" precedence and respects snap config + layer visibility
+        // (a hidden / hidden-reference shot can't snap) (#26, Codex).
+        const snap = options.querySnapAtPoint?.(event.point.x, event.point.y) ?? null;
+        if (snap?.kind === 'station') {
+          const coords = getStationCoordinates(snap.station);
           if (coords) {
-            ep = { kind: 'station', section_id: snapStation.section_id, station_index: snapStation.station_index, coords };
+            ep = { kind: 'station', section_id: snap.station.section_id, station_index: snap.station.station_index, coords };
           }
+        } else if (snap?.kind === 'shot') {
+          ep = buildShotPointEndpoint(snap.section_id, snap.shot_id, snap.t);
         }
         if (!ep && event.lngLat) {
           const m = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
