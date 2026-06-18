@@ -1006,6 +1006,27 @@ fn test_import_sections_persists_deferred_new_project() {
     });
 }
 
+// #104 review: a missing DB handle alone must NOT mean "deferred" — save_project
+// can drop the handle after a successful write if reopening fails. Such a project
+// has a .stalx on disk and is persisted, so importing into it must not force-save.
+#[test]
+fn test_initial_save_deferred_false_when_stalx_exists() {
+    let app = app_with_state();
+    let dir = TempDir::new().unwrap();
+    let project_path = dir.path().join("already-saved.stalx");
+    fs::write(&project_path, b"db").unwrap();
+
+    let mut project = Project::new("Saved".to_string(), None);
+    project.file_path = Some(project_path);
+    state(&app).inner().set_project_for_tests(project);
+
+    // database handle is None (e.g. dropped after a save), but the file exists.
+    assert!(
+        !state(&app).initial_save_deferred(),
+        "a persisted project with a dropped DB handle must not be treated as deferred"
+    );
+}
+
 #[test]
 fn test_list_recent_projects_includes_saved() {
     with_config_lock(|| {

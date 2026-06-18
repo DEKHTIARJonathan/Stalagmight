@@ -114,6 +114,34 @@ pub fn check_section_hashes(
     state.check_section_hashes(&hashes).map_err(|e| e.to_string())
 }
 
+/// #92: durably persist a newly-imported project. A project whose initial save is
+/// still deferred (created with no save path, never written) has no `.stalx` and no
+/// Recent Projects entry, so importing into it would otherwise be invisible and
+/// lost on close — regardless of which import type or UI is used. Every import
+/// command funnels its result through here, so resolving the deferred save once an
+/// import lands guarantees the project becomes real on disk + in recents on its
+/// first import. Already-persisted projects are left untouched, so their unrelated
+/// pending edits are never force-committed.
+///
+/// A failed deferred save is propagated rather than swallowed: the imported data is
+/// in the project but never reached disk, so callers must not treat the import as
+/// fully persisted.
+fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> CommandResult {
+    if !import_result.success || !state.initial_save_deferred() {
+        return import_result;
+    }
+    let saved = crate::commands::project::save_project_impl(state, None, false);
+    if !saved.success {
+        tracing::warn!(
+            error = ?saved.error,
+            purpose = "persist new project after first import",
+            "Deferred-save resolution failed after import"
+        );
+        return saved;
+    }
+    import_result
+}
+
 /// Import multiple sections as a single atomic undo/redo unit.
 /// Includes file hash tracking so undo also reverts the duplicate-detection state.
 #[tauri::command]
@@ -138,27 +166,7 @@ pub fn import_sections(
         section_hashes.unwrap_or_default(),
         updates,
     );
-
-    // #92: durably persist a newly-imported project. A project whose initial save
-    // is still deferred (created with no save path, never written) has no `.stalx`
-    // and no Recent Projects entry, so importing into it would otherwise be
-    // invisible and lost on close — regardless of how the import UI is structured.
-    // Resolving the deferred save HERE, at the command every import path funnels
-    // through, guarantees the project becomes real on disk + in recents on its
-    // first import. Already-persisted projects are left untouched, so their
-    // unrelated pending edits are never force-committed.
-    if result.success && state.initial_save_deferred() {
-        let saved = crate::commands::project::save_project_impl(state.inner(), None, false);
-        if !saved.success {
-            tracing::warn!(
-                error = ?saved.error,
-                purpose = "persist new project after first import",
-                "Deferred-save resolution failed after import"
-            );
-        }
-    }
-
-    result
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
@@ -245,7 +253,7 @@ pub fn execute_tml_import(
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    result
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Parse a Compass `.DAT`/`.MAK` file and return preview data for the import dialog.
@@ -344,7 +352,7 @@ pub fn execute_compass_import(
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    result
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Parse a GPX file and return preview data for the import dialog.
@@ -428,7 +436,10 @@ pub fn execute_gpx_import(
         "Converted GPX to import configs, executing import"
     );
 
-    state.execute_import_sections(sections, Vec::new(), file_hash, Vec::new(), Vec::new())
+    finalize_deferred_import(
+        state.inner(),
+        state.execute_import_sections(sections, Vec::new(), file_hash, Vec::new(), Vec::new()),
+    )
 }
 
 /// Suggest placement positions for an import section by detecting reference shot overlap.

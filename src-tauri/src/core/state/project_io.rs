@@ -334,10 +334,30 @@ impl AppState {
     /// on its first import (#92), at the command every import path funnels
     /// through, so the fix survives changes to the import UI.
     pub(crate) fn initial_save_deferred(&self) -> bool {
-        self.database
+        // A missing database handle is necessary but not sufficient: `save_project`
+        // also drops the handle after a successful write when reopening the saved
+        // DB fails (see the `database` reset on the save path). That project IS
+        // persisted, so also require that no `.stalx` exists on disk before treating
+        // it as a never-saved deferred project — otherwise the next import would
+        // force-save unrelated pending edits into an already-persisted project.
+        let has_db = self
+            .database
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_none()
+            .is_some();
+        if has_db {
+            return false;
+        }
+        match self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|p| p.file_path.clone())
+        {
+            Some(path) => !path.exists(),
+            None => true,
+        }
     }
 
     pub(super) fn save_project(&self, path: Option<PathBuf>, is_autosave: bool) -> CommandResult {
