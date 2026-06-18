@@ -13,14 +13,22 @@ This document describes the testing infrastructure, conventions, and best practi
 
 ## Test Infrastructure
 
-Stalagmight uses a multi-layered testing approach:
+Stalagmight uses a multi-layered testing approach. Beyond speed, note the
+**mocked-IPC vs. real-backend** axis: every automated tier except WebdriverIO
+mocks the Tauri backend, so only the on-demand WDIO suite exercises real file
+I/O / Recent Projects / persistence.
 
-| Layer | Framework | Purpose | Speed |
-|-------|-----------|---------|-------|
-| Unit (frontend) | Vitest | Component/store/util logic | Fast |
-| Playwright E2E | Playwright | UI tests with mocked IPC (`e2e-playwright/`) | Fast |
-| WebdriverIO E2E | WebdriverIO + tauri-driver | Full real-app tests (`e2e/legacy/`, **on-demand only**) | Slow (real backend) |
-| Backend Unit | Rust `#[test]` | Rust logic tests | Fast |
+| Layer | Framework | Env | Purpose | Speed |
+|-------|-----------|-----|---------|-------|
+| Unit (logic) | Vitest | `node` | Stores, utils, selectors (`*.test.ts`) | Fast |
+| Component | Vitest + Testing Library | `jsdom` | Render React components, assert handlers/wiring (`*.test.tsx`) | Fast |
+| Playwright E2E | Playwright | mocked IPC | UI flows (`e2e-playwright/`) | Fast |
+| WebdriverIO E2E | WebdriverIO + tauri-driver | real Tauri app | Full real-app tests (`e2e/legacy/`, **on-demand only**) | Slow (real backend) |
+| Backend Unit | Rust `#[test]` | — | Rust logic tests | Fast |
+
+The Vitest unit + component tiers are gated in CI (the `check` job) as of #107;
+the Playwright smoke/nightly split and the WDIO quarantine to `e2e/legacy/`
+landed in #103.
 
 ## Test Tiers (smoke vs nightly)
 
@@ -50,6 +58,9 @@ Guidelines:
 ## Quick Start
 
 ```bash
+# Run Vitest unit + component tests (watch mode; `vitest run` for a single pass)
+pnpm test
+
 # Run Playwright tests (recommended for development)
 pnpm test:ui
 
@@ -81,11 +92,57 @@ pnpm coverage:merge
 
 | Feature Type | Required Tests |
 |--------------|----------------|
-| New UI component/dialog | Playwright E2E tests |
+| New UI component/dialog | Component test (`*.test.tsx`: render + assert handlers/wiring) + Playwright E2E for the full flow |
+| Frontend logic (stores, utils, selectors) | Vitest unit test (`*.test.ts`) |
 | New Tauri IPC command | Rust unit tests + Playwright E2E tests |
 | Backend logic (parsers, models) | Rust unit tests |
 | User workflow (multi-step) | Playwright E2E tests |
-| Bug fix | Regression test covering the fix |
+| Bug fix | Regression test at the lowest tier that can catch it (unit/component before E2E) |
+
+## Vitest Unit & Component Tests
+
+Vitest runs all `src/**/*.{test,spec}.{ts,tsx}` files and is gated in CI (#107).
+Tiering is by **file extension** (see `vite.config.ts` → `environmentMatchGlobs`):
+
+| Extension | Environment | Use for |
+|-----------|-------------|---------|
+| `*.test.ts` | `node` | Pure logic — stores, utils, selectors, formatters. No DOM. |
+| `*.test.tsx` | `jsdom` | Rendering a React component with Testing Library. |
+
+`src/test/setup.ts` registers jest-dom matchers and auto-unmounts React trees
+between tests. The DOM libraries load lazily behind a `document` guard, so the
+`node` logic tests pay no DOM cost.
+
+### Writing a component test
+
+Render the real component, then assert on accessible roles and that handlers
+fire — prefer this over an E2E test when the behavior is component-local
+("completing X calls Y", "dialog renders Z on state W"). The full cross-view
+flow still belongs in Playwright.
+
+```tsx
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { Button } from './Button';
+
+it('fires onClick when activated', async () => {
+  const onClick = vi.fn();
+  render(<Button onClick={onClick}>Import</Button>);
+  await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+  expect(onClick).toHaveBeenCalledTimes(1);
+});
+```
+
+See `src/components/common/Button.test.tsx` for the harness smoke. Components
+that depend on Zustand stores or `react-i18next` need those mocked/provided;
+keep first component tests on leaf components to avoid heavy setup.
+
+> **Why this tier exists:** before #107 there was no way to render a component
+> in a unit test (0 `render()` calls), so UI-wiring bugs like #92 (import
+> completion never triggered a save) shipped on manual verification alone. Note
+> the component tier mocks IPC — the real-backend persistence path (file on disk
+> + Recent Projects) still needs a Rust/WDIO guard.
 
 ## Playwright E2E Tests
 
@@ -1378,7 +1435,8 @@ await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 Two GitHub Actions run on every push/PR to `master`:
 
-1. **`ci.yml` (`check`)** — `pnpm tsc --noEmit` + `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`.
+1. **`ci.yml` (`check`)** — `pnpm tsc --noEmit` + `pnpm test` (Vitest unit +
+   component, since #107) + `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`.
    This is the historical merge gate. (Note: `--features telemetry` is required —
    a plain `cargo test` filters out the `registry_covers_all_*` tests, and
    `build.rs` requires `TELEMETRY_ENDPOINT` under that feature.)
