@@ -31,8 +31,8 @@ use stalagmight_lib::export::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
-    ConnectivityResult, Coordinates, DeleteShotImpact, DistanceField, FrozenShotRef, GpsBounds, GpsCoordinates,
-    PathShot, RulerEndpoint,
+    ConnectivityResult, Coordinates, DeleteShotImpact, DeleteShotRangeImpact, DistanceField, FrozenShotRef,
+    GpsBounds, GpsCoordinates, PathShot, RangeDeleteKind, RulerEndpoint,
     ImportPlacement, ExistingShotUpdate, ImportSectionConfig, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, Section, SectionData, SectionRelationships, SectionStats,
     SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire,
@@ -131,6 +131,8 @@ fn main() {
     export::<ClosurePair>(&out_dir);
     export::<ClosureUpdate>(&out_dir);
     export::<DeleteShotImpact>(&out_dir);
+    export::<RangeDeleteKind>(&out_dir);
+    export::<DeleteShotRangeImpact>(&out_dir);
     export::<ConnectivityResult>(&out_dir);
     export::<ClosurePreview>(&out_dir);
     export::<ProjectWarning>(&out_dir);
@@ -310,6 +312,8 @@ fn main() {
         "ClosurePair",
         "ClosureUpdate",
         "DeleteShotImpact",
+        "RangeDeleteKind",
+        "DeleteShotRangeImpact",
         "ConnectivityResult",
         "ClosurePreview",
         "ProjectWarning",

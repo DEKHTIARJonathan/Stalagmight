@@ -53,6 +53,8 @@ export * from './ipc/StationPair';
 export * from './ipc/ClosurePair';
 export * from './ipc/ClosureUpdate';
 export * from './ipc/DeleteShotImpact';
+export * from './ipc/RangeDeleteKind';
+export * from './ipc/DeleteShotRangeImpact';
 export * from './ipc/ConnectivityResult';
 export * from './ipc/ClosurePreview';
 export * from './ipc/ProjectWarning';

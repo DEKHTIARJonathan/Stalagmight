@@ -33,6 +33,14 @@ fn assert_coords_close(a: Coordinates, b: Coordinates) {
     assert!((a.z - b.z).abs() < eps, "z mismatch: {} vs {}", a.z, b.z);
 }
 
+/// Like [`assert_coords_close`] but only the horizontal (map) position. Section
+/// offsets are 2D, so gap-close deletes preserve x/y but not section-relative z.
+fn assert_xy_close(a: Coordinates, b: Coordinates) {
+    let eps = 1e-6;
+    assert!((a.x - b.x).abs() < eps, "x mismatch: {} vs {}", a.x, b.x);
+    assert!((a.y - b.y).abs() < eps, "y mismatch: {} vs {}", a.y, b.y);
+}
+
 /// Absolute (section-offset-applied) coordinates of every station, keyed by ref.
 /// Used to assert that an edit shifts only the affected geometry and leaves the
 /// rest of the map put (#41 regression sentinels).
@@ -9001,6 +9009,537 @@ fn test_split_remaps_closures() {
         "the remapped closure should have become a merge on the new section: {:?}",
         proj.station_merges
     );
+}
+
+// === Bulk shot range deletion (#95) ===
+
+#[test]
+fn test_delete_range_split_interior() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Range Split".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: Some("Surv".to_string()),
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: Some(SurveyDirection::Out),
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    // Delete shots [2..=3] (the 3.0 and 4.0 shots) and split.
+    let result =
+        state.execute_delete_shot_range_split(section_id, s2, s3, "A".to_string(), "B".to_string());
+    assert!(result.success, "range split should succeed: {:?}", result.error);
+    let new_id = result.section_id.unwrap();
+
+    let proj = state.get_project_state().unwrap();
+    let a = proj.get_section(section_id).unwrap();
+    let b = proj.get_section(new_id).unwrap();
+    assert_eq!(a.name, Some("A".to_string()));
+    assert_eq!(a.shots.iter().map(|s| s.length).collect::<Vec<_>>(), vec![5.0, 7.0]);
+    assert_eq!(b.name, Some("B".to_string()));
+    assert_eq!(b.shots.iter().map(|s| s.length).collect::<Vec<_>>(), vec![6.0, 8.0]);
+    // Metadata is inherited by both halves.
+    assert_eq!(b.surveyor, Some("Surv".to_string()));
+    assert_eq!(b.direction, SurveyDirection::Out);
+}
+
+#[test]
+fn test_delete_range_split_preserves_after_position() {
+    // East-going shots: section B's offset should equal the displacement of
+    // (shots before the range ++ the deleted shots).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Range Offset".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            shot_data_with_azimuth(10.0, 90.0, 90.0), // before
+            shot_data_with_azimuth(5.0, 90.0, 90.0),  // deleted
+            shot_data_with_azimuth(7.0, 90.0, 90.0),  // deleted
+            shot_data_with_azimuth(8.0, 90.0, 90.0),  // after
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    let (s1, s2) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[1].id, sec.shots[2].id)
+    };
+    let result =
+        state.execute_delete_shot_range_split(section_id, s1, s2, "A".to_string(), "B".to_string());
+    assert!(result.success, "{:?}", result.error);
+    let new_id = result.section_id.unwrap();
+
+    let proj = state.get_project_state().unwrap();
+    let (bx, by) = *proj.section_offsets.get(&new_id).expect("B offset");
+    let h = |l: f64| (l * l - 1.0_f64).sqrt();
+    let expected = h(10.0) + h(5.0) + h(7.0);
+    assert!((bx - expected).abs() < 0.001, "bx ~{expected}, got {bx}");
+    assert!(by.abs() < 0.001, "by ~0, got {by}");
+}
+
+#[test]
+fn test_delete_range_shift_interior() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Range Shift".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let result = state.execute_delete_shot_range_shift(section_id, s2, s3);
+    assert!(result.success, "range shift should succeed: {:?}", result.error);
+
+    // No new section — the survivors gap-close into one section [5,7,6,8].
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(proj.sections.len(), 1);
+    let sec = proj.get_section(section_id).unwrap();
+    assert_eq!(sec.shots.iter().map(|s| s.length).collect::<Vec<_>>(), vec![5.0, 7.0, 6.0, 8.0]);
+}
+
+#[test]
+fn test_delete_range_prefix_shift() {
+    // Delete shots [0..=1] of a 5-shot section; the survivors keep their absolute
+    // positions (the section offset is shifted to compensate).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Prefix".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            shot_data_with_azimuth(10.0, 90.0, 90.0),
+            shot_data_with_azimuth(5.0, 90.0, 90.0),
+            shot_data_with_azimuth(7.0, 90.0, 90.0),
+            shot_data_with_azimuth(8.0, 90.0, 90.0),
+            shot_data_with_azimuth(6.0, 90.0, 90.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    let before_abs = {
+        let proj = state.get_project_state().unwrap();
+        abs_coord_map(&proj)
+    };
+    let kept_before = *before_abs.get(&StationRef::new(section_id, 2)).unwrap();
+    let (s0, s1) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[0].id, sec.shots[1].id)
+    };
+    let result = state.execute_delete_shot_range_shift(section_id, s0, s1);
+    assert!(result.success, "{:?}", result.error);
+
+    let proj = state.get_project_state().unwrap();
+    let sec = proj.get_section(section_id).unwrap();
+    assert_eq!(sec.shots.iter().map(|s| s.length).collect::<Vec<_>>(), vec![7.0, 8.0, 6.0]);
+    // Old station 2 (start of the first surviving shot) is now station 0, same place.
+    let after_abs = abs_coord_map(&proj);
+    let kept_after = *after_abs.get(&StationRef::new(section_id, 0)).unwrap();
+    assert_xy_close(kept_before, kept_after);
+}
+
+#[test]
+fn test_delete_range_suffix_shift() {
+    // Delete shots [3..=4] of a 5-shot section; the head stays put.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Suffix".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            shot_data_with_azimuth(10.0, 90.0, 90.0),
+            shot_data_with_azimuth(5.0, 90.0, 90.0),
+            shot_data_with_azimuth(7.0, 90.0, 90.0),
+            shot_data_with_azimuth(8.0, 90.0, 90.0),
+            shot_data_with_azimuth(6.0, 90.0, 90.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    let head_before = {
+        let proj = state.get_project_state().unwrap();
+        abs_coord_map(&proj)
+    };
+    let (s3, s4) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[3].id, sec.shots[4].id)
+    };
+    let result = state.execute_delete_shot_range_shift(section_id, s3, s4);
+    assert!(result.success, "{:?}", result.error);
+
+    let proj = state.get_project_state().unwrap();
+    let sec = proj.get_section(section_id).unwrap();
+    assert_eq!(sec.shots.iter().map(|s| s.length).collect::<Vec<_>>(), vec![10.0, 5.0, 7.0]);
+    let after = abs_coord_map(&proj);
+    for i in 0..=3u32 {
+        let r = StationRef::new(section_id, i);
+        assert_xy_close(*head_before.get(&r).unwrap(), *after.get(&r).unwrap());
+    }
+}
+
+#[test]
+fn test_delete_range_split_remaps_merge() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Range Merge Remap".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("ToSplit".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_c = state.execute(Command::CreateSection {
+        name: Some("Other".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_c = create_c.section_id.unwrap();
+    // Merge A:5 (-> new section index 1 after split [2..=3], split_station 4) with C:0.
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_a, 5),
+            station_b: StationRef::new(sec_c, 0),
+        })
+        .success);
+
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let result =
+        state.execute_delete_shot_range_split(sec_a, s2, s3, "A".to_string(), "B".to_string());
+    assert!(result.success, "{:?}", result.error);
+    let new_id = result.section_id.unwrap();
+
+    let proj = state.get_project_state().unwrap();
+    let has_remapped = proj.station_merges.iter().any(|m| {
+        let a = proj.resolve_key(&m.station_a);
+        let b = proj.resolve_key(&m.station_b);
+        (a.is_some_and(|sr| sr.section_id == new_id && sr.station_index == 1)
+            && m.station_b.section_id == sec_c)
+            || (b.is_some_and(|sr| sr.section_id == new_id && sr.station_index == 1)
+                && m.station_a.section_id == sec_c)
+    });
+    assert!(has_remapped, "merge A:5 should remap to new section index 1: {:?}", proj.station_merges);
+}
+
+#[test]
+fn test_delete_range_preserves_interior_merge_connectivity() {
+    // Two other sections (P, Q) bridge ONLY through an interior station A:3 that
+    // the range delete removes. A replacement merge must keep P and Q connected.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Interior Bridge".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_p = state.execute(Command::CreateSection {
+        name: Some("P".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_p = create_p.section_id.unwrap();
+    let create_q = state.execute(Command::CreateSection {
+        name: Some("Q".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_q = create_q.section_id.unwrap();
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_p, 0),
+            station_b: StationRef::new(sec_a, 3),
+        })
+        .success);
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_q, 0),
+            station_b: StationRef::new(sec_a, 3),
+        })
+        .success);
+    {
+        let proj = state.get_project_state().unwrap();
+        assert!(
+            proj.are_stations_merged(StationRef::new(sec_p, 0), StationRef::new(sec_q, 0)),
+            "P and Q should be connected before the delete"
+        );
+    }
+
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    // Range [2..=3] removes interior station A:3 (the only P<->Q bridge).
+    let result =
+        state.execute_delete_shot_range_split(sec_a, s2, s3, "A".to_string(), "B".to_string());
+    assert!(result.success, "{:?}", result.error);
+
+    let proj = state.get_project_state().unwrap();
+    assert!(
+        proj.are_stations_merged(StationRef::new(sec_p, 0), StationRef::new(sec_q, 0)),
+        "P and Q must stay connected via a replacement merge after the interior bridge is \
+         removed: {:?}",
+        proj.station_merges
+    );
+}
+
+#[test]
+fn test_delete_range_shift_blocked_aborts() {
+    // A loop around section A's middle makes the shift path unavailable; the
+    // shift range delete must fail and leave the project untouched.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Shift Blocked".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_b = create_b.section_id.unwrap();
+    // Form a loop directly (A:0-B:0 and A:4-B:1). MergeStations refuses the second
+    // edge because the stations are already connected, so push raw merges like the
+    // model-level shift_blocked test does.
+    {
+        let mut guard = state.project.lock().unwrap();
+        let proj = guard.as_mut().unwrap();
+        proj.station_merges.push(StationMerge {
+            station_a: StationRef::new(sec_a, 0).into(),
+            station_b: StationRef::new(sec_b, 0).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        proj.station_merges.push(StationMerge {
+            station_a: StationRef::new(sec_a, 4).into(),
+            station_b: StationRef::new(sec_b, 1).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        proj.merge_adjacency_cache.clear();
+    }
+
+    let (s1, s2) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[1].id, sec.shots[2].id)
+    };
+    let result = state.execute_delete_shot_range_shift(sec_a, s1, s2);
+    assert!(!result.success, "shift over a loop must be blocked");
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(
+        proj.get_section(sec_a).unwrap().shots.len(),
+        4,
+        "blocked shift must not mutate the project"
+    );
+}
+
+#[test]
+fn test_delete_range_undo_redo_roundtrip() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Range Undo".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("Original".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            shot_data_with_azimuth(10.0, 90.0, 90.0),
+            shot_data_with_azimuth(5.0, 45.0, 45.0),
+            shot_data_with_azimuth(7.0, 90.0, 90.0),
+            shot_data_with_azimuth(8.0, 135.0, 135.0),
+            shot_data_with_azimuth(6.0, 90.0, 90.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    let before_abs = {
+        let proj = state.get_project_state().unwrap();
+        abs_coord_map(&proj)
+    };
+    let undo_len_before = state.get_undo_stack().len();
+    let (s1, s2) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[1].id, sec.shots[2].id)
+    };
+    let result =
+        state.execute_delete_shot_range_split(section_id, s1, s2, "A".to_string(), "B".to_string());
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(
+        state.get_undo_stack().len(),
+        undo_len_before + 1,
+        "the whole range split is one undo entry"
+    );
+
+    assert!(state.undo().success);
+    let after_undo = {
+        let proj = state.get_project_state().unwrap();
+        abs_coord_map(&proj)
+    };
+    assert_eq!(before_abs.len(), after_undo.len());
+    for (r, c) in &before_abs {
+        let c2 = after_undo.get(r).unwrap_or_else(|| panic!("missing {r:?} after undo"));
+        assert_coords_close(*c, *c2);
+    }
+
+    assert!(state.redo().success);
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(proj.sections.len(), 2, "redo restores the split (two sections)");
+}
+
+#[test]
+fn test_preview_delete_shot_range_classifies_kind() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Kind".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    let proj = state.get_project_state().unwrap();
+    let ids: Vec<ShotId> =
+        proj.get_section(section_id).unwrap().shots.iter().map(|s| s.id).collect();
+
+    use crate::models::RangeDeleteKind;
+    assert_eq!(
+        proj.preview_delete_shot_range(section_id, ids[0], ids[4]).unwrap().kind,
+        RangeDeleteKind::WholeSection
+    );
+    assert_eq!(
+        proj.preview_delete_shot_range(section_id, ids[0], ids[2]).unwrap().kind,
+        RangeDeleteKind::Prefix
+    );
+    assert_eq!(
+        proj.preview_delete_shot_range(section_id, ids[2], ids[4]).unwrap().kind,
+        RangeDeleteKind::Suffix
+    );
+    let interior = proj.preview_delete_shot_range(section_id, ids[1], ids[3]).unwrap();
+    assert_eq!(interior.kind, RangeDeleteKind::Interior);
+    // Reversed endpoints normalize to the same range.
+    let rev = proj.preview_delete_shot_range(section_id, ids[3], ids[1]).unwrap();
+    assert_eq!((rev.start_pos, rev.end_pos), (1, 3));
+}
+
+#[test]
+fn test_delete_range_split_rejects_non_interior() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Reject".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0), test_shot_data(7.0), test_shot_data(3.0)],
+    });
+    let section_id = create.section_id.unwrap();
+    let ids: Vec<ShotId> = {
+        let proj = state.get_project_state().unwrap();
+        proj.get_section(section_id).unwrap().shots.iter().map(|s| s.id).collect()
+    };
+    // Prefix range [0..=1] is not interior — split must refuse.
+    assert!(
+        !state
+            .execute_delete_shot_range_split(section_id, ids[0], ids[1], "A".to_string(), "B".to_string())
+            .success
+    );
+    // Whole-section shift must refuse (delete the section instead).
+    assert!(!state.execute_delete_shot_range_shift(section_id, ids[0], ids[2]).success);
+
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(proj.get_section(section_id).unwrap().shots.len(), 3, "rejections must not mutate");
 }
 
 #[test]

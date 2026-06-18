@@ -1,0 +1,232 @@
+import { useEffect, useState } from 'react';
+import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { formatStationId } from '../../utils/formatters';
+import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
+import DeleteShotImpactDetails from './DeleteShotImpactDetails';
+import type { DeleteShotRangeImpact } from '../../types/commands';
+import { setSource, trackDialogComplete } from '../../utils/telemetry';
+
+/**
+ * Confirm + impact dialog for deleting a contiguous range of shots (#95).
+ * Opened by the data table when >1 real shot is selected. Interior ranges offer
+ * a choice — split the section in two (lossless, keeps both ends in place) or
+ * close the gap (shift the downstream survey). Prefix/suffix ranges only shift.
+ * (Whole-section selections route to the section-delete confirm instead.)
+ */
+export default function BulkDeleteDialog() {
+  const { closeDialog, dialogData, clearSelection, setSelection } = useUIStore();
+  const { deleteShotRangeSplit, deleteShotRangeShift } = useProjectStore();
+
+  const sectionId = dialogData.sectionId as number | undefined;
+  const startShotId = dialogData.startShotId as number | undefined;
+  const endShotId = dialogData.endShotId as number | undefined;
+  const shotCount = dialogData.shotCount as number | undefined;
+  const kind = dialogData.kind as 'prefix' | 'suffix' | 'interior' | undefined;
+  const sectionName = dialogData.sectionName as string | undefined;
+  const startStationIndex = dialogData.startStationIndex as number | undefined;
+  const endStationIndex = dialogData.endStationIndex as number | undefined;
+
+  const isInterior = kind === 'interior';
+
+  const [splitNameA, setSplitNameA] = useState('');
+  const [splitNameB, setSplitNameB] = useState('');
+  const [impact, setImpact] = useState<DeleteShotRangeImpact | null>(null);
+  const [impactError, setImpactError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const shiftBlocked = impact?.shift_blocked ?? false;
+  const shiftBlockedReasons = impact?.shift_blocked_reasons ?? [];
+
+  // Prefill split names for interior ranges (mirrors the single-shot dialog).
+  useEffect(() => {
+    if (isInterior && sectionName) {
+      setSplitNameA(`${sectionName}-A`);
+      setSplitNameB(`${sectionName}-B`);
+    }
+  }, [isInterior, sectionName]);
+
+  useEffect(() => {
+    if (sectionId !== undefined && startShotId !== undefined && endShotId !== undefined) {
+      invokeIpc<DeleteShotRangeImpact>(
+        'preview_delete_shot_range',
+        { sectionId, startShotId, endShotId },
+        { purpose: 'preview shot range deletion' }
+      )
+        .then((result) => {
+          setImpact(result);
+          setImpactError(null);
+        })
+        .catch((e) => {
+          setImpact(null);
+          setImpactError(getErrorMessage(e, 'Failed to load deletion impact'));
+        });
+    } else {
+      setImpact(null);
+      setImpactError(null);
+    }
+  }, [sectionId, startShotId, endShotId]);
+
+  const summary =
+    shotCount !== undefined &&
+    startStationIndex !== undefined &&
+    endStationIndex !== undefined &&
+    sectionId !== undefined
+      ? `Delete ${shotCount} shots (stations ${formatStationId(sectionId, startStationIndex)}–${formatStationId(sectionId, endStationIndex)} in ${sectionName ?? `Section ${sectionId}`}).`
+      : `Delete ${shotCount ?? 0} shots.`;
+
+  const finish = (split: boolean) => {
+    // Split keeps the original section as "A" — re-select it; otherwise clear.
+    if (split && sectionId !== undefined) {
+      setSelection({ type: 'section', sectionId });
+    } else {
+      clearSelection();
+    }
+    trackDialogComplete('bulk-delete');
+    closeDialog();
+  };
+
+  const handleSplit = async () => {
+    if (sectionId === undefined || startShotId === undefined || endShotId === undefined) return;
+    setSource('dialog');
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await deleteShotRangeSplit(
+        sectionId,
+        startShotId,
+        endShotId,
+        splitNameA.trim() || 'Section A',
+        splitNameB.trim() || 'Section B'
+      );
+      if (result.success) {
+        finish(true);
+      } else {
+        setError(result.error ?? 'Failed to split section');
+      }
+    } catch (e) {
+      setError(getErrorMessage(e, 'Failed to split section'));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleShift = async () => {
+    if (sectionId === undefined || startShotId === undefined || endShotId === undefined) return;
+    setSource('dialog');
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await deleteShotRangeShift(sectionId, startShotId, endShotId);
+      if (result.success) {
+        finish(false);
+      } else {
+        setError(result.error ?? 'Failed to delete shots');
+      }
+    } catch (e) {
+      setError(getErrorMessage(e, 'Failed to delete shots'));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <DialogWrapper
+      title="Delete Shots"
+      onClose={isLoading ? () => {} : closeDialog}
+      size="md"
+      data-testid="bulk-delete-dialog"
+    >
+      <div className="space-y-4">
+        <p className="text-text-secondary">{summary}</p>
+        {isInterior && (
+          <p className="text-text-secondary text-sm">
+            These shots are in the middle of the section. Split keeps both ends in place; closing
+            the gap shifts the downstream survey.
+          </p>
+        )}
+
+        {error && (
+          <div className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm">
+            {error}
+          </div>
+        )}
+        {impactError && (
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+            {impactError}
+          </div>
+        )}
+
+        {isInterior && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm text-text-secondary mb-1">
+                Section A name (before the range)
+              </label>
+              <input
+                type="text"
+                value={splitNameA}
+                onChange={(e) => setSplitNameA(e.target.value)}
+                className="w-full"
+                data-testid="split-name-a"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-text-secondary mb-1">
+                Section B name (after the range)
+              </label>
+              <input
+                type="text"
+                value={splitNameB}
+                onChange={(e) => setSplitNameB(e.target.value)}
+                className="w-full"
+                data-testid="split-name-b"
+              />
+            </div>
+          </div>
+        )}
+
+        {shiftBlocked && (
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+            <p className="font-medium">Closing the gap isn&apos;t available for this range.</p>
+            {shiftBlockedReasons.length > 0 && (
+              <ul className="list-disc list-inside">
+                {shiftBlockedReasons.map((reason: string, index: number) => (
+                  <li key={`shift-blocked-${index}`}>{reason}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        <DeleteShotImpactDetails
+          impact={impact}
+          title="Deleting these shots will update station relationships:"
+        />
+
+        <div className="flex justify-end gap-2 pt-4 border-t border-border">
+          <Button onClick={closeDialog} disabled={isLoading}>
+            Cancel
+          </Button>
+          {isInterior && (
+            <Button onClick={handleSplit} disabled={isLoading} data-testid="bulk-delete-split">
+              {isLoading ? 'Working…' : 'Split into Two Sections'}
+            </Button>
+          )}
+          <Button
+            variant="danger"
+            onClick={handleShift}
+            disabled={isLoading || shiftBlocked}
+            data-primary-action=""
+            data-testid="bulk-delete-shift"
+          >
+            {isLoading ? 'Deleting…' : isInterior ? 'Close Gap & Delete' : 'Delete Shots'}
+          </Button>
+        </div>
+      </div>
+    </DialogWrapper>
+  );
+}

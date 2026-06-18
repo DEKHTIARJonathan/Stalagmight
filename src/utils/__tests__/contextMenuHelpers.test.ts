@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getDeleteShotDialog } from '../contextMenuHelpers';
+import { getDeleteShotDialog, deriveRangeDeleteParams } from '../contextMenuHelpers';
 
 describe('getDeleteShotDialog', () => {
   const sectionId = 1;
@@ -55,5 +55,47 @@ describe('getDeleteShotDialog', () => {
   it('includes totalShots in edge-shot data', () => {
     const result = getDeleteShotDialog(sectionId, shotId, true, false, 5, sectionName);
     expect(result.data.totalShots).toBe(5);
+  });
+});
+
+describe('deriveRangeDeleteParams', () => {
+  it('classifies a whole-section range', () => {
+    expect(deriveRangeDeleteParams(0, 4, 5)).toEqual({
+      kind: 'whole',
+      removesSection: true,
+      splitRequired: false,
+    });
+  });
+
+  it('classifies a prefix range (starts at shot 0, shots remain after)', () => {
+    expect(deriveRangeDeleteParams(0, 1, 5)).toEqual({
+      kind: 'prefix',
+      removesSection: false,
+      splitRequired: false,
+    });
+  });
+
+  it('classifies a suffix range (ends at last shot, shots remain before)', () => {
+    expect(deriveRangeDeleteParams(3, 4, 5)).toEqual({
+      kind: 'suffix',
+      removesSection: false,
+      splitRequired: false,
+    });
+  });
+
+  it('classifies an interior range as split-required', () => {
+    expect(deriveRangeDeleteParams(1, 3, 5)).toEqual({
+      kind: 'interior',
+      removesSection: false,
+      splitRequired: true,
+    });
+  });
+
+  it('treats a two-shot interior selection as interior', () => {
+    expect(deriveRangeDeleteParams(2, 3, 6)).toEqual({
+      kind: 'interior',
+      removesSection: false,
+      splitRequired: true,
+    });
   });
 });

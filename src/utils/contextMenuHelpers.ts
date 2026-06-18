@@ -1,5 +1,32 @@
 import type { SectionId, ShotId } from '../types/project';
 
+export type RangeDeleteCase = 'whole' | 'prefix' | 'suffix' | 'interior';
+
+/**
+ * Classify a contiguous shot-range deletion `[firstIdx..lastIdx]` within a
+ * section of `total` shots. Mirrors the backend `RangeDeleteKind`:
+ * - `whole`    — every shot selected → the section is removed
+ * - `prefix`   — starts at shot 0, shots remain after → gap-close (shift)
+ * - `suffix`   — ends at the last shot, shots remain before → truncate (shift)
+ * - `interior` — shots remain before AND after → split-vs-shift choice
+ * `splitRequired` is true only for an interior range (the only case that can
+ * split the section and so needs two section names).
+ */
+export function deriveRangeDeleteParams(
+  firstIdx: number,
+  lastIdx: number,
+  total: number
+): { kind: RangeDeleteCase; removesSection: boolean; splitRequired: boolean } {
+  const atStart = firstIdx === 0;
+  const atEnd = lastIdx === total - 1;
+  let kind: RangeDeleteCase;
+  if (atStart && atEnd) kind = 'whole';
+  else if (atStart) kind = 'prefix';
+  else if (atEnd) kind = 'suffix';
+  else kind = 'interior';
+  return { kind, removesSection: kind === 'whole', splitRequired: kind === 'interior' };
+}
+
 /**
  * Determines which dialog to open for a Delete Shot action based on the shot's
  * position within its section.

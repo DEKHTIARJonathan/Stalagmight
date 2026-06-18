@@ -300,6 +300,8 @@ interface ProjectStore {
   deleteShot: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotAndSplit: (sectionId: SectionId, shotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
+  deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
+  deleteShotRangeShift: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
   setShotReference: (sectionId: SectionId, shotId: ShotId, isReference: boolean) => Promise<CommandResult>;
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
@@ -1427,6 +1429,28 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'delete_last_shot_and_section',
       { sectionId, shotId },
       { purpose: 'remove single-shot section', fields: { sectionId, shotId } }
+    );
+  },
+
+  deleteShotRangeSplit: async (
+    sectionId: SectionId,
+    startShotId: ShotId,
+    endShotId: ShotId,
+    nameA: string,
+    nameB: string
+  ) => {
+    return executeCommand(
+      'delete_shot_range_split',
+      { sectionId, startShotId, endShotId, nameA, nameB },
+      { purpose: 'delete shot range and split section', fields: { sectionId, startShotId, endShotId } }
+    );
+  },
+
+  deleteShotRangeShift: async (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => {
+    return executeCommand(
+      'delete_shot_range_shift',
+      { sectionId, startShotId, endShotId },
+      { purpose: 'delete shot range and close gap', fields: { sectionId, startShotId, endShotId } }
     );
   },
 

@@ -10,6 +10,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { ChevronDownIcon, ExpandIcon, EyeIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
 import { formatShotId, formatStationId } from '../../utils/formatters';
+import { getDeleteShotDialog, deriveRangeDeleteParams } from '../../utils/contextMenuHelpers';
 import { getNumberFormatLocale } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { setSource } from '../../utils/telemetry';
@@ -964,26 +965,70 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Delete on a gutter-selected range (or the context menu's "Delete rows"):
   // draft rows in the range are discarded outright (the end draft resets, no
-  // confirm — nothing is stored yet); a single real shot routes to the
-  // existing shot-delete confirm dialog (it owns the split/last-shot
-  // handling); multi-shot delete has no safe backend flow yet.
+  // confirm — nothing is stored yet). A single real shot routes through the
+  // shared position-aware helper (split-vs-shift choice for mid shots), matching
+  // the detail panel / map. A contiguous run of >1 real shot opens the
+  // bulk-delete flow (or the section-delete confirm when the whole section is
+  // selected).
   const onShotDeleteRows = useCallback(
     (fromRow: number, toRow: number) => {
       if (!selectedSection || geometryReadOnly) return;
       setSource('data-table');
-      const shotsInRange = rowEntries
+      const inRange = rowEntries
         .slice(fromRow, toRow + 1)
-        .flatMap((e) => (e.kind === 'shot' ? [e.shot] : []));
+        .flatMap((e) => (e.kind === 'shot' ? [{ shot: e.shot, shotIndex: e.shotIndex }] : []));
       discardDraftRows(fromRow, toRow);
-      if (shotsInRange.length === 0) return;
-      if (shotsInRange.length > 1) {
+      if (inRange.length === 0) return;
+
+      const total = selectedSection.shots.length;
+      const sectionName =
+        selectedSection.name ?? t('sections.defaultName', { id: selectedSection.id });
+
+      if (inRange.length === 1) {
+        const only = inRange[0]!;
+        const { dialog, data } = getDeleteShotDialog(
+          selectedSection.id,
+          only.shot.id,
+          only.shotIndex === 0,
+          only.shotIndex === total - 1,
+          total,
+          sectionName
+        );
+        openDialog(dialog, data);
+        return;
+      }
+
+      const firstIdx = inRange[0]!.shotIndex;
+      const lastIdx = inRange[inRange.length - 1]!.shotIndex;
+      // Defensive: a discarded draft must not have split the real-shot run (the
+      // backend deletes the positional closure [start..end], so a gap would
+      // remove unselected shots). Drafts only trail the real shots, so this is
+      // unreachable in practice.
+      if (lastIdx - firstIdx + 1 !== inRange.length) {
         showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete');
         return;
       }
-      openDialog('confirm-delete', {
-        type: 'shot',
+
+      const { kind } = deriveRangeDeleteParams(firstIdx, lastIdx, total);
+      if (kind === 'whole') {
+        // Deleting every shot removes the section — reuse the section confirm.
+        openDialog('confirm-delete', {
+          type: 'section',
+          sectionId: selectedSection.id,
+          sectionName,
+        });
+        return;
+      }
+
+      openDialog('bulk-delete', {
         sectionId: selectedSection.id,
-        shotId: shotsInRange[0]!.id,
+        startShotId: inRange[0]!.shot.id,
+        endShotId: inRange[inRange.length - 1]!.shot.id,
+        shotCount: inRange.length,
+        kind,
+        sectionName,
+        startStationIndex: firstIdx,
+        endStationIndex: lastIdx + 1,
       });
     },
     [selectedSection, geometryReadOnly, rowEntries, discardDraftRows, showToast, t, openDialog]

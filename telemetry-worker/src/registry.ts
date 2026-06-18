@@ -393,4 +393,14 @@ export const EVENT_NAMES: readonly string[] = [
   'action.dialog.delete-project',
   'dialog-cancel.delete-project',
   'dwell.dialog.delete-project',
+  // Bulk shot deletion: contiguous-range preview + split/shift commands (#95).
+  'command.preview_delete_shot_range',
+  'command.delete_shot_range_split',
+  'command.delete_shot_range_shift',
+  'undo-after.delete_shot_range_split',
+  'undo-after.delete_shot_range_shift',
+  // Bulk-delete dialog (action/cancel/dwell trio) (#95).
+  'action.dialog.bulk-delete',
+  'dialog-cancel.bulk-delete',
+  'dwell.dialog.bulk-delete',
 ];
