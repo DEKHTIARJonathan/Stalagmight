@@ -1,13 +1,47 @@
 import { useCallback, useRef, useState } from 'react';
-import { useUIStore, type Selection } from '../store/uiStore';
+import type { MapMouseEvent } from 'maplibre-gl';
+import { useUIStore, type Selection, type MeasureEndpoint } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { isNonInteractiveTool } from '../utils/toolUtils';
 import { useActiveStations } from './useActiveStations';
-import { getErrorMessage } from '../utils/ipc';
-import type { SectionId, ShotId, StationRef, Coordinates } from '../types/project';
+import { getErrorMessage, invokeIpc } from '../utils/ipc';
+import type { SectionId, ShotId, StationRef, Coordinates, RulerEndpoint, AlongLineResult } from '../types/project';
+import type { GpsOrigin } from '../types/config';
+import { distance, mapCoordsToMeters } from '../utils/coordinates';
 import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
+import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
+
+/** A measure endpoint's 3D coords (meters). For a raw `point` the fields are inline. */
+function endpointCoords(ep: MeasureEndpoint): Coordinates {
+  return ep.kind === 'point' ? { x: ep.x, y: ep.y, z: ep.z } : ep.coords;
+}
+
+/** Stable identity for ruler state: a distinct project file — even a duplicate
+ *  sharing created_at/modified_at — and any edit (modified_at) yield a different
+ *  key, so an in-flight along-line reply can't bleed across them (#26). */
+function projectIdentityKey(
+  project: { created_at?: string; modified_at?: string; file_path?: string | null } | null | undefined
+): string {
+  return `${project?.created_at ?? ''}|${project?.modified_at ?? ''}|${project?.file_path ?? ''}`;
+}
+
+/** Only stations and shot-points have a cave-line position (enable along-line + tint). */
+function isConnectable(ep: MeasureEndpoint): boolean {
+  return ep.kind !== 'point';
+}
+
+/** Map a UI measure endpoint to the backend `RulerEndpoint` (null for raw points). */
+function toRulerEndpoint(ep: MeasureEndpoint): RulerEndpoint | null {
+  if (ep.kind === 'station') {
+    return { section_id: ep.section_id, station_index: ep.station_index, shot_id: null, t: null };
+  }
+  if (ep.kind === 'shotPoint') {
+    return { section_id: ep.section_id, shot_id: ep.shot_id, t: ep.t, station_index: null };
+  }
+  return null;
+}
 
 interface MoveDragStartData {
   type: 'station' | 'segment' | 'shot';
@@ -20,11 +54,22 @@ interface MoveDragStartData {
 }
 
 interface MapToolsOptions {
-  onMeasureComplete?: (distance: number, depthDiff: number) => void;
   onMoveDragStart?: (data: MoveDragStartData) => void;
   onFeatureHover?: (isHovering: boolean) => void;
   /** Station keys ("sectionId:stationIndex") that cannot be moved (zero-datum or transitively connected) */
   immovableStationKeys?: Set<string>;
+  /** GPS origin for converting a raw map click to meters (ruler `point` endpoints). */
+  gpsOrigin?: GpsOrigin | null;
+  /** Re-query the measure snap (station, else shot-point) at a screen point, fresh,
+   *  respecting snap config + layer visibility. Used at click time so the endpoint
+   *  matches the actual click rather than the RAF/deferred snap store (#26). */
+  querySnapAtPoint?: (
+    screenX: number,
+    screenY: number
+  ) =>
+    | { kind: 'station'; station: StationRef }
+    | { kind: 'shot'; section_id: SectionId; shot_id: ShotId; t: number }
+    | null;
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
@@ -40,9 +85,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setMergeStationA,
     setMergeStationB,
     clearMergeStations,
-    measureStart,
     setMeasureStart,
     setMeasureEnd,
+    setMeasureDirect,
+    setMeasureAlongLine,
+    setMeasureAlongLinePending,
     clearMeasure,
     setHoveredStation,
     setHoveredShot,
@@ -53,8 +100,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     showToast,
     showDistanceGradient,
     setDistanceGradientOrigin,
+    // measureSnapShot is excluded too: it's rewritten on every mousemove over a
+    // shot (the live `t`), and is only ever read via getState() at click time — so
+    // subscribing here would re-render MapCanvas ~60×/s for nothing (#26).
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, ...rest }) => rest));
+  } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest));
 
   const { stations, project, checkMergeConnectivity } = useProjectStore();
   // Coordinate lookups for read-only inspection (the measure tool) follow the
@@ -79,24 +129,151 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [activeStations]
   );
 
-  // Calculate distance between two points
+  // Direct (3D straight-line) distance + depth diff between two measure endpoints.
+  // A raw map `point` has no real depth (its z is a sentinel 0): when measuring
+  // between a point and a real station/shot we treat the point's depth as equal to
+  // the other endpoint's, so the readout reports the horizontal distance with zero
+  // depth change rather than inflating it by the geometry endpoint's depth (#26).
+  // Two raw points likewise have no depth change.
   const calculateDistance = useCallback(
-    (a: StationRef | Coordinates, b: StationRef | Coordinates): { distance: number; depthDiff: number } | null => {
-      const coordsA = 'section_id' in a ? getStationCoordinates(a as StationRef) : (a as Coordinates);
-      const coordsB = 'section_id' in b ? getStationCoordinates(b as StationRef) : (b as Coordinates);
-
-      if (!coordsA || !coordsB) return null;
-
-      const dx = coordsB.x - coordsA.x;
-      const dy = coordsB.y - coordsA.y;
-      const dz = coordsB.z - coordsA.z;
-
+    (a: MeasureEndpoint, b: MeasureEndpoint): { distance: number; depthDiff: number } => {
+      const ca = endpointCoords(a);
+      const cb = endpointCoords(b);
+      const aHasDepth = a.kind !== 'point';
+      const bHasDepth = b.kind !== 'point';
+      const za = aHasDepth ? ca.z : bHasDepth ? cb.z : 0;
+      const zb = bHasDepth ? cb.z : aHasDepth ? ca.z : 0;
       return {
-        distance: Math.sqrt(dx * dx + dy * dy + dz * dz),
-        depthDiff: dz,
+        distance: distance({ x: ca.x, y: ca.y, z: za }, { x: cb.x, y: cb.y, z: zb }),
+        depthDiff: zb - za,
       };
     },
-    [getStationCoordinates]
+    []
+  );
+
+  // Build a shot-point endpoint from a shot id + fractional position `t`,
+  // interpolating the 3D coords from the active stations (geometry-mode aware).
+  const buildShotPointEndpoint = useCallback(
+    (sectionId: SectionId, shotId: ShotId, t: number): MeasureEndpoint | null => {
+      const section = project?.sections.find((s) => s.id === sectionId);
+      if (!section) return null;
+      const pos = section.shots.findIndex((sh) => sh.id === shotId);
+      if (pos < 0) return null;
+      const from = getStationCoordinates({ section_id: sectionId, station_index: pos });
+      const to = getStationCoordinates({ section_id: sectionId, station_index: pos + 1 });
+      if (!from || !to) return null;
+      const coords: Coordinates = {
+        x: from.x + t * (to.x - from.x),
+        y: from.y + t * (to.y - from.y),
+        z: from.z + t * (to.z - from.z),
+      };
+      return { kind: 'shotPoint', section_id: sectionId, shot_id: shotId, t, coords };
+    },
+    [project?.sections, getStationCoordinates]
+  );
+
+  // Fractional position `t` of a click along a shot, derived from the click's map
+  // position projected onto the shot segment. The plan view is affine, so this
+  // meters-space projection matches the on-screen one. Used when no live snap is
+  // available (snapping disabled), so a click near an end of a long shot isn't
+  // recorded as the midpoint (#26, Codex).
+  const clickShotParam = useCallback(
+    (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent): number | null => {
+      if (!event.lngLat) return null;
+      const section = project?.sections.find((s) => s.id === sectionId);
+      if (!section) return null;
+      const pos = section.shots.findIndex((sh) => sh.id === shotId);
+      if (pos < 0) return null;
+      const from = getStationCoordinates({ section_id: sectionId, station_index: pos });
+      const to = getStationCoordinates({ section_id: sectionId, station_index: pos + 1 });
+      if (!from || !to) return null;
+      const m = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
+      return projectParamOnSegment(m.x, m.y, from.x, from.y, to.x, to.y);
+    },
+    [project?.sections, getStationCoordinates, options.gpsOrigin]
+  );
+
+  // Monotonic id so a fast second measurement discards a stale along-line response.
+  const measureRequestIdRef = useRef(0);
+
+  // Query the backend for the along-cave-line distance + path shots, then store
+  // the result + tint ids (or null on disconnect / non-station endpoints).
+  const requestAlongLine = useCallback(
+    async (start: MeasureEndpoint, end: MeasureEndpoint) => {
+      const a = toRulerEndpoint(start);
+      const b = toRulerEndpoint(end);
+      if (!a || !b) {
+        setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
+        return;
+      }
+      measureRequestIdRef.current += 1;
+      const requestId = measureRequestIdRef.current;
+      // Capture the project identity so a response landing after the project
+      // changed is discarded directly, without depending on the MapCanvas reset
+      // effects having already run (they null the endpoints, but only after the
+      // change's render commits). Includes modified_at so an edit/undo/redo to the
+      // SAME project also invalidates the request, and file_path so opening a
+      // distinct file that happens to share created_at/modified_at (e.g. a
+      // duplicated project) can't inherit an in-flight reply (#26, Codex).
+      const requestProjectKey = projectIdentityKey(useProjectStore.getState().project);
+      setMeasureAlongLinePending(true);
+      try {
+        const result = await invokeIpc<AlongLineResult | null>(
+          'get_along_line_distance',
+          { a, b },
+          { purpose: 'ruler along-line distance' }
+        );
+        // Discard the response unless the EXACT measurement it was issued for is
+        // still live. We compare the live endpoints by reference against the ones
+        // this request was made for: every new click builds fresh endpoint objects,
+        // so a reset/restart — or a different completed measurement that never calls
+        // requestAlongLine (e.g. a non-connectable station→raw-point one, which
+        // leaves this hook-local request ref untouched) — fails the check. Without
+        // it, a late reply would resurrect a stale readout/path tint over an
+        // unrelated measurement (#26, Codex). The project check additionally guards
+        // a switch landing before the MapCanvas clearMeasure effect runs.
+        const ui = useUIStore.getState();
+        if (requestId !== measureRequestIdRef.current) return;
+        if (ui.activeTool !== 'measure' || ui.measureStart !== start || ui.measureEnd !== end) return;
+        if (projectIdentityKey(useProjectStore.getState().project) !== requestProjectKey) return;
+        setMeasureAlongLine(
+          result
+            ? { alongLine: result.along_line, pathShots: result.path_shots, pathStations: result.path_stations }
+            : { alongLine: null, pathShots: [], pathStations: [] }
+        );
+      } catch (e) {
+        if (requestId === measureRequestIdRef.current) {
+          console.warn('Along-line distance query failed:', getErrorMessage(e, 'unknown error'));
+          setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
+        }
+      }
+    },
+    [setMeasureAlongLine, setMeasureAlongLinePending]
+  );
+
+  // Apply a measure click: first point starts; second finishes (direct distance +
+  // along-line query); a click on a completed measurement resets and restarts (#26).
+  const applyMeasureClick = useCallback(
+    (ep: MeasureEndpoint) => {
+      const { measureStart: start, measureEnd: end } = useUIStore.getState();
+      if (start && end) {
+        clearMeasure();
+        setMeasureStart(ep);
+        return;
+      }
+      if (!start) {
+        setMeasureStart(ep);
+        return;
+      }
+      setMeasureEnd(ep);
+      setMeasureDirect(calculateDistance(start, ep));
+      if (isConnectable(start) && isConnectable(ep)) {
+        void requestAlongLine(start, ep);
+      } else {
+        setMeasureAlongLine({ alongLine: null, pathShots: [], pathStations: [] });
+      }
+    },
+    [calculateDistance, clearMeasure, requestAlongLine, setMeasureAlongLine, setMeasureDirect, setMeasureEnd, setMeasureStart]
   );
 
   // Check connectivity and open appropriate merge/closure dialog
@@ -213,16 +390,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         }
 
         case 'measure': {
-          if (!measureStart) {
-            setMeasureStart(ref);
-          } else {
-            setMeasureEnd(ref);
-            // Calculate and display distance
-            const result = calculateDistance(measureStart, ref);
-            if (result) {
-              options.onMeasureComplete?.(result.distance, result.depthDiff);
-            }
-            // Keep the measurement displayed but allow new measurement
+          const coords = getStationCoordinates(ref);
+          if (coords) {
+            applyMeasureClick({
+              kind: 'station',
+              section_id: ref.section_id,
+              station_index: ref.station_index,
+              coords,
+            });
           }
           break;
         }
@@ -311,17 +486,15 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     [
       activeTool,
       addToSelection,
-      calculateDistance,
+      applyMeasureClick,
+      getStationCoordinates,
       checkAndOpenMergeDialog,
       clearMergeStations,
       isCheckingConnectivity,
-      measureStart,
       mergeStationA,
       openDialog,
       options,
       project?.sections,
-      setMeasureEnd,
-      setMeasureStart,
       setMergeStationA,
       setSelection,
       showStations,
@@ -335,7 +508,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
   // Handle shot click based on active tool
   const handleShotClick = useCallback(
-    async (sectionId: SectionId, shotId: ShotId, event: { originalEvent: MouseEvent }) => {
+    async (sectionId: SectionId, shotId: ShotId, event: MapMouseEvent) => {
       // GUARD: No interactions for pan/zoom tools
       if (isNonInteractiveTool(activeTool)) return;
 
@@ -470,14 +643,68 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           }
           break;
         }
+
+        case 'measure': {
+          // A station within the snap threshold wins even when the click landed on a
+          // shot's hitbox (the snap threshold can exceed the station hit area), so
+          // re-check the fresh snap first (#26, Codex).
+          const snap = options.querySnapAtPoint?.(event.point.x, event.point.y) ?? null;
+          if (snap?.kind === 'station') {
+            const coords = getStationCoordinates(snap.station);
+            if (coords) {
+              applyMeasureClick({
+                kind: 'station',
+                section_id: snap.station.section_id,
+                station_index: snap.station.station_index,
+                coords,
+              });
+              break;
+            }
+          }
+          // Otherwise derive t directly from the click position on this shot, rather
+          // than the RAF/deferred snap store (which can hold a stale shot/t), falling
+          // back to the midpoint only if it can't be projected.
+          const t = clickShotParam(sectionId, shotId, event) ?? 0.5;
+          const ep = buildShotPointEndpoint(sectionId, shotId, t);
+          if (ep) applyMeasureClick(ep);
+          break;
+        }
       }
     },
-    [activeTool, addToSelection, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
+    [activeTool, addToSelection, applyMeasureClick, buildShotPointEndpoint, clickShotParam, openDialog, options, project?.sections, setSelection, showShots, showToast, toggleSelection, showDistanceGradient, setDistanceGradientOrigin]
   );
 
   // Handle empty click (no feature) - but use snapped station if available
   const handleEmptyClick = useCallback(
-    (_event: { originalEvent: MouseEvent }) => {
+    (event: MapMouseEvent) => {
+      // Measure: commit the current snap (shot-point or station) or, failing that,
+      // a raw map point. Handled before the snapped-station branch so a shot snap
+      // (no snapped station) works, and so the reset-and-restart on a fresh click
+      // applies regardless of snap state (#26).
+      if (activeTool === 'measure') {
+        let ep: MeasureEndpoint | null = null;
+        // Re-derive the snap from the ACTUAL click position rather than the
+        // RAF/deferred snap store, which can still hold the previous shot/t if the
+        // cursor moved or left the shot just before the click. The fresh query keeps
+        // the "stations win" precedence and respects snap config + layer visibility
+        // (a hidden / hidden-reference shot can't snap) (#26, Codex).
+        const snap = options.querySnapAtPoint?.(event.point.x, event.point.y) ?? null;
+        if (snap?.kind === 'station') {
+          const coords = getStationCoordinates(snap.station);
+          if (coords) {
+            ep = { kind: 'station', section_id: snap.station.section_id, station_index: snap.station.station_index, coords };
+          }
+        } else if (snap?.kind === 'shot') {
+          ep = buildShotPointEndpoint(snap.section_id, snap.shot_id, snap.t);
+        }
+        if (!ep && event.lngLat) {
+          const m = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
+          ep = { kind: 'point', x: m.x, y: m.y, z: 0 };
+        }
+        if (ep) applyMeasureClick(ep);
+        return;
+      }
+
       // If we have a snapped station, use it instead of treating as empty click
       // This enables snap functionality for merge/measure tools
       if (snappedStation) {
@@ -501,18 +728,6 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
               } else {
                 // Check connectivity and open appropriate dialog
                 checkAndOpenMergeDialog(mergeStationA, snappedStation);
-              }
-            }
-            return;
-
-          case 'measure':
-            if (!measureStart) {
-              setMeasureStart(snappedStation);
-            } else {
-              setMeasureEnd(snappedStation);
-              const result = calculateDistance(measureStart, snappedStation);
-              if (result) {
-                options.onMeasureComplete?.(result.distance, result.depthDiff);
               }
             }
             return;
@@ -542,28 +757,23 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             clearMergeStations();
           }
           break;
-
-        case 'measure':
-          clearMeasure();
-          break;
       }
     },
     [
       activeTool,
+      applyMeasureClick,
+      buildShotPointEndpoint,
+      getStationCoordinates,
       checkAndOpenMergeDialog,
       snappedStation,
       isCheckingConnectivity,
       mergeStationA,
-      measureStart,
-      calculateDistance,
-      clearMeasure,
       clearMergeStations,
       clearSelection,
       openDialog,
       options,
-      setMeasureEnd,
-      setMeasureStart,
       setMergeStationA,
+      showShots,
       showStations,
       showToast,
     ]

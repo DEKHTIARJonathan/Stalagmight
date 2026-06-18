@@ -801,10 +801,18 @@ pub struct DisplayConfig {
     pub font_size: u32,
     pub font_color: String,
     pub depth_gradient: DepthGradientConfig,
+    /// Highlight color for the ruler's chosen along-cave-line path (#26), applied
+    /// to both the path's shots and its stations. `#rrggbb`.
+    #[serde(default = "default_measure_path_color")]
+    pub measure_path_color: String,
 }
 
 fn default_grid_spacing() -> f64 {
     10.0
+}
+
+fn default_measure_path_color() -> String {
+    "#22d3ee".to_string()
 }
 
 fn default_azimuth_diff_threshold() -> f64 {

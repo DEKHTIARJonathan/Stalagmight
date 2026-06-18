@@ -382,6 +382,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.update_data_table_view",
     "command.get_raw_table_names",
     "command.get_raw_table",
+    // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
+    "command.get_along_line_distance",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -520,7 +522,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 321);
+        assert_eq!(EVENT_NAMES.len(), 322);
     }
 
     #[test]

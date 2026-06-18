@@ -90,6 +90,7 @@ impl Default for DisplayConfig {
             font_size: 12,
             font_color: "#f5f5f5".to_string(),
             depth_gradient: DepthGradientConfig::default(),
+            measure_path_color: "#22d3ee".to_string(),
         }
     }
 }

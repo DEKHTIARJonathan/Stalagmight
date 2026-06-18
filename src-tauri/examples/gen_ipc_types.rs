@@ -30,8 +30,9 @@ use stalagmight_lib::export::{
     ColorStop, DepthPreset, DepthPresetColors, ExportImageOptions, ImageFormat,
 };
 use stalagmight_lib::models::{
-    ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
+    AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate, CollabState,
     ConnectivityResult, Coordinates, DeleteShotImpact, DistanceField, FrozenShotRef, GpsBounds, GpsCoordinates,
+    PathShot, RulerEndpoint,
     ImportPlacement, ExistingShotUpdate, ImportSectionConfig, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, Section, SectionData, SectionRelationships, SectionStats,
     SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotUpdates, Station, StationMergeWire,
@@ -101,6 +102,9 @@ fn main() {
     export::<ProjectMetadata>(&out_dir);
     export::<ProjectStats>(&out_dir);
     export::<DistanceField>(&out_dir);
+    export::<RulerEndpoint>(&out_dir);
+    export::<PathShot>(&out_dir);
+    export::<AlongLineResult>(&out_dir);
     export::<Section>(&out_dir);
     export::<SectionData>(&out_dir);
     export::<SectionUpdates>(&out_dir);
@@ -278,6 +282,9 @@ fn main() {
         "ProjectMetadata",
         "ProjectStats",
         "DistanceField",
+        "RulerEndpoint",
+        "PathShot",
+        "AlongLineResult",
         "Section",
         "SectionData",
         "SectionUpdates",

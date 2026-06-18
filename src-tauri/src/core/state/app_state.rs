@@ -7,7 +7,9 @@ use tauri::AppHandle;
 
 use crate::cache::TileCache;
 use crate::config::{ClosureAdjustmentConfig, Config};
-use crate::models::{DistanceField, Project, Station, StationAnchor, StationRef};
+use crate::models::{
+    AlongLineResult, DistanceField, Project, RulerEndpoint, Station, StationAnchor, StationRef,
+};
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
 use crate::TileFetchStats;
@@ -354,6 +356,32 @@ impl AppState {
         // coordinate-dependent). Closure-solve perf is tracked separately (#81).
         let stations = project.compute_station_coordinates();
         Some(project.distance_field_from(&stations, from))
+    }
+
+    /// Shortest along-cave-line distance + traversed shots between two ruler
+    /// endpoints (#26). The distance sums the CLOSURE-ADJUSTED shot lengths, so it
+    /// uses the memoized adjusted-stations cache (`get_adjusted_stations`): warm
+    /// while the adjusted view is in use, and on a cold cache it pays one closure
+    /// solve (then repeat measurements are instant). Falls back to measured
+    /// coordinates only if the adjusted solve is unavailable — without loop
+    /// closures the two coincide anyway.
+    pub fn along_line_between(
+        &self,
+        a: RulerEndpoint,
+        b: RulerEndpoint,
+    ) -> Option<AlongLineResult> {
+        let project = self.get_project_state()?;
+        // `project` (topology) and `stations` (adjusted coords) are two independent
+        // locked reads, so a concurrent edit between them could yield a slightly
+        // skewed snapshot. That's safe here — `along_line_between` looks everything
+        // up by `StationRef` through guarded `idx.get(..)` and indexes coords only
+        // via those resolved indices, so a mismatch drops an edge at worst (never
+        // panics) and the ruler re-queries. We deliberately avoid a single
+        // command-locked snapshot to keep reusing the adjusted-stations cache.
+        let stations = self
+            .get_adjusted_stations()
+            .unwrap_or_else(|| project.compute_station_coordinates());
+        Some(project.along_line_between(&stations, a, b))
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every

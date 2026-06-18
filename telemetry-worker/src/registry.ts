@@ -380,4 +380,6 @@ export const EVENT_NAMES: readonly string[] = [
   'command.update_data_table_view',
   'command.get_raw_table_names',
   'command.get_raw_table',
+  // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
+  'command.get_along_line_distance',
 ];

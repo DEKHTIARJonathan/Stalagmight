@@ -1212,6 +1212,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           }
 
+          case 'get_along_line_distance': {
+            // Ruler along-line distance (#26). No real survey graph in the mock —
+            // return a deterministic distance and tint the first couple of shots
+            // of endpoint `a`'s section so the readout + tint have something to show.
+            const endpointA = (args?.a ?? null) as { section_id?: number } | null;
+            const sections = (currentProject?.sections ?? []) as Array<{ id: number; shots: Array<{ id: number }> }>;
+            const sec = sections.find((s) => s.id === endpointA?.section_id) ?? sections[0];
+            const path_shots = sec
+              ? (sec.shots ?? []).slice(0, 2).map((sh) => ({ section_id: sec.id, shot_id: sh.id }))
+              : [];
+            // Stations bounding those shots (one more than the shot count).
+            const path_stations = sec
+              ? Array.from({ length: path_shots.length + 1 }, (_, i) => ({ section_id: sec.id, station_index: i }))
+              : [];
+            return { along_line: 12.34, path_shots, path_stations };
+          }
+
           case 'create_section': {
             sectionCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
