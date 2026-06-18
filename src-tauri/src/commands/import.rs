@@ -139,7 +139,13 @@ fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> C
             purpose = "persist new project after first import",
             "Deferred-save resolution failed after import"
         );
-        let detail = saved.error.unwrap_or_else(|| "unknown error".to_string());
+        let raw = saved.error.unwrap_or_else(|| "unknown error".to_string());
+        // Don't leak the internal permission marker into the user-facing warning.
+        let detail = if raw.starts_with(crate::core::loading::PERMISSION_DENIED_CODE) {
+            "permission denied (check folder access in Privacy & Security)".to_string()
+        } else {
+            raw
+        };
         return import_result.with_warning(&format!(
             "Imported, but could not save the new project to disk: {detail}. \
              Your changes are unsaved — please save manually."

@@ -970,10 +970,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     try {
       result = await get().saveProject();
     } catch (e) {
-      // A reject (e.g. IPC transport failure) carries no CommandResult — convert
-      // it so surfaceSaveFailure can show an actionable message rather than a no-op.
+      // A reject (e.g. IPC transport failure) means saveProject never ran its
+      // integrity recheck, so `integritySaveBlocked` may be stale — routing through
+      // surfaceSaveFailure could wrongly open Review & Repair. Show the generic
+      // save error directly instead, and keep the project dirty (close-guarded).
       console.error('[import] save after import failed:', e);
-      result = emptyCommandResult(false, e instanceof Error ? e.message : String(e));
+      set({ isDirty: true });
+      useUIStore.getState().openDialog('error', {
+        message: e instanceof Error ? e.message : String(e),
+        title: 'Save Failed',
+      });
+      return false;
     }
     if (!result.success) {
       // The import isn't on disk: reflect the unsaved state (not a phantom

@@ -592,6 +592,12 @@ impl AppState {
             return save_failure("Failed to finalize save", &save_path, &e);
         }
 
+        // The `.stalx` is now written, so the initial save is no longer deferred.
+        // Set this BEFORE the reopen below: that path returns early on failure, and
+        // the project is persisted regardless of whether the handle reopens.
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
         // Reopen the database at the final path
         let db = match Database::open(&save_path) {
             Ok(db) => db,
@@ -697,10 +703,6 @@ impl AppState {
                 }
             }
         }
-
-        // The project now exists on disk — its initial save is no longer deferred.
-        self.initial_save_deferred
-            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         let save_path_str = save_path.display().to_string();
         tracing::info!(

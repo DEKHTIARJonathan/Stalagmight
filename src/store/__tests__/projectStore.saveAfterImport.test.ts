@@ -22,7 +22,9 @@ describe('projectStore.saveAfterImport (#92)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     useProjectStore.setState({ saveProject: realSaveProject, isDirty: false });
-    useUIStore.setState({ importContext: null });
+    // Failure cases open the error dialog (directly or via surfaceSaveFailure) —
+    // reset dialog + import state so it can't leak into later tests.
+    useUIStore.setState({ importContext: null, activeDialog: null, dialogData: {} });
   });
 
   it('persists a NEW-project import via saveProject and lets the caller proceed', async () => {
