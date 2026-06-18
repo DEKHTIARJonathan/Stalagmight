@@ -5,6 +5,21 @@ use crate::models::StationRef;
 use tempfile::TempDir;
 
 #[test]
+fn load_project_validation_returns_none_when_table_absent() {
+    // A legacy .stalx predating `project_settings`, opened read-only (which does
+    // NOT migrate), must not error: load_project_validation returns Ok(None) so
+    // get_survey_geometry_for_file's preview load still works (Codex). Simulate the
+    // missing table by dropping it, then confirm no error is propagated.
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute("DROP TABLE IF EXISTS project_settings", [])
+        .unwrap();
+    let result = db.load_project_validation();
+    assert!(result.is_ok(), "a missing project_settings table must not error");
+    assert!(result.unwrap().is_none(), "absent validation resolves to None");
+}
+
+#[test]
 fn test_foreign_keys_enabled_on_open() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("fk_enabled.stalx");

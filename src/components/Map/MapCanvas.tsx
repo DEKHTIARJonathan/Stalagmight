@@ -1787,7 +1787,9 @@ export default function MapCanvas() {
   useEffect(() => {
     originMarkerRef.current?.remove();
     originMarkerRef.current = null;
-    if (!map.current || !mapLoaded || !showDistanceGradient || !distanceGradientOrigin) {
+    // Suppressed while issue-severity owns the paint (the distance overlay isn't
+    // drawn then), so the picked-origin ring doesn't linger over a severity map.
+    if (!map.current || !mapLoaded || !showDistanceGradient || effectiveIssueSeverity || !distanceGradientOrigin) {
       return undefined;
     }
     const originStation = activeStations.find(
@@ -1814,7 +1816,7 @@ export default function MapCanvas() {
       originMarkerRef.current?.remove();
       originMarkerRef.current = null;
     };
-  }, [showDistanceGradient, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
+  }, [showDistanceGradient, effectiveIssueSeverity, distanceGradientOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Lazily fetch closure-adjusted geometry when the adjusted view is active and
   // we don't have it yet (first switch, or after an edit invalidated it). The
@@ -3304,13 +3306,15 @@ export default function MapCanvas() {
         />
       )}
 
-      {/* Distance legend (#34): color key + "which overlay" cue. */}
-      {showDistanceGradient && distanceField && (
+      {/* Distance legend (#34): color key + "which overlay" cue. Hidden while
+          issue-severity owns the paint (e.g. the Warnings tab) so the legend
+          matches the visible overlay (#57 / Codex). */}
+      {showDistanceGradient && !effectiveIssueSeverity && distanceField && (
         <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
       )}
       {/* While the field is being (re)computed — first toggle / re-root — show a
           lightweight cue so a slow closure solve doesn't look frozen. */}
-      {showDistanceGradient && !distanceField && (
+      {showDistanceGradient && !effectiveIssueSeverity && !distanceField && (
         <div
           data-testid="distance-legend-loading"
           style={{

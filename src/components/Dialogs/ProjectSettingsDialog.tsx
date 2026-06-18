@@ -73,11 +73,21 @@ export function ProjectSettingsDialog() {
   const handleSave = useCallback(async () => {
     if (!project || trimmedName.length === 0 || !isValidationConfigValid(validation) || hasValidationError || saving) return;
     setSaving(true);
-    const result = await updateProjectSettings(trimmedName, validation);
-    if (!result.success) {
-      setSaving(false);
-      showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings');
-      return;
+    // Skip the settings command when neither the name nor the validation changed:
+    // it routes through executeCommand, which marks every success dirty, so even
+    // the backend's no-op early-return would otherwise leave an unsaved-changes
+    // prompt and a misleading history item for a Save that changed nothing (Codex).
+    const currentValidation = project.validation ?? defaultConfig.validation;
+    const settingsChanged =
+      trimmedName !== (project.name ?? '') ||
+      JSON.stringify(validation) !== JSON.stringify(currentValidation);
+    if (settingsChanged) {
+      const result = await updateProjectSettings(trimmedName, validation);
+      if (!result.success) {
+        setSaving(false);
+        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings');
+        return;
+      }
     }
     // Commit the staged collab flag only when it actually changed. setCollabEnabled
     // (set_collab_enabled) sets the in-memory flag + project.touch() in one IPC;

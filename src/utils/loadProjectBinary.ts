@@ -30,6 +30,7 @@ import type { StationMerge } from '../types/ipc/StationMerge';
 import type { ZeroDatum } from '../types/ipc/ZeroDatum';
 import type { ProjectStats } from '../types/ipc/ProjectStats';
 import type { ProjectWarning } from '../types/ipc/ProjectWarning';
+import type { FrozenShotRef } from '../types/ipc/FrozenShotRef';
 import type { DisplaySettings } from '../types/ipc/DisplaySettings';
 import type { SurveyDirection } from '../types/ipc/SurveyDirection';
 import {
@@ -51,6 +52,10 @@ import { recordPerfTiming } from './memoryProbe';
 export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
   /** Struct-of-Arrays bulk-data layout. Phase-A staging area. */
   surveyData: SurveyData;
+  /** Frozen shots computed during load, shipped in the binary envelope (the
+   *  JSON `LoadProjectFullResult` omits them). Lets the store seed `frozenShots`
+   *  on a binary load instead of inheriting the previous project's set (#57). */
+  frozen_shots: FrozenShotRef[];
 }
 
 /** Wire format version expected from the Rust encoder. */
@@ -371,6 +376,11 @@ function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjectFullRe
     stations,
     stats: env.stats,
     warnings: env.warnings,
+    // The Rust encoder already ships the computed frozen shots in the envelope;
+    // surface them so the store can populate `frozenShots` on a binary load
+    // instead of leaving the previous project's stale set until the next refresh
+    // (issue #57 / Codex). Shape mirrors Rust's Vec<FrozenShotRef>.
+    frozen_shots: env.frozen_shots as FrozenShotRef[],
     displaySettings: env.display_settings,
     surveyData,
   };

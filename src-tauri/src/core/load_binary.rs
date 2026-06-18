@@ -175,6 +175,12 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         display_settings,
     } = result;
 
+    // Compute the frozen shots while the whole project is still in scope (its
+    // fields are moved into project_header below). The binary envelope used to
+    // ship an empty list, leaving the frontend's frozen-shot gating stale on a
+    // binary load until the next get_project_state refresh (issue #57 / Codex).
+    let frozen_shots = project.compute_frozen_shots();
+
     // Sum shot count up front so we can pre-allocate exactly.
     let shot_count: usize = project.sections.iter().map(|s| s.shots.len()).sum();
     let mut shots_floats = Vec::with_capacity(shot_count * SHOT_FLOAT_STRIDE);
@@ -363,7 +369,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         stats,
         warnings,
         display_settings,
-        frozen_shots: Vec::new(), // filled in by caller (frozen shots arrive via different path)
+        frozen_shots,
     };
 
     let t_pack = start.elapsed();

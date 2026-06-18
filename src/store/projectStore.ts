@@ -608,6 +608,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           surveyDataAdjusted: null,
           stats: result.stats,
           warnings: result.warnings,
+          // Populate from the load result so the resolve flow's frozen-shot gating
+          // is correct immediately, not stale from the previous project until the
+          // first command triggers refreshProjectState (issue #57 / Codex).
+          frozenShots: result.frozen_shots,
           isDirty: false,
           // Reset integrity state on project switch so a dismissal from the
           // previous project can never carry over and suppress this one's banner.
