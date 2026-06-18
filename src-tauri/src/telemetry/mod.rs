@@ -104,7 +104,17 @@ pub struct TelemetryCollector {
 #[cfg(feature = "telemetry")]
 impl TelemetryCollector {
     /// Create a new collector. If `enabled` is false, all tracking is a no-op.
+    ///
+    /// Dev affordance: `STALAGMIGHT_TELEMETRY_ENABLED=1` forces telemetry on at
+    /// startup regardless of the saved opt-in, so `scripts/dev.sh` can dogfood
+    /// telemetry without persisting the toggle. The Settings switch can still turn
+    /// it off afterward, and production builds never set this var.
     pub fn new(enabled: bool) -> Self {
+        let enabled = enabled
+            || matches!(
+                std::env::var("STALAGMIGHT_TELEMETRY_ENABLED").as_deref(),
+                Ok("1") | Ok("true")
+            );
         Self {
             inner: Arc::new(Mutex::new(TelemetryInner {
                 events: HashMap::new(),
