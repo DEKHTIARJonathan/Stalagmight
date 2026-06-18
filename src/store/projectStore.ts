@@ -6,6 +6,7 @@ import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
 import { hasEligibleClosures } from '../utils/closures';
 import { useUIStore } from './uiStore';
+import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
 import type {
   Project,
@@ -215,6 +216,20 @@ interface ProjectStore {
    * leave it `false` (the default) so the .tml is always written.
    */
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
+  /**
+   * Persist the project after a DMP import completes (#92). Imports bypass the
+   * dirty/save machinery, so the change would otherwise be lost. For a NEW
+   * project (`importContext === 'new-project'`) the initial save is deferred —
+   * only a real save writes the `.stalx` and registers it in Recent Projects —
+   * so this saves. For an import into an EXISTING project it only marks dirty, so
+   * the user's unrelated pending edits aren't silently committed; the normal
+   * unsaved-changes / autosave flow then persists it.
+   *
+   * Returns `true` when the caller may proceed to close the dialog / navigate,
+   * and `false` when a save failed and an error/permission dialog is now showing
+   * (the caller must leave it visible rather than dismiss it with `closeDialog`).
+   */
+  saveAfterImport: () => Promise<boolean>;
   closeProject: () => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
@@ -936,6 +951,49 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       await get().checkProjectIntegrity();
     }
     return result;
+  },
+
+  saveAfterImport: async (): Promise<boolean> => {
+    // Import into an existing project: just mark dirty so we don't silently
+    // commit the user's unrelated pending edits. The existing project already
+    // has a file + Recent Projects entry; the normal unsaved-changes / autosave
+    // flow persists the import, and the close-guard prevents silent loss.
+    if (useUIStore.getState().importContext !== 'new-project') {
+      set({ isDirty: true });
+      return true;
+    }
+    // New project: the initial save is deferred, so the import is invisible until
+    // a real save writes the .stalx and adds it to Recent Projects. Do that now.
+    // (The backend import_sections command also resolves this as a durable
+    // safety net; this gives the immediate, complete save with correct dirty state.)
+    let result: CommandResult;
+    try {
+      result = await get().saveProject();
+    } catch (e) {
+      // A reject (e.g. IPC transport failure) means saveProject never ran its
+      // integrity recheck, so `integritySaveBlocked` may be stale — routing through
+      // surfaceSaveFailure could wrongly open Review & Repair. Show the generic
+      // save error directly instead, and keep the project dirty (close-guarded).
+      console.error('[import] save after import failed:', e);
+      set({ isDirty: true });
+      useUIStore.getState().openDialog('error', {
+        message: e instanceof Error ? e.message : String(e),
+        title: 'Save Failed',
+      });
+      return false;
+    }
+    if (!result.success) {
+      // The import isn't on disk: reflect the unsaved state (not a phantom
+      // "saved") and surface the actionable error. Signal the caller NOT to close
+      // the dialog, so it doesn't dismiss the error/permission guidance.
+      set({ isDirty: true });
+      surfaceSaveFailure(
+        result.error ?? 'Failed to save the imported project.',
+        useUIStore.getState().openDialog,
+      );
+      return false;
+    }
+    return true;
   },
 
   closeProject: async () => {

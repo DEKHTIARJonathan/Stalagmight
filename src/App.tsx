@@ -631,6 +631,13 @@ function App() {
             }
           }}
           onComplete={async (newSectionIds?: number[]) => {
+            // Persist the freshly-imported project before anything else (#92) —
+            // including before handing off to orphan placement — so the import
+            // can never be lost. If the save failed, an error/permission dialog is
+            // now showing; leave it up instead of dismissing it via closeDialog.
+            if (!(await useProjectStore.getState().saveAfterImport())) {
+              return;
+            }
             if (newSectionIds?.length) {
               try {
                 const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(

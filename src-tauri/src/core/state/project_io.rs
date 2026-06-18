@@ -282,6 +282,9 @@ impl AppState {
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
+        // Opened an existing project from disk — its initial save is not deferred.
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Clear display settings cache (settings will be loaded from DB by frontend)
         self.clear_display_settings_cache();
@@ -326,6 +329,18 @@ impl AppState {
             "Project opened"
         );
         CommandResult::success()
+    }
+
+    /// True when the open project's initial save is still deferred — it was created
+    /// with no save path and has never been written to disk, so it has no `.stalx`
+    /// file and no Recent Projects entry yet. Used to durably persist a brand-new
+    /// project on its first import (#92), at the command every import path funnels
+    /// through, so the fix survives changes to the import UI. Backed by an explicit
+    /// flag (set at deferred creation, cleared on save/open/load) rather than
+    /// inferred from the DB handle or file existence, both of which are ambiguous.
+    pub(crate) fn initial_save_deferred(&self) -> bool {
+        self.initial_save_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(super) fn save_project(&self, path: Option<PathBuf>, is_autosave: bool) -> CommandResult {
@@ -604,6 +619,12 @@ impl AppState {
             );
             return save_failure("Failed to finalize save", &save_path, &e);
         }
+
+        // The `.stalx` is now written, so the initial save is no longer deferred.
+        // Set this BEFORE the reopen below: that path returns early on failure, and
+        // the project is persisted regardless of whether the handle reopens.
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Reopen the database at the final path
         let db = match Database::open(&save_path) {
@@ -1465,6 +1486,9 @@ impl AppState {
 
         // Commit 2: Database handle mutation
         *self.database.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
+        // Loaded an existing project from disk — its initial save is not deferred.
+        self.initial_save_deferred
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         // Commit 3: Display settings cache clear
         self.clear_display_settings_cache();
@@ -1701,6 +1725,11 @@ impl AppState {
 
         // Commit 3: Clear undo stack (new project)
         self.undo_stack.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+
+        // Track whether the initial save is still pending: a deferred new project
+        // has no file on disk yet, so its first import must durably persist it.
+        self.initial_save_deferred
+            .store(defer_initial_save, std::sync::atomic::Ordering::Relaxed);
 
         // Commit 4: Display settings cache
         if defer_initial_save {

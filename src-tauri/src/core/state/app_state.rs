@@ -70,6 +70,13 @@ pub struct AppState {
     pub(super) project: Mutex<Option<Project>>,
     /// Database connection (if project is open)
     pub(super) database: Mutex<Option<Database>>,
+    /// True while the open project's initial save is still deferred — created with
+    /// no save path and never written to disk, so it has no `.stalx` and no Recent
+    /// Projects entry yet. Tracked explicitly rather than inferred from
+    /// `database.is_none()` (ambiguous for dropped handles) or file existence
+    /// (ambiguous for reserved-path collisions), so the first import can durably
+    /// persist it exactly once (#92 / PR #104).
+    pub(super) initial_save_deferred: AtomicBool,
     /// Undo/redo stack
     pub(super) undo_stack: Mutex<UndoStack>,
     /// Application configuration
@@ -143,6 +150,7 @@ impl AppState {
         Ok(Self {
             project: Mutex::new(None),
             database: Mutex::new(None),
+            initial_save_deferred: AtomicBool::new(false),
             undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
             config: Mutex::new(config),
             recent_projects: Mutex::new(recent),

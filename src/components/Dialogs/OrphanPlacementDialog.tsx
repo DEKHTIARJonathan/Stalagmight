@@ -291,6 +291,12 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
 
   const finish = useCallback(async () => {
     await refreshProjectState();
+    // Persist after orphan placement (#92): import + orphan-merge changes are
+    // otherwise held in memory only. On a failed save an error/permission dialog
+    // is shown; leave it visible rather than dismissing it via closeDialog.
+    if (!(await useProjectStore.getState().saveAfterImport())) {
+      return;
+    }
     trackDialogComplete('orphan-placement');
     closeDialog();
     setView('single');
