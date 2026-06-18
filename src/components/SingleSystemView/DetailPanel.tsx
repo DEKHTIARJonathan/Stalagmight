@@ -229,9 +229,17 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
     overscan: 8,
   });
 
-  // The warning currently under resolution, resolved against live project data
-  // so it reflects edits applied earlier in a "Resolve all" pass.
-  const activeWarning = flow.kind === 'resolve' ? flow.queue[flow.index] : undefined;
+  // The warning currently under resolution. Rehydrate it from the LIVE warnings
+  // (matched by identity) so its shotIndex — which WarningResolution uses for
+  // frozen-shot gating and the on-map preview endpoints — reflects edits an
+  // earlier "Resolve all" step applied (e.g. a delete-shot renumbers later shots'
+  // indices). Falls back to the queued copy if it's no longer present (#57 / Codex).
+  const queuedWarning = flow.kind === 'resolve' ? flow.queue[flow.index] : undefined;
+  const activeWarning = useMemo(() => {
+    if (!queuedWarning) return undefined;
+    const key = warningKey(queuedWarning);
+    return warnings.find((w) => warningKey(w) === key) ?? queuedWarning;
+  }, [queuedWarning, warnings]);
   const activeSection = activeWarning ? project?.sections.find((s) => s.id === activeWarning.sectionId) : undefined;
   const activeShot = activeWarning && activeSection ? activeSection.shots.find((s) => s.id === activeWarning.shotId) : undefined;
 

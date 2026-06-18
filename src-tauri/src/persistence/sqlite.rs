@@ -2764,13 +2764,24 @@ impl Database {
     /// (`backfill_resolved_warning_uuids`), not here.
     pub fn save_resolved_warning(&self, warning: &ResolvedWarning) -> Result<()> {
         Self::delete_matching_resolved(&self.conn, warning)?;
-        // OR REPLACE for resilience against the legacy UNIQUE(section_id,
-        // shot_id, warning_code): a shot can raise two warnings with the same
-        // code (e.g. both azimuths invalid, or several negative LRUD), so the
-        // (section_id, shot_id, code) tuple is not unique per row.
-        self.conn.execute(
-            "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        // The legacy UNIQUE(section_id, shot_id, warning_code) keys rows by
+        // POSITION, but a UUID-keyed ignore's real identity is its shot_uuid. A
+        // plain INSERT OR REPLACE would, on a positional collision, delete a
+        // DIFFERENT live shot's by-UUID ignore that occupies that slot — e.g. after
+        // a save remapped rows to sequence positions while the open project still
+        // uses pre-save shot ids — silently losing it (issue #57 / Codex). Use a
+        // conditional upsert that only ever overwrites the SAME shot's row (or
+        // upgrades a legacy NULL-uuid row at that position), never a different
+        // shot's UUID-keyed row. `excluded` is the row we tried to insert.
+        let affected = self.conn.execute(
+            "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(section_id, shot_id, warning_code) DO UPDATE SET \
+                 resolved_at = excluded.resolved_at, \
+                 resolved_comment = excluded.resolved_comment, \
+                 shot_uuid = excluded.shot_uuid \
+             WHERE resolved_warnings.shot_uuid IS NULL \
+                OR resolved_warnings.shot_uuid = excluded.shot_uuid",
             params![
                 warning.section_id,
                 warning.shot_id,
@@ -2780,6 +2791,16 @@ impl Database {
                 warning.shot_uuid,
             ],
         )?;
+        if affected == 0 {
+            // The positional slot is held by a DIFFERENT shot's UUID-keyed ignore
+            // (a stale position from a prior save, before the ids re-sync on
+            // reload). We refuse to clobber it; surface the failure so the caller
+            // can tell the user to reload and retry rather than silently dropping
+            // either ignore.
+            anyhow::bail!(
+                "could not record this ignore: its position is held by another shot's ignore — reload the project and try again"
+            );
+        }
         Ok(())
     }
 
@@ -2877,17 +2898,26 @@ impl Database {
             Self::delete_matching_resolved(&tx, warning)?;
         }
         {
-            // OR REPLACE: resolve_all can hand us a batch containing two
-            // warnings with the same (section_id, shot_id, code) — e.g. a shot
-            // with both azimuths out of range yields two INVALID_AZIMUTH rows,
-            // and an over-anchored component can map two datums to one shot.
-            // A plain INSERT would trip the legacy UNIQUE and abort the whole
-            // atomic save.
+            // Conditional upsert (see save_resolved_warning): on a positional
+            // collision only the SAME shot's row is overwritten, or a legacy
+            // NULL-uuid row at that position is UPGRADED to the new UUID — a
+            // different shot's UUID-keyed ignore is never clobbered. This both
+            // collapses a batch that maps two warnings to one (shot, code) and
+            // absorbs a legacy NULL-uuid row colliding with a remapped UUID row
+            // on the save carry-over, order-independently (issue #57 / Codex).
             let mut stmt = tx.prepare(
-                "INSERT OR REPLACE INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO resolved_warnings (section_id, shot_id, warning_code, resolved_at, resolved_comment, shot_uuid) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(section_id, shot_id, warning_code) DO UPDATE SET \
+                     resolved_at = excluded.resolved_at, \
+                     resolved_comment = excluded.resolved_comment, \
+                     shot_uuid = excluded.shot_uuid \
+                 WHERE resolved_warnings.shot_uuid IS NULL \
+                    OR resolved_warnings.shot_uuid = excluded.shot_uuid",
             )?;
             for warning in warnings {
+                // A 0-row result means a different shot's UUID row already holds
+                // this position; preserving it (not aborting the save) is correct.
                 stmt.execute(params![
                     warning.section_id,
                     warning.shot_id,

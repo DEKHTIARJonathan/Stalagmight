@@ -20,6 +20,74 @@ fn load_project_validation_returns_none_when_table_absent() {
 }
 
 #[test]
+fn save_resolved_warning_never_clobbers_a_different_shots_uuid_row() {
+    // The legacy positional UNIQUE must not let one shot's ignore delete another
+    // shot's UUID-keyed ignore sharing the (section, shot_id) slot — which can
+    // happen transiently when in-memory ids diverge from saved positions after a
+    // save (issue #57 / Codex). The conditional upsert preserves the existing row
+    // and reports the collision rather than silently dropping either ignore.
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    let mk = |uuid: &str| ResolvedWarning {
+        section_id: 0,
+        shot_id: 5,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some(uuid.to_string()),
+    };
+    db.save_resolved_warning(&mk("aaa")).unwrap();
+    // A second shot's ignore landing on the same stale position is refused, not silent.
+    assert!(
+        db.save_resolved_warning(&mk("bbb")).is_err(),
+        "a colliding different-shot ignore must be reported, not silently applied"
+    );
+    let rows = db.load_resolved_warnings().unwrap();
+    assert_eq!(rows.len(), 1, "the first shot's ignore must be preserved");
+    assert_eq!(rows[0].shot_uuid.as_deref(), Some("aaa"));
+}
+
+#[test]
+fn bulk_upsert_keeps_uuid_row_over_colliding_legacy_null_row() {
+    // On the save carry-over a legacy NULL-uuid row can collide with a remapped
+    // UUID row at the same position; the UUID row must win regardless of insert
+    // order, never downgrading the survivor to position-keying (issue #57 / Codex).
+    let uuid_row = ResolvedWarning {
+        section_id: 0,
+        shot_id: 7,
+        warning_code: "SHORT_SHOT".to_string(),
+        resolved_at: Utc::now(),
+        resolved_comment: None,
+        shot_uuid: Some("ccc".to_string()),
+    };
+    let null_row = ResolvedWarning {
+        shot_uuid: None,
+        ..uuid_row.clone()
+    };
+    for batch in [
+        vec![null_row.clone(), uuid_row.clone()],
+        vec![uuid_row.clone(), null_row.clone()],
+    ] {
+        let db = Database::in_memory().unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        db.save_resolved_warnings_bulk(&batch).unwrap();
+        let rows = db.load_resolved_warnings().unwrap();
+        assert_eq!(rows.len(), 1, "the colliding rows collapse to one");
+        assert_eq!(rows[0].shot_uuid.as_deref(), Some("ccc"), "the UUID row wins");
+    }
+}
+
+#[test]
 fn test_foreign_keys_enabled_on_open() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("fk_enabled.stalx");
