@@ -219,8 +219,11 @@ function applyWorkerEnv(root: string): void {
 }
 
 export const config: Options.Testrunner = {
-  // Test file pattern
-  specs: ['./e2e/specs/**/*.spec.ts'],
+  // Test file pattern. The wdio layer is quarantined under e2e/legacy/ — it is
+  // an on-demand, heavyweight real-Tauri integration suite, not part of any
+  // automated gate (CI runs tsc + cargo test + the Playwright @smoke workflow;
+  // the full Playwright suite runs nightly). See e2e/legacy/README.md.
+  specs: ['./e2e/legacy/specs/**/*.spec.ts'],
   exclude: [],
 
   // Run tests in parallel (override with WDIO_MAX_INSTANCES=1 if needed)

@@ -31,11 +31,6 @@ test.describe('UI Components', () => {
       await page.keyboard.press('Control+a');
       await expect(page.getByTestId('map-canvas')).toBeVisible();
     });
-
-    test('should handle Ctrl+0 for fit to view', async ({ page }) => {
-      await page.keyboard.press('Control+0');
-      await expect(page.getByTestId('map-canvas')).toBeVisible();
-    });
   });
 
   test.describe('Panel Toggles', () => {

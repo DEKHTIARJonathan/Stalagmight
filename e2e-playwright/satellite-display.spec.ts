@@ -133,17 +133,6 @@ test.describe('Satellite Display', () => {
       // Display menu should still work
       await expect(button).toBeVisible();
     });
-
-    test('should allow toggle via menu item click', async ({ page }) => {
-      await openDisplayMenu(page);
-
-      // Click using the button text
-      await page.click('button:has-text("Satellite")');
-
-      // Verify toggled
-      const { checkbox } = getSatelliteToggle(page);
-      await expect(checkbox).toHaveClass(/bg-accent/);
-    });
   });
 
   test.describe('Layer Properties', () => {

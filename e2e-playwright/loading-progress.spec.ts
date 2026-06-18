@@ -27,11 +27,8 @@ test.describe('Loading Progress', () => {
       // Double-click on a project card
       await page.locator('h3:has-text("Cave System Alpha")').dblclick();
 
-      // Wait for command to be invoked
-      await page.waitForTimeout(500);
-
-      // Verify load_project_full was called
-      expect(ipcCalls.length).toBeGreaterThan(0);
+      // Verify load_project_full was called (poll until the IPC log arrives)
+      await expect.poll(() => ipcCalls.length).toBeGreaterThan(0);
     });
 
     test('load_project_full emits progress events', async ({ page }) => {
@@ -51,11 +48,8 @@ test.describe('Loading Progress', () => {
       // Double-click to start loading
       await page.locator('h3:has-text("Cave System Alpha")').dblclick();
 
-      // Wait for events
-      await page.waitForTimeout(500);
-
       // Verify loading-progress events were emitted during load_project_full
-      expect(eventLogs.length).toBeGreaterThan(0);
+      await expect.poll(() => eventLogs.length).toBeGreaterThan(0);
     });
 
     test('clientOpId increments on each project open', async ({ page }) => {
@@ -70,16 +64,12 @@ test.describe('Loading Progress', () => {
 
       // Open a project
       await page.locator('h3:has-text("Cave System Alpha")').dblclick();
-      await page.waitForTimeout(500);
 
-      // Get clientOpId after first open
-      const idAfterFirst = await page.evaluate(() => {
+      // clientOpId should have incremented from the load (poll the store)
+      await expect.poll(() => page.evaluate(() => {
         const e2e = (window as unknown as { __E2E_TEST__?: { getLoadingId?: () => number } }).__E2E_TEST__;
         return e2e?.getLoadingId?.() ?? 0;
-      });
-
-      // clientOpId should have incremented from the load
-      expect(idAfterFirst).toBeGreaterThan(idBefore);
+      })).toBeGreaterThan(idBefore);
     });
   });
 
@@ -106,14 +96,11 @@ test.describe('Loading Progress', () => {
         });
       });
 
-      // Wait for React to register the listener
-      await page.waitForTimeout(100);
-
       // Verify plugin:event|listen was called for loading-progress
-      const loadingProgressListen = consoleLogs.some(log =>
+      // (poll until React has registered the listener)
+      await expect.poll(() => consoleLogs.some(log =>
         log.includes('loading-progress')
-      );
-      expect(loadingProgressListen).toBe(true);
+      )).toBe(true);
     });
 
     test('event system correctly routes loading-progress events', async ({ page }) => {
