@@ -388,4 +388,9 @@ export const EVENT_NAMES: readonly string[] = [
   'action.dialog.project-settings',
   'dialog-cancel.project-settings',
   'dwell.dialog.project-settings',
+  // Delete-project command + its confirm dialog (action/cancel/dwell trio) (#118).
+  'command.delete_project',
+  'action.dialog.delete-project',
+  'dialog-cancel.delete-project',
+  'dwell.dialog.delete-project',
 ];
