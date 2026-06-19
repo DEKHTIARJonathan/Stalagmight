@@ -53,8 +53,8 @@ export default defineConfig({
       '**/src-tauri/**',
     ],
     // Tiered by extension (issue #107): pure-logic tests stay in `node` (fast,
-    // no DOM cost); component tests (`*.test.tsx`) get a jsdom DOM so real React
-    // components can be rendered with Testing Library.
+    // no DOM cost); component tests (`*.{test,spec}.tsx`) get a jsdom DOM so
+    // real React components can be rendered with Testing Library.
     environment: 'node',
     environmentMatchGlobs: [['**/*.{test,spec}.tsx', 'jsdom']],
     setupFiles: ['./src/test/setup.ts'],

@@ -106,8 +106,8 @@ Tiering is by **file extension** (see `vite.config.ts` → `environmentMatchGlob
 
 | Extension | Environment | Use for |
 |-----------|-------------|---------|
-| `*.test.ts` | `node` | Pure logic — stores, utils, selectors, formatters. No DOM. |
-| `*.test.tsx` | `jsdom` | Rendering a React component with Testing Library. |
+| `*.{test,spec}.ts` | `node` | Pure logic — stores, utils, selectors, formatters. No DOM. |
+| `*.{test,spec}.tsx` | `jsdom` | Rendering a React component with Testing Library. |
 
 `src/test/setup.ts` registers jest-dom matchers and auto-unmounts React trees
 between tests. The DOM libraries load lazily behind a `document` guard, so the
