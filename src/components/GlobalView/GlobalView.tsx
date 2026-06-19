@@ -753,7 +753,7 @@ export default function GlobalView() {
           )}
           <div className="border-t border-border my-1" />
           <button
-            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 text-error flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
             onClick={async () => {
               // Handle multi-selection remove with count
               try {
@@ -780,6 +780,23 @@ export default function GlobalView() {
               })
               : t('globalView.contextMenu.remove')}
           </button>
+          {selectedCount <= 1 && contextMenu.projectPath && (
+            <>
+              <div className="border-t border-border my-1" />
+              <button
+                className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 text-error flex items-center gap-2"
+                onClick={() => {
+                  const proj = recentProjects.find((p) => p.file_path === contextMenu.projectPath);
+                  openDialog('delete-project', { path: contextMenu.projectPath, name: proj?.name });
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                }}
+                role="menuitem"
+                data-testid="context-menu-delete"
+              >
+                {t('globalView.contextMenu.delete')}
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

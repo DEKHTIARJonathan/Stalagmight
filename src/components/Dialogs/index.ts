@@ -19,6 +19,7 @@ export { default as UnsavedChangesDialog } from './UnsavedChangesDialog';
 export { default as ErrorDialog } from './ErrorDialog';
 export { default as SavePermissionDialog } from './SavePermissionDialog';
 export { default as OverwriteConfirmDialog } from './OverwriteConfirmDialog';
+export { default as DeleteProjectDialog } from './DeleteProjectDialog';
 export { default as SectionAdjustDialog } from './SectionAdjustDialog';
 export { default as SettingsDialog } from './SettingsDialog';
 export { ProjectSettingsDialog } from './ProjectSettingsDialog';

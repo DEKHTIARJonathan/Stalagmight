@@ -48,6 +48,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   const setProjectNameForPath = useProjectStore((s) => s.setProjectNameForPath);
   const loadRecentProjects = useProjectStore((s) => s.loadRecentProjects);
   const showToast = useUIStore((s) => s.showToast);
+  const openDialog = useUIStore((s) => s.openDialog);
 
   // Normalize selection: prefer selectedProjects if non-empty, fallback to project
   const projects = selectedProjects?.length ? selectedProjects : (project ? [project] : []);
@@ -97,6 +98,14 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
       onRemoveFromRecent(singleProject.file_path);
     }
   }, [singleProject?.file_path, onRemoveFromRecent]);
+
+  // Destructive: permanently delete the project files (distinct from the
+  // forget-only Remove above). Routes through the shared confirm dialog.
+  const handleDeleteProject = useCallback(() => {
+    if (singleProject?.file_path) {
+      openDialog('delete-project', { path: singleProject.file_path, name: singleProject.name });
+    }
+  }, [singleProject?.file_path, singleProject?.name, openDialog]);
 
   // Rename the selected (not-necessarily-open) project's display name.
   const startEditName = useCallback(() => {
@@ -442,12 +451,21 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
               </Button>
               <Button
                 onClick={handleRemoveFromRecent}
-                variant="danger"
+                variant="secondary"
                 className="w-full"
                 data-testid="metadata-remove-button"
                 aria-label={t('globalView.metadata.actions.removeFromRecentAria', { name: singleProject.name })}
               >
                 {t('globalView.metadata.actions.removeFromRecent')}
+              </Button>
+              <Button
+                onClick={handleDeleteProject}
+                variant="danger"
+                className="w-full"
+                data-testid="metadata-delete-button"
+                aria-label={t('globalView.metadata.actions.deleteProjectAria', { name: singleProject.name })}
+              >
+                {t('globalView.metadata.actions.deleteProject')}
               </Button>
             </div>
           </div>
