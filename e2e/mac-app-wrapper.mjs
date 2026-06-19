@@ -14,6 +14,7 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
 const binary = process.env.STALAGMIGHT_BINARY;
 if (!binary) {
@@ -24,6 +25,18 @@ if (!binary) {
 const child = spawn(binary, [], {
   stdio: ['inherit', 'pipe', 'inherit'],
 });
+
+// Record this app's PID so wdio.sh reaps exactly the instances the test run
+// spawned and leaves a real stalagmight the user has open untouched (#127).
+// O_APPEND keeps concurrent wrapper writes from interleaving within a line.
+const pidFile = process.env.STALAGMIGHT_TEST_PIDFILE;
+if (pidFile && typeof child.pid === 'number') {
+  try {
+    appendFileSync(pidFile, `${child.pid}\n`);
+  } catch (err) {
+    process.stderr.write(`mac-app-wrapper: could not record pid: ${err}\n`);
+  }
+}
 
 // Forward signals to the real binary
 process.on('SIGTERM', () => child.kill('SIGTERM'));

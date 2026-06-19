@@ -41,6 +41,12 @@ IS_MACOS=false
 if [[ "$(uname -s)" == Darwin* ]]; then
     IS_MACOS=true
 fi
+
+# Per-run pidfile so macOS cleanup reaps ONLY the app instances this run spawned
+# (recorded by e2e/mac-app-wrapper.mjs) and never a real stalagmight you have
+# open via ./scripts/dev.sh. Exported so it reaches the wrapper through the
+# wdio -> tauri-wd -> app env chain (same channel as STALAGMIGHT_BINARY).
+export STALAGMIGHT_TEST_PIDFILE="${TMPDIR:-/tmp}/stalagmight-wdio-pids.$$"
 DIST_PATH="$PROJECT_ROOT/dist"
 DEFAULT_MAX_INSTANCES=1
 if command -v nproc &> /dev/null; then
@@ -254,8 +260,47 @@ check_display() {
     fi
 }
 
+# ===== Scoped stalagmight reaping (macOS) =====
+# Kill ONLY the app instances this run (or a dead prior run) launched, recorded
+# by e2e/mac-app-wrapper.mjs in a per-run pidfile. Each PID is re-verified as a
+# live stalagmight process before SIGKILL, so PID reuse can't take down an
+# unrelated process — and a real stalagmight you started outside the harness
+# (its PID is in no pidfile) is never touched.
+reap_tracked_stalagmight() {
+    local pidfile owner pid comm reaped=0
+    for pidfile in "${TMPDIR:-/tmp}"/stalagmight-wdio-pids.*; do
+        [[ -f "$pidfile" ]] || continue
+        # A pidfile owned by a *different* run is only safe to reap once that
+        # run's shell is gone (don't race a concurrent run). Our own file always
+        # reaps. The owner shell PID is the filename suffix.
+        if [[ "$pidfile" != "$STALAGMIGHT_TEST_PIDFILE" ]]; then
+            owner="${pidfile##*.}"
+            # Skip a pidfile a *live* run still owns — UNLESS it's stale. The
+            # owner PID can be reused by an unrelated process; an hours-old
+            # pidfile is never an active run (the wrapper touches it each
+            # session), so reap it instead of leaking its windows forever.
+            if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null \
+               && [[ -z "$(find "$pidfile" -mmin +120 2>/dev/null || true)" ]]; then
+                continue
+            fi
+        fi
+        while IFS= read -r pid; do
+            [[ "$pid" =~ ^[0-9]+$ ]] || continue
+            comm=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+            if [[ "$comm" == *stalagmight* ]]; then
+                if kill -9 "$pid" 2>/dev/null; then reaped=$((reaped + 1)); fi
+            fi
+        done < "$pidfile"
+        rm -f "$pidfile"
+    done
+    [[ "$reaped" -gt 0 ]] && warn "Reaped $reaped test-spawned stalagmight window(s)"
+    return 0
+}
+
 # ===== Port cleanup =====
 cleanup_ports() {
+    # phase: "start" (clear a prior run's stragglers) or "exit" (post-run teardown).
+    local phase="${1:-start}"
     info "Cleaning up stale processes..."
 
     # Kill any existing tauri-driver / tauri-wd processes
@@ -274,8 +319,14 @@ cleanup_ports() {
         pkill -9 WebKitWebDriver 2>/dev/null || true
     fi
 
-    # Kill any stale stalagmight processes
-    if pgrep -x stalagmight > /dev/null 2>&1; then
+    # Kill stalagmight app instances. On macOS, scope strictly to this harness's
+    # own spawned PIDs so a real dev instance survives (issue #127). On
+    # Linux/Windows there's no pidfile to scope by (no wrapper), so the broad
+    # sweep runs ONLY at startup (clearing a prior run's stragglers) — never from
+    # the EXIT trap, where it could kill a dev's own instance started meanwhile.
+    if $IS_MACOS; then
+        reap_tracked_stalagmight
+    elif [[ "$phase" == start ]] && pgrep -x stalagmight > /dev/null 2>&1; then
         warn "Found running stalagmight, killing..."
         pkill -9 stalagmight 2>/dev/null || true
     fi
@@ -482,6 +533,14 @@ main() {
     echo ""
 
     parse_args "$@"
+
+    # Reap our spawned processes on ANY exit (success, failure, or Ctrl-C), not
+    # just at start — otherwise tauri-wd's flaky deleteSession leaves orphaned
+    # app windows behind for the user to close by hand (issue #127). EXIT runs
+    # cleanup_ports and preserves the test exit code; INT/TERM route through it.
+    trap 'rc=$?; cleanup_ports exit; exit $rc' EXIT
+    trap 'exit 130' INT TERM
+
     check_platform
     check_tauri_driver
     check_display
