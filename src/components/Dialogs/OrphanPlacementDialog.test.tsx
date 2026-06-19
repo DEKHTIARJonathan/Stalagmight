@@ -86,12 +86,13 @@ describe('OrphanPlacementDialog — completion persists the import (#92 / #107)'
 
     await userEvent.click(screen.getByTestId('orphan-accept'));
 
-    // finish() persists, then closes. (It can run twice — explicitly from
-    // handleAccept and again from the isFinished effect — so assert "called",
-    // not an exact count.)
-    await waitFor(() => expect(saveAfterImport).toHaveBeenCalled());
+    // closeDialog is finish()'s terminal step — waiting for it guarantees the
+    // whole chain ran (refresh → save → close), avoiding a race where we assert
+    // before the awaited save resolves. (finish() can run twice — from
+    // handleAccept and the isFinished effect — so assert "called", not a count.)
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(refreshProjectState).toHaveBeenCalled();
-    expect(closeDialog).toHaveBeenCalled();
+    expect(saveAfterImport).toHaveBeenCalled();
   });
 
   it('keeps the dialog open when the save fails — no phantom success (#92)', async () => {
@@ -102,6 +103,11 @@ describe('OrphanPlacementDialog — completion persists the import (#92 / #107)'
     await userEvent.click(screen.getByTestId('orphan-accept'));
 
     await waitFor(() => expect(saveAfterImport).toHaveBeenCalled());
+    // saveAfterImport resolved false. Flush a full macrotask so finish()'s
+    // post-await continuation runs to completion — a regression that closed the
+    // dialog *after* awaiting the failed save would fire here and be caught,
+    // rather than racing past this assertion.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     // The save failed, so the dialog must NOT close (the error dialog raised by
     // saveAfterImport stays visible instead of being dismissed).
     expect(closeDialog).not.toHaveBeenCalled();
