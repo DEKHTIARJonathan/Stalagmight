@@ -4,10 +4,7 @@
  * Verifies that MapLibre GL JS built-in controls (NavigationControl, ScaleControl)
  * have the correct dark theme CSS overrides applied in both MapCanvas and GlobalViewMap.
  *
- * Uses browser.execute(getComputedStyle) pattern consistent with:
- * - section-highlighting-a11y.spec.ts:301-304
- * - shortcuts-accessibility.spec.ts:766-772
- * - export-accessibility.spec.ts:388-397
+ * Uses the browser.execute(getComputedStyle) pattern for asserting computed CSS.
  */
 
 import {
