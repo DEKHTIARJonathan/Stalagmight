@@ -1069,6 +1069,65 @@ fn test_remove_from_recent_projects_success() {
     });
 }
 
+// In test builds `send_to_trash` is a deterministic `fs::remove_file` (see
+// recent_projects.rs), so these assert the file is actually gone without touching
+// the developer's real Trash or needing a trash dir on a headless CI runner.
+
+#[test]
+fn test_delete_project_removes_file_and_recent() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            assert!(saved_path.exists(), "precondition: .stalx written to disk");
+
+            let result = project::delete_project(state(&app), saved_path.clone());
+            assert_success(&result);
+            assert!(!saved_path.exists(), "project file should be deleted from disk");
+            let recent = project::list_recent_projects(state(&app));
+            assert!(!recent.iter().any(|p| p.file_path == saved_path));
+        });
+    });
+}
+
+#[test]
+fn test_delete_project_removes_tml_sibling() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            let tml = saved_path.with_extension("tml");
+            fs::write(&tml, b"<dummy/>").unwrap();
+            assert!(tml.exists());
+
+            let result = project::delete_project(state(&app), saved_path.clone());
+            assert_success(&result);
+            assert!(!saved_path.exists());
+            assert!(!tml.exists(), "collab sibling .tml should be deleted too");
+        });
+    });
+}
+
+#[test]
+fn test_delete_project_tolerates_missing_file() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            // Nothing was ever written here: deleting a path with no file on disk
+            // should still succeed (there is simply nothing to remove).
+            let dir = TempDir::new().unwrap();
+            let missing = dir.path().join("never-saved.stalx");
+            let result = project::delete_project(state(&app), missing.clone());
+            assert_success(&result);
+            assert!(!missing.exists());
+        });
+    });
+}
+
 #[test]
 fn test_save_project_fails_when_directory_missing() {
     with_config_lock(|| {

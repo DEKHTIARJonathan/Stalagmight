@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::core::CommandResult;
 use crate::models::{Project, ProjectMetadata};
@@ -75,6 +75,65 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// Permanently delete a project from disk and drop it from the recent list.
+    ///
+    /// The destructive counterpart to
+    /// [`remove_from_recent_projects`](Self::remove_from_recent_projects), which
+    /// only forgets the entry. The project's `.stalx` and its sibling `.tml`
+    /// (collab file, when present) are handed to the OS's own delete via
+    /// [`send_to_trash`]: on macOS they land in the Trash, on Linux in the
+    /// freedesktop trash where one exists. The app keeps no undo trail of its
+    /// own — recovery, if any, is whatever the OS provides.
+    ///
+    /// Tolerant of a file that is already gone (it still drops the entry from
+    /// recents). If the deleted project is the one currently open in memory, the
+    /// open project is cleared so a later autosave can't recreate the file we
+    /// just removed.
+    pub fn delete_project(&self, path: PathBuf) -> CommandResult {
+        // Hand the project DB and its collab sibling to the OS trash. The sibling
+        // is skipped when absent — most projects have no `.tml`.
+        let tml = path.with_extension("tml");
+        let mut targets = vec![path.clone()];
+        if tml != path {
+            targets.push(tml);
+        }
+        for target in &targets {
+            if !target.exists() {
+                continue;
+            }
+            if let Err(e) = send_to_trash(target) {
+                return CommandResult::failure(format!("Failed to delete {}: {e}", target.display()));
+            }
+        }
+
+        // Drop it from the recent list. Best-effort: a project that was never in
+        // recents (or already removed) should still delete cleanly.
+        if let Ok(mut recent) = self.recent_projects.lock() {
+            let before = recent.len();
+            recent.retain(|p| p != &path);
+            if recent.len() != before {
+                if let Ok(mut config) = self.config.lock() {
+                    config.general.recent_projects.clone_from(&recent);
+                    if let Err(e) = config.save() {
+                        tracing::warn!("Failed to save config after deleting project: {}", e);
+                        return CommandResult::failure(format!("Failed to save config: {e}"));
+                    }
+                }
+            }
+        }
+
+        // If we just deleted the file backing the open project, clear it so an
+        // autosave can't resurrect the project at the now-trashed path.
+        if let Ok(mut guard) = self.project.lock() {
+            if guard.as_ref().and_then(|p| p.file_path.as_deref()) == Some(path.as_path()) {
+                *guard = None;
+            }
+        }
+
+        tracing::info!(path = ?path, "Deleted project");
+        CommandResult::success()
+    }
+
     /// Rename a project's display name on disk by path, without requiring it to
     /// be the open project. Used by the recent-projects metadata panel. Mirrors
     /// [`set_collab_enabled_for_path`](Self::set_collab_enabled_for_path): a
@@ -108,4 +167,31 @@ impl AppState {
         tracing::info!(path = ?path, "Renamed project");
         CommandResult::success()
     }
+}
+
+/// Delete a single file by handing it to the OS's native delete.
+///
+/// Production prefers the platform trash (`trash::delete`) — macOS Trash, Windows
+/// Recycle Bin, freedesktop trash on most Linux — so deletes are recoverable where
+/// the OS supports it. When there's no usable trash for the file's filesystem (a
+/// NAS / removable mount, `HOME` unset, a read-only FS), the trash call fails and
+/// we fall back to a permanent `fs::remove_file` so the delete still happens — the
+/// user asked for a real delete, and the OS provides recovery only where it can.
+///
+/// Test builds skip all of that and take the deterministic `fs::remove_file`
+/// directly, so `cargo test` neither pollutes the developer's real Trash nor
+/// depends on a trash directory existing on a headless CI runner.
+#[cfg(not(test))]
+fn send_to_trash(path: &Path) -> Result<(), String> {
+    match trash::delete(path) {
+        Ok(()) => Ok(()),
+        Err(trash_err) => std::fs::remove_file(path).map_err(|fs_err| {
+            format!("trash failed ({trash_err}); permanent delete also failed ({fs_err})")
+        }),
+    }
+}
+
+#[cfg(test)]
+fn send_to_trash(path: &Path) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| e.to_string())
 }

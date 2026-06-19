@@ -72,6 +72,7 @@ compass_data = { path = "vendor/compass_data" }
 igrf = "0.2"
 proj4rs = "0.1"
 time = "0.3"
+trash = "5.2.6"
 
 [profile.dev]
 # Backtraces still show file:line; skipping full debug info halves the link step.
