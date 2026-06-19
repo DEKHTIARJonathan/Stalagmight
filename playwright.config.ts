@@ -36,7 +36,14 @@ export default defineConfig({
   // Pass the env var through as a string so percent values aren't
   // silently truncated by parseInt ("50%" → 50, which would launch
   // fifty workers instead of half the cores).
-  workers: process.env.PW_WORKERS || undefined,
+  //
+  // In CI, default to "100%" (all cores). Playwright's default is
+  // floor(cpus/2), which on a 2-core `ubuntu-latest` runner is **1 worker** —
+  // i.e. the whole suite runs serially (this is why the nightly took ~57 min,
+  // #120). Using both cores ~halves the nightly wall-clock with no coverage
+  // change. The mocked-IPC suite is light enough that 2 Chromium workers fit
+  // comfortably in the runner's RAM.
+  workers: process.env.PW_WORKERS || (process.env.CI ? '100%' : undefined),
 
   // Test reporter: 'list' for live progress, 'github' for CI annotations
   // Override with PW_REPORTER env var (e.g. PW_REPORTER=html)
