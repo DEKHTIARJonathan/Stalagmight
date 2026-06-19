@@ -1276,6 +1276,14 @@ mod tests {
             std::fs::remove_file(&path).ok();
             // PNG layout: 8-byte signature, 4-byte IHDR length, 4-byte "IHDR",
             // then big-endian u32 width (bytes 16..20) and height (bytes 20..24).
+            // Validate the magic + length first so a future empty/partial/non-PNG
+            // export fails with a clear assertion instead of an out-of-bounds panic.
+            const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+            assert!(
+                bytes.len() >= 24 && bytes[..8] == PNG_SIGNATURE,
+                "export_png did not write a valid PNG at dpi {dpi} ({} bytes)",
+                bytes.len()
+            );
             let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
             let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
             (w, h)
