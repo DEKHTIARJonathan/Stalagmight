@@ -14,7 +14,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importDmpFile,
+  importDmpViaStore,
   waitForUiIdle,
 } from '../helpers/app';
 
@@ -92,7 +92,7 @@ describe('Export Scaling Verification', () => {
 
     // Import survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
     expect(importResult.sectionCount).toBeGreaterThan(0);
 
@@ -205,7 +205,7 @@ describe('Export Scaling Verification', () => {
 
     // Import survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
     expect(importResult.sectionCount).toBeGreaterThan(0);
 
@@ -338,7 +338,7 @@ describe('Export Scaling Verification', () => {
 
     // Import survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
 
     // Export SVG
@@ -461,7 +461,7 @@ describe('Export Scaling Verification', () => {
     await createNewProject('Station Circle Test');
 
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
 
     const svgPath = path.join(tempDir, 'export-stations.svg');

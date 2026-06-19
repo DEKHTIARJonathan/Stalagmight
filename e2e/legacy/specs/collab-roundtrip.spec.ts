@@ -19,7 +19,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importDmpFile,
+  importDmpViaStore,
   getProjectStats,
   waitForUiIdle,
   undo,
@@ -268,7 +268,7 @@ describe('Collaboration round-trip (fullstack)', () => {
 
   it('writes a sibling .tml and a clean round-trip shows no review dialog', async () => {
     await createNewProject('Collab Clean');
-    expect((await importDmpFile(DMP)).success).toBe(true);
+    expect((await importDmpViaStore(DMP)).success).toBe(true);
     expect((await setCollabEnabled(true)).success).toBe(true);
 
     const projectPath = path.join(tempDir, 'clean.stalx');
@@ -285,7 +285,7 @@ describe('Collaboration round-trip (fullstack)', () => {
 
   it('detects, applies, and converges an external shot edit; apply is undoable', async () => {
     await createNewProject('Collab Edit');
-    expect((await importDmpFile(DMP)).success).toBe(true);
+    expect((await importDmpViaStore(DMP)).success).toBe(true);
     await setCollabEnabled(true);
 
     const projectPath = path.join(tempDir, 'edit.stalx');
@@ -330,7 +330,7 @@ describe('Collaboration round-trip (fullstack)', () => {
 
   it('reconciles an external section rename as a metadata change (no destroy)', async () => {
     await createNewProject('Collab Rename');
-    expect((await importDmpFile(DMP)).success).toBe(true);
+    expect((await importDmpViaStore(DMP)).success).toBe(true);
     await setCollabEnabled(true);
 
     const projectPath = path.join(tempDir, 'rename.stalx');
@@ -359,7 +359,7 @@ describe('Collaboration round-trip (fullstack)', () => {
 
   it('georeferenced project (mid-station datum) clean round-trip shows no phantom section', async () => {
     await createNewProject('Collab Datum');
-    expect((await importDmpFile(DMP)).success).toBe(true);
+    expect((await importDmpViaStore(DMP)).success).toBe(true);
     expect((await setMidStationDatum()).success).toBe(true);
     await setCollabEnabled(true);
 

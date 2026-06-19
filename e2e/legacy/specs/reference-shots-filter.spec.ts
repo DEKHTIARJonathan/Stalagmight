@@ -13,7 +13,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importTmlFile,
+  importTmlViaStore,
   getProjectSections,
   waitForUiIdle,
   waitForMapReady,
@@ -118,7 +118,7 @@ describe('Reference Shots Filter', () => {
     await createNewProject('Reference Import Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const result = await importTmlFile(tmluPath);
+    const result = await importTmlViaStore(tmluPath);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -157,7 +157,7 @@ describe('Reference Shots Filter', () => {
     await createNewProject('Reference Data Preservation Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const result = await importTmlFile(tmluPath);
+    const result = await importTmlViaStore(tmluPath);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -189,7 +189,7 @@ describe('Reference Shots Filter', () => {
     await createNewProject('Reference Persist Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const result = await importTmlFile(tmluPath);
+    const result = await importTmlViaStore(tmluPath);
     expect(result.success).toBe(true);
 
     await waitForMapReady();

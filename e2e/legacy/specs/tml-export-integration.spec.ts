@@ -16,7 +16,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importTmlFile,
+  importTmlViaStore,
   exportTmlFile,
   parseTmlFile,
   getProjectSections,
@@ -59,7 +59,7 @@ describe('TML Export Integration', () => {
 
     // Import data first
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const importResult = await importTmlFile(tmluPath);
+    const importResult = await importTmlViaStore(tmluPath);
     expect(importResult.success).toBe(true);
 
     const sections = await getProjectSections();
@@ -103,7 +103,7 @@ describe('TML Export Integration', () => {
 
     // Import data first
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const importResult = await importTmlFile(tmluPath);
+    const importResult = await importTmlViaStore(tmluPath);
     expect(importResult.success).toBe(true);
 
     // Export as TML (ZIP)
@@ -143,7 +143,7 @@ describe('TML Export Integration', () => {
 
     // Import original
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const importResult = await importTmlFile(tmluPath);
+    const importResult = await importTmlViaStore(tmluPath);
     expect(importResult.success).toBe(true);
 
     // Get section count for comparison
@@ -187,7 +187,7 @@ describe('TML Export Integration', () => {
 
     // Import
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const importResult = await importTmlFile(tmluPath);
+    const importResult = await importTmlViaStore(tmluPath);
     expect(importResult.success).toBe(true);
 
     const originalSections = await getProjectSections();
@@ -223,7 +223,7 @@ describe('TML Export Integration', () => {
     await createNewProject('Section Names Export Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const importResult = await importTmlFile(tmluPath);
+    const importResult = await importTmlViaStore(tmluPath);
     expect(importResult.success).toBe(true);
 
     // Get original section names

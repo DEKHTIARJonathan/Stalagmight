@@ -59,3 +59,23 @@ UI/interaction specs whose behavior is already covered, faster, by
 `import-section-dialog`, `export-accessibility`.
 
 Prefer adding new UI coverage to `e2e-playwright/`, not here. Tracked under #23.
+
+## Logic-level seed helpers (NOT import-UI coverage)
+
+Some helpers in `helpers/app.ts` are named like an import — `importDmpViaStore`,
+`importTmlViaStore`, `createSectionViaStore` — but **bypass the import wizard UI**.
+They parse via the real backend and call the store's `createSection` /
+`executeTmlImport` directly to get sections into the project quickly. They are
+**setup/seed utilities, not coverage of the import flow**: a spec that "imports"
+a file through them is *not* exercising the selection → zero-datum → placement →
+orphan-connection dialogs.
+
+| Helper | What it really does | Where the import *UI* is covered |
+|--------|---------------------|----------------------------------|
+| `importDmpViaStore(path)` | Parses `.dmp` (real backend) → `createSection` per section | `import-dmp-dialog.spec.ts`; Playwright `dmp-import` |
+| `importTmlViaStore(path)` | Real `executeTmlImport`, no dialog | `tml-import-integration.spec.ts` (backend round-trip) |
+| `createSectionViaStore(data)` | `createSection` directly, no dialog | `import-section-dialog.spec.ts`; Playwright |
+
+To assert the import *experience*, drive the wizard instead
+(`openDmpImportWithFile` + `placeAllSectionsInDmpWizard`), or write a Playwright /
+component test.

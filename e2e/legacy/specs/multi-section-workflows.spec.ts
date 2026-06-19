@@ -15,7 +15,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importDmpFile,
+  importDmpViaStore,
   getProjectSections,
   waitForUiIdle,
 } from '../helpers/app';
@@ -272,7 +272,7 @@ describe('Multi-Section Workflows', () => {
 
     // Import a multi-section DMP file
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
 
     // Verify import succeeded with multiple sections
     expect(result.success).toBe(true);
@@ -303,7 +303,7 @@ describe('Multi-Section Workflows', () => {
 
     // Import another DMP file to test cumulative importing
     const dmpPath2 = path.join(FIXTURES_DIR, 'test_v5.dmp');
-    const result2 = await importDmpFile(dmpPath2);
+    const result2 = await importDmpViaStore(dmpPath2);
 
     expect(result2.success).toBe(true);
     expect(result2.sectionCount).toBeGreaterThan(0);
@@ -334,7 +334,7 @@ describe('Multi-Section Workflows', () => {
 
     // Import multi-section DMP to get sections that can be merged
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
 
     expect(result.success).toBe(true);
     expect(result.sectionCount).toBeGreaterThan(1);

@@ -15,7 +15,7 @@ import {
   resetAppState,
   createNewProject,
   openTmlImportWithFile,
-  importTmlFile,
+  importTmlViaStore,
   parseTmlFile,
   getProjectSections,
   waitForUiIdle,
@@ -101,7 +101,7 @@ describe('TML Excluded Shots', () => {
     const tmluPath = path.join(FIXTURES_DIR, 'test_with_excluded.tmlu');
 
     // Import with default (includeExcluded = false)
-    const result = await importTmlFile(tmluPath, false);
+    const result = await importTmlViaStore(tmluPath, false);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -128,7 +128,7 @@ describe('TML Excluded Shots', () => {
     const tmluPath = path.join(FIXTURES_DIR, 'test_with_excluded.tmlu');
 
     // Import with includeExcluded = true
-    const result = await importTmlFile(tmluPath, true);
+    const result = await importTmlViaStore(tmluPath, true);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -156,7 +156,7 @@ describe('TML Excluded Shots', () => {
     await createNewProject('Excluded Compare Test 1');
     const tmluPath = path.join(FIXTURES_DIR, 'test_with_excluded.tmlu');
 
-    const result1 = await importTmlFile(tmluPath, false);
+    const result1 = await importTmlViaStore(tmluPath, false);
     expect(result1.success).toBe(true);
     await waitForUiIdle(500);
 
@@ -170,7 +170,7 @@ describe('TML Excluded Shots', () => {
     await resetAppState();
     await createNewProject('Excluded Compare Test 2');
 
-    const result2 = await importTmlFile(tmluPath, true);
+    const result2 = await importTmlViaStore(tmluPath, true);
     expect(result2.success).toBe(true);
     await waitForUiIdle(500);
 
