@@ -1174,12 +1174,6 @@ export async function elementWithTextExists(text: string): Promise<boolean> {
 }
 
 /**
- * Import a DMP file by providing the path directly to the store.
- * This bypasses the file dialog for E2E testing.
- * It parses the DMP file and creates all sections in the project.
- * Returns the import result including section count.
- */
-/**
  * Seed a project's sections from a `.dmp` file **via the store**, bypassing the
  * import wizard UI.
  *

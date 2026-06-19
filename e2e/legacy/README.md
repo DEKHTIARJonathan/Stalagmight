@@ -73,7 +73,7 @@ orphan-connection dialogs.
 | Helper | What it really does | Where the import *UI* is covered |
 |--------|---------------------|----------------------------------|
 | `importDmpViaStore(path)` | Parses `.dmp` (real backend) → `createSection` per section | `import-dmp-dialog.spec.ts`; Playwright `dmp-import` |
-| `importTmlViaStore(path)` | Real `executeTmlImport`, no dialog | `tml-import-integration.spec.ts` (backend round-trip) |
+| `importTmlViaStore(path)` | Real `executeTmlImport`, no dialog | `tml-import-integration.spec.ts` (`openTmlImportWithFile` → dialog confirm) |
 | `createSectionViaStore(data)` | `createSection` directly, no dialog | `import-section-dialog.spec.ts`; Playwright |
 
 To assert the import *experience*, drive the wizard instead
