@@ -10,12 +10,44 @@ name: Nightly E2E Regression
 # e2e/legacy/README.md.
 on:
   schedule:
-    # 07:00 UTC daily — overnight in the Americas, morning in CET.
-    - cron: '0 7 * * *'
+    # Mondays 07:00 UTC (weekly) — overnight in the Americas, morning in CET.
+    # Weekly, not daily, to conserve Actions minutes (#114); run any time on
+    # demand via workflow_dispatch.
+    - cron: '0 7 * * 1'
   workflow_dispatch: {}
 
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Don't spend full-suite minutes on a scheduled run when nothing has merged
+  # since the last one (we don't work every day). This gate job is ~15s; a
+  # manual workflow_dispatch always proceeds.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.changed.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "manual dispatch — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$(git log --since='8 days ago' --pretty=oneline)" ]; then
+            echo "commits in the last week — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no commits since the last weekly run — skipping the suite."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   full:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -28,7 +60,21 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
+      - name: Install Playwright browsers + system deps
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright system deps (browser restored from cache)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
       - run: pnpm test:ui
         env:
           PW_REPORTER: github
