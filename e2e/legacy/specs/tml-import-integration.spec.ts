@@ -16,7 +16,7 @@ import {
   resetAppState,
   createNewProject,
   openTmlImportWithFile,
-  importTmlFile,
+  importTmlViaStore,
   parseTmlFile,
   getProjectSections,
   getProjectStats,
@@ -132,7 +132,7 @@ describe('TML Import Integration', () => {
     await createNewProject('TMLU Import Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const result = await importTmlFile(tmluPath);
+    const result = await importTmlViaStore(tmluPath);
 
     expect(result.success).toBe(true);
     expect(result.error).toBeFalsy();
@@ -166,7 +166,7 @@ describe('TML Import Integration', () => {
     await createNewProject('TML ZIP Import Test');
 
     const tmlPath = path.join(FIXTURES_DIR, 'test_simple.tml');
-    const result = await importTmlFile(tmlPath);
+    const result = await importTmlViaStore(tmlPath);
 
     expect(result.success).toBe(true);
     expect(result.error).toBeFalsy();
@@ -228,7 +228,7 @@ describe('TML Import Integration', () => {
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
 
     // First import
-    const firstResult = await importTmlFile(tmluPath);
+    const firstResult = await importTmlViaStore(tmluPath);
     expect(firstResult.success).toBe(true);
 
     // Open dialog again with the same file

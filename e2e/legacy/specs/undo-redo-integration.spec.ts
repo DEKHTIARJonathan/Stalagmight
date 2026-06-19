@@ -13,7 +13,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importDmpFile,
+  importDmpViaStore,
   undo,
   redo,
   getProjectSections,

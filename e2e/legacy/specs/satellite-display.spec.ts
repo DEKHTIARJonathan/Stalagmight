@@ -19,7 +19,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importDmpFile,
+  importDmpViaStore,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -331,7 +331,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Import survey data to have a map view
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      const importResult = await importDmpFile(dmpPath);
+      const importResult = await importDmpViaStore(dmpPath);
       expect(importResult.success).toBe(true);
 
       // Wait for map to load
@@ -370,7 +370,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Import survey data
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      const importResult = await importDmpFile(dmpPath);
+      const importResult = await importDmpViaStore(dmpPath);
       expect(importResult.success).toBe(true);
 
       await waitForMapLoaded();
@@ -442,7 +442,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Import survey data
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      const importResult = await importDmpFile(dmpPath);
+      const importResult = await importDmpViaStore(dmpPath);
       expect(importResult.success).toBe(true);
 
       await waitForMapLoaded();
@@ -495,7 +495,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Import survey data
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      const importResult = await importDmpFile(dmpPath);
+      const importResult = await importDmpViaStore(dmpPath);
       expect(importResult.success).toBe(true);
 
       await waitForMapLoaded();
@@ -531,7 +531,7 @@ describe('Satellite Display and Cache Verification', () => {
       await createNewProject('Cache Persist Test 1');
 
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      await importDmpFile(dmpPath);
+      await importDmpViaStore(dmpPath);
       await waitForMapLoaded();
 
       // Ensure baseline and enable satellite
@@ -599,7 +599,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Import data and enable satellite to populate cache
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      await importDmpFile(dmpPath);
+      await importDmpViaStore(dmpPath);
       await waitForMapLoaded();
 
       await ensureBaselineState();
@@ -641,7 +641,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Populate cache
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      await importDmpFile(dmpPath);
+      await importDmpViaStore(dmpPath);
       await waitForMapLoaded();
 
       await ensureBaselineState();
@@ -707,7 +707,7 @@ describe('Satellite Display and Cache Verification', () => {
 
       // Import data and populate cache
       const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-      await importDmpFile(dmpPath);
+      await importDmpViaStore(dmpPath);
       await waitForMapLoaded();
 
       await setSatellite(true);

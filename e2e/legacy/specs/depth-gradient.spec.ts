@@ -20,7 +20,7 @@ import {
   resetAppState,
   createNewProject,
   waitForMapReady,
-  importDmpFile,
+  importDmpViaStore,
 } from '../helpers/app';
 
 const FIXTURES_DIR = path.resolve(process.cwd(), 'e2e', 'fixtures');
@@ -122,7 +122,7 @@ describe('Depth Gradient Display', () => {
     await createNewProject('Depth Gradient Test');
     // Import survey data so depth legend can be rendered (requires stats from survey data)
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    await importDmpFile(dmpPath);
+    await importDmpViaStore(dmpPath);
     await waitForMapReady();
   });
 
@@ -274,7 +274,7 @@ describe('Depth Gradient Persistence', () => {
     await createNewProject('Persistence Test');
     // Import survey data so depth legend can render (requires stats)
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    await importDmpFile(dmpPath);
+    await importDmpViaStore(dmpPath);
     await waitForMapReady();
 
     // Verify initial state - showDepthGradient should be false (default)

@@ -13,7 +13,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importTmlFile,
+  importTmlViaStore,
   parseTmlFile,
   getProjectSections,
   getProjectMerges,
@@ -86,7 +86,7 @@ describe('TML Closure Import', () => {
     await createNewProject('Closure Import Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const result = await importTmlFile(tmluPath);
+    const result = await importTmlViaStore(tmluPath);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -105,7 +105,7 @@ describe('TML Closure Import', () => {
     await createNewProject('Closure Section Data Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const result = await importTmlFile(tmluPath);
+    const result = await importTmlViaStore(tmluPath);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -140,7 +140,7 @@ describe('TML Closure Import', () => {
     await createNewProject('Walls Closure Test');
 
     const tmlPath = path.join(FIXTURES_DIR, 'test_with_walls.tml');
-    const result = await importTmlFile(tmlPath);
+    const result = await importTmlViaStore(tmlPath);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -167,7 +167,7 @@ describe('TML Closure Import', () => {
     await createNewProject('Closure Topology Test');
 
     const tmluPath = path.join(FIXTURES_DIR, 'test_synthetic.tmlu');
-    const result = await importTmlFile(tmluPath);
+    const result = await importTmlViaStore(tmluPath);
     expect(result.success).toBe(true);
 
     await waitForUiIdle(500);

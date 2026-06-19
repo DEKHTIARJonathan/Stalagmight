@@ -14,7 +14,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importDmpFile,
+  importDmpViaStore,
   selectTool,
   getProjectSections,
   waitForUiIdle,
@@ -42,7 +42,7 @@ describe('Map Integration', () => {
 
     // Import a DMP file with survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
     expect(result.success).toBe(true);
     expect(result.sectionCount).toBeGreaterThan(0);
 
@@ -79,7 +79,7 @@ describe('Map Integration', () => {
 
     // Import survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
     expect(result.success).toBe(true);
 
     // Switch to select tool
@@ -159,7 +159,7 @@ describe('Map Integration', () => {
 
     // Import survey data with multiple sections for merging
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
     expect(result.success).toBe(true);
     expect(result.sectionCount).toBeGreaterThan(1); // Need multiple sections for merge
 
@@ -234,7 +234,7 @@ describe('Map Integration', () => {
 
     // Import survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
     expect(result.success).toBe(true);
 
     // Switch to move segment tool (V)
@@ -309,7 +309,7 @@ describe('Map Integration', () => {
 
     // Import survey data for visual reference
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
     expect(result.success).toBe(true);
 
     const mapCanvas = await $('[data-testid="map-canvas"]');
@@ -413,7 +413,7 @@ describe('Map Integration', () => {
 
     // Import survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
     expect(result.success).toBe(true);
 
     // Wait for map to render

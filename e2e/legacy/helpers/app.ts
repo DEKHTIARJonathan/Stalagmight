@@ -1174,12 +1174,24 @@ export async function elementWithTextExists(text: string): Promise<boolean> {
 }
 
 /**
- * Import a DMP file by providing the path directly to the store.
- * This bypasses the file dialog for E2E testing.
- * It parses the DMP file and creates all sections in the project.
- * Returns the import result including section count.
+ * Seed a project's sections from a `.dmp` file **via the store**, bypassing the
+ * import wizard UI.
+ *
+ * Parses the file with the real backend (`projectStore.importDmp`) and then calls
+ * `createSection` directly for each section — it does NOT drive the DMP wizard
+ * (selection → zero-datum → placement → orphan-connection dialogs). Use it as
+ * fast logic-level setup when a spec just needs sections present; it is **not**
+ * coverage of the import flow itself.
+ *
+ * To exercise the import *experience*, drive the wizard instead
+ * (`openDmpImportWithFile` + `placeAllSectionsInDmpWizard`), see
+ * `import-dmp-dialog.spec.ts`, or the Playwright `dmp-import` specs. See this
+ * folder's README ("Logic-level seed helpers").
+ *
+ * @param path - Absolute path to the `.dmp` file
+ * @returns success + parsed section count (or an error)
  */
-export async function importDmpFile(path: string): Promise<{ success: boolean; error?: string; sectionCount?: number }> {
+export async function importDmpViaStore(path: string): Promise<{ success: boolean; error?: string; sectionCount?: number }> {
   try {
     return await browser.executeAsync(
     async (
@@ -1653,8 +1665,9 @@ export async function getProjectStats(): Promise<{ totalLength: number; stationC
 // ============================================================================
 
 /**
- * Create a section with shots via the store.
- * Returns the actual backend section ID for tracking.
+ * Create a section with shots **via the store**, bypassing the section-creation
+ * dialog. Returns the backend section ID for tracking. Logic-level setup, not UI
+ * coverage (see this folder's README, "Logic-level seed helpers").
  *
  * @param data - Section data including name, color, and shots
  * @returns Result with success status and backend section ID
@@ -1974,13 +1987,15 @@ export async function openTmlImportWithFile(filePath: string): Promise<void> {
 }
 
 /**
- * Import a TML/TMLU file directly via the store's executeTmlImport.
- * This bypasses the UI dialog for quick programmatic import.
+ * Seed sections from a TML/TMLU file **via the store** (`executeTmlImport`),
+ * bypassing the import dialog. Logic-level setup for real-backend specs — NOT
+ * coverage of the TML import UI. See this folder's README ("Logic-level seed
+ * helpers"); `tml-import-integration.spec.ts` covers the real backend round-trip.
  *
  * @param filePath - Absolute path to the TML/TMLU file
  * @param includeExcluded - Whether to include excluded shots (default: false)
  */
-export async function importTmlFile(
+export async function importTmlViaStore(
   filePath: string,
   includeExcluded = false
 ): Promise<{ success: boolean; error?: string }> {

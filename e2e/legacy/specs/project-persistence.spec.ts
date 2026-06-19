@@ -16,7 +16,7 @@ import {
   resetAppState,
   createNewProject,
   saveProject,
-  importDmpFile,
+  importDmpViaStore,
   getProjectSections,
   getProjectStats,
   waitForUiIdle,
@@ -63,7 +63,7 @@ describe('Project Persistence', () => {
 
     // Import survey data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
     expect(importResult.sectionCount).toBeGreaterThan(0);
 
@@ -166,7 +166,7 @@ describe('Project Persistence', () => {
 
     // Import data with multiple sections
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
     expect(importResult.sectionCount).toBeGreaterThan(1);
 
@@ -313,7 +313,7 @@ describe('Project Persistence', () => {
 
     // Import data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
 
     // Set a zero datum with precise GPS coordinates (8+ decimal places)
@@ -480,7 +480,7 @@ describe('Project Persistence', () => {
 
     // Import some data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    await importDmpFile(dmpPath);
+    await importDmpViaStore(dmpPath);
 
     // Create a read-only directory
     const readOnlyDir = path.join(tempDir, 'readonly');
@@ -577,7 +577,7 @@ describe('Project Persistence', () => {
 
     // Import some data
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    await importDmpFile(dmpPath);
+    await importDmpViaStore(dmpPath);
 
     // Save project
     const projectPath = path.join(tempDir, 'recent-test.stalx');
@@ -684,7 +684,7 @@ describe('Project Persistence', () => {
 
     // Import DMP file to make changes
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    await importDmpFile(dmpPath);
+    await importDmpViaStore(dmpPath);
     await waitForUiIdle(500);
 
     // After import, project should be dirty (createSection sets isDirty)
@@ -815,7 +815,7 @@ describe('Project Persistence', () => {
 
     // Import survey data to have something to zoom to
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
 
     // Save project

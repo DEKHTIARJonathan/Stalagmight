@@ -18,7 +18,7 @@ import {
   waitForAppReady,
   resetAppState,
   createNewProject,
-  importDmpFile,
+  importDmpViaStore,
 } from '../helpers/app';
 
 // Get absolute path to fixtures directory
@@ -68,7 +68,7 @@ describe('Export Dialog Accessibility', () => {
 
     // Import survey data for realistic export scenario
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
 
     // Open export dialog

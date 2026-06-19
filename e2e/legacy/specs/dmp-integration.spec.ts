@@ -21,7 +21,7 @@ import {
   proceedToDmpImportWizard,
   ensureDmpNewImportDialogVisible,
   placeAllSectionsInDmpWizard,
-  importDmpFile,
+  importDmpViaStore,
   getProjectSections,
   getProjectStats,
   waitForUiIdle,
@@ -65,7 +65,7 @@ describe('DMP Integration', () => {
     const dmpPath = path.join(FIXTURES_DIR, 'test_v2.dmp');
 
     // Import the DMP file directly via store to test parsing
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
 
     // Verify parsing succeeded
     expect(result.success).toBe(true);
@@ -107,7 +107,7 @@ describe('DMP Integration', () => {
     const dmpPath = path.join(FIXTURES_DIR, 'test_v5.dmp');
 
     // Import and parse the DMP file
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
     expect(result.success).toBe(true);
 
     // Open import dialog with file (Step 1: DmpSelectionDialog)
@@ -146,7 +146,7 @@ describe('DMP Integration', () => {
     const dmpPath = path.join(FIXTURES_DIR, 'test_corrupted.dmp');
 
     // Try to import corrupted file - should fail
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
 
     // Verify parsing failed with an error
     expect(result.success).toBe(false);
@@ -211,7 +211,7 @@ describe('DMP Integration', () => {
     await cancelBtn.click();
     await selectionDialog.waitForDisplayed({ reverse: true, timeout: 5000 });
 
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
     expect(importResult.sectionCount).toBeGreaterThan(1);
 
@@ -256,7 +256,7 @@ describe('DMP Integration', () => {
     await cancelBtn.click();
     await selectionDialog.waitForDisplayed({ reverse: true, timeout: 5000 });
 
-    const importResult = await importDmpFile(dmpPath);
+    const importResult = await importDmpViaStore(dmpPath);
     expect(importResult.success).toBe(true);
 
     await waitForUiIdle(500);
@@ -284,7 +284,7 @@ describe('DMP Integration', () => {
     const dmpPath = path.join(FIXTURES_DIR, 'test_v5_buggy_EOS.dmp');
 
     // Import file with buggy EOS markers
-    const result = await importDmpFile(dmpPath);
+    const result = await importDmpViaStore(dmpPath);
 
     // Should still parse successfully
     expect(result.success).toBe(true);
