@@ -14,6 +14,16 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
 
+// Component tests render into a jsdom DOM. DialogWrapper portals into a
+// `#dialog-root` element (mirrors index.html), so provision it once here —
+// otherwise every dialog component test renders nothing. No-op in the node-env
+// logic tests (no `document`), so they pay no DOM cost.
+if (typeof document !== 'undefined' && !document.getElementById('dialog-root')) {
+  const dialogRoot = document.createElement('div');
+  dialogRoot.id = 'dialog-root';
+  document.body.appendChild(dialogRoot);
+}
+
 afterEach(async () => {
   // Only component tests render into a DOM. We run with globals:false, so
   // React Testing Library's built-in afterEach auto-cleanup does not
