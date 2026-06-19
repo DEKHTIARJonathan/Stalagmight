@@ -31,7 +31,7 @@ jobs:
       # Cache the Chromium browser (~120 MB) so it isn't re-downloaded each run.
       - name: Resolve Playwright version
         id: pw
-        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browsers
         id: pw-cache
         uses: actions/cache@v4
