@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -179,7 +179,7 @@ test.describe('Satellite Display', () => {
       expect(hasLayer).toBe(true);
     });
 
-    test('should use custom tile protocol (stalagmight-tiles://)', async ({ page }) => {
+    test('should use the custom tile protocol', async ({ page }) => {
       await openDisplayMenu(page);
       const { button } = getSatelliteToggle(page);
 
@@ -198,7 +198,7 @@ test.describe('Satellite Display', () => {
           if (!source || !('tiles' in source)) return null;
           return source.tiles?.[0] ?? null;
         });
-      }, { timeout: 5000 }).toMatch(/^stalagmight-tiles:\/\//);
+      }, { timeout: 5000 }).toMatch(CUSTOM_TILE_URL_RE);
     });
 
     test('should have source attribution present', async ({ page }) => {
