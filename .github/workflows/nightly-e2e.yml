@@ -21,7 +21,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Don't spend full-suite minutes on a scheduled run when nothing has merged
+  # since the last one (we don't work every day). This gate job is ~15s; a
+  # manual workflow_dispatch always proceeds.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.changed.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "manual dispatch — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$(git log --since='8 days ago' --pretty=oneline)" ]; then
+            echo "commits in the last week — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no commits since the last weekly run — skipping the suite."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   full:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
