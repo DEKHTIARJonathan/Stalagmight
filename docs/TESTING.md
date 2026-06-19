@@ -342,7 +342,7 @@ e2e/
 │   ├── import-dmp-dialog.spec.ts      # DMP import flow (Selection + Wizard)
 │   ├── import-section-dialog.spec.ts  # ImportDialog tests (section creation)
 │   ├── project-lifecycle.spec.ts
-│   ├── keyboard-shortcuts.spec.ts
+│   ├── map-tools.spec.ts              # tool-activation keyboard shortcuts
 │   └── map-interactions.spec.ts
 ├── fixtures/
 │   ├── test_v2.dmp
