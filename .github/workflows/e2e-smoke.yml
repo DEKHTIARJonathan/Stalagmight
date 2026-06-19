@@ -4,11 +4,17 @@ name: E2E Smoke
 # Runs against the Vite dev server with mocked Tauri IPC, so it needs only
 # Node + Chromium (no Rust/Tauri build). The comprehensive suite runs nightly
 # (see nightly-e2e.yml).
+# Smoke runs the app with MOCKED Tauri IPC, so a Rust-only (`src-tauri/**`) change
+# cannot affect it — skip those here (a real IPC-contract change lands as a `src/**`
+# diff via the committed generated types and re-triggers). Also skip docs + the
+# separate WDIO legacy suite. Blocklist style; safe because `master` is unprotected (#122).
 on:
   push:
     branches: [master]
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'src-tauri/**']
   pull_request:
     branches: [master]
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**', 'src-tauri/**']
 
 concurrency:
   group: smoke-${{ github.ref }}

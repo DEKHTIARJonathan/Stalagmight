@@ -3,12 +3,10 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
+    # Don't spend a full LLM review on changes with nothing to review: pure docs
+    # and the quarantined WDIO legacy suite. Rust IS reviewed (not ignored).
+    # Blocklist style; safe because `master` is unprotected — no required-check deadlock (#122).
+    paths-ignore: ['**/*.md', 'docs/**', 'e2e/legacy/**']
 
 # Cancel an in-flight review when a newer push supersedes it, so rapid pushes
 # don't each pay for a full review.
