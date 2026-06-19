@@ -22,11 +22,11 @@ describe('projectStore.deleteProject', () => {
     useProjectStore.setState({ recentProjects: [], config: null });
   });
 
-  it('calls delete_project with the path and refreshes recents + config on success', async () => {
-    const result = await useProjectStore.getState().deleteProject(PATH);
+  it('calls delete_project with the path + sibling flag and refreshes recents + config on success', async () => {
+    const result = await useProjectStore.getState().deleteProject(PATH, true);
 
     expect(result.success).toBe(true);
-    expect(invokeIpcMock).toHaveBeenCalledWith('delete_project', { path: PATH }, expect.any(Object));
+    expect(invokeIpcMock).toHaveBeenCalledWith('delete_project', { path: PATH, deleteCollabSibling: true }, expect.any(Object));
     // The refresh (so the deleted project leaves both available and "missing" rows)
     // fires only on success.
     expect(invokeIpcMock).toHaveBeenCalledWith('list_recent_projects', undefined, expect.any(Object));
@@ -39,7 +39,7 @@ describe('projectStore.deleteProject', () => {
       return undefined;
     });
 
-    const result = await useProjectStore.getState().deleteProject(PATH);
+    const result = await useProjectStore.getState().deleteProject(PATH, false);
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('boom');
@@ -52,7 +52,7 @@ describe('projectStore.deleteProject', () => {
       return undefined;
     });
 
-    const result = await useProjectStore.getState().deleteProject(PATH);
+    const result = await useProjectStore.getState().deleteProject(PATH, true);
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('ipc exploded');

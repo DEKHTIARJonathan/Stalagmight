@@ -47,7 +47,7 @@ export default function DeleteProjectDialog() {
     }
     setIsDeleting(true);
     setError(null);
-    const result = await deleteProject(path);
+    const result = await deleteProject(path, collabEnabled);
     if (result.success) {
       closeDialog();
       return;

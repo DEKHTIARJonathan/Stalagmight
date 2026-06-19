@@ -210,12 +210,20 @@ pub(crate) fn remove_from_recent_projects_impl(
 /// list. The destructive counterpart to `remove_from_recent_projects`; see
 /// [`AppState::delete_project`] for the OS-trash / permanent-delete semantics.
 #[tauri::command]
-pub fn delete_project(state: State<AppState>, path: PathBuf) -> CommandResult {
-    delete_project_impl(state.inner(), path)
+pub fn delete_project(
+    state: State<AppState>,
+    path: PathBuf,
+    delete_collab_sibling: bool,
+) -> CommandResult {
+    delete_project_impl(state.inner(), path, delete_collab_sibling)
 }
 
-pub(crate) fn delete_project_impl(state: &AppState, path: PathBuf) -> CommandResult {
-    state.delete_project(path)
+pub(crate) fn delete_project_impl(
+    state: &AppState,
+    path: PathBuf,
+    delete_collab_sibling: bool,
+) -> CommandResult {
+    state.delete_project(path, delete_collab_sibling)
 }
 
 /// Rename a recent project's display name by path (project need not be open).

@@ -79,23 +79,27 @@ impl AppState {
     ///
     /// The destructive counterpart to
     /// [`remove_from_recent_projects`](Self::remove_from_recent_projects), which
-    /// only forgets the entry. The project's `.stalx` and its sibling `.tml`
-    /// (collab file, when present) are handed to the OS's own delete via
-    /// [`send_to_trash`]: on macOS they land in the Trash, on Linux in the
-    /// freedesktop trash where one exists. The app keeps no undo trail of its
-    /// own — recovery, if any, is whatever the OS provides.
+    /// only forgets the entry. The project's `.stalx` (and, when
+    /// `delete_collab_sibling` is set, its same-stem `.tml` collab file) are handed
+    /// to the OS's own delete via [`send_to_trash`]: on macOS they land in the
+    /// Trash, on Linux in the freedesktop trash where one exists. The app keeps no
+    /// undo trail of its own — recovery, if any, is whatever the OS provides.
     ///
     /// Tolerant of a file that is already gone (it still drops the entry from
     /// recents). If the deleted project is the one currently open in memory, the
     /// open project is cleared so a later autosave can't recreate the file we
     /// just removed.
-    pub fn delete_project(&self, path: PathBuf) -> CommandResult {
-        // Hand the project DB and its collab sibling to the OS trash. The sibling
-        // is skipped when absent — most projects have no `.tml`.
-        let tml = path.with_extension("tml");
+    pub fn delete_project(&self, path: PathBuf, delete_collab_sibling: bool) -> CommandResult {
+        // Hand the project DB to the OS trash. The sibling `.tml` is removed only
+        // when the caller confirms it's this project's collab file — a same-stem
+        // `.tml` next to a non-collab project may be an unrelated/imported Ariane
+        // file the user was never warned about, so we leave it alone.
         let mut targets = vec![path.clone()];
-        if tml != path {
-            targets.push(tml);
+        if delete_collab_sibling {
+            let tml = path.with_extension("tml");
+            if tml != path {
+                targets.push(tml);
+            }
         }
         for target in &targets {
             if !target.exists() {
@@ -178,10 +182,11 @@ impl AppState {
 /// we fall back to a permanent `fs::remove_file` so the delete still happens — the
 /// user asked for a real delete, and the OS provides recovery only where it can.
 ///
-/// Test builds skip all of that and take the deterministic `fs::remove_file`
-/// directly, so `cargo test` neither pollutes the developer's real Trash nor
-/// depends on a trash directory existing on a headless CI runner.
-#[cfg(not(test))]
+/// Test builds (and the Android `cdylib` target, which has no desktop trash and
+/// excludes the `trash` crate) skip all of that and take the deterministic
+/// `fs::remove_file` directly, so `cargo test` neither pollutes the developer's
+/// real Trash nor depends on a trash directory existing on a headless CI runner.
+#[cfg(all(not(test), not(target_os = "android")))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
     match trash::delete(path) {
         Ok(()) => Ok(()),
@@ -189,6 +194,15 @@ fn send_to_trash(path: &Path) -> Result<(), String> {
             format!("trash failed ({trash_err}); permanent delete also failed ({fs_err})")
         }),
     }
+}
+
+// Android has no desktop trash and the `trash` crate isn't built there (the
+// dependency is gated off `target_os = "android"` in Cargo.toml), so fall straight
+// through to a permanent remove. The app ships desktop-only; this just keeps the
+// Android `cdylib` target compiling.
+#[cfg(all(not(test), target_os = "android"))]
+fn send_to_trash(path: &Path) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -72,6 +72,10 @@ compass_data = { path = "vendor/compass_data" }
 igrf = "0.2"
 proj4rs = "0.1"
 time = "0.3"
+
+# `trash` has no Android platform module, and the app ships desktop-only — gate it
+# off the Android `cdylib` target so `tauri android build` keeps compiling.
+[target.'cfg(not(target_os = "android"))'.dependencies]
 trash = "5.2.6"
 
 [profile.dev]

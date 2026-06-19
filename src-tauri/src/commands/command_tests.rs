@@ -1083,7 +1083,7 @@ fn test_delete_project_removes_file_and_recent() {
             let saved_path = save_project_to_temp(&app, &dir);
             assert!(saved_path.exists(), "precondition: .stalx written to disk");
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = project::delete_project(state(&app), saved_path.clone(), false);
             assert_success(&result);
             assert!(!saved_path.exists(), "project file should be deleted from disk");
             let recent = project::list_recent_projects(state(&app));
@@ -1104,10 +1104,32 @@ fn test_delete_project_removes_tml_sibling() {
             fs::write(&tml, b"<dummy/>").unwrap();
             assert!(tml.exists());
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = project::delete_project(state(&app), saved_path.clone(), true);
             assert_success(&result);
             assert!(!saved_path.exists());
             assert!(!tml.exists(), "collab sibling .tml should be deleted too");
+        });
+    });
+}
+
+#[test]
+fn test_delete_project_keeps_unconfirmed_tml() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            // A same-stem .tml exists but the caller did NOT confirm it's this
+            // project's collab file (delete_collab_sibling = false): it may be an
+            // unrelated/imported Ariane file, so it must be left on disk.
+            let tml = saved_path.with_extension("tml");
+            fs::write(&tml, b"<dummy/>").unwrap();
+
+            let result = project::delete_project(state(&app), saved_path.clone(), false);
+            assert_success(&result);
+            assert!(!saved_path.exists(), "project .stalx should be deleted");
+            assert!(tml.exists(), "unconfirmed sibling .tml must NOT be deleted");
         });
     });
 }
@@ -1121,7 +1143,7 @@ fn test_delete_project_tolerates_missing_file() {
             // should still succeed (there is simply nothing to remove).
             let dir = TempDir::new().unwrap();
             let missing = dir.path().join("never-saved.stalx");
-            let result = project::delete_project(state(&app), missing.clone());
+            let result = project::delete_project(state(&app), missing.clone(), false);
             assert_success(&result);
             assert!(!missing.exists());
         });

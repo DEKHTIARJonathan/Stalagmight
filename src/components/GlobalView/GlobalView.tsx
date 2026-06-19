@@ -266,6 +266,27 @@ export default function GlobalView() {
     });
   }, [removeFromRecentProjects, selectedProjectId]);
 
+  // Prune selection when a project leaves the recents list (e.g. after a delete,
+  // or any external removal): otherwise selectedProjectId / multiSelectedIds dangle
+  // on a path that's gone, and Enter/Delete would act on it. The valid set is the
+  // loaded recents plus config "missing" paths, so selecting a missing entry sticks.
+  useEffect(() => {
+    const valid = new Set<string>([
+      ...recentProjects.map((p) => p.file_path),
+      ...(config?.general?.recent_projects ?? []),
+    ]);
+    setSelectedProjectId((prev) => (prev && !valid.has(prev) ? null : prev));
+    setMultiSelectedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [recentProjects, config]);
+
   // Register GlobalView keyboard shortcuts via hook
   useGlobalViewShortcuts({
     selectedProjectId,

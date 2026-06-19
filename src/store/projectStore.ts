@@ -282,7 +282,7 @@ interface ProjectStore {
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
-  deleteProject: (path: string) => Promise<CommandResult>;
+  deleteProject: (path: string, deleteCollabSibling: boolean) => Promise<CommandResult>;
   mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
@@ -1301,11 +1301,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // removeFromRecentProjects, which only forgets the entry). The backend hands the
   // files to the OS delete; on success we refresh both the loaded list and the
   // config so the project disappears from the available AND "missing" recent rows.
-  deleteProject: async (path: string) => {
+  deleteProject: async (path: string, deleteCollabSibling: boolean) => {
     try {
       const result = await invokeIpc<CommandResult>(
         'delete_project',
-        { path },
+        { path, deleteCollabSibling },
         { purpose: 'permanently delete project', fields: { path } }
       );
       if (result.success) {
