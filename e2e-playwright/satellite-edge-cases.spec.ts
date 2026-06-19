@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -464,7 +464,7 @@ test.describe('Satellite Edge Cases', () => {
           if (!source || !('tiles' in source)) return null;
           return source.tiles?.[0] ?? null;
         });
-      }, { timeout: 5000 }).toContain('stalagmight-tiles://');
+      }, { timeout: 5000 }).toMatch(CUSTOM_TILE_URL_RE);
     });
 
     test('should clean up satellite layer when disabled', async ({ page }) => {

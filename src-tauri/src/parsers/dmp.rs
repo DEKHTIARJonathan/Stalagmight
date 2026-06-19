@@ -979,6 +979,37 @@ mod tests {
         }
     }
 
+    /// Ported from the WDIO `dmp-integration` spec (#120): the v5 parser must be
+    /// resilient to malformed end-of-section markers (the `_buggy_EOS` fixture)
+    /// and still recover sections instead of bailing out.
+    #[test]
+    fn test_parse_v5_dmp_buggy_eos_is_resilient() {
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/test_v5_buggy_EOS.dmp");
+        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+
+        let dmp = parse_dmp(&test_file)
+            .expect("v5 DMP with malformed EOS markers should still parse");
+        assert!(
+            !dmp.sections.is_empty(),
+            "buggy-EOS DMP should still yield sections"
+        );
+    }
+
+    /// Ported from the WDIO `dmp-integration` spec (#120): a corrupted DMP must
+    /// fail loudly (Err), never silently "succeed" with empty/garbage data.
+    #[test]
+    fn test_parse_corrupted_dmp_errors() {
+        let test_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../e2e/fixtures/test_corrupted.dmp");
+        assert!(test_file.exists(), "Fixture missing: {}", test_file.display());
+
+        assert!(
+            parse_dmp(&test_file).is_err(),
+            "corrupted DMP must return Err, not parse successfully"
+        );
+    }
+
     // ============================================================================
     // Edge Case Tests (fn-37-rxr.1)
     // ============================================================================

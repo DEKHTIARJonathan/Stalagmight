@@ -781,4 +781,39 @@ test.describe('Visual Regression - Shortcuts', () => {
       fullPage: false,
     });
   });
+
+  test.describe('Accessibility — live region announcements', () => {
+    // Ported from the retired WDIO `shortcuts-accessibility` spec (#120): the
+    // ShortcutRecorder's aria-live region must announce recording state changes
+    // for screen-reader users. No other Playwright spec asserts these.
+    test('announces recording start and cancellation', async ({ page }) => {
+      await openSettingsDialog(page);
+      await navigateToShortcutsCategory(page);
+
+      const recorder = page.locator('[data-testid="shortcut-primary-select"]');
+      const liveRegion = recorder.locator('[role="status"][aria-live="polite"]');
+
+      await recorder.click();
+      await waitForRecording(page, 'shortcut-primary-select', true);
+      await expect(liveRegion).toContainText('Recording shortcut', { timeout: 2000 });
+
+      await page.keyboard.press('Escape');
+      await waitForRecording(page, 'shortcut-primary-select', false);
+      await expect(liveRegion).toContainText('Recording cancelled', { timeout: 2000 });
+    });
+
+    test('announces the captured shortcut on completion', async ({ page }) => {
+      await openSettingsDialog(page);
+      await navigateToShortcutsCategory(page);
+
+      const recorder = page.locator('[data-testid="shortcut-secondary-select"]');
+      const liveRegion = recorder.locator('[role="status"][aria-live="polite"]');
+
+      await recorder.click();
+      await waitForRecording(page, 'shortcut-secondary-select', true);
+      await page.keyboard.press('Control+Shift+W');
+      await waitForRecording(page, 'shortcut-secondary-select', false);
+      await expect(liveRegion).toContainText('Shortcut set to', { timeout: 2000 });
+    });
+  });
 });

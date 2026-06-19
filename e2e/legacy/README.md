@@ -9,9 +9,17 @@ any automated gate:
 - **Releases** do not run this suite.
 
 They live under `legacy/` because they are **15–20× slower** than the Playwright
-suite (`e2e-playwright/`, mocked IPC) and **~85% of them duplicate** behavior that
-the Playwright suite already covers faster and more reliably. Nothing here was
-deleted — full history and coverage are preserved, and the suite stays runnable.
+suite (`e2e-playwright/`, mocked IPC) and most of them duplicate behavior the
+Playwright suite already covers faster and more reliably.
+
+**#120 cleanup (2026-06):** 13 rotted specs that failed on `master` were retired
+after **verifying their coverage is preserved elsewhere**. The unique real-backend
+assertions moved to **Rust** integration/unit tests (export PNG dpi-scaling in
+`export/image.rs`; DMP buggy-EOS + corrupted in `parsers/dmp.rs`; reconcile
+round-trips already in `core/reconcile.rs` + `core/state/collab.rs`), and the two
+genuinely-unique UI cases — the import-section dialog and the shortcut-recorder
+`aria-live` announcements — were ported to `e2e-playwright/`. The remaining 11 were
+already duplicated. See git history for the retired specs.
 
 ## Running
 
@@ -20,7 +28,7 @@ deleted — full history and coverage are preserved, and the suite stays runnabl
 ./scripts/wdio.sh
 
 # One spec
-./scripts/wdio.sh --spec e2e/legacy/specs/export-integration.spec.ts
+./scripts/wdio.sh --spec e2e/legacy/specs/tml-import-integration.spec.ts
 
 # Manual (Linux/Windows only; macOS uses tauri-wd)
 pnpm test:e2e
@@ -39,24 +47,30 @@ relevant spec here before a release:
 
 | Spec | Why it can't be a Playwright test |
 |------|-----------------------------------|
-| `export-integration.spec.ts` | Real CSV/JSON/PNG/SVG files written to disk and inspected |
-| `export-scaling.spec.ts` | Real `resvg` rasterization / pixel-accurate SVG scaling |
 | `tml-import-integration.spec.ts`, `tml-export-integration.spec.ts`, `tml-closure-import.spec.ts`, `tml-excluded-shots.spec.ts` | Real TML parse/serialize round-trips through the backend |
-| `dmp-integration.spec.ts` | Real `.dmp` parsing with real file I/O |
 | `project-persistence.spec.ts` | Real filesystem save/load across app sessions |
 | `save-now-single-write.spec.ts` | Real write coordination (single-write invariant) |
-| `collab-roundtrip.spec.ts` | Real sibling `.tml` save/reconcile round-trip |
 | `fractal-data-generation.spec.ts` | Large-dataset stress / perf against the real backend |
+
+> Export (CSV/JSON/PNG/SVG + dpi scaling), `.dmp` parsing, and collab `.tml`
+> reconcile round-trips used to live here too (`export-integration`,
+> `export-scaling`, `dmp-integration`, `collab-roundtrip`) — retired in #120; that
+> coverage is now in Rust tests (`export/image.rs`, `parsers/dmp.rs`,
+> `core/reconcile.rs`, `core/state/collab.rs`), which run on every CI `cargo test`.
 
 ## What's duplicated by Playwright (redundant — low priority to maintain)
 
 UI/interaction specs whose behavior is already covered, faster, by
-`e2e-playwright/`: `back-button`, `keyboard-shortcuts`, `map-controls-styling`,
-`map-integration`, `map-interactions`, `multi-section-workflows`, `zoom-tool`,
-`satellite-display`, `depth-gradient`, `detail-panel-center`,
-`section-highlighting-a11y`, `shortcuts-accessibility`, `reference-shots-filter`,
-`project-lifecycle`, `undo-redo-integration`, `import-dmp-dialog`,
-`import-section-dialog`, `export-accessibility`.
+`e2e-playwright/`: `back-button`, `map-controls-styling`, `map-integration`,
+`map-interactions`, `multi-section-workflows`, `depth-gradient`,
+`reference-shots-filter`, `project-lifecycle`, `import-dmp-dialog`.
+
+(The duplicated specs that were also **failing on `master`** — `keyboard-shortcuts`,
+`zoom-tool`, `satellite-display`, `detail-panel-center`, `section-highlighting-a11y`,
+`shortcuts-accessibility`, `undo-redo-integration`, `import-section-dialog`,
+`export-accessibility` — were deleted in #120; the Playwright twins
+(`map-tools`, `zoom-tool`, `satellite-*`, `detail-panel-links`, `settings-shortcuts`,
+`undo-redo-dropdown`, `section-highlighting`, plus the two new ports) cover them.)
 
 Prefer adding new UI coverage to `e2e-playwright/`, not here. Tracked under #23.
 

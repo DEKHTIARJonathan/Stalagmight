@@ -271,3 +271,19 @@ export async function placeAllSections(page: Page): Promise<void> {
     await expect(wizard).toBeHidden({ timeout: 10000 });
   }
 }
+
+/**
+ * Matches the `stalagmight-tiles` custom tile protocol in EITHER platform form.
+ *
+ * Tauri v2 surfaces a registered custom scheme differently per webview:
+ *   - macOS/Linux (WRY):        `stalagmight-tiles://<provider>/{z}/{y}/{x}`
+ *   - Windows/WebView2:         `http://stalagmight-tiles.localhost/<provider>/{z}/{y}/{x}`
+ * The Vite + Chromium test environment reports the `http://…localhost/` form. Both
+ * are served by the same registered Rust protocol handler (`src-tauri/src/lib.rs`
+ * `register_asynchronous_uri_scheme_protocol("stalagmight-tiles", …)`) — neither is
+ * a raw network fetch. This regex intentionally accepts only those two forms, so a
+ * real external tile server (`https://server.arcgisonline.com/…`) still fails the
+ * assertion (the original CORS-bug guard these satellite tests were written for).
+ */
+export const CUSTOM_TILE_URL_RE =
+  /^(?:stalagmight-tiles:\/\/|http:\/\/stalagmight-tiles\.localhost\/)/;

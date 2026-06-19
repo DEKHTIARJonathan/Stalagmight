@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Regression tests for satellite imagery bugs that were fixed.
@@ -268,9 +268,10 @@ test.describe('Satellite Bug Regressions', () => {
       // Verify the source uses custom protocol
       const tileUrl = await getTileUrl(page, 'satellite-tiles');
 
-      // Must use custom protocol, not https://
-      expect(tileUrl).toMatch(/^stalagmight-tiles:\/\//);
-      expect(tileUrl).not.toMatch(/^https?:\/\//);
+      // Must use the custom protocol (either platform form), never a raw external
+      // fetch URL. CUSTOM_TILE_URL_RE already excludes external https://, so the
+      // single positive assertion preserves the original anti-CORS guard.
+      expect(tileUrl).toMatch(CUSTOM_TILE_URL_RE);
     });
 
     test('should include provider in tile URL path', async ({ page }) => {
@@ -341,7 +342,7 @@ test.describe('Satellite Bug Regressions', () => {
       // Verify custom protocol
       const protocolTileUrl = await getTileUrl(page, 'satellite-tiles');
       expect(protocolTileUrl).toBeTruthy();
-      expect(protocolTileUrl).toMatch(/^stalagmight-tiles:\/\//);
+      expect(protocolTileUrl).toMatch(CUSTOM_TILE_URL_RE);
 
       // App should be stable
       await expect(page.getByTestId('map-canvas')).toBeVisible();

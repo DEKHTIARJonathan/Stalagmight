@@ -124,7 +124,7 @@ Any additional arguments are passed through to wdio.
 Examples:
   $0                                    # Run all tests
   $0 --rebuild                          # Force rebuild, then run tests
-  $0 --spec e2e/legacy/specs/dmp-integration.spec.ts  # Run specific spec
+  $0 --spec e2e/legacy/specs/tml-import-integration.spec.ts  # Run specific spec
   $0 --headless --spec e2e/legacy/specs/foo.spec.ts   # Force xvfb, run specific spec
 
 Environment Variables:
