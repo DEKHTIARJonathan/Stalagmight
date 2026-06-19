@@ -18,6 +18,28 @@ It is year 2026.
 
 ## Critical Rules
 
+### Pinned Toolchain — enable corepack
+
+The toolchain is pinned so every machine + CI runs the same versions:
+
+- **pnpm `9.15.9`** via `"packageManager"` in `package.json` (corepack and
+  `pnpm/action-setup@v4` both read it — no per-workflow `version:`).
+- **node `22.x`** via `.nvmrc` + advisory `engines` (a warning, not a hard block,
+  on newer node).
+
+First-time setup on a clean clone:
+
+```bash
+corepack enable      # makes `pnpm` honor packageManager (pins to 9.15.9)
+pnpm install         # build scripts are pre-approved (pnpm.onlyBuiltDependencies)
+./scripts/dev.sh
+```
+
+Without `corepack enable`, a globally-installed **pnpm 11** hard-fails
+`pnpm tauri dev` on a fresh clone (its stricter deps check rejects unapproved
+build scripts — issue #109). Don't commit a lockfile-only drift. Coordinated
+pnpm/node upgrades are a deliberate, separate change (Phase 2).
+
 ### Never Use `cd` in Bash Commands
 
 The shell session persists working directory changes, causing commands to run from wrong locations. This has caused files to be created in `src-tauri/src-tauri/` and committed to git.

@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.2.0",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -70,5 +74,12 @@
     "vite-plugin-istanbul": "^7.2.1",
     "vitest": "^2.1.5",
     "webdriverio": "^9.23.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "edgedriver",
+      "geckodriver"
+    ]
   }
 }
