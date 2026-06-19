@@ -30,6 +30,16 @@ export default function DeleteProjectDialog() {
     path?.split(/[\\/]/).pop()?.replace(/\.stalx$/i, '') ||
     'this project';
 
+  // Name the actual files the backend will remove, by full path: the .stalx, plus
+  // its .tml collab sibling when the project is collab-enabled.
+  const collabEnabled = Boolean(dialogData.collabEnabled);
+  const tmlPath = path?.replace(/\.stalx$/i, '.tml');
+  const fileNames = path
+    ? collabEnabled && tmlPath && tmlPath !== path
+      ? `${path} and ${tmlPath}`
+      : path
+    : name;
+
   const handleConfirm = async () => {
     if (!path) {
       closeDialog();
@@ -55,9 +65,8 @@ export default function DeleteProjectDialog() {
         </p>
 
         <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-          This removes the project file from disk. Where your system has a
-          Trash/Recycle Bin it's moved there; otherwise it can't be undone from
-          within the app.
+          This removes the project files{' '}
+          <span className="font-medium break-all">{fileNames}</span> from disk. It cannot be undone.
         </div>
 
         {error && (

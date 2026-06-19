@@ -787,7 +787,7 @@ export default function GlobalView() {
                 className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 text-error flex items-center gap-2"
                 onClick={() => {
                   const proj = recentProjects.find((p) => p.file_path === contextMenu.projectPath);
-                  openDialog('delete-project', { path: contextMenu.projectPath, name: proj?.name });
+                  openDialog('delete-project', { path: contextMenu.projectPath, name: proj?.name, collabEnabled: proj?.collab_enabled });
                   setContextMenu((prev) => ({ ...prev, visible: false }));
                 }}
                 role="menuitem"

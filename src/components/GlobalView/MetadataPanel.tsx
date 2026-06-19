@@ -103,9 +103,13 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   // forget-only Remove above). Routes through the shared confirm dialog.
   const handleDeleteProject = useCallback(() => {
     if (singleProject?.file_path) {
-      openDialog('delete-project', { path: singleProject.file_path, name: singleProject.name });
+      openDialog('delete-project', {
+        path: singleProject.file_path,
+        name: singleProject.name,
+        collabEnabled: singleProject.collab_enabled,
+      });
     }
-  }, [singleProject?.file_path, singleProject?.name, openDialog]);
+  }, [singleProject?.file_path, singleProject?.name, singleProject?.collab_enabled, openDialog]);
 
   // Rename the selected (not-necessarily-open) project's display name.
   const startEditName = useCallback(() => {

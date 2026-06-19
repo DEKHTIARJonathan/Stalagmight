@@ -41,6 +41,10 @@ test.describe('GlobalView — Delete project (destructive)', () => {
     const dialog = page.getByTestId('delete-project-dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('Cave System Alpha');
+    // Names the actual files being removed by full path (Alpha is collab-enabled
+    // → .stalx + .tml) and is unambiguous about permanence.
+    await expect(dialog).toContainText('/projects/cave-alpha.stalx and /projects/cave-alpha.tml');
+    await expect(dialog).toContainText('It cannot be undone');
 
     await page.getByTestId('delete-project-confirm').click();
     // A successful delete closes the dialog.
