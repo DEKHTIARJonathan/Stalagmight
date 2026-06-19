@@ -46,6 +46,43 @@ const maxInstances = isMacOS ? 1 : readEnvInt('WDIO_MAX_INSTANCES', DEFAULT_MAX_
 const basePort = readEnvInt('WDIO_BASE_PORT', 4444);
 const baseNativePort = readEnvInt('WDIO_BASE_NATIVE_PORT', basePort + 1000);
 const xvfbScreen = process.env.WDIO_XVFB_SCREEN || '1280x720x24';
+
+// macOS: SIGKILL any still-alive app instances this run launched (recorded by
+// e2e/mac-app-wrapper.mjs in STALAGMIGHT_TEST_PIDFILE). Called from afterSession
+// so each session's window is reaped as it ends rather than piling up in RAM for
+// the whole run (the wdio.sh EXIT trap stays as the catch-all). Mirrors the
+// verify-then-kill in scripts/wdio.sh: each PID is re-checked as a live
+// `stalagmight` process before kill, so PID reuse can't take down an unrelated
+// process and a user-launched instance (never recorded) is never touched.
+function reapTrackedAppsOnce(): void {
+  const pidFile = process.env.STALAGMIGHT_TEST_PIDFILE;
+  if (!pidFile || !fs.existsSync(pidFile)) return;
+  let pids: number[];
+  try {
+    pids = fs
+      .readFileSync(pidFile, 'utf8')
+      .split('\n')
+      .map((line) => parseInt(line.trim(), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return;
+  }
+  for (const pid of pids) {
+    let comm = '';
+    try {
+      comm = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf8' }).trim();
+    } catch {
+      continue; // ps exited non-zero => pid not alive
+    }
+    if (comm.includes('stalagmight')) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+}
 const xvfbDisplays = [
   process.env.WDIO_XVFB_DISPLAY,
   ':99',
@@ -330,6 +367,9 @@ export const config: Options.Testrunner = {
     // Environment isolation: tauri-wd inherits the main process env, and apps
     // launched by tauri-wd inherit tauri-wd's env. So we set up an isolated
     // HOME here BEFORE starting tauri-wd, ensuring all apps use a clean config.
+    // This same inheritance carries STALAGMIGHT_TEST_PIDFILE to the wrapper so
+    // launched apps get tracked for reaping — keep the spawn() env inherited;
+    // don't pass an explicit `env:` here without spreading `...process.env`.
     if (isMacOS) {
       // Create isolated HOME so the app doesn't read the user's real config
       macTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-wdio-shared-'));
@@ -635,6 +675,13 @@ export const config: Options.Testrunner = {
         console.warn('Failed to remove temp directory:', error);
       }
       tempRoot = null;
+    }
+
+    // macOS: reap THIS session's app now so windows don't accumulate across a
+    // long run. Sequential execution (maxInstances=1) means only the just-ended
+    // session's app is alive here; the wdio.sh EXIT trap remains the catch-all.
+    if (isMacOS) {
+      reapTrackedAppsOnce();
     }
 
     currentWorkerId = null;

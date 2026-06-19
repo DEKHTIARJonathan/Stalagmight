@@ -275,7 +275,12 @@ reap_tracked_stalagmight() {
         # reaps. The owner shell PID is the filename suffix.
         if [[ "$pidfile" != "$STALAGMIGHT_TEST_PIDFILE" ]]; then
             owner="${pidfile##*.}"
-            if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+            # Skip a pidfile a *live* run still owns — UNLESS it's stale. The
+            # owner PID can be reused by an unrelated process; an hours-old
+            # pidfile is never an active run (the wrapper touches it each
+            # session), so reap it instead of leaking its windows forever.
+            if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null \
+               && [[ -z "$(find "$pidfile" -mmin +120 2>/dev/null)" ]]; then
                 continue
             fi
         fi
@@ -294,6 +299,8 @@ reap_tracked_stalagmight() {
 
 # ===== Port cleanup =====
 cleanup_ports() {
+    # phase: "start" (clear a prior run's stragglers) or "exit" (post-run teardown).
+    local phase="${1:-start}"
     info "Cleaning up stale processes..."
 
     # Kill any existing tauri-driver / tauri-wd processes
@@ -313,11 +320,13 @@ cleanup_ports() {
     fi
 
     # Kill stalagmight app instances. On macOS, scope strictly to this harness's
-    # own spawned PIDs so a real dev instance survives (issue #127); elsewhere a
-    # broad sweep is fine (no overlapping user instance in the WDIO workflow).
+    # own spawned PIDs so a real dev instance survives (issue #127). On
+    # Linux/Windows there's no pidfile to scope by (no wrapper), so the broad
+    # sweep runs ONLY at startup (clearing a prior run's stragglers) — never from
+    # the EXIT trap, where it could kill a dev's own instance started meanwhile.
     if $IS_MACOS; then
         reap_tracked_stalagmight
-    elif pgrep -x stalagmight > /dev/null 2>&1; then
+    elif [[ "$phase" == start ]] && pgrep -x stalagmight > /dev/null 2>&1; then
         warn "Found running stalagmight, killing..."
         pkill -9 stalagmight 2>/dev/null || true
     fi
@@ -529,7 +538,7 @@ main() {
     # just at start — otherwise tauri-wd's flaky deleteSession leaves orphaned
     # app windows behind for the user to close by hand (issue #127). EXIT runs
     # cleanup_ports and preserves the test exit code; INT/TERM route through it.
-    trap 'rc=$?; cleanup_ports; exit $rc' EXIT
+    trap 'rc=$?; cleanup_ports exit; exit $rc' EXIT
     trap 'exit 130' INT TERM
 
     check_platform
