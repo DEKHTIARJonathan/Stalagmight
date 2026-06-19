@@ -1250,6 +1250,50 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// Ported from the WDIO `export-scaling` spec (#120): PNG raster dimensions
+    /// must scale linearly with DPI. `export_png` uses `scale = dpi / 72`, so
+    /// quadrupling the DPI must (modulo 1px ceil rounding per axis) ~4x each
+    /// dimension. This is the one export-scaling assertion not already covered
+    /// by `export_png_writes_valid_file` / the SVG structure tests.
+    #[test]
+    fn export_png_dimensions_scale_with_dpi() {
+        let project = simple_project();
+
+        let png_dims = |dpi: u32| -> (u32, u32) {
+            let file = NamedTempFile::new().unwrap();
+            let path = file.path().with_extension("png");
+            export_png(
+                &project,
+                &path,
+                &ExportImageOptions {
+                    format: ImageFormat::Png,
+                    dpi,
+                    branching_threshold: 2,
+                },
+            )
+            .unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::remove_file(&path).ok();
+            // PNG layout: 8-byte signature, 4-byte IHDR length, 4-byte "IHDR",
+            // then big-endian u32 width (bytes 16..20) and height (bytes 20..24).
+            let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+            let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+            (w, h)
+        };
+
+        let (w1, h1) = png_dims(72); // scale 1.0
+        let (w4, h4) = png_dims(288); // scale 4.0
+        assert!(w1 > 0 && h1 > 0, "base dimensions must be positive");
+        assert!(
+            (w4 as i64 - 4 * w1 as i64).abs() <= 4,
+            "width should scale ~4x with dpi: 72->{w1}, 288->{w4}"
+        );
+        assert!(
+            (h4 as i64 - 4 * h1 as i64).abs() <= 4,
+            "height should scale ~4x with dpi: 72->{h1}, 288->{h4}"
+        );
+    }
+
     #[test]
     fn export_pdf_writes_nonempty_file() {
         let project = simple_project();
