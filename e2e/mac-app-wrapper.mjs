@@ -30,7 +30,7 @@ const child = spawn(binary, [], {
 // spawned and leaves a real stalagmight the user has open untouched (#127).
 // O_APPEND keeps concurrent wrapper writes from interleaving within a line.
 const pidFile = process.env.STALAGMIGHT_TEST_PIDFILE;
-if (pidFile) {
+if (pidFile && typeof child.pid === 'number') {
   try {
     appendFileSync(pidFile, `${child.pid}\n`);
   } catch (err) {

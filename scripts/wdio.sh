@@ -280,7 +280,7 @@ reap_tracked_stalagmight() {
             # pidfile is never an active run (the wrapper touches it each
             # session), so reap it instead of leaking its windows forever.
             if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null \
-               && [[ -z "$(find "$pidfile" -mmin +120 2>/dev/null)" ]]; then
+               && [[ -z "$(find "$pidfile" -mmin +120 2>/dev/null || true)" ]]; then
                 continue
             fi
         fi
