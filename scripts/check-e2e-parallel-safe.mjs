@@ -6,10 +6,19 @@
 // shares a server / global. This scanner fails the build if a spec introduces a
 // pattern that would break that invariant. See docs/TESTING.md.
 //
-// Runs in the `smoke` job (e2e-smoke.yml) — the only CI job that triggers on
-// `e2e-playwright/**`. `check` (the home of the repo's Rust/vitest grep-gates)
-// path-ignores `e2e-playwright/**`, so a gate there would be a no-op for an
-// e2e-playwright-only PR — exactly the change this must catch.
+// Runs in the `smoke` job (e2e-smoke.yml) — the only CI job that runs the
+// Playwright tier on `e2e-playwright/**` changes. `check` (the home of the
+// repo's Rust/vitest grep-gates) path-ignores `e2e-playwright/**`, so a gate
+// there would be a no-op for an e2e-playwright-only PR — exactly the change this
+// must catch. (claude-code-review.yml also lacks that path-ignore, but it's an
+// LLM review that wouldn't run this gate, and is currently disabled anyway.)
+//
+// This is a line-based heuristic tripwire for the *common, accidental* regression,
+// not a parser/sandbox. Known accepted gaps: it doesn't inspect
+// `page.screenshot({path})` (framework I/O, used with unique filenames), the root
+// `playwright.config.ts` (outside the scan dir, so a `fullyParallel: false` there
+// is invisible), or `process.env`/module-global mutation; and a `//` after
+// whitespace *inside* a string literal still cuts the rest of that line.
 //
 // Usage:  node scripts/check-e2e-parallel-safe.mjs   (or: pnpm lint:e2e-parallel)
 
@@ -42,8 +51,9 @@ const RULES = [
   {
     id: 'disk-write',
     // Require the call paren so mock command labels such as 'plugin:fs|writeFile'
-    // (string literals, no `(`) do not false-positive.
-    re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream)\s*\(/,
+    // (string literals, no `(`) do not false-positive. `page.screenshot({path})`
+    // is intentionally absent — it's framework I/O, used here with unique names.
+    re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|copyFileSync|cpSync|renameSync)\s*\(/,
     why: 'writes disk — use a per-(test,worker)-unique path only (see fixtures/coverage.ts), else concurrent workers clobber each other.',
   },
   {
@@ -54,7 +64,9 @@ const RULES = [
   },
   {
     id: 'serial',
-    re: /\b(?:describe|test)\.serial\b/,
+    // Both the `test.describe.serial(...)` shorthand and the idiomatic
+    // `test.describe.configure({ mode: 'serial' })` form.
+    re: /\b(?:describe|test)\.serial\b|mode:\s*['"]serial['"]/,
     why: 'serial execution defeats fullyParallel. If genuinely required, add this file to ALLOW in this script with a written reason.',
   },
 ];
@@ -73,11 +85,26 @@ function listTsFiles(dir) {
   return out;
 }
 
-// Cheap comment skip — not a real parser, just avoids the common false positive
-// of a pattern appearing inside a line/block comment.
-function isCommentLine(line) {
-  const t = line.trimStart();
-  return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+// Strip comments from a line so a pattern named in prose doesn't false-positive.
+// Tracks `/* */` across lines via `state.inBlock`. Removes a `//` line-comment at
+// line start or after whitespace, which leaves `://` inside URL strings intact.
+// Not a real parser: a `//` after whitespace *inside* a string literal still cuts
+// the rest of the line (documented accepted gap).
+function stripComments(line, state) {
+  let code = line;
+  if (state.inBlock) {
+    const end = code.indexOf('*/');
+    if (end === -1) return ''; // whole line is still inside a block comment
+    code = code.slice(end + 2);
+    state.inBlock = false;
+  }
+  code = code.replace(/\/\*.*?\*\//g, ''); // inline /* ... */ blocks
+  const open = code.indexOf('/*');
+  if (open !== -1) {
+    state.inBlock = true; // unterminated block — rest of line is comment
+    code = code.slice(0, open);
+  }
+  return code.replace(/(^|\s)\/\/.*$/, '$1');
 }
 
 function main() {
@@ -89,14 +116,13 @@ function main() {
   const files = listTsFiles(SCAN_DIR);
   const violations = [];
   for (const file of files) {
-    const rel = path.relative(ROOT, file);
+    // Normalize to forward slashes so the ALLOW list + report paths match on Windows.
+    const rel = path.relative(ROOT, file).split(path.sep).join('/');
     const lines = fs.readFileSync(file, 'utf8').split('\n');
+    const state = { inBlock: false };
     lines.forEach((line, i) => {
-      if (isCommentLine(line)) return;
-      // Drop a trailing line-comment so a pattern mentioned in prose (e.g.
-      // `// avoid writeFileSync( here`) doesn't false-positive. Only strip `//`
-      // preceded by whitespace, which leaves `://` inside URL strings intact.
-      const code = line.replace(/\s\/\/.*$/, '');
+      const code = stripComments(line, state);
+      if (!code.trim()) return;
       for (const rule of RULES) {
         const m = rule.re.exec(code);
         if (!m) continue;
