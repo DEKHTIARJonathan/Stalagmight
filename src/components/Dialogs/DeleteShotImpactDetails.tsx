@@ -17,11 +17,26 @@ function Pair({ a, b }: { a: StationRef; b: StationRef }) {
   );
 }
 
+/**
+ * The station-relationship fields shared by `DeleteShotImpact` and
+ * `DeleteShotRangeImpact`, so this component renders either one.
+ */
+export type ShotImpactRelationships = Pick<
+  DeleteShotImpact,
+  | 'removed_merges'
+  | 'removed_closures'
+  | 'replacement_merges'
+  | 'replacement_closure_updates'
+  | 'closure_to_merge'
+  | 'merge_rewire_skipped'
+  | 'closure_rewire_skipped'
+>;
+
 export default function DeleteShotImpactDetails({
   impact,
   title = 'This deletion will update station relationships:',
 }: {
-  impact: DeleteShotImpact | null;
+  impact: ShotImpactRelationships | null;
   title?: string;
 }) {
   if (!impact) return null;

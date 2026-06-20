@@ -3032,6 +3032,42 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] delete_shot_and_split called with:', args);
             return { success: true };
 
+          case 'preview_delete_shot_range': {
+            console.log('[Mock IPC] preview_delete_shot_range called with:', args);
+            const sectionId = (args?.sectionId as number | undefined) ?? 1;
+            return {
+              section_id: sectionId,
+              start_pos: 1,
+              end_pos: 2,
+              kind: 'interior',
+              removed_stations: [{ section_id: sectionId, station_index: 2 }],
+              removed_merges: [
+                {
+                  station_a: { section_id: sectionId, station_index: 1 },
+                  station_b: { section_id: sectionId, station_index: 2 },
+                },
+              ],
+              removed_closures: [],
+              replacement_merges: [],
+              replacement_closure_updates: [],
+              closure_to_merge: [],
+              merge_rewire_skipped: false,
+              closure_rewire_skipped: false,
+              shift_blocked: false,
+              shift_blocked_reasons: [],
+              removed_datums: [],
+              removed_comments: [],
+            };
+          }
+
+          case 'delete_shot_range_split':
+            console.log('[Mock IPC] delete_shot_range_split called with:', args);
+            return { success: true };
+
+          case 'delete_shot_range_shift':
+            console.log('[Mock IPC] delete_shot_range_shift called with:', args);
+            return { success: true };
+
           case 'update_section': {
             console.log('[Mock IPC] update_section called with:', args);
             // Mutate currentProject to support persistence testing

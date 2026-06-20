@@ -2687,6 +2687,396 @@ impl AppState {
         CommandResult::success().with_section_id(new_section_id)
     }
 
+    /// Delete a contiguous *interior* range of shots and split the section into
+    /// two: section A keeps the shots before the range (in place), section B is a
+    /// new section holding the shots after the range (offset so it keeps its
+    /// absolute position). Generalizes [`Self::execute_delete_shot_and_split`]
+    /// from a single shot to `[start_pos..=end_pos]`. Commits as ONE
+    /// `ProjectSnapshotPair` undo entry. The range must be interior (shots remain
+    /// before AND after); prefix/suffix/whole ranges use the shift or
+    /// section-delete paths.
+    pub fn execute_delete_shot_range_split(
+        &self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+        name_a: String,
+        name_b: String,
+    ) -> CommandResult {
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        tracing::info!(
+            section_id,
+            start_shot_id,
+            end_shot_id,
+            purpose = "split section after deleting shot range",
+            "Executing delete_shot_range_split as single undo unit"
+        );
+
+        let before_snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
+        };
+        let undo_section_b_name = name_b.clone();
+
+        let new_section_id = {
+            let Ok(mut proj_guard) = self.project.lock() else {
+                return CommandResult::failure("Failed to lock project".to_string());
+            };
+            let Some(project) = proj_guard.as_mut() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            let Some(section) = project.get_section(section_id) else {
+                return CommandResult::failure(format!("Section {section_id} not found"));
+            };
+
+            let n = section.shots.len();
+            let Some(mut start_pos) = section.shots.iter().position(|s| s.id == start_shot_id)
+            else {
+                return CommandResult::failure(format!(
+                    "Shot {start_shot_id} not found in section {section_id}"
+                ));
+            };
+            let Some(mut end_pos) = section.shots.iter().position(|s| s.id == end_shot_id) else {
+                return CommandResult::failure(format!(
+                    "Shot {end_shot_id} not found in section {section_id}"
+                ));
+            };
+            if start_pos > end_pos {
+                std::mem::swap(&mut start_pos, &mut end_pos);
+            }
+            // Split requires shots both before and after the range.
+            if start_pos == 0 || end_pos >= n - 1 {
+                return CommandResult::failure(
+                    "Range is not interior to the section (split needs shots before and after). \
+                     Use shift or delete the section instead."
+                        .to_string(),
+                );
+            }
+
+            // Capture owned data; afterwards the `section` borrow ends so we can mutate.
+            let shots_before: Vec<ShotData> =
+                section.shots[..start_pos].iter().map(|s| s.to_shot_data()).collect();
+            let shots_after: Vec<ShotData> =
+                section.shots[end_pos + 1..].iter().map(|s| s.to_shot_data()).collect();
+            let deleted_shots_data: Vec<ShotData> =
+                section.shots[start_pos..=end_pos].iter().map(|s| s.to_shot_data()).collect();
+            let range_shot_ids: Vec<ShotId> =
+                section.shots[start_pos..=end_pos].iter().map(|s| s.id).collect();
+            let surveyor = section.surveyor.clone();
+            let date = section.date;
+            let color = section.color.clone();
+            let direction = section.direction;
+            let quality = section.quality;
+
+            // Frozen-geometry guard (mirrors delete_shot).
+            for &sid in &range_shot_ids {
+                if project.is_shot_frozen_by_id(section_id, sid) {
+                    return CommandResult::failure(
+                        "Cannot delete a frozen shot. This range includes shots that are part of \
+                         an adjusted survey network."
+                            .to_string(),
+                    );
+                }
+            }
+
+            // Interior stations dropped by the split (strictly between the kept
+            // boundary stations `start_pos` (→A) and `end_pos+1` (→B:0)).
+            let interior: std::collections::HashSet<StationRef> =
+                ((start_pos as u32 + 1)..=(end_pos as u32))
+                    .map(|i| StationRef::new(section_id, i))
+                    .collect();
+
+            // Preserve connectivity across the dropped stations, then drop their
+            // own refs — BEFORE we capture old_refs, so the stored-ref set is
+            // final and the positional remap below stays 1:1 aligned. Both run
+            // while the section is structurally intact (indices still resolve).
+            project.preserve_connections_for_removed_stations(&interior);
+            project.cleanup_removed_station_references(&interior);
+
+            // Stable-identity remap snapshot (see execute_delete_shot_and_split):
+            // resolve every surviving cross-ref to its current positional ref.
+            let split_station = (end_pos + 1) as u32;
+            let original_station_count = n as u32 + 1;
+            let old_refs: Vec<Option<StationRef>> = {
+                let p: &Project = project;
+                let mut out = Vec::new();
+                p.for_each_station_ref(|_label, key| out.push(p.resolve_key(&key)));
+                out
+            };
+
+            // Section A = before (truncate in place to preserve shot IDs).
+            let Some(section_mut) = project.get_section_mut(section_id) else {
+                // preserve/cleanup above already mutated the project; roll back
+                // to the before-snapshot so a failure here leaves no half-applied
+                // state (mirrors the shift path's rollback on remove failure).
+                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                return CommandResult::failure(format!("Section {section_id} not found"));
+            };
+            section_mut.name = Some(name_a);
+            section_mut.shots.truncate(start_pos);
+
+            // Section B offset = section offset + displacement of (before ++ deleted).
+            let mut bx: f64 = 0.0;
+            let mut by: f64 = 0.0;
+            for shot_data in shots_before.iter().chain(deleted_shots_data.iter()) {
+                let temp_shot = crate::models::Shot::new(0, shot_data.clone());
+                let azimuth_rad = temp_shot.average_azimuth().to_radians();
+                let horizontal = temp_shot.horizontal_length();
+                bx += horizontal * azimuth_rad.sin();
+                by += horizontal * azimuth_rad.cos();
+            }
+            let (section_ox, section_oy) = project.section_offset(section_id);
+
+            let section_b_data = SectionData {
+                name: Some(name_b),
+                surveyor,
+                date,
+                color,
+                direction: Some(direction),
+                quality,
+                shots: shots_after,
+            };
+            let section_b = project.add_section(section_b_data);
+            let new_id = section_b.id;
+            project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
+
+            // Remap cross-refs across the split: stations at index >= split_station
+            // (= end_pos+1) move to B with index -= split_station; everything else
+            // (index <= start_pos) stays on A. Interior refs were already dropped,
+            // so no surviving ref resolves into the gap.
+            let new_keys: Vec<Option<StationKey>> = old_refs
+                .iter()
+                .map(|old_ref| {
+                    let sr = (*old_ref)?;
+                    let new_ref = if sr.section_id == section_id
+                        && sr.station_index >= split_station
+                        && sr.station_index < original_station_count
+                    {
+                        StationRef::new(new_id, sr.station_index - split_station)
+                    } else {
+                        sr
+                    };
+                    project.key_for_ref(new_ref)
+                })
+                .collect();
+            let mut remap_i = 0usize;
+            project.map_station_refs(|old_key| {
+                let next = new_keys.get(remap_i).cloned().flatten();
+                remap_i += 1;
+                next.unwrap_or(old_key)
+            });
+            debug_assert_eq!(
+                remap_i,
+                new_keys.len(),
+                "split-range remap: map_station_refs visited a different number of refs \
+                 than were captured in old_refs — traversal order diverged"
+            );
+
+            project.convert_orphan_closures_to_merges();
+            project.touch();
+            new_id
+        };
+
+        // Custom path bypasses execute()'s reconcile; re-derive offsets here.
+        self.reconcile_geometry();
+
+        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            Ok(s) => s,
+            Err(result) => return result,
+        };
+
+        let batch_cmd = Command::Batch {
+            commands: vec![
+                Command::DeleteShot {
+                    section_id,
+                    shot_id: start_shot_id,
+                },
+                Command::CreateSection {
+                    name: Some(undo_section_b_name),
+                    surveyor: None,
+                    date: None,
+                    color: String::new(),
+                    direction: None,
+                    shots: Vec::new(),
+                },
+            ],
+        };
+        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
+
+        tracing::info!(
+            section_id,
+            new_section_id,
+            purpose = "split section after deleting shot range",
+            "Delete shot range and split section completed"
+        );
+        CommandResult::success().with_section_id(new_section_id)
+    }
+
+    /// Delete a contiguous range of shots by gap-closing (shifting) — the
+    /// survivors rejoin and the section stays single. Generalizes the
+    /// single-shot `delete_shot` (`remove_shot_with_rewire`) to a range by
+    /// deleting the range's shots in forward order within ONE
+    /// `ProjectSnapshotPair` undo unit (each step is a valid single-shot
+    /// gap-close: head/before stays for interior & suffix ranges, tail/after
+    /// stays for prefix ranges). Refuses when the range is shift-blocked or would
+    /// empty the section (use split / section delete respectively).
+    pub fn execute_delete_shot_range_shift(
+        &self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+    ) -> CommandResult {
+        let Ok(_cmd_guard) = self.command_lock.lock() else {
+            return CommandResult::failure("Failed to acquire command lock".to_string());
+        };
+        tracing::info!(
+            section_id,
+            start_shot_id,
+            end_shot_id,
+            purpose = "gap-close a deleted shot range",
+            "Executing delete_shot_range_shift as single undo unit"
+        );
+
+        let before_snapshot = match self.capture_project_snapshot() {
+            Ok(s) => s,
+            Err(result) => return result,
+        };
+
+        let result_section = {
+            let Ok(mut proj_guard) = self.project.lock() else {
+                return CommandResult::failure("Failed to lock project".to_string());
+            };
+            let Some(project) = proj_guard.as_mut() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            let Some(section) = project.get_section(section_id) else {
+                return CommandResult::failure(format!("Section {section_id} not found"));
+            };
+
+            let n = section.shots.len();
+            let Some(mut start_pos) = section.shots.iter().position(|s| s.id == start_shot_id)
+            else {
+                return CommandResult::failure(format!(
+                    "Shot {start_shot_id} not found in section {section_id}"
+                ));
+            };
+            let Some(mut end_pos) = section.shots.iter().position(|s| s.id == end_shot_id) else {
+                return CommandResult::failure(format!(
+                    "Shot {end_shot_id} not found in section {section_id}"
+                ));
+            };
+            if start_pos > end_pos {
+                std::mem::swap(&mut start_pos, &mut end_pos);
+            }
+            // Deleting the whole section this way would leave it empty — route
+            // that through delete_section instead.
+            if start_pos == 0 && end_pos == n - 1 {
+                return CommandResult::failure(
+                    "Cannot shift-delete an entire section; delete the section instead."
+                        .to_string(),
+                );
+            }
+
+            // Delete in forward (ascending position) order by stable shot id.
+            let range_shot_ids: Vec<ShotId> =
+                section.shots[start_pos..=end_pos].iter().map(|s| s.id).collect();
+
+            // Frozen-geometry + shift-blocked prechecks (no mutation yet).
+            for &sid in &range_shot_ids {
+                if project.is_shot_frozen_by_id(section_id, sid) {
+                    return CommandResult::failure(
+                        "Cannot delete a frozen shot. This range includes shots that are part of \
+                         an adjusted survey network."
+                            .to_string(),
+                    );
+                }
+            }
+            if let Ok(impact) =
+                project.preview_delete_shot_range(section_id, start_shot_id, end_shot_id)
+            {
+                if impact.shift_blocked {
+                    let reasons = if impact.shift_blocked_reasons.is_empty() {
+                        "Shift geometry is not allowed for this range.".to_string()
+                    } else {
+                        impact.shift_blocked_reasons.join(" ")
+                    };
+                    return CommandResult::failure(format!("{reasons} Use split instead."));
+                }
+            }
+
+            // Stations the WHOLE range will remove, captured up front as
+            // canonical (position-independent) keys so renumbering during the
+            // per-shot deletes can't invalidate them. Each per-shot gap-close
+            // ignores anchors on these when deciding which side keeps its
+            // position — otherwise an anchor on a later, also-doomed range shot
+            // would displace the survivors (e.g. a suffix shift would keep the
+            // doomed tail fixed and shift the head). Whole-section was refused
+            // above, so start_pos==0 here means prefix.
+            let doomed_indices: Vec<u32> = if start_pos == 0 {
+                (0..=(end_pos as u32)).collect() // prefix
+            } else if end_pos == n - 1 {
+                ((start_pos as u32 + 1)..=(n as u32)).collect() // suffix
+            } else {
+                ((start_pos as u32 + 1)..=(end_pos as u32 + 1)).collect() // interior
+            };
+            let doomed_anchors: std::collections::HashSet<_> = doomed_indices
+                .iter()
+                .filter_map(|&i| project.key_for_ref(StationRef::new(section_id, i)))
+                .collect();
+
+            for &sid in &range_shot_ids {
+                if let Err(e) = project.remove_shot_with_rewire_excluding_anchors(
+                    section_id,
+                    sid,
+                    &doomed_anchors,
+                    /* defer_cascade */ true,
+                ) {
+                    // Already mutated — roll back to the before snapshot.
+                    let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                    return CommandResult::failure(e);
+                }
+            }
+            // Single cascade now that every range shot (and any doomed merge) is
+            // gone, so a doomed station's intermediate shift never propagates into
+            // a connected free-floating section — the per-shot cascades were
+            // deferred for exactly this reason. Assert alignment here, since each
+            // per-shot delete skipped its own alignment check.
+            project.cascade_connection_offsets(&[section_id]);
+            project.debug_assert_merge_alignment("delete_shot_range_shift");
+            section_id
+        };
+
+        self.reconcile_geometry();
+
+        let after_snapshot = match self.capture_after_snapshot_or_rollback(&before_snapshot) {
+            Ok(s) => s,
+            Err(result) => return result,
+        };
+
+        let batch_cmd = Command::Batch {
+            commands: vec![
+                Command::DeleteShot {
+                    section_id,
+                    shot_id: start_shot_id,
+                },
+                Command::DeleteShot {
+                    section_id,
+                    shot_id: end_shot_id,
+                },
+            ],
+        };
+        self.push_snapshot_undo(batch_cmd, before_snapshot, after_snapshot);
+
+        tracing::info!(
+            section_id,
+            purpose = "gap-close a deleted shot range",
+            "Delete shot range (shift) completed"
+        );
+        CommandResult::success().with_section_id(result_section)
+    }
+
     /// Execute a delete-last-shot-and-section operation as a single atomic undo/redo unit.
     /// When a section has exactly 1 shot remaining, this removes the section (and its
     /// only shot) along with all section references (merges, closures, section_offsets,

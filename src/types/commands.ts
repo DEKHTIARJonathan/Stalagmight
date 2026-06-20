@@ -30,6 +30,8 @@ export type {
   ClosurePair,
   ClosureUpdate,
   DeleteShotImpact,
+  DeleteShotRangeImpact,
+  RangeDeleteKind,
   ConnectivityResult,
   ClosurePreview,
   CommentHolder,

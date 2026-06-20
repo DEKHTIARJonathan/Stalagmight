@@ -97,6 +97,7 @@ const UNDOABLE_COMMANDS: ReadonlySet<string> = new Set([
   'set_zero_datum', 'remove_zero_datum', 'set_station_comment', 'move_comment', 'move_station',
   'create_loop_closure', 'remove_loop_closure',
   'create_section_and_merge', 'delete_shot_and_split', 'delete_last_shot_and_section',
+  'delete_shot_range_split', 'delete_shot_range_shift',
   'import_sections', 'execute_tml_import', 'execute_gpx_import', 'execute_batch',
 ]);
 

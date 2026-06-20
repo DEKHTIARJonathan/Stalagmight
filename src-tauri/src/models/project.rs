@@ -134,6 +134,66 @@ pub struct DeleteShotImpact {
     pub shift_blocked_reasons: Vec<String>,
 }
 
+/// Which structural case a contiguous shot-range deletion falls into. Computed
+/// from the range endpoints relative to the section's shot count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RangeDeleteKind {
+    /// The range covers every shot — the whole section is removed.
+    WholeSection,
+    /// The range starts at the first shot (nothing before); the survivors keep
+    /// their absolute position by an offset shift.
+    Prefix,
+    /// The range ends at the last shot (nothing after); the head is truncated.
+    Suffix,
+    /// Shots remain both before and after — the section can be split (A=before,
+    /// B=after) or gap-closed (shift).
+    Interior,
+}
+
+/// Aggregate impact of deleting a contiguous range of shots `[start_pos..=end_pos]`
+/// from one section. The merge/closure fields mirror [`DeleteShotImpact`] (so the
+/// frontend can render them with the same component); `kind` drives the dialog
+/// routing and `shift_blocked` reports whether the gap-close path is available.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct DeleteShotRangeImpact {
+    pub section_id: SectionId,
+    pub start_pos: u32,
+    pub end_pos: u32,
+    pub kind: RangeDeleteKind,
+    /// Stations any offered action removes. For an interior range this is the
+    /// gap-close (shift) set `(start_pos+1 ..= end_pos+1)` — the superset that
+    /// also covers the split's interior set — so the relationship panel never
+    /// hides what closing the gap touches. (Prefix/suffix/whole remove exactly
+    /// the gap-close set; only an interior split keeps the boundary `end_pos+1`.)
+    pub removed_stations: Vec<StationRef>,
+    pub removed_merges: Vec<StationPair>,
+    pub removed_closures: Vec<ClosurePair>,
+    pub replacement_merges: Vec<StationPair>,
+    pub replacement_closure_updates: Vec<ClosureUpdate>,
+    #[serde(default)]
+    pub closure_to_merge: Vec<StationPair>,
+    pub merge_rewire_skipped: bool,
+    pub closure_rewire_skipped: bool,
+    /// True when the gap-close (shift) path is unavailable for this range (the
+    /// two sides are already connected or both anchored, or the gap-close drops
+    /// a zero datum).
+    #[serde(default)]
+    pub shift_blocked: bool,
+    #[serde(default)]
+    pub shift_blocked_reasons: Vec<String>,
+    /// Zero datums the SPLIT would drop (anchored on a strictly-interior station
+    /// the split removes) — surfaced so the dialog can warn. The gap-close path
+    /// is instead blocked when it would drop a datum, so this set is split-only.
+    #[serde(default)]
+    pub removed_datums: Vec<StationRef>,
+    /// Station comments the SPLIT would drop (anchored on a strictly-interior
+    /// station the split removes) — surfaced so the dialog can warn before the
+    /// annotation disappears.
+    #[serde(default)]
+    pub removed_comments: Vec<StationRef>,
+}
+
 /// A complete cave survey project
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Project {
@@ -940,6 +1000,242 @@ impl Project {
         components
     }
 
+    /// Like [`Self::preserve_connections_for_section_deletion`] but for an
+    /// arbitrary SET of stations being removed (e.g. the interior stations
+    /// dropped by a contiguous range delete) rather than a whole section. Adds
+    /// replacement merges so external merge groups stay connected after the
+    /// stations vanish, and rewires closures off the removed stations to a
+    /// surviving merge-group partner. Call this BEFORE dropping the removed
+    /// stations' own refs — it reads the live merge groups. Computing the
+    /// replacement merges over the ENTIRE removed set at once (rather than
+    /// per-station) guarantees every replacement joins two survivors.
+    pub(crate) fn preserve_connections_for_removed_stations(
+        &mut self,
+        removed: &HashSet<StationRef>,
+    ) {
+        // --- Merge preservation ---
+        let mut processed_groups: HashSet<StationRef> = HashSet::new();
+        let mut replacement_merges: Vec<(StationRef, StationRef)> = Vec::new();
+
+        for &station in removed {
+            let group = self.get_merge_group(station);
+            let external_members: HashSet<StationRef> = group
+                .iter()
+                .filter(|s| !removed.contains(s))
+                .copied()
+                .collect();
+            if external_members.is_empty() {
+                continue;
+            }
+            if external_members.iter().any(|s| processed_groups.contains(s)) {
+                continue;
+            }
+            for &s in &external_members {
+                processed_groups.insert(s);
+            }
+
+            let components = self.build_merge_components_excluding_stations(&external_members, removed);
+            if components.len() > 1 {
+                let base = &components[0];
+                for component in components.iter().skip(1) {
+                    let mut found = None;
+                    for a in base {
+                        for b in component {
+                            if a.section_id != b.section_id {
+                                found = Some((*a, *b));
+                                break;
+                            }
+                        }
+                        if found.is_some() {
+                            break;
+                        }
+                    }
+                    if found.is_none() {
+                        if let (Some(a), Some(b)) = (base.first(), component.first()) {
+                            found = Some((*a, *b));
+                        }
+                    }
+                    if let Some((a, b)) = found {
+                        if !self.has_direct_merge(a, b)
+                            && !replacement_merges
+                                .iter()
+                                .any(|(ra, rb)| (*ra == a && *rb == b) || (*ra == b && *rb == a))
+                        {
+                            replacement_merges.push((a, b));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (a, b) in &replacement_merges {
+            let (Some(ka), Some(kb)) = (self.key_for_ref(*a), self.key_for_ref(*b)) else {
+                continue;
+            };
+            self.record_station_merge(StationMerge {
+                station_a: ka,
+                station_b: kb,
+                merged_at: Utc::now(),
+            });
+        }
+
+        // --- Closure rewiring ---
+        let closures_to_rewire: Vec<(u64, StationRef, StationRef)> = self
+            .loop_closures
+            .iter()
+            .filter_map(|lc| {
+                let a = self.resolve_key(&lc.station_a)?;
+                let b = self.resolve_key(&lc.station_b)?;
+                if removed.contains(&a) || removed.contains(&b) {
+                    Some((lc.id, a, b))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (closure_id, ref_a, ref_b) in closures_to_rewire {
+            let replace_a = removed.contains(&ref_a);
+            let (removed_ref, other_ref) = if replace_a { (ref_a, ref_b) } else { (ref_b, ref_a) };
+            // If both sides are removed, the closure drops with its stations.
+            if removed.contains(&other_ref) {
+                continue;
+            }
+            let group = self.get_merge_group(removed_ref);
+            let mut candidates: Vec<StationRef> =
+                group.into_iter().filter(|s| !removed.contains(s)).collect();
+            candidates.sort_by_key(Self::station_ref_key);
+            // Prefer a survivor on a DIFFERENT section than the surviving
+            // endpoint so the rewired closure stays cross-section. A same-section
+            // closure would be degenerate (a self-loop) and is silently skipped
+            // by convert_orphan_closures_to_merges and the integrity checks, so
+            // it would persist undetected. If no cross-section survivor exists
+            // the loop has genuinely collapsed into one section — leave the
+            // closure for cleanup to drop rather than rewire it into a self-loop.
+            let replacement = candidates
+                .iter()
+                .find(|s| s.section_id != other_ref.section_id)
+                .copied();
+            if let Some(replacement) = replacement {
+                if replacement == other_ref
+                    || self.are_stations_merged(replacement, other_ref)
+                    || self.are_stations_in_closure(replacement, other_ref)
+                {
+                    continue;
+                }
+                let Some(replacement_key) = self.key_for_ref(replacement) else {
+                    continue;
+                };
+                if let Some(lc) = self.loop_closures.iter_mut().find(|lc| lc.id == closure_id) {
+                    if replace_a {
+                        lc.station_a = replacement_key;
+                    } else {
+                        lc.station_b = replacement_key;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Like [`Self::build_merge_components_excluding_section`] but excludes any
+    /// merge edge whose endpoints resolve into the given `removed` station set.
+    fn build_merge_components_excluding_stations(
+        &self,
+        stations: &HashSet<StationRef>,
+        removed: &HashSet<StationRef>,
+    ) -> Vec<Vec<StationRef>> {
+        let mut adjacency: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for station in stations {
+            adjacency.entry(*station).or_default();
+        }
+
+        for merge in &self.station_merges {
+            let (Some(a), Some(b)) =
+                (self.resolve_key(&merge.station_a), self.resolve_key(&merge.station_b))
+            else {
+                continue;
+            };
+            if removed.contains(&a) || removed.contains(&b) {
+                continue;
+            }
+            if stations.contains(&a) && stations.contains(&b) {
+                adjacency.entry(a).or_default().push(b);
+                adjacency.entry(b).or_default().push(a);
+            }
+        }
+
+        let mut components = Vec::new();
+        let mut visited = HashSet::new();
+        let mut station_list: Vec<StationRef> = stations.iter().copied().collect();
+        station_list.sort_by_key(Self::station_ref_key);
+
+        for station in station_list {
+            if visited.contains(&station) {
+                continue;
+            }
+            let mut component = Vec::new();
+            let mut queue = VecDeque::new();
+            visited.insert(station);
+            queue.push_back(station);
+            while let Some(current) = queue.pop_front() {
+                component.push(current);
+                if let Some(neighbors) = adjacency.get(&current) {
+                    for neighbor in neighbors {
+                        if visited.insert(*neighbor) {
+                            queue.push_back(*neighbor);
+                        }
+                    }
+                }
+            }
+            component.sort_by_key(Self::station_ref_key);
+            components.push(component);
+        }
+
+        components
+    }
+
+    /// Drop every project-level reference (merge, closure, station offset,
+    /// station comment, zero datum) anchored on a station in `removed`. Call
+    /// AFTER [`Self::preserve_connections_for_removed_stations`] and BEFORE
+    /// re-deriving geometry, when removing a sub-range of a section's stations.
+    pub(crate) fn cleanup_removed_station_references(&mut self, removed: &HashSet<StationRef>) {
+        let is_removed = |this: &Self, key: &StationKey| -> bool {
+            this.resolve_key(key).is_some_and(|sr| removed.contains(&sr))
+        };
+        // `mem::take` so the predicate can borrow `self` immutably (resolve_key
+        // reads section shots, not these fields) while we rebuild each list.
+        let merges = std::mem::take(&mut self.station_merges);
+        self.station_merges = merges
+            .into_iter()
+            .filter(|m| !is_removed(self, &m.station_a) && !is_removed(self, &m.station_b))
+            .collect();
+        self.merge_adjacency_cache.clear();
+
+        let closures = std::mem::take(&mut self.loop_closures);
+        self.loop_closures = closures
+            .into_iter()
+            .filter(|lc| !is_removed(self, &lc.station_a) && !is_removed(self, &lc.station_b))
+            .collect();
+
+        let datums = std::mem::take(&mut self.zero_datums);
+        self.zero_datums = datums
+            .into_iter()
+            .filter(|zd| !is_removed(self, &zd.station_ref))
+            .collect();
+
+        let removed_keys: Vec<StationKey> = self
+            .station_offsets
+            .keys()
+            .chain(self.station_comments.keys())
+            .filter(|&k| is_removed(self, k))
+            .cloned()
+            .collect();
+        for k in removed_keys {
+            self.station_offsets.remove(&k);
+            self.station_comments.remove(&k);
+        }
+    }
+
     /// Remove all merges, closures, section_offsets, station_offsets, and zero_datums
     /// that reference the given section. Call before `remove_section()` to avoid orphans.
     pub fn cleanup_section_references(&mut self, section_id: SectionId) {
@@ -1687,10 +1983,439 @@ impl Project {
         Ok(impact)
     }
 
+    /// Aggregate impact of deleting a contiguous range of shots
+    /// `[start_shot_id .. end_shot_id]` (by their current positions) from one
+    /// section. Used by the bulk-delete dialog to show a range summary, the
+    /// removed station relationships, and whether the gap-close (shift) path is
+    /// available. `start`/`end` may be given in any order — they are normalized.
+    pub fn preview_delete_shot_range(
+        &self,
+        section_id: SectionId,
+        start_shot_id: ShotId,
+        end_shot_id: ShotId,
+    ) -> Result<DeleteShotRangeImpact, String> {
+        let section = self
+            .get_section(section_id)
+            .ok_or_else(|| format!("Section {section_id} not found"))?;
+        let n = section.shots.len();
+        let mut start_pos = section
+            .shots
+            .iter()
+            .position(|s| s.id == start_shot_id)
+            .ok_or_else(|| format!("Shot {start_shot_id} not found in section {section_id}"))?;
+        let mut end_pos = section
+            .shots
+            .iter()
+            .position(|s| s.id == end_shot_id)
+            .ok_or_else(|| format!("Shot {end_shot_id} not found in section {section_id}"))?;
+        if start_pos > end_pos {
+            std::mem::swap(&mut start_pos, &mut end_pos);
+        }
+
+        let kind = match (start_pos == 0, end_pos == n - 1) {
+            (true, true) => RangeDeleteKind::WholeSection,
+            (true, false) => RangeDeleteKind::Prefix,
+            (false, true) => RangeDeleteKind::Suffix,
+            (false, false) => RangeDeleteKind::Interior,
+        };
+
+        // Stations any offered action removes. The gap-close (shift) removes the
+        // interior PLUS the tail boundary station `end_pos+1` (which an interior
+        // split keeps as B:0). Use that superset for the relationship panel so
+        // closing the gap never hides what it touches. (Prefix/suffix/whole
+        // remove exactly this set; only an interior split keeps `end_pos+1`.)
+        let removed_indices: Vec<u32> = match kind {
+            RangeDeleteKind::Interior => ((start_pos as u32 + 1)..=(end_pos as u32 + 1)).collect(),
+            RangeDeleteKind::Prefix => (0..=(end_pos as u32)).collect(),
+            RangeDeleteKind::Suffix => ((start_pos as u32 + 1)..=(n as u32)).collect(),
+            RangeDeleteKind::WholeSection => (0..=(n as u32)).collect(),
+        };
+        let removed_set: HashSet<StationRef> = removed_indices
+            .iter()
+            .map(|&i| StationRef::new(section_id, i))
+            .collect();
+        let in_removed = |key: &StationKey| -> bool {
+            self.resolve_key(key)
+                .is_some_and(|sr| removed_set.contains(&sr))
+        };
+
+        // Stations the SPLIT drops (interior only — it keeps both boundaries).
+        // Datums/comments anchored here are silently lost by the split, so the
+        // dialog warns about them; the gap-close instead BLOCKS on datum loss,
+        // so these loss sets are intentionally split-only.
+        let split_removed_set: HashSet<StationRef> = match kind {
+            RangeDeleteKind::Interior => ((start_pos as u32 + 1)..=(end_pos as u32))
+                .map(|i| StationRef::new(section_id, i))
+                .collect(),
+            // No split path exists for these — their loss set is the removed set.
+            _ => removed_set.clone(),
+        };
+        let split_in_removed = |key: &StationKey| -> bool {
+            self.resolve_key(key)
+                .is_some_and(|sr| split_removed_set.contains(&sr))
+        };
+
+        let removed_datums: Vec<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter(|zd| split_in_removed(&zd.station_ref))
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .collect();
+        // Simulate the connectivity the gap-close preserves: each per-shot
+        // `remove_shot_with_rewire` re-bridges any external merge group that was
+        // joined only through a removed station, so two boundary stations can be
+        // reconnected AFTER the deletion by a replacement merge. The blocker and
+        // the replacement-merge display both read this POST-preservation topology
+        // (`sim`) so a loop / both-anchored case that only re-forms via a
+        // replacement is not missed (and a path that exists only through a
+        // to-be-removed station is correctly dropped).
+        let mut sim = self.clone();
+        sim.preserve_connections_for_removed_stations(&removed_set);
+
+        // Gap-close (shift) availability.
+        let mut shift_blocked_reasons: Vec<String> = Vec::new();
+        // Loop / both-anchored ambiguity applies only to an INTERIOR gap-close,
+        // which removes stations `start_pos+1 ..= end_pos+1` (= `removed_set`) and
+        // rejoins the head boundary `start_pos` with the first SURVIVING tail
+        // station `end_pos+2`. Evaluate connectivity / anchoring between those two
+        // survivors on `sim` (post-preservation), treating every removed station
+        // (incl. the tail boundary `end_pos+1`) and the range's shots as gone.
+        if kind == RangeDeleteKind::Interior {
+            let head = StationRef::new(section_id, start_pos as u32);
+            let tail = StationRef::new(section_id, end_pos as u32 + 2);
+            // Only a MERGE-based loop blocks: merges are hard coincidence
+            // constraints that survive the delete, so gap-closing two
+            // merge-connected sides is over-constrained. A loop closure is a
+            // soft/redundant constraint that the delete removes (or converts), so
+            // the resulting geometry is still valid — closures must NOT block
+            // (include_closures = false).
+            if sim.stations_connected_excluding_range(
+                head, tail, section_id, start_pos, end_pos, &removed_set, false,
+            ) {
+                shift_blocked_reasons.push(
+                    "This range is part of a loop (the two sides are already connected)."
+                        .to_string(),
+                );
+            }
+            let head_anchored = sim
+                .station_reaches_datum_excluding_range(head, section_id, start_pos, end_pos, &removed_set);
+            let tail_anchored = sim
+                .station_reaches_datum_excluding_range(tail, section_id, start_pos, end_pos, &removed_set);
+            if head_anchored && tail_anchored {
+                shift_blocked_reasons
+                    .push("Both sides are anchored to a zero datum.".to_string());
+            }
+        }
+        // The gap-close removes every station in `removed_set`; if any carries a
+        // zero datum the survey loses an anchor, so block (use split — which
+        // keeps the boundary datums — or remove the datum first).
+        let shift_drops_datum = self.zero_datums.iter().any(|zd| in_removed(&zd.station_ref));
+        if shift_drops_datum {
+            let reason = "Deleting this range would remove a zero datum.".to_string();
+            if !shift_blocked_reasons.contains(&reason) {
+                shift_blocked_reasons.push(reason);
+            }
+        }
+
+        // Station comments on every station the gap-close removes (the shift
+        // superset, incl. the tail boundary `end_pos+1`). The dialog frames these
+        // per action — a SPLIT keeps `end_pos+1` and its comment — using the
+        // `start_pos`/`end_pos` it carries.
+        let removed_comments: Vec<StationRef> = self
+            .station_comments
+            .keys()
+            .filter_map(|k| self.resolve_key(k))
+            .filter(|sr| removed_set.contains(sr))
+            .collect();
+
+        // The relationship panel (`removed_stations`/`removed_merges`/
+        // `removed_closures`) and the preserved-connectivity replacements describe
+        // the action actually OFFERED. When the gap-close is blocked an interior
+        // range can only SPLIT, which keeps both boundary stations, so describe
+        // the split's smaller removed set and its own preservation; otherwise
+        // describe the gap-close superset (the help text notes a split keeps the
+        // boundaries). Prefix/suffix have no split, so this is always the gap-close
+        // set for them.
+        let shift_blocked = !shift_blocked_reasons.is_empty();
+        let interior_split_only = shift_blocked && kind == RangeDeleteKind::Interior;
+        let split_sim;
+        let (impact_removed_set, impact_sim): (&HashSet<StationRef>, &Project) =
+            if interior_split_only {
+                let mut s = self.clone();
+                s.preserve_connections_for_removed_stations(&split_removed_set);
+                split_sim = s;
+                (&split_removed_set, &split_sim)
+            } else {
+                (&removed_set, &sim)
+            };
+        let in_impact = |key: &StationKey| -> bool {
+            self.resolve_key(key)
+                .is_some_and(|sr| impact_removed_set.contains(&sr))
+        };
+
+        let mut removed_stations: Vec<StationRef> = impact_removed_set.iter().copied().collect();
+        removed_stations.sort_by_key(|s| (s.section_id, s.station_index));
+        let mut removed_merges = Vec::new();
+        for merge in &self.station_merges {
+            if in_impact(&merge.station_a) || in_impact(&merge.station_b) {
+                removed_merges.push(StationPair {
+                    station_a: self.key_to_ref_lossy(&merge.station_a),
+                    station_b: self.key_to_ref_lossy(&merge.station_b),
+                });
+            }
+        }
+        let mut removed_closures = Vec::new();
+        for closure in &self.loop_closures {
+            if in_impact(&closure.station_a) || in_impact(&closure.station_b) {
+                removed_closures.push(ClosurePair {
+                    closure_id: closure.id,
+                    station_a: self.key_to_ref_lossy(&closure.station_a),
+                    station_b: self.key_to_ref_lossy(&closure.station_b),
+                });
+            }
+        }
+
+        // Connectivity the operation PRESERVES, so the dialog doesn't overstate
+        // loss (it would otherwise list a bridging merge/closure as "Removed"
+        // with no replacement shown). Diff the simulated post-preservation graph
+        // against the current one — see [`Self::preview_preserved_connections`].
+        let (replacement_merges, replacement_closure_updates) =
+            self.preview_preserved_connections(impact_sim);
+
+        Ok(DeleteShotRangeImpact {
+            section_id,
+            start_pos: start_pos as u32,
+            end_pos: end_pos as u32,
+            kind,
+            removed_stations,
+            removed_merges,
+            removed_closures,
+            replacement_merges,
+            replacement_closure_updates,
+            closure_to_merge: Vec::new(),
+            merge_rewire_skipped: false,
+            closure_rewire_skipped: false,
+            shift_blocked,
+            shift_blocked_reasons,
+            removed_datums,
+            removed_comments,
+        })
+    }
+
+    /// Neighbors of `station_ref` for range-delete connectivity checks: like
+    /// [`Self::station_neighbors_excluding_shot`] but skips ALL shot edges at
+    /// positions `start_pos..=end_pos` in `section_id` (the gap-closed range).
+    fn range_neighbors(
+        &self,
+        station_ref: StationRef,
+        section_id: SectionId,
+        start_pos: usize,
+        end_pos: usize,
+        include_closures: bool,
+    ) -> Vec<StationRef> {
+        let mut neighbors = Vec::new();
+        let Some(section) = self.get_section(station_ref.section_id) else {
+            return neighbors;
+        };
+        let idx = station_ref.station_index as usize;
+        if idx > section.shots.len() {
+            return neighbors;
+        }
+        let in_range = |shot_idx: usize| {
+            station_ref.section_id == section_id && (start_pos..=end_pos).contains(&shot_idx)
+        };
+        if idx > 0 && !in_range(idx - 1) {
+            neighbors.push(StationRef::new(station_ref.section_id, (idx - 1) as u32));
+        }
+        if idx < section.shots.len() && !in_range(idx) {
+            neighbors.push(StationRef::new(station_ref.section_id, (idx + 1) as u32));
+        }
+        for merge in &self.station_merges {
+            if self.key_is_ref(&merge.station_a, station_ref) {
+                neighbors.extend(self.resolve_key(&merge.station_b));
+            } else if self.key_is_ref(&merge.station_b, station_ref) {
+                neighbors.extend(self.resolve_key(&merge.station_a));
+            }
+        }
+        if include_closures {
+            for closure in &self.loop_closures {
+                if self.key_is_ref(&closure.station_a, station_ref) {
+                    neighbors.extend(self.resolve_key(&closure.station_b));
+                } else if self.key_is_ref(&closure.station_b, station_ref) {
+                    neighbors.extend(self.resolve_key(&closure.station_a));
+                }
+            }
+        }
+        neighbors
+    }
+
+    /// Are `a` and `b` connected WITHOUT using a shot in `section_id`'s range
+    /// `start_pos..=end_pos` and without passing through a `removed` station?
+    /// Used to detect a loop around a to-be-gap-closed interior range so the
+    /// check sees the post-delete topology rather than each original single shot.
+    fn stations_connected_excluding_range(
+        &self,
+        a: StationRef,
+        b: StationRef,
+        section_id: SectionId,
+        start_pos: usize,
+        end_pos: usize,
+        removed: &HashSet<StationRef>,
+        include_closures: bool,
+    ) -> bool {
+        if a == b {
+            return true;
+        }
+        let mut visited = HashSet::new();
+        visited.insert(a);
+        let mut queue = VecDeque::new();
+        queue.push_back(a);
+        while let Some(cur) = queue.pop_front() {
+            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, include_closures) {
+                if removed.contains(&nb) {
+                    continue;
+                }
+                if nb == b {
+                    return true;
+                }
+                if visited.insert(nb) {
+                    queue.push_back(nb);
+                }
+            }
+        }
+        false
+    }
+
+    /// Does `station` reach a zero datum WITHOUT using a shot in the range or
+    /// passing through a `removed` station (datums on removed stations don't
+    /// count — they are themselves being deleted)?
+    fn station_reaches_datum_excluding_range(
+        &self,
+        station: StationRef,
+        section_id: SectionId,
+        start_pos: usize,
+        end_pos: usize,
+        removed: &HashSet<StationRef>,
+    ) -> bool {
+        let datum_set: HashSet<StationRef> = self
+            .zero_datums
+            .iter()
+            .filter_map(|zd| self.resolve_key(&zd.station_ref))
+            .filter(|sr| !removed.contains(sr))
+            .collect();
+        if datum_set.contains(&station) {
+            return true;
+        }
+        let mut visited = HashSet::new();
+        visited.insert(station);
+        let mut queue = VecDeque::new();
+        queue.push_back(station);
+        while let Some(cur) = queue.pop_front() {
+            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, true) {
+                if removed.contains(&nb) {
+                    continue;
+                }
+                if datum_set.contains(&nb) {
+                    return true;
+                }
+                if visited.insert(nb) {
+                    queue.push_back(nb);
+                }
+            }
+        }
+        false
+    }
+
+    /// Read-only summary of the merges/closures a range delete would ADD or
+    /// REWIRE to keep external groups connected when the removed stations vanish.
+    /// Diffs a caller-supplied `sim` (a clone of `self` with
+    /// [`Self::preserve_connections_for_removed_stations`] already applied)
+    /// against `self`, so the bulk-delete preview can never drift from what the
+    /// executor does. Returns `(replacement_merges, replacement_closure_updates)`
+    /// resolved to current positional refs.
+    fn preview_preserved_connections(
+        &self,
+        sim: &Project,
+    ) -> (Vec<StationPair>, Vec<ClosureUpdate>) {
+        let same_pair = |a: StationRef, b: StationRef, x: StationRef, y: StationRef| {
+            (a == x && b == y) || (a == y && b == x)
+        };
+        // Merges that exist BEFORE preservation (resolved, unordered).
+        let existing: Vec<(StationRef, StationRef)> = self
+            .station_merges
+            .iter()
+            .filter_map(|m| Some((self.resolve_key(&m.station_a)?, self.resolve_key(&m.station_b)?)))
+            .collect();
+
+        let mut replacement_merges: Vec<StationPair> = Vec::new();
+        for m in &sim.station_merges {
+            let (Some(a), Some(b)) = (sim.resolve_key(&m.station_a), sim.resolve_key(&m.station_b))
+            else {
+                continue;
+            };
+            if existing.iter().any(|&(ea, eb)| same_pair(ea, eb, a, b)) {
+                continue; // pre-existing merge, not a replacement
+            }
+            if replacement_merges
+                .iter()
+                .any(|p| same_pair(p.station_a, p.station_b, a, b))
+            {
+                continue; // already listed
+            }
+            replacement_merges.push(StationPair { station_a: a, station_b: b });
+        }
+
+        // Closures whose endpoint moved off a removed station onto a survivor.
+        let mut replacement_closure_updates: Vec<ClosureUpdate> = Vec::new();
+        for old in &self.loop_closures {
+            let Some(new) = sim.loop_closures.iter().find(|c| c.id == old.id) else {
+                continue;
+            };
+            for (old_key, new_key) in
+                [(&old.station_a, &new.station_a), (&old.station_b, &new.station_b)]
+            {
+                let old_ref = self.resolve_key(old_key);
+                let new_ref = sim.resolve_key(new_key);
+                if old_ref != new_ref {
+                    if let (Some(old_station), Some(new_station)) = (old_ref, new_ref) {
+                        replacement_closure_updates.push(ClosureUpdate {
+                            closure_id: old.id,
+                            old_station,
+                            new_station,
+                        });
+                    }
+                }
+            }
+        }
+
+        (replacement_merges, replacement_closure_updates)
+    }
+
     pub fn remove_shot_with_rewire(
         &mut self,
         section_id: SectionId,
         shot_id: ShotId,
+    ) -> Result<(Shot, DeleteShotImpact), String> {
+        self.remove_shot_with_rewire_excluding_anchors(section_id, shot_id, &HashSet::new(), false)
+    }
+
+    /// Like [`Self::remove_shot_with_rewire`] but for use inside a bulk-range
+    /// delete, with two range-specific knobs:
+    /// - `doomed_anchors`: canonical keys of stations the surrounding range will
+    ///   ALSO remove. The keep-side (head vs tail) decision ignores anchors on
+    ///   these — deciding from an anchor that is itself about to be deleted would
+    ///   displace the survivors (e.g. a suffix shift would shift the head).
+    /// - `defer_cascade`: skip the per-shot `cascade_connection_offsets` and the
+    ///   alignment assert. The range driver runs ONE cascade after all range
+    ///   shots are gone (see `execute_delete_shot_range_shift`); a per-shot
+    ///   cascade would propagate a doomed station's transient shift into a merged
+    ///   free-floating section before that merge is removed.
+    pub(crate) fn remove_shot_with_rewire_excluding_anchors(
+        &mut self,
+        section_id: SectionId,
+        shot_id: ShotId,
+        doomed_anchors: &HashSet<StationKey>,
+        defer_cascade: bool,
     ) -> Result<(Shot, DeleteShotImpact), String> {
         let section = self
             .get_section(section_id)
@@ -1844,6 +2569,7 @@ impl Project {
             // resolve to index > pos (after the deletion renumbered them).
             let on_tail = |key: &StationKey| -> bool {
                 key.section_id == section_id
+                    && !doomed_anchors.contains(key)
                     && self.resolve_key(key).is_some_and(|sr| sr.station_index > pos as u32)
             };
             let tail_anchored = self.zero_datums.iter().any(|zd| on_tail(&zd.station_ref))
@@ -1878,10 +2604,20 @@ impl Project {
             }
         }
 
-        // Cascade offset adjustments for any drifted connections on the
-        // non-anchored side.
-        self.cascade_connection_offsets(&[section_id]);
-        self.debug_assert_merge_alignment("remove_shot_with_rewire");
+        // A bulk range delete removes shots one at a time and runs ONE cascade +
+        // alignment pass at the end (see execute_delete_shot_range_shift). A
+        // per-step cascade here would propagate a doomed station's transient
+        // shift into a merged free-floating section BEFORE that merge is removed,
+        // leaving the section displaced with no edge to pull it back; and an
+        // intermediate step can transiently misalign a merge on a doomed station.
+        // The range driver sets `defer_cascade`; standalone single-shot deletes
+        // cascade + assert immediately.
+        if !defer_cascade {
+            // Cascade offset adjustments for any drifted connections on the
+            // non-anchored side.
+            self.cascade_connection_offsets(&[section_id]);
+            self.debug_assert_merge_alignment("remove_shot_with_rewire");
+        }
 
         self.touch();
         Ok((deleted_shot, impact))
