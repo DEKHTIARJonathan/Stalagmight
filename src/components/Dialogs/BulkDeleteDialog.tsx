@@ -45,6 +45,21 @@ export default function BulkDeleteDialog() {
   const shiftBlockedReasons = impact?.shift_blocked_reasons ?? [];
   const removedDatums = impact?.removed_datums ?? [];
   const removedComments = impact?.removed_comments ?? [];
+  // `removed_comments` covers every station the gap-close removes (the superset).
+  // Frame it per action: an interior SPLIT keeps both boundary stations, so it
+  // only drops comments on the strictly-interior stations (index <= end_pos);
+  // the tail boundary (index == end_pos+1) falls only to the gap-close. For
+  // prefix/suffix there is no split, so the gap-close drops all of them.
+  const endPos = impact?.end_pos ?? -1;
+  const splitComments = isInterior
+    ? removedComments.filter((c: StationRef) => c.station_index <= endPos)
+    : [];
+  const gapComments = shiftBlocked
+    ? []
+    : isInterior
+      ? removedComments.filter((c: StationRef) => c.station_index > endPos)
+      : removedComments;
+  const fmt = (s: StationRef) => formatStationId(s.section_id, s.station_index);
   // The preview is the only source of the datum/comment/shift-blocked warnings,
   // so keep the destructive actions disabled until it resolves (loaded or
   // errored) — otherwise a fast click could confirm before the warning renders.
@@ -199,28 +214,25 @@ export default function BulkDeleteDialog() {
           </div>
         )}
 
-        {((isInterior && removedDatums.length > 0) || removedComments.length > 0) && (
+        {((isInterior && removedDatums.length > 0) ||
+          splitComments.length > 0 ||
+          gapComments.length > 0) && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
             <p className="font-medium">Deleting these shots will remove anchored data.</p>
             {isInterior && removedDatums.length > 0 && (
+              <p>Zero datums (anchor the survey&apos;s real-world position) on {removedDatums.map(fmt).join(', ')}.</p>
+            )}
+            {splitComments.length > 0 && (
+              <p>Station comments on {splitComments.map(fmt).join(', ')}.</p>
+            )}
+            {gapComments.length > 0 && (
               <p>
-                Zero datums (anchor the survey&apos;s real-world position) on{' '}
-                {removedDatums
-                  .map((s: StationRef) => formatStationId(s.section_id, s.station_index))
-                  .join(', ')}
-                .
+                {isInterior
+                  ? `Closing the gap also removes comments on ${gapComments.map(fmt).join(', ')} (splitting keeps them).`
+                  : `Station comments on ${gapComments.map(fmt).join(', ')}.`}
               </p>
             )}
-            {removedComments.length > 0 && (
-              <p>
-                Station comments on{' '}
-                {removedComments
-                  .map((s: StationRef) => formatStationId(s.section_id, s.station_index))
-                  .join(', ')}
-                .
-              </p>
-            )}
-            <p>These sit on stations the deletion drops (you can undo to restore).</p>
+            <p>You can undo to restore them.</p>
           </div>
         )}
 
@@ -233,6 +245,9 @@ export default function BulkDeleteDialog() {
                   <li key={`shift-blocked-${index}`}>{reason}</li>
                 ))}
               </ul>
+            )}
+            {!isInterior && removedDatums.length > 0 && (
+              <p className="mt-1">Blocking zero datum on {removedDatums.map(fmt).join(', ')}.</p>
             )}
             {!isInterior && (
               <p className="mt-1">

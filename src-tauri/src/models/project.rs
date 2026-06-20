@@ -164,7 +164,8 @@ pub struct DeleteShotRangeImpact {
     /// Stations any offered action removes. For an interior range this is the
     /// gap-close (shift) set `(start_pos+1 ..= end_pos+1)` — the superset that
     /// also covers the split's interior set — so the relationship panel never
-    /// hides what closing the gap touches. Empty for a single-shot range.
+    /// hides what closing the gap touches. (Prefix/suffix/whole remove exactly
+    /// the gap-close set; only an interior split keeps the boundary `end_pos+1`.)
     pub removed_stations: Vec<StationRef>,
     pub removed_merges: Vec<StationPair>,
     pub removed_closures: Vec<ClosurePair>,
@@ -2080,20 +2081,29 @@ impl Project {
             .filter(|zd| split_in_removed(&zd.station_ref))
             .filter_map(|zd| self.resolve_key(&zd.station_ref))
             .collect();
+        // Simulate the connectivity the gap-close preserves: each per-shot
+        // `remove_shot_with_rewire` re-bridges any external merge group that was
+        // joined only through a removed station, so two boundary stations can be
+        // reconnected AFTER the deletion by a replacement merge. The blocker and
+        // the replacement-merge display both read this POST-preservation topology
+        // (`sim`) so a loop / both-anchored case that only re-forms via a
+        // replacement is not missed (and a path that exists only through a
+        // to-be-removed station is correctly dropped).
+        let mut sim = self.clone();
+        sim.preserve_connections_for_removed_stations(&removed_set);
+
         // Gap-close (shift) availability.
         let mut shift_blocked_reasons: Vec<String> = Vec::new();
-        // Loop / both-anchored ambiguity applies only to an INTERIOR gap-close.
-        // The gap-close removes stations `start_pos+1 ..= end_pos+1` (= the
-        // interior `removed_set`) and rejoins the head boundary `start_pos` with
-        // the first SURVIVING tail station `end_pos+2`. Evaluate connectivity /
-        // anchoring between those two survivors while treating EVERY removed
-        // station (incl. the tail boundary `end_pos+1`) and the range's shots as
-        // gone — a path that only exists through a to-be-removed station's ref is
-        // not a real loop and must not falsely block a valid bulk shift.
+        // Loop / both-anchored ambiguity applies only to an INTERIOR gap-close,
+        // which removes stations `start_pos+1 ..= end_pos+1` (= `removed_set`) and
+        // rejoins the head boundary `start_pos` with the first SURVIVING tail
+        // station `end_pos+2`. Evaluate connectivity / anchoring between those two
+        // survivors on `sim` (post-preservation), treating every removed station
+        // (incl. the tail boundary `end_pos+1`) and the range's shots as gone.
         if kind == RangeDeleteKind::Interior {
             let head = StationRef::new(section_id, start_pos as u32);
             let tail = StationRef::new(section_id, end_pos as u32 + 2);
-            if self.stations_connected_excluding_range(
+            if sim.stations_connected_excluding_range(
                 head, tail, section_id, start_pos, end_pos, &removed_set, true,
             ) {
                 shift_blocked_reasons.push(
@@ -2101,9 +2111,9 @@ impl Project {
                         .to_string(),
                 );
             }
-            let head_anchored = self
+            let head_anchored = sim
                 .station_reaches_datum_excluding_range(head, section_id, start_pos, end_pos, &removed_set);
-            let tail_anchored = self
+            let tail_anchored = sim
                 .station_reaches_datum_excluding_range(tail, section_id, start_pos, end_pos, &removed_set);
             if head_anchored && tail_anchored {
                 shift_blocked_reasons
@@ -2120,37 +2130,24 @@ impl Project {
                 shift_blocked_reasons.push(reason);
             }
         }
-        let shift_available = shift_blocked_reasons.is_empty();
 
-        // Station comments any AVAILABLE action would drop. The gap-close removes
-        // the whole `removed_set` (incl. the tail boundary `end_pos+1`); the split
-        // removes only `split_removed_set`. When the gap-close is available the
-        // user may pick either, so warn over the superset; when it is blocked only
-        // an interior split can run; a fully-blocked prefix/suffix has no action
-        // and drops nothing. (Datums only ever fall to the split — the gap-close
-        // is blocked when it would drop one — so `removed_datums` above stays on
-        // the split set.)
-        let comment_anchor_set: HashSet<StationRef> = if shift_available {
-            removed_set.clone()
-        } else if kind == RangeDeleteKind::Interior {
-            split_removed_set.clone()
-        } else {
-            HashSet::new()
-        };
+        // Station comments on every station the gap-close removes (the shift
+        // superset, incl. the tail boundary `end_pos+1`). The dialog frames these
+        // per action — a SPLIT keeps `end_pos+1` and its comment — using the
+        // `start_pos`/`end_pos` it carries.
         let removed_comments: Vec<StationRef> = self
             .station_comments
             .keys()
             .filter_map(|k| self.resolve_key(k))
-            .filter(|sr| comment_anchor_set.contains(sr))
+            .filter(|sr| removed_set.contains(sr))
             .collect();
 
         // Connectivity the operation PRESERVES, so the dialog doesn't overstate
         // loss (it would otherwise list a bridging merge/closure as "Removed"
-        // with no replacement shown). Dry-run the real preservation over the
-        // removed set and surface the added merges / rewired closures — see
-        // [`Self::preview_preserved_connections`].
+        // with no replacement shown). Diff the simulated post-preservation graph
+        // against the current one — see [`Self::preview_preserved_connections`].
         let (replacement_merges, replacement_closure_updates) =
-            self.preview_preserved_connections(&removed_set);
+            self.preview_preserved_connections(&sim);
 
         Ok(DeleteShotRangeImpact {
             section_id,
@@ -2297,18 +2294,16 @@ impl Project {
     }
 
     /// Read-only summary of the merges/closures a range delete would ADD or
-    /// REWIRE to keep external groups connected when `removed` stations vanish.
-    /// Dry-runs [`Self::preserve_connections_for_removed_stations`] on a clone
-    /// and diffs the result, so the bulk-delete preview can never drift from
-    /// what the executor actually does. Returns `(replacement_merges,
-    /// replacement_closure_updates)` resolved to current positional refs.
+    /// REWIRE to keep external groups connected when the removed stations vanish.
+    /// Diffs a caller-supplied `sim` (a clone of `self` with
+    /// [`Self::preserve_connections_for_removed_stations`] already applied)
+    /// against `self`, so the bulk-delete preview can never drift from what the
+    /// executor does. Returns `(replacement_merges, replacement_closure_updates)`
+    /// resolved to current positional refs.
     fn preview_preserved_connections(
         &self,
-        removed: &HashSet<StationRef>,
+        sim: &Project,
     ) -> (Vec<StationPair>, Vec<ClosureUpdate>) {
-        let mut sim = self.clone();
-        sim.preserve_connections_for_removed_stations(removed);
-
         let same_pair = |a: StationRef, b: StationRef, x: StationRef, y: StationRef| {
             (a == x && b == y) || (a == y && b == x)
         };

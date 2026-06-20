@@ -10100,6 +10100,192 @@ fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
 }
 
 #[test]
+fn test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge() {
+    // Self-review (HIGH): two external sections P and Q are each merged ONLY to a
+    // removed interior station, so head and tail are NOT connected on the raw
+    // graph (the path runs through the removed station). The gap-close re-bridges
+    // P<->Q with a replacement merge, reconnecting head and tail into a loop. The
+    // blocker checks the POST-preservation graph, so it must catch this and block.
+    let state = AppState::new().unwrap();
+    state
+        .execute(Command::CreateProject { name: "Loop Via Replacement".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_p = state.execute(Command::CreateSection {
+        name: Some("P".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_p = create_p.section_id.unwrap();
+    let create_q = state.execute(Command::CreateSection {
+        name: Some("Q".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_q = create_q.section_id.unwrap();
+    // P:0 <-> head A:2, Q:0 <-> tail A:5 (valid merges).
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_p, 0),
+            station_b: StationRef::new(sec_a, 2),
+        })
+        .success);
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_q, 0),
+            station_b: StationRef::new(sec_a, 5),
+        })
+        .success);
+    // P:0 and Q:0 each also merged to the REMOVED interior A:3 (already connected,
+    // so push raw). A:3 is the only P<->Q bridge.
+    {
+        let mut guard = state.project.lock().unwrap();
+        let proj = guard.as_mut().unwrap();
+        proj.station_merges.push(StationMerge {
+            station_a: StationRef::new(sec_p, 0).into(),
+            station_b: StationRef::new(sec_a, 3).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        proj.station_merges.push(StationMerge {
+            station_a: StationRef::new(sec_q, 0).into(),
+            station_b: StationRef::new(sec_a, 3).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        proj.merge_adjacency_cache.clear();
+    }
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj.preview_delete_shot_range(sec_a, s2, s3).unwrap();
+    assert!(
+        impact.shift_blocked,
+        "the gap-close re-forms a head<->tail loop via a replacement merge; must block: {:?}",
+        impact.shift_blocked_reasons
+    );
+}
+
+#[test]
+fn test_delete_range_shift_undo_redo_roundtrip() {
+    // Self-review (#6): the only range undo/redo test exercised the SPLIT path.
+    // Cover the SHIFT path too — including a replacement merge added during the
+    // deferred-cascade gap-close — so snapshot restore/redo is verified.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Shift Undo".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            shot_data_with_azimuth(10.0, 90.0, 90.0),
+            shot_data_with_azimuth(5.0, 45.0, 45.0),
+            shot_data_with_azimuth(7.0, 90.0, 90.0),
+            shot_data_with_azimuth(8.0, 135.0, 135.0),
+            shot_data_with_azimuth(6.0, 90.0, 90.0),
+            shot_data_with_azimuth(4.0, 90.0, 90.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_p = state.execute(Command::CreateSection {
+        name: Some("P".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![shot_data_with_azimuth(4.0, 90.0, 90.0)],
+    });
+    let sec_p = create_p.section_id.unwrap();
+    let create_q = state.execute(Command::CreateSection {
+        name: Some("Q".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![shot_data_with_azimuth(4.0, 90.0, 90.0)],
+    });
+    let sec_q = create_q.section_id.unwrap();
+    // P and Q bridge ONLY through interior A:3 (removed by the range) — the
+    // gap-close adds a replacement merge P:0<->Q:0 to keep them connected.
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_p, 0),
+            station_b: StationRef::new(sec_a, 3),
+        })
+        .success);
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_q, 0),
+            station_b: StationRef::new(sec_a, 3),
+        })
+        .success);
+
+    let before_abs = {
+        let proj = state.get_project_state().unwrap();
+        abs_coord_map(&proj)
+    };
+    let undo_len_before = state.get_undo_stack().len();
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let result = state.execute_delete_shot_range_shift(sec_a, s2, s3);
+    assert!(result.success, "{:?}", result.error);
+    assert_eq!(state.get_undo_stack().len(), undo_len_before + 1, "one undo entry");
+    {
+        let proj = state.get_project_state().unwrap();
+        assert_eq!(proj.get_section(sec_a).unwrap().shots.len(), 4, "two shots removed");
+        assert!(
+            proj.are_stations_merged(StationRef::new(sec_p, 0), StationRef::new(sec_q, 0)),
+            "P and Q stay connected via a replacement merge after the gap-close"
+        );
+    }
+
+    assert!(state.undo().success);
+    {
+        let proj = state.get_project_state().unwrap();
+        let after_undo = abs_coord_map(&proj);
+        assert_eq!(before_abs.len(), after_undo.len());
+        for (r, c) in &before_abs {
+            let c2 = after_undo.get(r).unwrap_or_else(|| panic!("missing {r:?} after undo"));
+            assert_coords_close(*c, *c2);
+        }
+        assert_eq!(proj.get_section(sec_a).unwrap().shots.len(), 6, "undo restores all shots");
+    }
+
+    assert!(state.redo().success);
+    {
+        let proj = state.get_project_state().unwrap();
+        assert_eq!(proj.get_section(sec_a).unwrap().shots.len(), 4, "redo re-applies the shift");
+        assert!(proj.are_stations_merged(StationRef::new(sec_p, 0), StationRef::new(sec_q, 0)));
+    }
+}
+
+#[test]
 fn test_delete_range_prefix_shift_surfaces_comment() {
     // Codex re-review: prefix/suffix shifts drop station comments on removed
     // stations; the preview must surface them so the dialog can warn (the
