@@ -1340,6 +1340,8 @@ pub struct ShortcutsConfig {
     pub import_dmp: Vec<String>,
     #[serde(deserialize_with = "deserialize_shortcut_vec")]
     pub export: Vec<String>,
+    #[serde(deserialize_with = "deserialize_shortcut_vec")]
+    pub quit: Vec<String>,
 }
 
 impl ShortcutsConfig {
@@ -1445,6 +1447,7 @@ impl ShortcutsConfig {
         normalize_shortcut_field(&mut self.save_as, &defaults.save_as, "save_as");
         normalize_shortcut_field(&mut self.import_dmp, &defaults.import_dmp, "import_dmp");
         normalize_shortcut_field(&mut self.export, &defaults.export, "export");
+        normalize_shortcut_field(&mut self.quit, &defaults.quit, "quit");
     }
 }
 

@@ -246,6 +246,7 @@ impl Default for ShortcutsConfig {
             save_as: vec!["Ctrl+Shift+S".to_string()],
             import_dmp: vec!["Ctrl+I".to_string()],
             export: vec!["Ctrl+E".to_string()],
+            quit: vec!["Ctrl+Q".to_string()],
         }
     }
 }

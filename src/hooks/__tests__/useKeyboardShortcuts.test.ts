@@ -125,6 +125,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -168,6 +169,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -217,6 +219,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -272,6 +275,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);
@@ -316,6 +320,7 @@ describe('buildShortcutMap logic', () => {
       save_as: ['Ctrl+Shift+S'],
       import_dmp: ['Ctrl+I'],
       export: ['Ctrl+E'],
+      quit: ['Ctrl+Q'],
     };
 
     const map = buildShortcutMap(shortcuts);

@@ -196,6 +196,7 @@ export const defaultConfig: Config = {
     save_as: ['Ctrl+Shift+S'],
     import_dmp: ['Ctrl+I'],
     export: ['Ctrl+E'],
+    quit: ['Ctrl+Q'],
   },
   panels: {
     sections_panel_width: 250,

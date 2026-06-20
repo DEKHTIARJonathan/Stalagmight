@@ -860,7 +860,8 @@
         "zoomOut": "Zoom Out",
         "toggleSectionsPanel": "Toggle Sections Panel",
         "toggleDetailPanel": "Toggle Detail Panel",
-        "toggleDataTable": "Toggle Data Table"
+        "toggleDataTable": "Toggle Data Table",
+        "quit": "Quit"
       }
     },
     "map": {
