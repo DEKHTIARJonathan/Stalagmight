@@ -71,14 +71,38 @@ jobs:
       # real fix. (Container runs as root → --with-deps apt works.)
       - name: Install Playwright browser + system deps
         run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:ui
+      # --reporter on the CLI (github annotations + a json report file) overrides
+      # the config reporter WITHOUT touching the shared playwright.config.ts and
+      # WITHOUT wrapping the test command — so the test exit code (the nightly's
+      # pass/fail gate) is untouched. The json file feeds the summary step below.
+      - name: Run Playwright (full suite)
+        run: pnpm test:ui -- --reporter=github,json
         env:
-          PW_REPORTER: github
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/pw-results.json
           # NUC is 2C/4T (i5-7300U), 8GB, no GPU → MapLibre specs render via
           # SwiftShader (CPU+RAM heavy). 50% of 4 CPUs = 2 workers (validated
           # sweet spot: 848 passed, 0 flaky, RAM headroom). Percentage, not a
           # bare integer — playwright.config.ts rejects a non-percentage string.
           PW_WORKERS: '50%'
+      # Surface results on the run summary page + flag flake/failures as
+      # annotations (a 44-min nightly shouldn't need log-spelunking). Defensive:
+      # always(), can't fail the job, degrades to a pointer if json/stats absent.
+      - name: E2E summary (run page)
+        if: always()
+        run: |
+          f="${{ runner.temp }}/pw-results.json"
+          if [ ! -f "$f" ]; then
+            echo "🎭 **Nightly E2E** on self-hosted NUC — results file not found (see job log)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node -e '
+            const s = (require(process.argv[1]).stats) || {};
+            const dur = s.duration ? Math.round(s.duration / 1000) + "s" : "?";
+            const line = `🎭 **Nightly E2E** on self-hosted NUC — ${s.expected ?? "?"} passed, ${s.flaky ?? 0} flaky, ${s.unexpected ?? 0} failed, ${s.skipped ?? 0} skipped (${dur})`;
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, line + "\n");
+            if ((s.unexpected ?? 0) > 0) console.log(`::warning title=E2E failures::${s.unexpected} failed test(s) in the nightly suite — see the uploaded report.`);
+            else if ((s.flaky ?? 0) > 0) console.log(`::warning title=E2E flake::${s.flaky} flaky test(s) (passed on retry) — watch for instability.`);
+          ' "$f" || echo "🎭 **Nightly E2E** on self-hosted NUC — could not parse results (see job log)." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
