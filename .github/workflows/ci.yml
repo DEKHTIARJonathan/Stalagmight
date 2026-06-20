@@ -116,19 +116,25 @@ jobs:
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
       # Zero sccache counters so the post-step reports THIS run's hit-rate, not
-      # the server's lifetime totals. NUC only — no sccache on hosted.
+      # lifetime totals. NUC only — no sccache on hosted. `|| true`: an
+      # observability step must never be able to fail the merge gate. (Likely
+      # redundant — each ephemeral --rm container starts a fresh per-container
+      # sccache server, so stats are already isolated + zero — but this
+      # guarantees per-run numbers, and a single runner = one job at a time so
+      # there's no cross-job zero-stats race.)
       - name: sccache zero-stats (NUC only)
         if: runner.environment == 'self-hosted'
-        run: sccache --zero-stats
+        run: sccache --zero-stats || true
       - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # sccache health on the NUC path (the cache that replaces rust-cache on the
-      # ephemeral runner). Skipped on hosted; always() so we still see it when
-      # cargo test fails. Hit-rate is also echoed to the run summary page.
+      # ephemeral runner). Skipped on hosted. !cancelled() (not always()): still
+      # report on cargo FAILURE, but skip on a superseded/cancelled run. Hit-rate
+      # is also echoed to the run summary page.
       - name: sccache stats (NUC only)
-        if: ${{ always() && runner.environment == 'self-hosted' }}
+        if: ${{ !cancelled() && runner.environment == 'self-hosted' }}
         run: |
           stats=$(sccache --show-stats 2>&1) || true
           echo "$stats"
