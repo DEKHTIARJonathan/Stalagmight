@@ -3,6 +3,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { trackDialogComplete } from '../../utils/telemetry';
 
 /**
  * Destructive confirm for permanently deleting a project from disk (#118).
@@ -42,6 +43,9 @@ export default function DeleteProjectDialog() {
 
   const handleConfirm = async () => {
     if (!path) {
+      // No-op completion (the Delete button is disabled without a path, but be
+      // explicit so cancel-vs-complete is reported accurately on every exit).
+      trackDialogComplete('delete-project');
       closeDialog();
       return;
     }
@@ -49,6 +53,10 @@ export default function DeleteProjectDialog() {
     setError(null);
     const result = await deleteProject(path, collabEnabled);
     if (result.success) {
+      // Mark the dialog completed BEFORE closing: closeDialog() runs
+      // checkDialogCancel('delete-project'), which would otherwise record a
+      // successful delete as a cancel (mirrors OverwriteConfirmDialog).
+      trackDialogComplete('delete-project');
       closeDialog();
       return;
     }
