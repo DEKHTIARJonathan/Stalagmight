@@ -11,18 +11,70 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  # Pick the runner: the self-hosted NUC when it's online AND idle, else fall
+  # back to a GitHub-hosted ubuntu-latest. A single ephemeral NUC serializes
+  # jobs, so routing every check there would queue them behind each other (and
+  # behind the nightly E2E) — the picker spills to hosted whenever the NUC is
+  # busy or down. (#134 / #135)
+  #
+  # The default GITHUB_TOKEN can't read org runner status, so this uses a PAT:
+  #   NUC_RUNNER_READ_PAT = fine-grained PAT, org "Self-hosted runners: Read".
+  # If that secret is absent/empty (or the API call fails — e.g. a fork PR with
+  # no secret access), pick defaults to HOSTED. So this is inert (always-hosted,
+  # same as before) until the secret is added, then NUC routing turns on.
+  pick:
     runs-on: ubuntu-latest
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.NUC_RUNNER_READ_PAT }}
+        run: |
+          state=""
+          if [ -n "$GH_TOKEN" ]; then
+            state=$(gh api orgs/Stalagmight/actions/runners \
+              --jq '.runners[] | select(.name=="i5-nuc-runner") | "\(.status) \(.busy)"' \
+              2>/dev/null || echo "")
+          fi
+          if [ "$state" = "online false" ]; then
+            echo 'runs_on=["self-hosted","ubuntu-latest-local"]' >> "$GITHUB_OUTPUT"
+            echo "NUC online & idle → self-hosted"
+          else
+            echo 'runs_on=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo "NUC state=[${state:-unavailable}] → hosted fallback"
+          fi
+
+  check:
+    needs: pick
+    runs-on: ${{ fromJSON(needs.pick.outputs.runs_on) }}
+    # NUC cold ≈ 7m, warm ≈ 4m; hosted ≈ 3m. Generous headroom either way.
+    timeout-minutes: 30
+    env:
+      # Required for sccache to cache on the NUC; harmless on hosted (rust-cache
+      # sets it too).
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      # tauri/gtk build deps. Hosted installs them; the NUC image bakes them
+      # (see ~/tools/nuc-i5/Dockerfile), so skip the apt-get there.
+      - name: Install tauri apt deps (hosted only)
+        if: runner.environment == 'github-hosted'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
       - uses: dtolnay/rust-toolchain@stable
-      # Cache ~/.cargo + src-tauri/target so cargo test doesn't recompile every
-      # crate from scratch each run (the dominant CI cost). Keyed on the Rust
-      # toolchain + src-tauri/Cargo.lock.
-      - uses: Swatinem/rust-cache@v2
+
+      # Hosted: actions/cache-backed rust-cache restores a prebuilt target/.
+      # NUC: that's useless on an ephemeral (--rm) runner — it uses the
+      # persistent sccache Docker volume instead (RUSTC_WRAPPER=sccache is set
+      # in the container env). 100% warm hit-rate measured in #134.
+      - name: Rust cache (hosted only)
+        if: runner.environment == 'github-hosted'
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
