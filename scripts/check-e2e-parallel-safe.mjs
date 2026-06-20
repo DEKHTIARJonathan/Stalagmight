@@ -33,7 +33,13 @@ const SHARED_VITE_PORT = '1420'; // the one shared webServer every page talks to
 // coverage fixture writes a per-(test,worker)-unique file under docs/coverage,
 // gated behind E2E_COVERAGE=1 — parallel-safe by construction. To add a genuine
 // exception, append a row here with a written justification.
-const ALLOW = [{ file: 'e2e-playwright/fixtures/coverage.ts', rule: 'disk-write' }];
+const ALLOW = [
+  {
+    file: 'e2e-playwright/fixtures/coverage.ts',
+    rule: 'disk-write',
+    reason: 'per-(test,worker)-unique path under docs/coverage, gated on E2E_COVERAGE=1',
+  },
+];
 
 // One rule per parallel-unsafe pattern. `re` is tested per non-comment line; an
 // optional `accept(match)` exempts a benign sub-case (used for the shared port).
@@ -77,7 +83,11 @@ function isAllowed(relFile, ruleId) {
 
 function listTsFiles(dir) {
   const out = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  // Sort for a deterministic scan/report order across machines and CI.
+  const entries = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...listTsFiles(full));
     else if (entry.isFile() && /\.tsx?$/.test(entry.name)) out.push(full);

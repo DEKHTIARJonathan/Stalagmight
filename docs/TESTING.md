@@ -187,9 +187,10 @@ per-test discipline:
 
 So a spec must **never** introduce shared state that survives across pages/workers:
 no `createServer(`/`.listen(` (a test binding its own port), no fixed-path
-`writeFileSync`/`writeFile`, no hardcoded `localhost:<port>` other than `:1420`,
-and no `describe.serial`/`test.serial`. On a 2-core runner at multiple workers,
-that kind of bad hygiene surfaces as flake.
+`writeFileSync`/`writeFile`/`copyFileSync`, no hardcoded `localhost:<port>` other
+than `:1420`, and no forced serial mode (`test.describe.serial(...)` or
+`test.describe.configure({ mode: 'serial' })`). On a 2-core runner at multiple
+workers, that kind of bad hygiene surfaces as flake.
 
 **Enforcement:** `pnpm lint:e2e-parallel` (`scripts/check-e2e-parallel-safe.mjs`)
 fails on any of the patterns above. It runs in the **`smoke` CI job** — the only
