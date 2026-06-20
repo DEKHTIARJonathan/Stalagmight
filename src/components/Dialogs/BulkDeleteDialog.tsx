@@ -7,13 +7,16 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import DeleteShotImpactDetails from './DeleteShotImpactDetails';
 import type { DeleteShotRangeImpact } from '../../types/commands';
+import type { StationRef } from '../../types/project';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 
 /**
  * Confirm + impact dialog for deleting a contiguous range of shots (#95).
  * Opened by the data table when >1 real shot is selected. Interior ranges offer
- * a choice — split the section in two (lossless, keeps both ends in place) or
- * close the gap (shift the downstream survey). Prefix/suffix ranges only shift.
+ * a choice — split the section in two (keeps both ends in place) or close the
+ * gap (shift the downstream survey). Prefix/suffix ranges only shift. Splitting
+ * drops any zero datum / comment on a dropped interior station (warned below);
+ * a gap-close that would drop a datum is blocked instead.
  * (Whole-section selections route to the section-delete confirm instead.)
  */
 export default function BulkDeleteDialog() {
@@ -40,6 +43,7 @@ export default function BulkDeleteDialog() {
 
   const shiftBlocked = impact?.shift_blocked ?? false;
   const shiftBlockedReasons = impact?.shift_blocked_reasons ?? [];
+  const removedDatums = impact?.removed_datums ?? [];
 
   // Prefill split names for interior ranges (mirrors the single-shot dialog).
   useEffect(() => {
@@ -189,6 +193,21 @@ export default function BulkDeleteDialog() {
           </div>
         )}
 
+        {isInterior && removedDatums.length > 0 && (
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
+            <p className="font-medium">Splitting will remove a zero datum.</p>
+            <ul className="list-disc list-inside">
+              {removedDatums.map((station: StationRef, index: number) => (
+                <li key={`removed-datum-${index}`}>
+                  {formatStationId(station.section_id, station.station_index)}
+                </li>
+              ))}
+            </ul>
+            <p>Zero datums anchor the survey&apos;s real-world position. These sit on stations the
+              split drops, so they will be removed (you can undo to restore).</p>
+          </div>
+        )}
+
         {shiftBlocked && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
             <p className="font-medium">Closing the gap isn&apos;t available for this range.</p>
@@ -198,6 +217,13 @@ export default function BulkDeleteDialog() {
                   <li key={`shift-blocked-${index}`}>{reason}</li>
                 ))}
               </ul>
+            )}
+            {!isInterior && (
+              <p className="mt-1">
+                This range can only be removed by closing the gap, so it can&apos;t be deleted here.
+                Remove the blocking zero datum or loop closure first, delete the shots one at a
+                time, or delete the whole section.
+              </p>
             )}
           </div>
         )}

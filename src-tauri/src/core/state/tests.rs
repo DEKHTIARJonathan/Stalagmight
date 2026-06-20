@@ -9543,6 +9543,214 @@ fn test_delete_range_split_rejects_non_interior() {
 }
 
 #[test]
+fn test_delete_range_interior_shift_blocked_by_tail_datum() {
+    // Regression (#95): an interior-range SHIFT gap-closes THROUGH station
+    // end_pos+1 (which the split keeps as B:0). A zero datum anchored there must
+    // block the shift — the preview previously scanned only the split's interior
+    // set and missed it, so the gap-close silently destroyed the datum.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Tail Datum".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    // Datum on station 3 = end_pos+1 for the interior range [1..=2].
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(section_id, 3),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    let (s1, s2) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[1].id, sec.shots[2].id)
+    };
+    {
+        let proj = state.get_project_state().unwrap();
+        let impact = proj.preview_delete_shot_range(section_id, s1, s2).unwrap();
+        assert!(
+            impact.shift_blocked,
+            "shift must be blocked: it would drop the datum on station end_pos+1"
+        );
+        assert!(
+            impact.removed_datums.is_empty(),
+            "the split (display) set keeps station end_pos+1, so its datum is not in removed_datums"
+        );
+    }
+    // The shift executor must refuse and leave the datum intact.
+    let result = state.execute_delete_shot_range_shift(section_id, s1, s2);
+    assert!(!result.success, "interior shift over a tail datum must be blocked");
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(proj.zero_datums.len(), 1, "blocked shift must not drop the datum");
+    assert_eq!(
+        proj.get_section(section_id).unwrap().shots.len(),
+        5,
+        "blocked shift must not mutate the section"
+    );
+}
+
+#[test]
+fn test_delete_range_prefix_shift_blocked_by_datum() {
+    // Coverage (#95): a prefix range whose removed boundary station carries a
+    // zero datum must block the shift rather than silently drop the anchor.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Prefix Datum".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(section_id, 0),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    let (s0, s1) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[0].id, sec.shots[1].id)
+    };
+    {
+        let proj = state.get_project_state().unwrap();
+        let impact = proj.preview_delete_shot_range(section_id, s0, s1).unwrap();
+        assert!(impact.shift_blocked, "prefix shift dropping a datum must be blocked");
+        assert!(!impact.removed_datums.is_empty(), "the removed station-0 datum is surfaced");
+    }
+    let result = state.execute_delete_shot_range_shift(section_id, s0, s1);
+    assert!(!result.success, "prefix shift over a datum must be blocked");
+    let proj = state.get_project_state().unwrap();
+    assert_eq!(proj.zero_datums.len(), 1, "blocked shift must not drop the datum");
+}
+
+#[test]
+fn test_delete_range_preview_surfaces_interior_split_datum() {
+    // #95: a zero datum on a strictly-interior station the split drops must be
+    // surfaced in removed_datums so the dialog can warn (the interior split is
+    // not lossless for interior-station datums/comments).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Interior Datum".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    // Datum on station 2 — strictly interior to the range [1..=2] (interior set {2}).
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(section_id, 2),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    let (s1, s2) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[1].id, sec.shots[2].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj.preview_delete_shot_range(section_id, s1, s2).unwrap();
+    assert!(
+        impact.removed_datums.iter().any(|sr| sr.station_index == 2),
+        "the interior-station datum the split drops must be surfaced: {:?}",
+        impact.removed_datums
+    );
+}
+
+#[test]
+fn test_delete_range_preview_reports_replacement_merge() {
+    // #95: when a removed interior station bridges two external sections, the
+    // preview must report the replacement merge the delete adds (not just the
+    // removed merges), so the dialog doesn't overstate connectivity loss.
+    let state = AppState::new().unwrap();
+    state
+        .execute(Command::CreateProject { name: "Replacement Preview".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("Main".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_p = state.execute(Command::CreateSection {
+        name: Some("P".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_p = create_p.section_id.unwrap();
+    let create_q = state.execute(Command::CreateSection {
+        name: Some("Q".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#0000ff".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_q = create_q.section_id.unwrap();
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_p, 0),
+            station_b: StationRef::new(sec_a, 3),
+        })
+        .success);
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_q, 0),
+            station_b: StationRef::new(sec_a, 3),
+        })
+        .success);
+
+    // Range [2..=3] removes the bridging interior station A:3.
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj.preview_delete_shot_range(sec_a, s2, s3).unwrap();
+    assert!(
+        !impact.replacement_merges.is_empty(),
+        "removing the bridging interior station must report a replacement merge: {impact:?}"
+    );
+}
+
+#[test]
 fn test_split_remaps_station_offsets() {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {

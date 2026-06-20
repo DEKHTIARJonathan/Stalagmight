@@ -2808,6 +2808,10 @@ impl AppState {
 
             // Section A = before (truncate in place to preserve shot IDs).
             let Some(section_mut) = project.get_section_mut(section_id) else {
+                // preserve/cleanup above already mutated the project; roll back
+                // to the before-snapshot so a failure here leaves no half-applied
+                // state (mirrors the shift path's rollback on remove failure).
+                let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                 return CommandResult::failure(format!("Section {section_id} not found"));
             };
             section_mut.name = Some(name_a);
@@ -3003,6 +3007,23 @@ impl AppState {
             }
 
             for &sid in &range_shot_ids {
+                // Re-check against the EVOLVING topology, not just the upfront
+                // preview: an earlier gap-close can add a replacement merge that
+                // makes a later shot newly shift-blocked (both sides anchored, or
+                // a freshly-formed loop). The upfront range preview only saw the
+                // original graph, so verify each step before it silently picks a
+                // side and drops an anchor.
+                if let Ok(impact) = project.preview_delete_shot(section_id, sid) {
+                    if impact.shift_blocked {
+                        let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
+                        let reasons = if impact.shift_blocked_reasons.is_empty() {
+                            "Shift geometry is not allowed for this range.".to_string()
+                        } else {
+                            impact.shift_blocked_reasons.join(" ")
+                        };
+                        return CommandResult::failure(format!("{reasons} Use split instead."));
+                    }
+                }
                 if let Err(e) = project.remove_shot_with_rewire(section_id, sid) {
                     // Already mutated — roll back to the before snapshot.
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
