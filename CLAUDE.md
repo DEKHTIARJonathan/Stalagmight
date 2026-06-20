@@ -79,6 +79,24 @@ env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
 never resolved at startup. The shipping app is unaffected (it gets a
 Common-Controls v6 manifest from `tauri_build`).
 
+### Code Review
+
+Before opening a PR, run an adversarial local review with Claude Code:
+
+```bash
+# interactive: type this in a Claude Code session
+/code-review
+# headless / print mode
+claude -p "/code-review"
+```
+
+It applies a shared rubric (`.claude/commands/code-review.md`): an assume-broken
+stance, project-specific lenses (state-invalidation, IPC version guards,
+geometry / multi-section integrity, plus the telemetry / IPC-types / MapLibre
+landmines), and a fixed output format — so "do a code review" means the same
+quality bar for everyone, including new contributors. It runs on your personal
+subscription (not a CI gate); extend the rubric when a new class of bug recurs.
+
 ### Don't Run `cargo fmt`
 
 Much of the Rust is hand-formatted (notably `src-tauri/src/models/project.rs`)
