@@ -5,6 +5,9 @@ name: Nightly E2E Regression
 # fast pre-push / @smoke gate. Like the smoke workflow it runs against the Vite
 # dev server with mocked Tauri IPC (Node + Chromium only).
 #
+# The `full` job runs on the self-hosted NUC (labels: self-hosted,
+# ubuntu-latest-local) so the weekly suite costs zero Actions minutes (#130).
+#
 # NOTE: the heavyweight WebdriverIO suite (e2e/legacy/) drives the real Tauri
 # app and is intentionally NOT run here — it stays on-demand. See
 # e2e/legacy/README.md.
@@ -48,8 +51,10 @@ jobs:
   full:
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Self-hosted NUC (i5-7300U, 2C/4T, 8GB) — zero Actions minutes (#130).
+    runs-on: [self-hosted, ubuntu-latest-local]
+    # Slower box than hosted (~44m at 2 workers); generous headroom over 60.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -58,24 +63,22 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Resolve Playwright version
-        id: pw
-        run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
-      - name: Cache Playwright browsers
-        id: pw-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
-      - name: Install Playwright browsers + system deps
-        if: steps.pw-cache.outputs.cache-hit != 'true'
+      # Install the browser fresh each run; no actions/cache step on purpose.
+      # This runner is ephemeral (--rm), so ~/.cache/ms-playwright is wiped
+      # between jobs and the GitHub cache would just be a network round-trip for
+      # the same ~150MB we install anyway (and the shared hosted key was missing
+      # chrome-headless-shell). A persistent local volume on the runner is the
+      # real fix. (Container runs as root → --with-deps apt works.)
+      - name: Install Playwright browser + system deps
         run: pnpm exec playwright install --with-deps chromium
-      - name: Install Playwright system deps (browser restored from cache)
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: pnpm exec playwright install-deps chromium
       - run: pnpm test:ui
         env:
           PW_REPORTER: github
+          # NUC is 2C/4T (i5-7300U), 8GB, no GPU → MapLibre specs render via
+          # SwiftShader (CPU+RAM heavy). 50% of 4 CPUs = 2 workers (validated
+          # sweet spot: 848 passed, 0 flaky, RAM headroom). Percentage, not a
+          # bare integer — playwright.config.ts rejects a non-percentage string.
+          PW_WORKERS: '50%'
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
