@@ -66,6 +66,12 @@ jobs:
           fi
           echo "runs_on=$runs_on" >> "$GITHUB_OUTPUT"
           echo "Routed to $runs_on (idle i5-nuc-runner count: $idle)"
+          # Surface the routing on the run's summary page — no log-digging.
+          if [ "$runs_on" = '["self-hosted","ubuntu-latest-local"]' ]; then
+            echo "🖥️ \`check\` → **self-hosted NUC** (i5-nuc-runner idle)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "☁️ \`check\` → **github-hosted** (NUC busy/unavailable; idle count: $idle)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   check:
     needs: pick
@@ -109,7 +115,22 @@ jobs:
       # vitest unit + component tests (issue #107). `vitest` auto-detects CI
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
+      # Zero sccache counters so the post-step reports THIS run's hit-rate, not
+      # the server's lifetime totals. NUC only — no sccache on hosted.
+      - name: sccache zero-stats (NUC only)
+        if: runner.environment == 'self-hosted'
+        run: sccache --zero-stats
       - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # sccache health on the NUC path (the cache that replaces rust-cache on the
+      # ephemeral runner). Skipped on hosted; always() so we still see it when
+      # cargo test fails. Hit-rate is also echoed to the run summary page.
+      - name: sccache stats (NUC only)
+        if: ${{ always() && runner.environment == 'self-hosted' }}
+        run: |
+          stats=$(sccache --show-stats 2>&1) || true
+          echo "$stats"
+          rate=$(printf '%s\n' "$stats" | grep -m1 -E 'Cache hits rate +[0-9]' | grep -oE '[0-9.]+ %' | head -1)
+          echo "🦀 **sccache hit rate (this run):** ${rate:-n/a}" >> "$GITHUB_STEP_SUMMARY"
