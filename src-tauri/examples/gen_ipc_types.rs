@@ -51,6 +51,7 @@ use stalagmight_lib::models::{
     StationMergeWire, StationPair, StationRef, SurveyDirection, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
+use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
     GpxFile, GpxRoute, GpxRoutePoint, GpxSectionPlacement, GpxTrack, GpxTrackPoint,
@@ -186,6 +187,10 @@ fn main() {
     // Compass import
     export::<CompassFile>(&out_dir);
     export::<CompassSurveySummary>(&out_dir);
+
+    // Walls import
+    export::<WallsFile>(&out_dir);
+    export::<WallsSurveySummary>(&out_dir);
 
     // Export/image types
     export::<ExportImageOptions>(&out_dir);
@@ -355,6 +360,8 @@ fn main() {
         "TmlClosure",
         "CompassFile",
         "CompassSurveySummary",
+        "WallsFile",
+        "WallsSurveySummary",
         "ExportImageOptions",
         "ImageFormat",
         "DepthPreset",

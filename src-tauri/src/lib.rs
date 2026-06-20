@@ -1306,6 +1306,8 @@ pub fn run() {
             commands::import::execute_tml_import,
             commands::import::parse_compass,
             commands::import::execute_compass_import,
+            commands::import::parse_walls,
+            commands::import::execute_walls_import,
             commands::import::parse_gpx,
             commands::import::execute_gpx_import,
             commands::import::suggest_import_placement,

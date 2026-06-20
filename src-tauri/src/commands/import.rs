@@ -15,6 +15,7 @@ use crate::models::ShotData;
 use crate::parsers::compass::{CompassFile, CompassImportOptions};
 use crate::parsers::gpx::{GpxFile, GpxSectionPlacement};
 use crate::parsers::tml::TmlFile;
+use crate::parsers::walls::{WallsFile, WallsImportOptions};
 use crate::parsers::DmpFile;
 
 /// Import a DMP file and return parsed data
@@ -535,4 +536,101 @@ pub fn suggest_orphan_placements(
         project
             .suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion),
     )
+}
+
+/// Parse a Walls `.WPJ`/`.SRV` file and return preview data for the import dialog.
+#[tauri::command]
+pub fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
+    tracing::info!(
+        path = ?path,
+        purpose = "prepare Walls import preview",
+        "Parsing Walls .WPJ/.SRV file for import preview"
+    );
+    let parsed = crate::parsers::walls::parse_walls(&path).map_err(|e| {
+        tracing::error!(
+            path = ?path,
+            purpose = "prepare Walls import preview",
+            reason = %e,
+            "Failed to parse Walls file for import preview"
+        );
+        e.to_string()
+    })?;
+    Ok(crate::parsers::walls::build_preview(&parsed))
+}
+
+/// Parse a Walls file, convert to import configs, and execute the import.
+#[tauri::command]
+pub fn execute_walls_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: PathBuf,
+    file_hash: Option<String>,
+    comments_on_stations: bool,
+    include_splays: bool,
+) -> CommandResult {
+    tracing::info!(
+        path = ?path,
+        purpose = "import Walls",
+        "Executing Walls import"
+    );
+
+    let mut emitter = ProgressEmitter::new_for_import(app);
+
+    emitter.start_phase(LoadingPhase::ImportParsing);
+    let parsed = match crate::parsers::walls::parse_walls(&path) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            tracing::error!(
+                path = ?path,
+                purpose = "import Walls",
+                reason = %e,
+                "Failed to parse Walls file for import"
+            );
+            return CommandResult::failure(format!("Failed to parse Walls file: {e}"));
+        }
+    };
+    emitter.complete_phase(LoadingPhase::ImportParsing);
+
+    emitter.start_phase(LoadingPhase::ImportConverting);
+    let opts = WallsImportOptions {
+        comments_on_stations,
+        include_splays,
+    };
+    let (sections, closures, warnings) =
+        match crate::parsers::walls::convert_walls_to_import_configs(&parsed, &opts) {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!(
+                    path = ?path,
+                    purpose = "import Walls",
+                    reason = %e,
+                    "Failed to convert Walls data to import configs"
+                );
+                return CommandResult::failure(format!("Failed to convert Walls data: {e}"));
+            }
+        };
+    emitter.complete_phase(LoadingPhase::ImportConverting);
+
+    for warning in &warnings {
+        tracing::warn!(purpose = "import Walls", "{warning}");
+    }
+
+    tracing::info!(
+        path = ?path,
+        section_count = sections.len(),
+        closure_count = closures.len(),
+        warning_count = warnings.len(),
+        purpose = "import Walls",
+        "Converted Walls to import configs, executing import"
+    );
+
+    emitter.start_phase(LoadingPhase::ImportApplyingChanges);
+    let result =
+        state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new());
+    emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
+
+    emitter.start_phase(LoadingPhase::ImportFinalizing);
+    emitter.complete_phase(LoadingPhase::ImportFinalizing);
+
+    finalize_deferred_import(state.inner(), result)
 }

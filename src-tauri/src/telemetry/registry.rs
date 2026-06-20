@@ -477,6 +477,14 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.project-settings",
     "active-dwell.dialog.delete-project",
     "active-dwell.dialog.bulk-delete",
+    // Walls (.wpj/.srv) survey import.
+    "command.parse_walls",
+    "command.execute_walls_import",
+    // walls-import dialog (action/cancel/dwell + active-dwell mirror).
+    "action.dialog.walls-import",
+    "dialog-cancel.walls-import",
+    "dwell.dialog.walls-import",
+    "active-dwell.dialog.walls-import",
 ];
 
 #[cfg(test)]

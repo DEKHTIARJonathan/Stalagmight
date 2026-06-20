@@ -92,6 +92,8 @@ export * from './ipc/TmlGeoCoding';
 export * from './ipc/TmlClosure';
 export * from './ipc/CompassFile';
 export * from './ipc/CompassSurveySummary';
+export * from './ipc/WallsFile';
+export * from './ipc/WallsSurveySummary';
 export * from './ipc/ExportImageOptions';
 export * from './ipc/ImageFormat';
 export * from './ipc/DepthPreset';

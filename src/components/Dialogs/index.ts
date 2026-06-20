@@ -28,6 +28,7 @@ export { default as SplitSectionDialog } from './SplitSectionDialog';
 export { default as CorruptionRecoveryDialog } from './CorruptionRecoveryDialog';
 export { default as TmlImportDialog } from './TmlImportDialog';
 export { default as CompassImportDialog } from './CompassImportDialog';
+export { default as WallsImportDialog } from './WallsImportDialog';
 export { default as DebugDialog } from './DebugDialog';
 export { default as SwapCommentsDialog } from './SwapCommentsDialog';
 export { default as GpxSelectionDialog } from './GpxSelectionDialog';

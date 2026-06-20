@@ -28,7 +28,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy } from '../types/survey-data';
@@ -347,6 +347,8 @@ interface ProjectStore {
   executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  parseWalls: (path: string) => Promise<WallsFile>;
+  executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean) => Promise<CommandResult>;
   // Per-project settings (#57): name + validation thresholds, stored in the .stalx
   updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
   // Collaboration mode
@@ -1780,6 +1782,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // can't leak the armed project-action source into the next command.
       clearProjectActionSource();
     }
+  },
+
+  parseWalls: async (path: string) => {
+    return await invokeIpc<WallsFile>('parse_walls', { path }, {
+      purpose: 'parse Walls for import preview',
+      fields: { path },
+    });
+  },
+
+  executeWallsImport: async (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean) => {
+    return executeCommand(
+      'execute_walls_import',
+      {
+        path,
+        fileHash: fileHash ?? null,
+        commentsOnStations: commentsOnStations ?? true,
+        includeSplays: includeSplays ?? false,
+      },
+      { purpose: 'import Walls', fields: { path } }
+    );
   },
 
   // Collaboration mode
