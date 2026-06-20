@@ -14,9 +14,13 @@ This document describes the testing infrastructure, conventions, and best practi
 ## Test Infrastructure
 
 Stalagmight uses a multi-layered testing approach. Beyond speed, note the
-**mocked-IPC vs. real-backend** axis: every automated tier except WebdriverIO
-mocks the Tauri backend, so only the on-demand WDIO suite exercises real file
-I/O / Recent Projects / persistence.
+**mocked-IPC vs. real-backend** axis: every *frontend* tier (Vitest unit/
+component, Playwright, smoke) mocks the Tauri backend. The real backend — actual
+file I/O, Recent Projects, the save/import persistence pipeline — is exercised by
+the **Rust command-layer tests** (`src-tauri/src/commands/command_tests.rs`), which
+run in the CI-gated `check` job against real `TempDir` files with no display or
+Tauri build. The on-demand WDIO suite is the only tier that drives the **real Tauri
+app** end-to-end (webview + Rust), but it runs nowhere automatically.
 
 | Layer | Framework | Env | Purpose | Speed |
 |-------|-----------|-----|---------|-------|
@@ -140,9 +144,12 @@ keep first component tests on leaf components to avoid heavy setup.
 
 > **Why this tier exists:** before #107 there was no way to render a component
 > in a unit test (0 `render()` calls), so UI-wiring bugs like #92 (import
-> completion never triggered a save) shipped on manual verification alone. Note
-> the component tier mocks IPC — the real-backend persistence path (file on disk
-> + Recent Projects) still needs a Rust/WDIO guard.
+> completion never triggered a save) shipped on manual verification alone. The
+> component tier mocks IPC, so the **real-backend** persistence path (file on
+> disk + Recent Projects) is owned separately by the Rust command-layer tests
+> `test_import_sections_persists_deferred_new_project` (success path) and
+> `test_import_sections_deferred_save_failure_warns_no_phantom` (failed save →
+> warning, no phantom) in `src-tauri/src/commands/command_tests.rs` (#112).
 
 ## Playwright E2E Tests
 
