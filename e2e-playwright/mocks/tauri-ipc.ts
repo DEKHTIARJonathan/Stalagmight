@@ -3056,6 +3056,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shift_blocked: false,
               shift_blocked_reasons: [],
               removed_datums: [],
+              removed_comments: [],
             };
           }
 

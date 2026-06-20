@@ -3006,25 +3006,30 @@ impl AppState {
                 }
             }
 
+            // Stations the WHOLE range will remove, captured up front as
+            // canonical (position-independent) keys so renumbering during the
+            // per-shot deletes can't invalidate them. Each per-shot gap-close
+            // ignores anchors on these when deciding which side keeps its
+            // position — otherwise an anchor on a later, also-doomed range shot
+            // would displace the survivors (e.g. a suffix shift would keep the
+            // doomed tail fixed and shift the head). Whole-section was refused
+            // above, so start_pos==0 here means prefix.
+            let doomed_indices: Vec<u32> = if start_pos == 0 {
+                (0..=(end_pos as u32)).collect() // prefix
+            } else if end_pos == n - 1 {
+                ((start_pos as u32 + 1)..=(n as u32)).collect() // suffix
+            } else {
+                ((start_pos as u32 + 1)..=(end_pos as u32 + 1)).collect() // interior
+            };
+            let doomed_anchors: std::collections::HashSet<_> = doomed_indices
+                .iter()
+                .filter_map(|&i| project.key_for_ref(StationRef::new(section_id, i)))
+                .collect();
+
             for &sid in &range_shot_ids {
-                // Re-check against the EVOLVING topology, not just the upfront
-                // preview: an earlier gap-close can add a replacement merge that
-                // makes a later shot newly shift-blocked (both sides anchored, or
-                // a freshly-formed loop). The upfront range preview only saw the
-                // original graph, so verify each step before it silently picks a
-                // side and drops an anchor.
-                if let Ok(impact) = project.preview_delete_shot(section_id, sid) {
-                    if impact.shift_blocked {
-                        let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
-                        let reasons = if impact.shift_blocked_reasons.is_empty() {
-                            "Shift geometry is not allowed for this range.".to_string()
-                        } else {
-                            impact.shift_blocked_reasons.join(" ")
-                        };
-                        return CommandResult::failure(format!("{reasons} Use split instead."));
-                    }
-                }
-                if let Err(e) = project.remove_shot_with_rewire(section_id, sid) {
+                if let Err(e) =
+                    project.remove_shot_with_rewire_excluding_anchors(section_id, sid, &doomed_anchors)
+                {
                     // Already mutated — roll back to the before snapshot.
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);

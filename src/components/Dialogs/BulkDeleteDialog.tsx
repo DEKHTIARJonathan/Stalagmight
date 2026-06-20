@@ -44,6 +44,7 @@ export default function BulkDeleteDialog() {
   const shiftBlocked = impact?.shift_blocked ?? false;
   const shiftBlockedReasons = impact?.shift_blocked_reasons ?? [];
   const removedDatums = impact?.removed_datums ?? [];
+  const removedComments = impact?.removed_comments ?? [];
 
   // Prefill split names for interior ranges (mirrors the single-shot dialog).
   useEffect(() => {
@@ -149,7 +150,8 @@ export default function BulkDeleteDialog() {
         {isInterior && (
           <p className="text-text-secondary text-sm">
             These shots are in the middle of the section. Split keeps both ends in place; closing
-            the gap shifts the downstream survey.
+            the gap shifts the downstream survey. The relationship changes below cover closing the
+            gap — the split keeps the stations at each end and their connections.
           </p>
         )}
 
@@ -193,18 +195,28 @@ export default function BulkDeleteDialog() {
           </div>
         )}
 
-        {isInterior && removedDatums.length > 0 && (
+        {isInterior && (removedDatums.length > 0 || removedComments.length > 0) && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-            <p className="font-medium">Splitting will remove a zero datum.</p>
-            <ul className="list-disc list-inside">
-              {removedDatums.map((station: StationRef, index: number) => (
-                <li key={`removed-datum-${index}`}>
-                  {formatStationId(station.section_id, station.station_index)}
-                </li>
-              ))}
-            </ul>
-            <p>Zero datums anchor the survey&apos;s real-world position. These sit on stations the
-              split drops, so they will be removed (you can undo to restore).</p>
+            <p className="font-medium">Deleting these shots will remove anchored data.</p>
+            {removedDatums.length > 0 && (
+              <p>
+                Zero datums (anchor the survey&apos;s real-world position) on{' '}
+                {removedDatums
+                  .map((s: StationRef) => formatStationId(s.section_id, s.station_index))
+                  .join(', ')}
+                .
+              </p>
+            )}
+            {removedComments.length > 0 && (
+              <p>
+                Station comments on{' '}
+                {removedComments
+                  .map((s: StationRef) => formatStationId(s.section_id, s.station_index))
+                  .join(', ')}
+                .
+              </p>
+            )}
+            <p>These sit on stations the deletion drops (you can undo to restore).</p>
           </div>
         )}
 
