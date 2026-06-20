@@ -63,18 +63,12 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Resolve Playwright version
-        id: pw
-        run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
-      # Always do a full browser install: on the ephemeral NUC the cross-runner
-      # cache restore was missing chrome-headless-shell, which failed every test.
-      # The cache above still warms most of ~/.cache/ms-playwright; this tops up
-      # the missing bits. (Container runs as root → --with-deps apt works.)
+      # Install the browser fresh each run; no actions/cache step on purpose.
+      # This runner is ephemeral (--rm), so ~/.cache/ms-playwright is wiped
+      # between jobs and the GitHub cache would just be a network round-trip for
+      # the same ~150MB we install anyway (and the shared hosted key was missing
+      # chrome-headless-shell). A persistent local volume on the runner is the
+      # real fix. (Container runs as root → --with-deps apt works.)
       - name: Install Playwright browser + system deps
         run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:ui
