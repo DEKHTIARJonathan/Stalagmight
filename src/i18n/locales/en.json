@@ -1610,14 +1610,25 @@
   },
   "globalView": {
     "actions": {
+      "import": "Import",
       "importDmp": "Import DMP",
       "importTml": "Import Ariane",
       "importCompass": "Import Compass",
+      "importGpx": "Import GPX",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "mergeProjectsAria": "Merge {{countFormatted}} selected projects",
       "newProject": "New project",
       "openProject": "Open project",
-      "settings": "Settings"
+      "openOrImport": "Open / Import",
+      "settings": "Settings",
+      "debugLogs": "Debug Logs",
+      "quit": "Quit"
+    },
+    "menu": {
+      "aria": "Application menu"
+    },
+    "viewToggle": {
+      "aria": "Switch between map and list view"
     },
     "tabs": {
       "map": "Map",
@@ -1632,6 +1643,10 @@
     "recent": {
       "title": "Recent projects",
       "hint": "Click to select, double-click to open, right-click for options.",
+      "hintPrefix": "Click to select, double-click to open, right-click for options.",
+      "hintFindPrefix": "Don't see your project?",
+      "hintFindLink": "Click here",
+      "hintFindSuffix": " to open it from file.",
       "countFiltered": "Showing {{shown}} of {{total}}",
       "noResults": "No projects match \"{{term}}\".",
       "density": {

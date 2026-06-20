@@ -2,13 +2,16 @@ import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, typ
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProject } from '../../hooks/useProject';
 import { useGlobalViewShortcuts } from '../../hooks/useGlobalViewShortcuts';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
-import { Button, IconButton } from '../common/Button';
-import { BugIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, MapIcon } from '../common/icons';
+import { Button } from '../common/Button';
+import { AppMenu, type AppMenuItem } from '../common/AppMenu';
+import { BugIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon, QuitIcon, SettingsIcon } from '../common/icons';
+import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
@@ -66,6 +69,20 @@ function formatPhaseLabel(
 
 type ViewTab = 'map' | 'list';
 
+/**
+ * Fixed icon tints for the hamburger menu actions. These are menu-action colors
+ * (not survey-entity syntactic roles), so they live here rather than in the
+ * syntactic palette. Hexes reuse the app's existing palette where natural.
+ */
+const MENU_ICON_COLORS = {
+  new: '#5fcf83', // green
+  open: '#0070dd', // blue
+  import: '#eab946', // amber
+  settings: '#9aa6b2', // gray
+  debug: '#a335ee', // purple
+  quit: '#f75d59', // red
+} as const;
+
 interface ContextMenuState {
   visible: boolean;
   x: number;
@@ -89,15 +106,21 @@ export default function GlobalView() {
     recentProjects,
     handleNewProject,
     handleOpenProject,
+    handleOpenOrImport,
     handleImportDmp,
     handleImportTml,
     handleImportCompass,
+    handleImportGpx,
   } = useProject();
 
   const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects, config } = useProjectStore();
 
   // Note: useLoadingProgress() is called in App.tsx (always mounted) to avoid duplicate listeners
   const { openDialog } = useUIStore();
+  const syntacticLevel = useUIStore((s) => s.syntacticLevel);
+  // Toolbar buttons show icons at the 'toolbar_only' level and up (menu items
+  // use the stricter 'icons' level — handled inside AppMenu).
+  const showToolbarIcons = syntacticLevelAtLeast(syntacticLevel, 'toolbar_only');
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -325,18 +348,33 @@ export default function GlobalView() {
     }
   }, [multiSelectedIds, recentProjects, openDialog]);
 
+  // Switch between map and list views. Search is list-only, so clear the term
+  // when entering the map (the map shows all projects unfiltered).
+  const handleSwitchTab = useCallback((tab: ViewTab) => {
+    setActiveTab(tab);
+    if (tab === 'map') {
+      setSearchTerm('');
+    }
+  }, []);
+
+  // Quit the app: requests a window close; the App-level useBeforeUnload listener
+  // handles tauri://close-requested (confirms on unsaved work, else closes).
+  const handleQuit = useCallback(() => {
+    void getCurrentWindow().close();
+  }, []);
+
   // Handle zoom to system (context menu action)
   const handleZoomToSystem = useCallback(() => {
     if (contextMenu.projectPath) {
       // Toggle to map tab if not already there
       if (activeTab !== 'map') {
-        setActiveTab('map');
+        handleSwitchTab('map');
       }
       // Trigger zoom - use a counter pattern to ensure re-trigger even for same path
       setZoomToSystem(contextMenu.projectPath);
     }
     setContextMenu((prev) => ({ ...prev, visible: false }));
-  }, [contextMenu.projectPath, activeTab]);
+  }, [contextMenu.projectPath, activeTab, handleSwitchTab]);
 
   // Callback for GlobalViewMap to signal zoom was handled
   const handleZoomHandled = useCallback(() => {
@@ -437,120 +475,129 @@ export default function GlobalView() {
   // panel stays gated on loaded projects, since missing rows aren't selectable.)
   const hasRecentItems = listItems.length > 0;
 
+  // Hamburger menu contents. testids reuse the legacy button ids on equivalent
+  // actions so most existing selectors keep working (now via the menu).
+  const menuItems: AppMenuItem[] = [
+    {
+      id: 'app-menu-new-project',
+      label: t('globalView.actions.newProject'),
+      icon: <FilePlusIcon size={18} />,
+      iconColor: MENU_ICON_COLORS.new,
+      action: 'new_file',
+      onClick: () => handleNewProject(),
+    },
+    {
+      id: 'global-open-project-button',
+      label: t('globalView.actions.openProject'),
+      icon: <FolderOpenIcon size={18} />,
+      iconColor: MENU_ICON_COLORS.open,
+      action: 'open_file',
+      onClick: () => handleOpenProject(),
+    },
+    {
+      id: 'global-import-menu-button',
+      label: t('globalView.actions.import'),
+      icon: <DownloadIcon size={18} />,
+      iconColor: MENU_ICON_COLORS.import,
+      submenu: [
+        { id: 'global-import-dmp-button', label: t('globalView.actions.importDmp'), action: 'import_dmp', onClick: () => handleImportDmp() },
+        { id: 'global-import-tml-button', label: t('globalView.actions.importTml'), onClick: () => handleImportTml() },
+        { id: 'global-import-compass-button', label: t('globalView.actions.importCompass'), onClick: () => handleImportCompass() },
+        { id: 'global-import-gpx-button', label: t('globalView.actions.importGpx'), onClick: () => handleImportGpx() },
+      ],
+    },
+    { id: 'app-menu-sep-1', label: '', separator: true },
+    {
+      id: 'settings-button',
+      label: t('globalView.actions.settings'),
+      icon: <SettingsIcon size={18} />,
+      iconColor: MENU_ICON_COLORS.settings,
+      onClick: () => openDialog('settings'),
+    },
+    {
+      id: 'global-debug-button',
+      label: t('globalView.actions.debugLogs'),
+      icon: <BugIcon size={18} />,
+      iconColor: MENU_ICON_COLORS.debug,
+      onClick: () => openDialog('debug'),
+    },
+    { id: 'app-menu-sep-2', label: '', separator: true },
+    {
+      id: 'global-quit-button',
+      label: t('globalView.actions.quit'),
+      icon: <QuitIcon size={18} />,
+      iconColor: MENU_ICON_COLORS.quit,
+      action: 'quit',
+      onClick: handleQuit,
+    },
+  ];
+
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <div className="flex items-center gap-3">
-          <Button onClick={() => handleImportDmp()} data-testid="global-import-dmp-button">
-            {t('globalView.actions.importDmp')}
-          </Button>
-          <Button onClick={() => handleImportTml()} data-testid="global-import-tml-button">
-            {t('globalView.actions.importTml')}
-          </Button>
-          <Button onClick={() => handleImportCompass()} data-testid="global-import-compass-button">
-            {t('globalView.actions.importCompass')}
-          </Button>
-          <Button data-testid="new-project-button" onClick={() => handleNewProject()}>
+      {/* Header — left: menu + primary actions, center: title, right: Map|List toggle */}
+      <header className="grid grid-cols-[1fr_auto_1fr] items-center px-4 py-3 border-b border-border">
+        <div className="flex items-center gap-3 justify-self-start">
+          <AppMenu items={menuItems} aria-label={t('globalView.menu.aria')} />
+          <Button
+            data-testid="new-project-button"
+            onClick={() => handleNewProject()}
+            icon={showToolbarIcons ? <span style={{ color: MENU_ICON_COLORS.new }}><FilePlusIcon size={16} /></span> : undefined}
+          >
             {t('globalView.actions.newProject')}
           </Button>
-          <Button onClick={() => handleOpenProject()} data-testid="global-open-project-button">
-            {t('globalView.actions.openProject')}
-          </Button>
-        </div>
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-bold">Stalagmight</h1>
           <Button
-            onClick={() => openDialog('settings')}
-            data-testid="settings-button"
-            aria-label={t('globalView.actions.settings')}
+            data-testid="global-open-import-button"
+            onClick={() => handleOpenOrImport()}
+            icon={showToolbarIcons ? <span style={{ color: MENU_ICON_COLORS.open }}><FolderOpenIcon size={16} /></span> : undefined}
           >
-            {t('globalView.actions.settings')}
+            {t('globalView.actions.openOrImport')}
           </Button>
-          <IconButton
-            icon={<BugIcon />}
-            onClick={() => openDialog('debug')}
-            tooltip="Debug Logs"
-            aria-label="Debug Logs"
-            size="sm"
-            data-testid="global-debug-button"
-          />
         </div>
-      </header>
 
-      {/* Tabs - only show if there are projects (loaded or missing) */}
-      {hasRecentItems && (
-        <div className="flex items-center justify-between border-b border-border px-4">
-          <div className="flex">
-            <button
-              data-testid="globalview-map-tab"
-              onClick={() => setActiveTab('map')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'map'
-                  ? 'border-accent text-accent'
-                  : 'border-transparent text-text-secondary hover:text-text'
-              }`}
-            >
-              {t('globalView.tabs.map')}{' '}
-              {hasGpsProjects ? `(${formatNumber(gpsProjectCount)})` : ''}
-            </button>
-            <button
-              data-testid="globalview-list-tab"
-              onClick={() => setActiveTab('list')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'list'
-                  ? 'border-accent text-accent'
-                  : 'border-transparent text-text-secondary hover:text-text'
-              }`}
-            >
-              {t('globalView.tabs.list')} ({formatNumber(recentProjects.length)})
-            </button>
-          </div>
+        <h1 className="text-xl font-bold justify-self-center">Stalagmight</h1>
 
-          {/* Search input - on the list tab always, on the map tab when there
-              are GPS projects to filter. */}
-          {(activeTab === 'list' || (activeTab === 'map' && hasGpsProjects)) && (
-            <div className="relative py-1">
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchTerm}
-                onChange={handleSearchChange}
-                onKeyDown={handleSearchKeyDown}
-                placeholder={t('globalView.search.placeholder')}
-                className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-                data-testid="globalview-search-input"
-                aria-label={t('globalView.search.aria')}
-              />
-              {/* Clear button (X) - only show when there's text */}
-              {searchTerm && (
-                <button
-                  onClick={handleClearSearch}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text p-1"
-                  title={t('globalView.search.clearTitle')}
-                  aria-label={t('globalView.search.clearAria')}
-                  data-testid="globalview-search-clear"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              )}
+        <div className="flex items-center gap-2 justify-self-end">
+          {hasRecentItems && (
+            <div
+              className="inline-flex rounded border border-border overflow-hidden"
+              role="tablist"
+              aria-label={t('globalView.viewToggle.aria')}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'map'}
+                data-testid="globalview-view-toggle-map"
+                onClick={() => handleSwitchTab('map')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
+                  activeTab === 'map'
+                    ? 'bg-accent text-accent-on'
+                    : 'text-text-secondary hover:text-text hover:bg-panel'
+                }`}
+              >
+                {showToolbarIcons && <MapIcon size={16} />}
+                {t('globalView.tabs.map')}
+                {hasGpsProjects ? ` (${formatNumber(gpsProjectCount)})` : ''}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'list'}
+                data-testid="globalview-view-toggle-list"
+                onClick={() => handleSwitchTab('list')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border-l border-border transition-colors ${
+                  activeTab === 'list'
+                    ? 'bg-accent text-accent-on'
+                    : 'text-text-secondary hover:text-text hover:bg-panel'
+                }`}
+              >
+                {showToolbarIcons && <ListIcon size={16} />}
+                {t('globalView.tabs.list')} ({formatNumber(recentProjects.length)})
+              </button>
             </div>
           )}
         </div>
-      )}
+      </header>
 
       {/* Loading Modal Overlay */}
       {loading.isLoading && (
@@ -588,6 +635,7 @@ export default function GlobalView() {
               />
             </div>
           ) : activeTab === 'map' ? (
+            // Search is list-only now; the map always shows all projects (searchTerm="").
             <GlobalViewMap
               ref={mapRef}
               projects={recentProjects}
@@ -596,7 +644,7 @@ export default function GlobalView() {
               onProjectOpen={handleProjectOpen}
               geometryData={geometryData}
               geometryStates={geometryStates}
-              searchTerm={searchTerm}
+              searchTerm=""
               onContextMenu={handleMapContextMenu}
               zoomToSystem={zoomToSystem}
               onZoomHandled={handleZoomHandled}
@@ -633,14 +681,69 @@ export default function GlobalView() {
                   <RecentDensityToggle density={density} onChange={setDensity} />
                 </div>
               </div>
-              <p className="text-xs text-text-secondary mb-4" data-testid="globalview-list-status">
-                {isSearching
-                  ? t('globalView.recent.countFiltered', {
-                    shown: formatNumber(visibleItems.length),
-                    total: formatNumber(listItems.length),
-                  })
-                  : t('globalView.recent.hint')}
-              </p>
+              <div className="flex items-start justify-between gap-4 mb-4" data-testid="globalview-list-status-row">
+                <p className="text-xs text-text-secondary" data-testid="globalview-list-status">
+                  {isSearching ? (
+                    t('globalView.recent.countFiltered', {
+                      shown: formatNumber(visibleItems.length),
+                      total: formatNumber(listItems.length),
+                    })
+                  ) : (
+                    <>
+                      {t('globalView.recent.hintPrefix')}{' '}
+                      {t('globalView.recent.hintFindPrefix')}{' '}
+                      <button
+                        type="button"
+                        onClick={() => handleOpenOrImport()}
+                        className="text-accent hover:underline"
+                        data-testid="globalview-hint-open-link"
+                      >
+                        {t('globalView.recent.hintFindLink')}
+                      </button>
+                      {t('globalView.recent.hintFindSuffix')}
+                    </>
+                  )}
+                </p>
+
+                {/* Search — list-only; the map shows all projects. */}
+                <div className="relative shrink-0">
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={searchTerm}
+                    onChange={handleSearchChange}
+                    onKeyDown={handleSearchKeyDown}
+                    placeholder={t('globalView.search.placeholder')}
+                    className="bg-panel border border-border rounded px-2 py-1 text-sm w-48 pr-7 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                    data-testid="globalview-search-input"
+                    aria-label={t('globalView.search.aria')}
+                  />
+                  {searchTerm && (
+                    <button
+                      onClick={handleClearSearch}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text p-1"
+                      title={t('globalView.search.clearTitle')}
+                      aria-label={t('globalView.search.clearAria')}
+                      data-testid="globalview-search-clear"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
 
               {visibleItems.length === 0 ? (
                 <div
