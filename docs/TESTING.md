@@ -161,7 +161,7 @@ e2e-playwright/
 ├── settings-shortcuts.spec.ts  # Shortcut configuration tests
 ├── dmp-import.spec.ts     # DMP import dialog tests
 ├── debug.spec.ts          # Debugging helper test
-└── ...                    # 67 spec files total
+└── ...                    # 89 spec files total
 ```
 
 ### Configuration
@@ -193,10 +193,13 @@ that kind of bad hygiene surfaces as flake.
 
 **Enforcement:** `pnpm lint:e2e-parallel` (`scripts/check-e2e-parallel-safe.mjs`)
 fails on any of the patterns above. It runs in the **`smoke` CI job** — the only
-job that triggers on `e2e-playwright/**` (the `check` job path-ignores it, so a
-gate there would be a no-op for an e2e-playwright-only change). Run it locally
-before pushing. `fixtures/coverage.ts` is the one allow-listed write; a genuinely
-necessary exception goes in the `ALLOW` list in that script with a written reason.
+job that runs the Playwright tier on `e2e-playwright/**` changes (the `check` job
+path-ignores them, so a gate there would be a no-op for an e2e-playwright-only
+change). Run it locally before pushing. `fixtures/coverage.ts` is the one
+allow-listed write; a genuinely necessary exception goes in the `ALLOW` list in
+that script with a written reason. The scanner is a line-based tripwire for the
+common, accidental regression — not a parser; it intentionally does not inspect
+`page.screenshot({path})` (framework I/O) or the root `playwright.config.ts`.
 
 ### Writing Playwright Tests
 
