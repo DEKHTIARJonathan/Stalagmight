@@ -1094,6 +1094,78 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
     });
 }
 
+// #92 / #112: the permission-denied face of the failure path — the macOS "folder
+// access revoked" scenario the deferred-save warning was built for. When the save
+// fails with a permission-classified error, `finalize_deferred_import` must HUMANIZE
+// it ("permission denied (check folder access ...)") and must NOT leak the internal
+// `FS_PERMISSION_DENIED` marker into the user-facing warning (import.rs:143-152).
+//
+// We can't induce a literal EACCES root-safely (container-root holds
+// CAP_DAC_OVERRIDE, so mode bits don't bite), so we drive the same branch via the
+// classifier's documented string fallback: a directory squatting the `.stalx.tmp`
+// temp path makes SQLite report "unable to open database file", which
+// `is_permission_denied` (loading.rs) treats as permission-denied — and because the
+// parent dir is present, `save_failure` keeps the marker prefix. The partial-success
+// invariants (no phantom, in-memory survival, still-deferred) are already covered by
+// the generic-failure twin above; this test focuses on the message mapping.
+#[test]
+fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let project_path = dir.path().join("new-import.stalx");
+        // Squat a DIRECTORY at the atomic-save temp path (`<stem>.stalx.tmp`). The
+        // reserved `.stalx` path itself stays absent (so no collision auto-rename),
+        // but `Database::open` on the temp dir fails with "unable to open database
+        // file" — classified as permission-denied — while the parent dir exists.
+        let temp_squat = dir.path().join("new-import.stalx.tmp");
+        fs::create_dir_all(&temp_squat).unwrap();
+
+        let mut project = Project::new("New Import".to_string(), None);
+        project.file_path = Some(project_path.clone());
+        state(&app).inner().set_project_for_tests(project);
+        state(&app).inner().set_initial_save_deferred_for_tests(true);
+        assert!(
+            state(&app).initial_save_deferred(),
+            "precondition: project must be deferred (never saved)"
+        );
+
+        let sections = vec![crate::models::ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+        let result = import::import_sections(state(&app), sections, None, None, None);
+
+        // Partial success carrying a HUMANIZED permission warning...
+        assert_success(&result);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("permission denied (check folder access")),
+            "a permission-classified save failure must be humanized: {:?}",
+            result.warnings
+        );
+        // ...and the internal marker must never reach the user-facing message.
+        assert!(
+            result
+                .warnings
+                .iter()
+                .all(|w| !w.message.contains(crate::core::loading::PERMISSION_DENIED_CODE)),
+            "the internal FS_PERMISSION_DENIED marker must be stripped, not leaked: {:?}",
+            result.warnings
+        );
+    });
+}
+
 // #104 review: "deferred" is tracked by an explicit flag, not inferred from the DB
 // handle or file existence (both ambiguous — dropped handles after a save, and
 // reserved-path collisions). A persisted project must never read as deferred; a
