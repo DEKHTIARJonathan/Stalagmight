@@ -45,6 +45,10 @@ export default function BulkDeleteDialog() {
   const shiftBlockedReasons = impact?.shift_blocked_reasons ?? [];
   const removedDatums = impact?.removed_datums ?? [];
   const removedComments = impact?.removed_comments ?? [];
+  // The preview is the only source of the datum/comment/shift-blocked warnings,
+  // so keep the destructive actions disabled until it resolves (loaded or
+  // errored) — otherwise a fast click could confirm before the warning renders.
+  const previewReady = impact !== null || impactError !== null;
 
   // Prefill split names for interior ranges (mirrors the single-shot dialog).
   useEffect(() => {
@@ -195,10 +199,10 @@ export default function BulkDeleteDialog() {
           </div>
         )}
 
-        {isInterior && (removedDatums.length > 0 || removedComments.length > 0) && (
+        {((isInterior && removedDatums.length > 0) || removedComments.length > 0) && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
             <p className="font-medium">Deleting these shots will remove anchored data.</p>
-            {removedDatums.length > 0 && (
+            {isInterior && removedDatums.length > 0 && (
               <p>
                 Zero datums (anchor the survey&apos;s real-world position) on{' '}
                 {removedDatums
@@ -250,14 +254,18 @@ export default function BulkDeleteDialog() {
             Cancel
           </Button>
           {isInterior && (
-            <Button onClick={handleSplit} disabled={isLoading} data-testid="bulk-delete-split">
+            <Button
+              onClick={handleSplit}
+              disabled={isLoading || !previewReady}
+              data-testid="bulk-delete-split"
+            >
               {isLoading ? 'Working…' : 'Split into Two Sections'}
             </Button>
           )}
           <Button
             variant="danger"
             onClick={handleShift}
-            disabled={isLoading || shiftBlocked}
+            disabled={isLoading || shiftBlocked || !previewReady}
             data-primary-action=""
             data-testid="bulk-delete-shift"
           >

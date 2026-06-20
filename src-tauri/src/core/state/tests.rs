@@ -9971,6 +9971,222 @@ fn test_delete_range_interior_preview_includes_shift_boundary_merge() {
 }
 
 #[test]
+fn test_delete_range_shift_does_not_displace_free_floating_merged_section() {
+    // Codex re-review (P1): a suffix gap-close keeps the head fixed and shifts
+    // the doomed tail. A per-shot cascade would push a free-floating (undatumed)
+    // section merged to that tail, then the tail+merge are deleted — leaving it
+    // displaced with no edge to pull it back. Deferring to one final cascade
+    // keeps it in place.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Free Float".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            shot_data_with_azimuth(10.0, 90.0, 90.0),
+            shot_data_with_azimuth(5.0, 90.0, 90.0),
+            shot_data_with_azimuth(7.0, 90.0, 90.0),
+            shot_data_with_azimuth(8.0, 90.0, 90.0),
+            shot_data_with_azimuth(6.0, 90.0, 90.0),
+        ],
+    });
+    let sec_a = create.section_id.unwrap();
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![shot_data_with_azimuth(4.0, 45.0, 45.0)],
+    });
+    let sec_b = create_b.section_id.unwrap();
+    // B is free-floating (NO datum), merged to A's END station (A:5) — the doomed tail.
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_a, 5),
+            station_b: StationRef::new(sec_b, 0),
+        })
+        .success);
+
+    let before = {
+        let proj = state.get_project_state().unwrap();
+        abs_coord_map(&proj)
+    };
+    let b0_before = *before.get(&StationRef::new(sec_b, 0)).unwrap();
+    let b1_before = *before.get(&StationRef::new(sec_b, 1)).unwrap();
+
+    let (s3, s4) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[3].id, sec.shots[4].id)
+    };
+    assert!(state.execute_delete_shot_range_shift(sec_a, s3, s4).success);
+
+    let proj = state.get_project_state().unwrap();
+    let after = abs_coord_map(&proj);
+    // B is now disconnected from A; it must stay where it was, not be dragged by
+    // the doomed tail's intermediate shift.
+    assert_xy_close(b0_before, *after.get(&StationRef::new(sec_b, 0)).unwrap());
+    assert_xy_close(b1_before, *after.get(&StationRef::new(sec_b, 1)).unwrap());
+}
+
+#[test]
+fn test_delete_range_interior_shift_not_blocked_via_removed_tail_boundary() {
+    // Codex re-review: a path from the head to the REMOVED tail boundary
+    // (end_pos+1) through an external section is not a real loop — that station
+    // and its merge are deleted by the gap-close — so it must not block.
+    let state = AppState::new().unwrap();
+    state
+        .execute(Command::CreateProject { name: "Tail Boundary Loop".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_e = state.execute(Command::CreateSection {
+        name: Some("E".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_e = create_e.section_id.unwrap();
+    // Head side A:1 <-> E:0. A:4 (= end_pos+1 for range [2..=3]) <-> E:1 is
+    // already connected (A:4->A:1->E:0->E:1), so push it raw to form the loop
+    // that runs through the to-be-removed tail boundary A:4.
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_a, 1),
+            station_b: StationRef::new(sec_e, 0),
+        })
+        .success);
+    {
+        let mut guard = state.project.lock().unwrap();
+        let proj = guard.as_mut().unwrap();
+        proj.station_merges.push(StationMerge {
+            station_a: StationRef::new(sec_a, 4).into(),
+            station_b: StationRef::new(sec_e, 1).into(),
+            merged_at: chrono::Utc::now(),
+        });
+        proj.merge_adjacency_cache.clear();
+    }
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj.preview_delete_shot_range(sec_a, s2, s3).unwrap();
+    assert!(
+        !impact.shift_blocked,
+        "close-gap connected only through the removed tail boundary must not block: {:?}",
+        impact.shift_blocked_reasons
+    );
+}
+
+#[test]
+fn test_delete_range_prefix_shift_surfaces_comment() {
+    // Codex re-review: prefix/suffix shifts drop station comments on removed
+    // stations; the preview must surface them so the dialog can warn (the
+    // warning was previously gated to interior splits only).
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Prefix Comment".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    // Comment on station 1 (removed by the prefix range [0..=1]).
+    assert!(state
+        .execute(Command::SetStationComment {
+            station_ref: StationRef::new(section_id, 1),
+            comment: Some("note".to_string()),
+        })
+        .success);
+    let (s0, s1) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[0].id, sec.shots[1].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj.preview_delete_shot_range(section_id, s0, s1).unwrap();
+    assert!(
+        impact.removed_comments.iter().any(|sr| sr.station_index == 1),
+        "prefix shift comment loss must be surfaced: {:?}",
+        impact.removed_comments
+    );
+}
+
+#[test]
+fn test_delete_range_interior_shift_surfaces_boundary_comment() {
+    // Codex re-review: the interior close-gap deletes end_pos+1 and drops a
+    // comment there. With the gap-close available, the comment set covers the
+    // shift removed set, so the boundary comment is surfaced before closing.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Boundary Comment".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("S".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+        ],
+    });
+    let section_id = create.section_id.unwrap();
+    // Comment on station 4 = end_pos+1 for the interior range [2..=3]. The split
+    // keeps it; the gap-close drops it.
+    assert!(state
+        .execute(Command::SetStationComment {
+            station_ref: StationRef::new(section_id, 4),
+            comment: Some("boundary".to_string()),
+        })
+        .success);
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(section_id).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj.preview_delete_shot_range(section_id, s2, s3).unwrap();
+    assert!(!impact.shift_blocked, "no datum, so the gap-close is available");
+    assert!(
+        impact.removed_comments.iter().any(|sr| sr.station_index == 4),
+        "close-gap tail-boundary comment must be surfaced: {:?}",
+        impact.removed_comments
+    );
+}
+
+#[test]
 fn test_split_remaps_station_offsets() {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {

@@ -3035,6 +3035,11 @@ impl AppState {
                     return CommandResult::failure(e);
                 }
             }
+            // Single cascade now that every range shot (and any doomed merge) is
+            // gone, so a doomed station's intermediate shift never propagates into
+            // a connected free-floating section — the per-shot cascades were
+            // deferred for exactly this reason.
+            project.cascade_connection_offsets(&[section_id]);
             section_id
         };
 

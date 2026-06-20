@@ -2080,39 +2080,31 @@ impl Project {
             .filter(|zd| split_in_removed(&zd.station_ref))
             .filter_map(|zd| self.resolve_key(&zd.station_ref))
             .collect();
-        let removed_comments: Vec<StationRef> = self
-            .station_comments
-            .keys()
-            .filter(|k| split_in_removed(k))
-            .filter_map(|k| self.resolve_key(k))
-            .collect();
-
         // Gap-close (shift) availability.
         let mut shift_blocked_reasons: Vec<String> = Vec::new();
-        // Loop / both-anchored ambiguity applies only to an INTERIOR gap-close,
-        // which rejoins the head boundary (station `start_pos`) with the tail
-        // boundary (station `end_pos+1`). Evaluate connectivity/anchoring
-        // EXCLUDING the whole range — a path that exists only through the
-        // to-be-deleted shots/stations must not falsely block a valid bulk shift
-        // (it is gone by the time the survivors rejoin).
+        // Loop / both-anchored ambiguity applies only to an INTERIOR gap-close.
+        // The gap-close removes stations `start_pos+1 ..= end_pos+1` (= the
+        // interior `removed_set`) and rejoins the head boundary `start_pos` with
+        // the first SURVIVING tail station `end_pos+2`. Evaluate connectivity /
+        // anchoring between those two survivors while treating EVERY removed
+        // station (incl. the tail boundary `end_pos+1`) and the range's shots as
+        // gone — a path that only exists through a to-be-removed station's ref is
+        // not a real loop and must not falsely block a valid bulk shift.
         if kind == RangeDeleteKind::Interior {
             let head = StationRef::new(section_id, start_pos as u32);
-            let tail = StationRef::new(section_id, end_pos as u32 + 1);
-            let interior: HashSet<StationRef> = ((start_pos as u32 + 1)..=(end_pos as u32))
-                .map(|i| StationRef::new(section_id, i))
-                .collect();
+            let tail = StationRef::new(section_id, end_pos as u32 + 2);
             if self.stations_connected_excluding_range(
-                head, tail, section_id, start_pos, end_pos, &interior, true,
+                head, tail, section_id, start_pos, end_pos, &removed_set, true,
             ) {
                 shift_blocked_reasons.push(
                     "This range is part of a loop (the two sides are already connected)."
                         .to_string(),
                 );
             }
-            let head_anchored =
-                self.station_reaches_datum_excluding_range(head, section_id, start_pos, end_pos, &interior);
-            let tail_anchored =
-                self.station_reaches_datum_excluding_range(tail, section_id, start_pos, end_pos, &interior);
+            let head_anchored = self
+                .station_reaches_datum_excluding_range(head, section_id, start_pos, end_pos, &removed_set);
+            let tail_anchored = self
+                .station_reaches_datum_excluding_range(tail, section_id, start_pos, end_pos, &removed_set);
             if head_anchored && tail_anchored {
                 shift_blocked_reasons
                     .push("Both sides are anchored to a zero datum.".to_string());
@@ -2128,6 +2120,29 @@ impl Project {
                 shift_blocked_reasons.push(reason);
             }
         }
+        let shift_available = shift_blocked_reasons.is_empty();
+
+        // Station comments any AVAILABLE action would drop. The gap-close removes
+        // the whole `removed_set` (incl. the tail boundary `end_pos+1`); the split
+        // removes only `split_removed_set`. When the gap-close is available the
+        // user may pick either, so warn over the superset; when it is blocked only
+        // an interior split can run; a fully-blocked prefix/suffix has no action
+        // and drops nothing. (Datums only ever fall to the split — the gap-close
+        // is blocked when it would drop one — so `removed_datums` above stays on
+        // the split set.)
+        let comment_anchor_set: HashSet<StationRef> = if shift_available {
+            removed_set.clone()
+        } else if kind == RangeDeleteKind::Interior {
+            split_removed_set.clone()
+        } else {
+            HashSet::new()
+        };
+        let removed_comments: Vec<StationRef> = self
+            .station_comments
+            .keys()
+            .filter_map(|k| self.resolve_key(k))
+            .filter(|sr| comment_anchor_set.contains(sr))
+            .collect();
 
         // Connectivity the operation PRESERVES, so the dialog doesn't overstate
         // loss (it would otherwise list a bridging merge/closure as "Removed"
@@ -2556,16 +2571,18 @@ impl Project {
             }
         }
 
-        // Cascade offset adjustments for any drifted connections on the
-        // non-anchored side.
-        self.cascade_connection_offsets(&[section_id]);
-        // A bulk range delete removes shots one at a time; an intermediate step
-        // can transiently misalign a merge on a doomed (about-to-be-deleted)
-        // station — e.g. keeping the head fixed shifts the doomed tail while it
-        // is still merged to a datum-pinned section. That resolves once the next
-        // step deletes the doomed station, and the range path reconciles geometry
-        // at the end, so only assert alignment for standalone single-shot deletes.
+        // A bulk range delete removes shots one at a time and runs ONE cascade +
+        // alignment pass at the end (see execute_delete_shot_range_shift). A
+        // per-step cascade here would propagate a doomed station's transient
+        // shift into a merged free-floating section BEFORE that merge is removed,
+        // leaving the section displaced with no edge to pull it back; and an
+        // intermediate step can transiently misalign a merge on a doomed station.
+        // Defer both for the range path (signaled by a non-empty doomed set);
+        // standalone single-shot deletes cascade + assert immediately.
         if doomed_anchors.is_empty() {
+            // Cascade offset adjustments for any drifted connections on the
+            // non-anchored side.
+            self.cascade_connection_offsets(&[section_id]);
             self.debug_assert_merge_alignment("remove_shot_with_rewire");
         }
 
