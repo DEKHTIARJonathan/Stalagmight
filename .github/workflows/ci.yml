@@ -27,27 +27,34 @@ jobs:
     outputs:
       runs_on: ${{ steps.pick.outputs.runs_on }}
     steps:
-      - id: pick
+      - name: Choose runner — NUC when online & idle, else hosted
+        id: pick
         env:
           GH_TOKEN: ${{ secrets.NUC_RUNNER_READ_PAT }}
         run: |
-          state=""
+          # Default to hosted; only route to the NUC if we can POSITIVELY
+          # confirm a runner named i5-nuc-runner is online AND idle. Any
+          # uncertainty — no token, API error, runner missing/busy, or a
+          # DUPLICATE stale registration with the same name — counts as 0 and
+          # stays on hosted. (Counting matches, not string-comparing one line,
+          # is what makes a leftover offline duplicate harmless.)
+          runs_on='["ubuntu-latest"]'
           if [ -n "$GH_TOKEN" ]; then
-            state=$(gh api orgs/Stalagmight/actions/runners \
-              --jq '.runners[] | select(.name=="i5-nuc-runner") | "\(.status) \(.busy)"' \
-              2>/dev/null || echo "")
+            idle=$(gh api 'orgs/Stalagmight/actions/runners?per_page=100' \
+              --jq '[.runners[] | select(.name=="i5-nuc-runner" and .status=="online" and .busy==false)] | length' \
+              2>/dev/null || echo 0)
+            if [ "${idle:-0}" -ge 1 ]; then
+              runs_on='["self-hosted","ubuntu-latest-local"]'
+            fi
           fi
-          if [ "$state" = "online false" ]; then
-            echo 'runs_on=["self-hosted","ubuntu-latest-local"]' >> "$GITHUB_OUTPUT"
-            echo "NUC online & idle → self-hosted"
-          else
-            echo 'runs_on=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
-            echo "NUC state=[${state:-unavailable}] → hosted fallback"
-          fi
+          echo "runs_on=$runs_on" >> "$GITHUB_OUTPUT"
+          echo "Routed to $runs_on (idle i5-nuc-runner count: ${idle:-n/a})"
 
   check:
     needs: pick
-    runs-on: ${{ fromJSON(needs.pick.outputs.runs_on) }}
+    # Default-guard the expression: if pick somehow emits no output, fall back
+    # to hosted rather than crash the run with a fromJSON("") error.
+    runs-on: ${{ fromJSON(needs.pick.outputs.runs_on || '["ubuntu-latest"]') }}
     # NUC cold ≈ 7m, warm ≈ 4m; hosted ≈ 3m. Generous headroom either way.
     timeout-minutes: 30
     env:
