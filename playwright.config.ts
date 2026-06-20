@@ -15,6 +15,23 @@ const retries =
     ? envRetries
     : defaultRetries;
 
+// Workers: PW_WORKERS overrides. Playwright's `workers` accepts a number OR a
+// percentage string ("50%") but NOT a bare numeric *string*, which it rejects
+// with "config.workers must be a number or percentage" (#132). Env vars are
+// always strings, so coerce a bare integer (PW_WORKERS=3) to a Number while
+// leaving a percentage ("50%") as-is. In CI default to "100%" (all cores):
+// Playwright's own default is floor(cpus/2) = 1 worker (serial) on a 2-core
+// runner (#120).
+const envWorkers = process.env.PW_WORKERS;
+const workers =
+  envWorkers === undefined || envWorkers === ''
+    ? process.env.CI
+      ? '100%'
+      : undefined
+    : /^\d+$/.test(envWorkers)
+      ? Number(envWorkers)
+      : envWorkers;
+
 /**
  * Playwright configuration for fast UI tests with Tauri IPC mocking.
  * These tests run against the Vite dev server with mocked Tauri commands.
@@ -31,19 +48,9 @@ export default defineConfig({
   // Derived above (validated PW_RETRIES override; CI 2 / local 1).
   retries,
 
-  // Use PW_WORKERS env var to override (Playwright accepts either an
-  // integer count or a percentage of logical CPU cores, e.g. "50%").
-  // Pass the env var through as a string so percent values aren't
-  // silently truncated by parseInt ("50%" → 50, which would launch
-  // fifty workers instead of half the cores).
-  //
-  // In CI, default to "100%" (all cores). Playwright's default is
-  // floor(cpus/2), which on a 2-core `ubuntu-latest` runner is **1 worker** —
-  // i.e. the whole suite runs serially (this is why the nightly took ~57 min,
-  // #120). Using both cores ~halves the nightly wall-clock with no coverage
-  // change. The mocked-IPC suite is light enough that 2 Chromium workers fit
-  // comfortably in the runner's RAM.
-  workers: process.env.PW_WORKERS || (process.env.CI ? '100%' : undefined),
+  // Derived + validated above (PW_WORKERS: bare int -> number, "50%" kept as-is;
+  // CI defaults to "100%" / all cores). See #120, #132.
+  workers,
 
   // Test reporter: 'list' for live progress, 'github' for CI annotations
   // Override with PW_REPORTER env var (e.g. PW_REPORTER=html)
