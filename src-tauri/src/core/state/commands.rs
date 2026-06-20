@@ -3027,9 +3027,12 @@ impl AppState {
                 .collect();
 
             for &sid in &range_shot_ids {
-                if let Err(e) =
-                    project.remove_shot_with_rewire_excluding_anchors(section_id, sid, &doomed_anchors)
-                {
+                if let Err(e) = project.remove_shot_with_rewire_excluding_anchors(
+                    section_id,
+                    sid,
+                    &doomed_anchors,
+                    /* defer_cascade */ true,
+                ) {
                     // Already mutated — roll back to the before snapshot.
                     let _ = Self::restore_snapshot_into(&mut proj_guard, &before_snapshot);
                     return CommandResult::failure(e);
@@ -3038,8 +3041,10 @@ impl AppState {
             // Single cascade now that every range shot (and any doomed merge) is
             // gone, so a doomed station's intermediate shift never propagates into
             // a connected free-floating section — the per-shot cascades were
-            // deferred for exactly this reason.
+            // deferred for exactly this reason. Assert alignment here, since each
+            // per-shot delete skipped its own alignment check.
             project.cascade_connection_offsets(&[section_id]);
+            project.debug_assert_merge_alignment("delete_shot_range_shift");
             section_id
         };
 

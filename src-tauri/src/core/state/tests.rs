@@ -9971,6 +9971,78 @@ fn test_delete_range_interior_preview_includes_shift_boundary_merge() {
 }
 
 #[test]
+fn test_delete_range_blocked_interior_impact_describes_split() {
+    // Review finding (P2): when the gap-close is blocked, an interior range can
+    // only SPLIT (which keeps both boundary stations), so the relationship panel
+    // must describe the split — NOT list the kept tail boundary (end_pos+1) or
+    // its merge as removed. (Complements the not-blocked case above, where the
+    // gap-close IS offered and the boundary merge is surfaced.)
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Blocked Impact".to_string(), location: None });
+    let create = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+        ],
+    });
+    let sec_a = create.section_id.unwrap();
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_b = create_b.section_id.unwrap();
+    // Datum on interior station A:3 blocks the gap-close (it would drop the datum).
+    state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(sec_a, 3),
+        coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
+    });
+    // Merge on the tail boundary A:4 (= end_pos+1 for range [2..=3]) — kept by split.
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_a, 4),
+            station_b: StationRef::new(sec_b, 0),
+        })
+        .success);
+
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    let proj = state.get_project_state().unwrap();
+    let impact = proj.preview_delete_shot_range(sec_a, s2, s3).unwrap();
+    assert!(impact.shift_blocked, "datum on interior station blocks the gap-close");
+    assert!(
+        !impact
+            .removed_stations
+            .iter()
+            .any(|sr| sr.section_id == sec_a && sr.station_index == 4),
+        "split-only impact must not list the kept tail boundary: {:?}",
+        impact.removed_stations
+    );
+    assert!(
+        !impact.removed_merges.iter().any(|p| {
+            (p.station_a.section_id == sec_a && p.station_a.station_index == 4)
+                || (p.station_b.section_id == sec_a && p.station_b.station_index == 4)
+        }),
+        "the kept tail boundary's merge must not be reported as removed: {:?}",
+        impact.removed_merges
+    );
+}
+
+#[test]
 fn test_delete_range_shift_does_not_displace_free_floating_merged_section() {
     // Codex re-review (P1): a suffix gap-close keeps the head fixed and shifts
     // the doomed tail. A per-shot cascade would push a free-floating (undatumed)
