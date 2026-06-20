@@ -37,14 +37,24 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Pinned (was @v1, a moving tag) for reproducibility — v1.0.152 is the
+      # latest as of 2026-06-20, well past the v1.0.94 June security baseline.
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@v1.0.152
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # THE FIX: post the review as one sticky PR comment. Without this the
+          # review ran (8-19 turns, ~$1.5-5/run) but landed nowhere — every run
+          # logged "No buffered inline comments" and sticky defaulted off, so a
+          # fully-generated review just evaporated. (#138)
+          use_sticky_comment: 'true'
+          # Un-truncate the Claude output in the Action log (it was hidden behind
+          # "enable show_full_output: true"), so a silent non-post is debuggable.
+          show_full_output: 'true'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
