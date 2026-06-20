@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackSelect, trackSelectAdd } from '../utils/telemetry';
+import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackSelect, trackSelectAdd, clearProjectActionSource } from '../utils/telemetry';
 import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
 
 export interface CommentTarget {
@@ -494,6 +494,9 @@ export const useUIStore = create<UIStore>((set) => ({
     setDwellState(view === 'global' ? 'global-view' : `tool.${useUIStore.getState().activeTool}`);
     if (view === 'single') {
       void advanceProjectSeq();
+      // A project open/create/import flow has landed — the entry-point source
+      // has been consumed, so clear it to prevent bleed into a later open.
+      clearProjectActionSource();
     }
     // Dev stats is a single-view developer overlay — the Display toggle that
     // controls it lives only in SingleSystemView, but <MemoryProbe/> is mounted

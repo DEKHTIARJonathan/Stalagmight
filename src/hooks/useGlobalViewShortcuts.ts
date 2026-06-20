@@ -24,6 +24,7 @@ import { useUIStore } from '../store/uiStore';
 import { parseKeyEvent, normalizeShortcut } from '../utils/shortcuts';
 import { importOpenFilters, projectOpenFilters } from '../utils/fileDialogs';
 import { routeOpenedFile } from '../utils/openOrImport';
+import { setProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import { getErrorMessage } from '../utils/ipc';
 import { setSource } from '../utils/telemetry';
 import { defaultConfig } from '../types/config';
@@ -339,11 +340,13 @@ export function useGlobalViewShortcuts({
       switch (fileAction) {
         case 'new_file':
           e.preventDefault();
+          setProjectActionSource('keyboard');
           openDialog('new-project');
           break;
 
         case 'open_file': {
           e.preventDefault();
+          setProjectActionSource('keyboard');
           (async () => {
             try {
               const selected = await open({
@@ -361,6 +364,8 @@ export function useGlobalViewShortcuts({
               if (path) {
                 const store = useProjectStore.getState();
                 await store.loadProject(path);
+              } else {
+                clearProjectActionSource();
               }
             } catch (err) {
               useUIStore.getState().openDialog('error', {
@@ -374,6 +379,7 @@ export function useGlobalViewShortcuts({
 
         case 'import_dmp': {
           e.preventDefault();
+          setProjectActionSource('keyboard');
           (async () => {
             const selected = await open({
               multiple: false,
@@ -381,6 +387,7 @@ export function useGlobalViewShortcuts({
             });
 
             if (!selected || typeof selected !== 'string') {
+              clearProjectActionSource();
               return;
             }
 

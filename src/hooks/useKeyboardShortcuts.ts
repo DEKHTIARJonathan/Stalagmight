@@ -17,7 +17,7 @@ import {
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
 import type { ToolType, Selection, DisplayToggleKey } from '../store/uiStore';
-import { setSource, trackNav } from '../utils/telemetry';
+import { setSource, trackNav, setProjectActionSource, clearProjectActionSource } from '../utils/telemetry';
 import type { ShortcutsConfig, ShortcutFeedback } from '../types/config';
 import { defaultConfig } from '../types/config';
 
@@ -647,12 +647,14 @@ export function useKeyboardShortcuts() {
         // File actions
         case 'new_file':
           event.preventDefault();
+          setProjectActionSource('keyboard');
           openDialog('new-project');
           maybeShowToast(action);
           break;
 
         case 'open_file': {
           event.preventDefault();
+          setProjectActionSource('keyboard');
           (async () => {
             try {
               const selected = await open({
@@ -670,6 +672,8 @@ export function useKeyboardShortcuts() {
               if (path) {
                 const store = useProjectStore.getState();
                 await store.loadProject(path);
+              } else {
+                clearProjectActionSource();
               }
             } catch (e) {
               openDialog('error', {

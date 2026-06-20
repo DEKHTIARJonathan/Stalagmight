@@ -39,6 +39,15 @@ let available: boolean | null = null;
 let _source = 'unknown';
 let _sourceTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Pending source for a project open/create/import flow. Unlike `_source`, this
+ * does NOT auto-reset after 50ms — it bridges the file-picker / dialog gap
+ * between the originating click and the terminal IPC. Set at the entry point,
+ * peeked at each terminal command, cleared when the flow completes
+ * (setView('single')) or is cancelled.
+ */
+let _pendingProjectSource: SourceName | null = null;
+
 /** Dialog completion flag — set before closeDialog() in success paths. */
 let _dialogCompleted: string | null = null;
 
@@ -106,9 +115,13 @@ export type SourceName =
   | 'detail-panel'
   | 'dialog'
   | 'display-menu'
+  | 'empty-state'
+  | 'hamburger'
   | 'keyboard'
   | 'map'
   | 'mouse'
+  | 'recent-list'
+  | 'recent-map'
   | 'sections-panel'
   | 'toolbar'
   | 'touch';
@@ -175,6 +188,25 @@ export function consumeSource(): string {
   _source = 'unknown';
   if (_sourceTimer) { clearTimeout(_sourceTimer); _sourceTimer = null; }
   return s;
+}
+
+/**
+ * Set the entry-point source for a project open/create/import flow. Survives
+ * the file-picker / dialog async gap until the terminal command applies it.
+ * Call synchronously at the originating click.
+ */
+export function setProjectActionSource(source: SourceName): void {
+  _pendingProjectSource = source;
+}
+
+/** Read the pending project-action source without clearing it (multi-command flows). */
+export function peekProjectActionSource(): SourceName | undefined {
+  return _pendingProjectSource ?? undefined;
+}
+
+/** Clear the pending project-action source (flow complete or cancelled). */
+export function clearProjectActionSource(): void {
+  _pendingProjectSource = null;
 }
 
 /** Run a callback with tracking suppressed (for programmatic UI changes like onboarding). */
@@ -321,10 +353,10 @@ export function trackContextMenuAction(action: ContextMenuAction, source?: Sourc
  * Called from `invokeIpc` for every IPC call.
  * Includes source hint (keyboard, toolbar, etc.) when available.
  */
-export function trackCommand(command: string): void {
+export function trackCommand(command: string, sourceOverride?: string): void {
   if (!_enabled) return;
-  const src = consumeSource();
-  const key = src !== 'unknown' ? `command.${command}:${src}` : `command.${command}`;
+  const src = sourceOverride ?? consumeSource();
+  const key = src && src !== 'unknown' ? `command.${command}:${src}` : `command.${command}`;
   counts[key] = (counts[key] || 0) + 1;
 
   if (command === 'undo' && _lastUndoable && (Date.now() - _lastUndoable.time) < REGRET_WINDOW_MS) {

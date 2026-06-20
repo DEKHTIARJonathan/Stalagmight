@@ -12,6 +12,7 @@ import { Button } from '../common/Button';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { BugIcon, DownloadIcon, FilePlusIcon, FolderOpenIcon, ListIcon, MapIcon, QuitIcon, SettingsIcon } from '../common/icons';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
+import { setProjectActionSource } from '../../utils/telemetry';
 import { LoadingProgress } from '../LoadingProgress';
 import SystemCard from './SystemCard';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
@@ -257,6 +258,17 @@ export default function GlobalView() {
     await loadProject(filePath);
   }, [loadProject]);
 
+  // Source-tagged open variants for telemetry attribution (the recent list vs
+  // the recent map are distinct entry points feeding the same loadProject).
+  const handleOpenFromList = useCallback((filePath: string) => {
+    setProjectActionSource('recent-list');
+    return handleProjectOpen(filePath);
+  }, [handleProjectOpen]);
+  const handleOpenFromMap = useCallback((filePath: string) => {
+    setProjectActionSource('recent-map');
+    return handleProjectOpen(filePath);
+  }, [handleProjectOpen]);
+
   // Handle cancel during loading
   const handleCancelLoading = useCallback(async () => {
     await cancelLoading();
@@ -265,6 +277,8 @@ export default function GlobalView() {
   // Handle retry after error
   const handleRetryLoading = useCallback(async () => {
     if (loading.projectPath) {
+      // Retry of a recent-projects open; attribute it the same way.
+      setProjectActionSource('recent-list');
       await loadProject(loading.projectPath);
     }
   }, [loading.projectPath, loadProject]);
@@ -484,7 +498,7 @@ export default function GlobalView() {
       icon: <FilePlusIcon size={18} />,
       iconColor: MENU_ICON_COLORS.new,
       action: 'new_file',
-      onClick: () => handleNewProject(),
+      onClick: () => { setProjectActionSource('hamburger'); handleNewProject(); },
     },
     {
       id: 'global-open-project-button',
@@ -492,7 +506,7 @@ export default function GlobalView() {
       icon: <FolderOpenIcon size={18} />,
       iconColor: MENU_ICON_COLORS.open,
       action: 'open_file',
-      onClick: () => handleOpenProject(),
+      onClick: () => { setProjectActionSource('hamburger'); handleOpenProject(); },
     },
     {
       id: 'global-import-menu-button',
@@ -500,10 +514,10 @@ export default function GlobalView() {
       icon: <DownloadIcon size={18} />,
       iconColor: MENU_ICON_COLORS.import,
       submenu: [
-        { id: 'global-import-dmp-button', label: t('globalView.actions.importDmp'), action: 'import_dmp', onClick: () => handleImportDmp() },
-        { id: 'global-import-tml-button', label: t('globalView.actions.importTml'), onClick: () => handleImportTml() },
-        { id: 'global-import-compass-button', label: t('globalView.actions.importCompass'), onClick: () => handleImportCompass() },
-        { id: 'global-import-gpx-button', label: t('globalView.actions.importGpx'), onClick: () => handleImportGpx() },
+        { id: 'global-import-dmp-button', label: t('globalView.actions.importDmp'), action: 'import_dmp', onClick: () => { setProjectActionSource('hamburger'); handleImportDmp(); } },
+        { id: 'global-import-tml-button', label: t('globalView.actions.importTml'), onClick: () => { setProjectActionSource('hamburger'); handleImportTml(); } },
+        { id: 'global-import-compass-button', label: t('globalView.actions.importCompass'), onClick: () => { setProjectActionSource('hamburger'); handleImportCompass(); } },
+        { id: 'global-import-gpx-button', label: t('globalView.actions.importGpx'), onClick: () => { setProjectActionSource('hamburger'); handleImportGpx(); } },
       ],
     },
     { id: 'app-menu-sep-1', label: '', separator: true },
@@ -540,14 +554,14 @@ export default function GlobalView() {
           <AppMenu items={menuItems} aria-label={t('globalView.menu.aria')} />
           <Button
             data-testid="new-project-button"
-            onClick={() => handleNewProject()}
+            onClick={() => { setProjectActionSource('toolbar'); handleNewProject(); }}
             icon={showToolbarIcons ? <span style={{ color: MENU_ICON_COLORS.new }}><FilePlusIcon size={16} /></span> : undefined}
           >
             {t('globalView.actions.newProject')}
           </Button>
           <Button
             data-testid="global-open-import-button"
-            onClick={() => handleOpenOrImport()}
+            onClick={() => { setProjectActionSource('toolbar'); handleOpenOrImport(); }}
             icon={showToolbarIcons ? <span style={{ color: MENU_ICON_COLORS.open }}><FolderOpenIcon size={16} /></span> : undefined}
           >
             {t('globalView.actions.openOrImport')}
@@ -629,9 +643,9 @@ export default function GlobalView() {
           {!hasRecentItems ? (
             <div className="h-full overflow-auto p-6">
               <EmptyState
-                onImport={handleImportDmp}
-                onNew={handleNewProject}
-                onOpen={handleOpenProject}
+                onImport={() => { setProjectActionSource('empty-state'); handleImportDmp(); }}
+                onNew={() => { setProjectActionSource('empty-state'); handleNewProject(); }}
+                onOpen={() => { setProjectActionSource('empty-state'); handleOpenProject(); }}
               />
             </div>
           ) : activeTab === 'map' ? (
@@ -641,7 +655,7 @@ export default function GlobalView() {
               projects={recentProjects}
               selectedProjectId={selectedProjectId}
               onProjectSelect={(path) => handleProjectSelect(path, false)}
-              onProjectOpen={handleProjectOpen}
+              onProjectOpen={handleOpenFromMap}
               geometryData={geometryData}
               geometryStates={geometryStates}
               searchTerm=""
@@ -694,7 +708,7 @@ export default function GlobalView() {
                       {t('globalView.recent.hintFindPrefix')}{' '}
                       <button
                         type="button"
-                        onClick={() => handleOpenOrImport()}
+                        onClick={() => { setProjectActionSource('recent-list'); handleOpenOrImport(); }}
                         className="text-accent hover:underline"
                         data-testid="globalview-hint-open-link"
                       >
@@ -771,7 +785,7 @@ export default function GlobalView() {
                   sortDirection={recentSort.direction}
                   onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
-                  onOpen={handleProjectOpen}
+                  onOpen={handleOpenFromList}
                   onContextMenu={handleContextMenu}
                   onRemoveMissing={handleRemoveFromRecent}
                 />
@@ -811,7 +825,7 @@ export default function GlobalView() {
           <MetadataPanel
             project={selectedProject}
             selectedProjects={selectedProjects}
-            onOpenProject={handleProjectOpen}
+            onOpenProject={handleOpenFromList}
             onRemoveFromRecent={handleRemoveFromRecent}
             collapsed={metadataPanelCollapsed}
             onCollapseChange={setMetadataPanelCollapsed}
@@ -848,6 +862,7 @@ export default function GlobalView() {
             className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
             onClick={() => {
               if (contextMenu.projectPath) {
+                setProjectActionSource('context-menu');
                 handleProjectOpen(contextMenu.projectPath);
               }
               setContextMenu((prev) => ({ ...prev, visible: false }));

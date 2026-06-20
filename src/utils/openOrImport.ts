@@ -21,6 +21,7 @@ import { useUIStore } from '../store/uiStore';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openOrImportFilters } from './fileDialogs';
+import { clearProjectActionSource } from './telemetry';
 
 /**
  * Dispatch an already-chosen path to the matching open/import flow.
@@ -124,5 +125,9 @@ export async function openOrImport(): Promise<void> {
 
   if (path) {
     await routeOpenedFile(path);
+  } else {
+    // Picker cancelled — drop the entry-point source so it can't attribute a
+    // later, unrelated open/create/import.
+    clearProjectActionSource();
   }
 }

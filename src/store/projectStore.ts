@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
+import { trackCommand, setSource, peekProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
@@ -588,6 +589,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (key !== path) inFlightLoads.delete(key);
     }
 
+    // Count the open with its entry-point source. loadProject uses the raw
+    // binary IPC (untracked by invokeIpc), so emit the command event here.
+    // Tracked once per actual load (deduped same-path calls returned above).
+    trackCommand('load_project_full', peekProjectActionSource());
+
     const promise: Promise<{ success: boolean }> = (async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
@@ -796,6 +802,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const deferred = options?.deferInitialSave ?? !options?.savePath;
 
     try {
+      // Attribute the create to its entry point (peek: a DMP import-into-new
+      // flow also fires import_sections, which peeks the same source).
+      const actionSource = peekProjectActionSource();
+      if (actionSource) setSource(actionSource);
       const result = await invokeIpc<CreateProjectFullResult>(
         'create_project_full',
         {
@@ -1701,6 +1711,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => {
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
     return executeCommand(
       'execute_tml_import',
       {
@@ -1721,6 +1733,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   executeCompassImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => {
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
     return executeCommand(
       'execute_compass_import',
       {
@@ -1800,6 +1814,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   executeGpxImport: async (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => {
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
     return executeCommand(
       'execute_gpx_import',
       {
@@ -1844,6 +1860,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => {
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
     return executeCommand(
       'import_sections',
       {

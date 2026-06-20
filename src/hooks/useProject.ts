@@ -19,6 +19,7 @@ import {
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
 import { openOrImport } from '../utils/openOrImport';
+import { clearProjectActionSource } from '../utils/telemetry';
 import { debugLog } from '../utils/debugLog';
 
 export function useProject() {
@@ -53,6 +54,8 @@ export function useProject() {
       debugLog('[useProject] loadProject result:', result);
       return result;
     }
+    // Picker cancelled — drop any entry-point source set by the caller.
+    clearProjectActionSource();
     return null;
   }, [store]);
 
