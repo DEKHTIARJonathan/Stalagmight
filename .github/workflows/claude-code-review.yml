@@ -60,6 +60,13 @@ jobs:
           # whether anything posts. Unverified until on master — the workflow
           # self-skips on PRs that edit this file.)
           classify_inline_comments: 'false'
+          # TEMPORARY DIAGNOSTIC (#138): the review burns 5–9 permission-DENIED
+          # tool calls every run and posts nothing. Dump the full Claude output
+          # so we can see WHICH posting tools are denied, then allow exactly
+          # those via claude_args/settings. REVERT this line right after one run
+          # captures the names. Low risk: private repo, 0 committed secrets
+          # (scanned), action tokens masked/ephemeral.
+          show_full_output: 'true'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
