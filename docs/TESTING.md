@@ -172,6 +172,32 @@ See `playwright.config.ts` for settings:
 - Uses Chromium browser
 - Generates traces, screenshots, and videos on failure
 
+### Parallel-safety invariant
+
+This tier runs with `fullyParallel: true` at multiple workers (`workers: '100%'`
+on CI). That is safe **only** because of the mocked-IPC architecture, not any
+per-test discipline:
+
+- IPC is mocked **per page** (`mocks/tauri-ipc.ts`); all backend state lives on
+  `window.*` inside each isolated browser context.
+- The single shared `webServer` (Vite, `:1420`) is **stateless** — it serves the
+  bundle only.
+- The one real disk write (`fixtures/coverage.ts`) is uniquely named per
+  `test + workerIndex` and gated behind `E2E_COVERAGE=1`.
+
+So a spec must **never** introduce shared state that survives across pages/workers:
+no `createServer(`/`.listen(` (a test binding its own port), no fixed-path
+`writeFileSync`/`writeFile`, no hardcoded `localhost:<port>` other than `:1420`,
+and no `describe.serial`/`test.serial`. On a 2-core runner at multiple workers,
+that kind of bad hygiene surfaces as flake.
+
+**Enforcement:** `pnpm lint:e2e-parallel` (`scripts/check-e2e-parallel-safe.mjs`)
+fails on any of the patterns above. It runs in the **`smoke` CI job** — the only
+job that triggers on `e2e-playwright/**` (the `check` job path-ignores it, so a
+gate there would be a no-op for an e2e-playwright-only change). Run it locally
+before pushing. `fixtures/coverage.ts` is the one allow-listed write; a genuinely
+necessary exception goes in the `ALLOW` list in that script with a written reason.
+
 ### Writing Playwright Tests
 
 #### Basic Test Structure
