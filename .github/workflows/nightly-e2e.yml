@@ -82,37 +82,57 @@ jobs:
       - name: Run Playwright (full suite)
         run: pnpm exec playwright test --reporter=github,json
         env:
-          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/pw-results.json
+          # JSON report written into the workspace (not runner.temp) so the
+          # upload step can persist it as a durable artifact — the primary
+          # consumer is an AI pulling `gh run download` on a failed/flaky nightly
+          # to see which specs failed and why. github → annotations; json → the
+          # machine-readable per-test report.
+          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-report/results.json
           # NUC is 2C/4T (i5-7300U), 8GB, no GPU → MapLibre specs render via
           # SwiftShader (CPU+RAM heavy). 50% of 4 CPUs = 2 workers (validated
           # sweet spot: 848 passed, 0 flaky, RAM headroom). Percentage, not a
           # bare integer — playwright.config.ts rejects a non-percentage string.
           PW_WORKERS: '50%'
-      # Surface results on the run summary page + flag flake/failures as
-      # annotations (a 44-min nightly shouldn't need log-spelunking). Defensive:
-      # always(), can't fail the job, degrades to a pointer if json/stats absent.
+      # Surface results on the run summary page, flag flake/failures as
+      # annotations, and signal the upload step (issues=true) to keep the report.
+      # Defensive: always(), can't fail the job, degrades to a pointer if the
+      # json is absent. Full per-test detail lives in the results.json artifact.
       - name: E2E summary (run page)
+        id: summary
         if: always()
         run: |
-          f="${{ runner.temp }}/pw-results.json"
+          f="playwright-report/results.json"
           if [ ! -f "$f" ]; then
             echo "🎭 **Nightly E2E** on self-hosted NUC — results file not found (see job log)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           node -e '
             const s = (require(process.argv[1]).stats) || {};
-            const dur = s.duration ? Math.round(s.duration / 1000) + "s" : "?";
+            const fs = require("fs");
+            const ms = s.duration || 0;
+            const dur = !ms ? "?" : ms >= 120000 ? Math.round(ms / 60000) + "m" : Math.round(ms / 1000) + "s";
             const line = `🎭 **Nightly E2E** on self-hosted NUC — ${s.expected ?? "?"} passed, ${s.flaky ?? 0} flaky, ${s.unexpected ?? 0} failed, ${s.skipped ?? 0} skipped (${dur})`;
-            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, line + "\n");
-            if ((s.unexpected ?? 0) > 0) console.log(`::warning title=E2E failures::${s.unexpected} failed test(s) in the nightly suite — see the uploaded report.`);
-            else if ((s.flaky ?? 0) > 0) console.log(`::warning title=E2E flake::${s.flaky} flaky test(s) (passed on retry) — watch for instability.`);
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, line + "\n");
+            const issues = (s.unexpected ?? 0) > 0 || (s.flaky ?? 0) > 0;
+            if (issues && process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, "issues=true\n");
+            if ((s.unexpected ?? 0) > 0) console.log(`::warning title=E2E failures::${s.unexpected} failed test(s) — full report in the nightly-e2e-report artifact (gh run download).`);
+            else if ((s.flaky ?? 0) > 0) console.log(`::warning title=E2E flake::${s.flaky} flaky test(s) (passed on retry) — trace in the nightly-e2e-report artifact.`);
           ' "$f" || echo "🎭 **Nightly E2E** on self-hosted NUC — could not parse results (see job log)." >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload Playwright report on failure
-        if: failure()
+      # Durable report for post-hoc debugging — primary consumer is an AI pulling
+      # `gh run download <run-id> -n nightly-e2e-report` on a failed/flaky nightly.
+      # Uploads on any failure OR when the summary flagged failed/flaky specs (a
+      # flaky run is green but its retry trace is worth keeping). results.json =
+      # machine-readable per-test outcomes + errors; test-results/ = traces,
+      # screenshots, videos (trace captured on first retry). 30d so an AI can
+      # still pull a few weeks of nightly history; if-no-files-found: ignore so a
+      # dev-server-didn't-start failure (no artifacts) doesn't warn.
+      - name: Upload E2E report (failures & flakes)
+        if: failure() || steps.summary.outputs.issues == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: nightly-e2e-report
           path: |
-            test-results/
             playwright-report/
-          retention-days: 7
+            test-results/
+          retention-days: 30
+          if-no-files-found: ignore
