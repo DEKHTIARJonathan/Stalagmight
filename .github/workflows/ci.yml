@@ -66,6 +66,12 @@ jobs:
           fi
           echo "runs_on=$runs_on" >> "$GITHUB_OUTPUT"
           echo "Routed to $runs_on (idle i5-nuc-runner count: $idle)"
+          # Surface the routing on the run's summary page — no log-digging.
+          if [ "$runs_on" = '["self-hosted","ubuntu-latest-local"]' ]; then
+            echo "🖥️ \`check\` → **self-hosted NUC** (i5-nuc-runner idle)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "☁️ \`check\` → **github-hosted** (NUC busy/unavailable; idle count: $idle)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   check:
     needs: pick
@@ -109,7 +115,38 @@ jobs:
       # vitest unit + component tests (issue #107). `vitest` auto-detects CI
       # (CI=true) and runs once instead of watching.
       - run: pnpm test
+      # Zero sccache counters so the post-step reports THIS run's hit-rate, not
+      # lifetime totals. NUC only — no sccache on hosted. `|| true`: an
+      # observability step must never be able to fail the merge gate. (Likely
+      # redundant — each ephemeral --rm container starts a fresh per-container
+      # sccache server, so stats are already isolated + zero — but this
+      # guarantees per-run numbers, and a single runner = one job at a time so
+      # there's no cross-job zero-stats race.)
+      - name: sccache zero-stats (NUC only)
+        if: runner.environment == 'self-hosted'
+        run: sccache --zero-stats || true
       - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # sccache health on the NUC path (the cache that replaces rust-cache on the
+      # ephemeral runner). Skipped on hosted. !cancelled() (not always()): still
+      # report on cargo FAILURE, but skip on a superseded/cancelled run. Hit-rate
+      # is also echoed to the run summary page.
+      - name: sccache stats (NUC only)
+        if: ${{ !cancelled() && runner.environment == 'self-hosted' }}
+        run: |
+          stats=$(sccache --show-stats 2>&1) || true
+          echo "$stats"
+          rate=$(printf '%s\n' "$stats" | grep -m1 -E 'Cache hits rate +[0-9]' | grep -oE '[0-9.]+ %' | head -1)
+          size=$(printf '%s\n' "$stats" | grep -m1 -E '^[[:space:]]*Cache size[[:space:]]+[0-9]' | sed -E 's/.*Cache size[[:space:]]+//')
+          max=$(printf '%s\n' "$stats" | grep -m1 -E '^[[:space:]]*Max cache size[[:space:]]+[0-9]' | sed -E 's/.*Max cache size[[:space:]]+//')
+          reqs=$(printf '%s\n' "$stats" | grep -m1 -E 'Compile requests +[0-9]' | grep -oE '[0-9]+' | head -1)
+          echo "🦀 **sccache:** hit rate ${rate:-n/a} · cache ${size:-n/a} / ${max:-10 GiB}" >> "$GITHUB_STEP_SUMMARY"
+          # Warn ONLY when a run that actually compiled a lot still had a very low
+          # hit rate — a cold/wiped/evicted cache, not a normal big incremental.
+          # Threshold deliberately low to avoid false alarms; tune as needed.
+          pct=$(printf '%s' "${rate:-0}" | grep -oE '^[0-9]+' | head -1)
+          if [ "${reqs:-0}" -gt 100 ] && [ "${pct:-100}" -lt 25 ]; then
+            echo "::warning title=sccache cold::Low sccache hit rate (${rate:-n/a}) over ${reqs} compile requests — cache may be cold, wiped, or evicted (cap ${max:-10 GiB})."
+          fi
