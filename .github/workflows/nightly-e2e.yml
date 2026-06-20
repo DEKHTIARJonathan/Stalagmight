@@ -13,10 +13,11 @@ name: Nightly E2E Regression
 # e2e/legacy/README.md.
 on:
   schedule:
-    # Mondays 07:00 UTC (weekly) — overnight in the Americas, morning in CET.
-    # Weekly, not daily, to conserve Actions minutes (#114); run any time on
-    # demand via workflow_dispatch.
-    - cron: '0 7 * * 1'
+    # 07:00 UTC nightly — overnight in the Americas, morning in CET. Runs on the
+    # self-hosted NUC (zero Actions minutes, #130/#131), so the old weekly cap
+    # (to conserve minutes, #114) no longer applies; the gate job still skips a
+    # run when nothing has merged since the last one.
+    - cron: '0 7 * * *'
   workflow_dispatch: {}
 
 concurrency:
@@ -24,9 +25,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Don't spend full-suite minutes on a scheduled run when nothing has merged
-  # since the last one (we don't work every day). This gate job is ~15s; a
-  # manual workflow_dispatch always proceeds.
+  # Skip a scheduled run when nothing has merged since the last nightly — the NUC
+  # run is free, but there's no point re-testing unchanged code (and re-flagging
+  # flakes). This gate job is ~15s; a manual workflow_dispatch always proceeds.
   gate:
     runs-on: ubuntu-latest
     outputs:
@@ -40,11 +41,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "manual dispatch — running."
             echo "run=true" >> "$GITHUB_OUTPUT"
-          elif [ -n "$(git log --since='8 days ago' --pretty=oneline)" ]; then
-            echo "commits in the last week — running."
+          elif [ -n "$(git log --since='2 days ago' --pretty=oneline)" ]; then
+            echo "commits since the last nightly — running."
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "no commits since the last weekly run — skipping the suite."
+            echo "nothing merged in the last 2 days — skipping the suite."
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
