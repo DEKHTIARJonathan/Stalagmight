@@ -1007,6 +1007,93 @@ fn test_import_sections_persists_deferred_new_project() {
     });
 }
 
+// #92 / #112: the adversarial twin of the success test above. When the deferred
+// save *fails* (here: the save's parent directory is missing, so the temp `.stalx`
+// can't be created), `finalize_deferred_import` must return a PARTIAL success —
+// keep the import's `success` (so the frontend refreshes + marks dirty, keeping
+// the in-memory import under the close-guard), attach a warning, and never
+// phantom-add the never-written project to Recent Projects. A hard failure (or a
+// silent "saved") would put us back in the #92 data-loss class.
+#[test]
+fn test_import_sections_deferred_save_failure_warns_no_phantom() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        // Force the deferred save to fail: point it at a path whose PARENT directory
+        // doesn't exist, so the atomic save can't create the temp `.stalx`
+        // (`Database::open` returns "Failed to create save file"). NB a directory
+        // squatting the *exact* reserved path does NOT fail — the first implicit save
+        // auto-renames around a collision (`next_available_project_path`) and
+        // succeeds; and a read-only dir wouldn't fail under the root-in-container NUC
+        // CI. A missing parent fails the create regardless of uid. (This drives the
+        // GENERIC save-failure branch; the permission-denied humanization in
+        // `finalize_deferred_import` needs `dir_present && EACCES`, which isn't
+        // root-safe to induce here — that sub-branch is left to a follow-up.)
+        let project_path = dir.path().join("missing-subdir").join("new-import.stalx");
+
+        let mut project = Project::new("New Import".to_string(), None);
+        project.file_path = Some(project_path.clone());
+        state(&app).inner().set_project_for_tests(project);
+        state(&app).inner().set_initial_save_deferred_for_tests(true);
+        assert!(
+            state(&app).initial_save_deferred(),
+            "precondition: project must be deferred (never saved)"
+        );
+
+        // Import one origin-placed section through the command — same shape as the
+        // success test, only the save target differs.
+        let sections = vec![crate::models::ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot_data(5.0)],
+            station_comments: Vec::new(),
+            placement: crate::models::ImportPlacement::Origin,
+        }];
+        let result = import::import_sections(state(&app), sections, None, None, None);
+
+        // Partial success: the import itself still succeeds, but a warning flags the
+        // failed save instead of reporting a phantom "saved".
+        assert_success(&result);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("could not save")),
+            "a failed deferred save must surface a warning, not a phantom save: {:?}",
+            result.warnings
+        );
+
+        // No phantom: the never-written project must NOT appear in Recent Projects,
+        // and it must remain deferred (still unsaved) so the app keeps prompting.
+        let cfg = config::get_config(state(&app));
+        assert!(
+            !cfg.general.recent_projects.contains(&project_path),
+            "a project whose save failed must not be added to Recent Projects"
+        );
+        assert!(
+            state(&app).initial_save_deferred(),
+            "a failed deferred save must leave the project deferred (still unsaved)"
+        );
+
+        // ...and the just-imported section must still be in memory: the partial-
+        // success contract keeps the import under the close-guard so it isn't lost.
+        // A regression that returns success+warning while dropping the in-memory
+        // import would be the #92 data-loss class on the failure path — assert the
+        // CommandResult flag (above) is NOT enough on its own.
+        let project_state = state(&app).inner().get_project_state().unwrap();
+        assert_eq!(
+            project_state.sections.len(),
+            1,
+            "the imported section must survive in memory after a failed deferred save"
+        );
+    });
+}
+
 // #104 review: "deferred" is tracked by an explicit flag, not inferred from the DB
 // handle or file existence (both ambiguous — dropped handles after a save, and
 // reserved-path collisions). A persisted project must never read as deferred; a
