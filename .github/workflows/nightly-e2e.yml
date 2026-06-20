@@ -76,8 +76,11 @@ jobs:
       # the config reporter WITHOUT touching the shared playwright.config.ts and
       # WITHOUT wrapping the test command — so the test exit code (the nightly's
       # pass/fail gate) is untouched. The json file feeds the summary step below.
+      # NB: `pnpm exec playwright test`, NOT `pnpm test:ui -- …` — pnpm forwards
+      # the `--` through literally, which playwright reads as a positional test
+      # filter ("No tests found"). `pnpm exec` passes the flags straight through.
       - name: Run Playwright (full suite)
-        run: pnpm test:ui -- --reporter=github,json
+        run: pnpm exec playwright test --reporter=github,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/pw-results.json
           # NUC is 2C/4T (i5-7300U), 8GB, no GPU → MapLibre specs render via
