@@ -285,6 +285,17 @@ export default function GlobalView() {
       }
       return changed ? next : prev;
     });
+    // Also prune the map-selection store. The store→local sync effect above
+    // copies selectedSystemIds back into multiSelectedIds on the next map
+    // ctrl-click, so a deleted path left in the store gets resurrected into the
+    // selection (status-bar count + Enter/Delete then point at a gone file).
+    // Read fresh via getState() (not the render-closure value, which isn't a
+    // dep here) and only write when something was actually removed.
+    const gv = useGlobalViewStore.getState();
+    const prunedSystems = new Set([...gv.selectedSystemIds].filter((id) => valid.has(id)));
+    if (prunedSystems.size !== gv.selectedSystemIds.size) {
+      gv.setSelectedSystems(prunedSystems);
+    }
   }, [recentProjects, config]);
 
   // Register GlobalView keyboard shortcuts via hook
