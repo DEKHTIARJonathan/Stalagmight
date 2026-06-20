@@ -118,6 +118,41 @@ export async function clickFirstVisible(locators: Locator[]): Promise<void> {
   throw new Error('No matching locator was visible');
 }
 
+/** Open the hamburger application menu in the global view. */
+export async function openAppMenu(page: Page): Promise<void> {
+  const trigger = page.getByTestId('app-menu-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5000 });
+  if ((await trigger.getAttribute('data-dropdown-open')) === null) {
+    await trigger.click();
+  }
+  await expect(page.getByTestId('app-menu')).toBeVisible({ timeout: 5000 });
+}
+
+/** Open the Settings dialog via the hamburger menu (global view). */
+export async function openSettingsFromMenu(page: Page): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('settings-button').click();
+  await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
+}
+
+/** Open the Debug Logs dialog via the hamburger menu (global view). */
+export async function openDebugFromMenu(page: Page): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('global-debug-button').click();
+}
+
+/** Open the hamburger Import submenu and click a specific import item. */
+export async function openImportFromMenu(page: Page, itemTestId: string): Promise<void> {
+  await openAppMenu(page);
+  await page.getByTestId('global-import-menu-button').click();
+  await page.getByTestId(itemTestId).click();
+}
+
+/** Switch the recent-projects view (global view) between list and map. */
+export async function switchRecentView(page: Page, view: 'list' | 'map'): Promise<void> {
+  await page.getByTestId(`globalview-view-toggle-${view}`).click();
+}
+
 export async function openNewProjectDialog(page: Page): Promise<void> {
   const newProjectButton = page
     .locator('[data-testid="new-project-button"], [data-testid="empty-state-new-project"]')

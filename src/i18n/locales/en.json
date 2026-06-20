@@ -2059,13 +2059,9 @@
             "title": "Open an Existing Project",
             "description": "Use Open Project to continue where you left off in any .stalx file on disk."
           },
-          "settings": {
-            "title": "Tune Your Workspace",
-            "description": "Open Settings to configure units, shortcuts, display defaults, and performance options."
-          },
-          "debugLogs": {
-            "title": "Debug Logs",
-            "description": "Use the bug icon to open Debug Logs. Include relevant logs when reporting issues or bugs."
+          "menu": {
+            "title": "Everything Else Is in the Menu",
+            "description": "Open the menu (top-left) for New Project, Open / Import, Settings, Debug Logs, and Quit. Each entry shows its keyboard shortcut where one is assigned."
           }
         }
       },
