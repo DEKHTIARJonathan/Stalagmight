@@ -34,21 +34,28 @@ jobs:
         run: |
           # Default to hosted; only route to the NUC if we can POSITIVELY
           # confirm a runner named i5-nuc-runner is online AND idle. Any
-          # uncertainty — no token, API error, runner missing/busy, or a
-          # DUPLICATE stale registration with the same name — counts as 0 and
-          # stays on hosted. (Counting matches, not string-comparing one line,
-          # is what makes a leftover offline duplicate harmless.)
+          # uncertainty — no token, API error, malformed response, runner
+          # missing/busy, or a DUPLICATE stale registration with the same name
+          # — sanitizes to 0 and stays on hosted. (Counting matches, not
+          # string-comparing one line, keeps a leftover offline dup harmless.)
           runs_on='["ubuntu-latest"]'
+          idle=0
           if [ -n "$GH_TOKEN" ]; then
+            # On an HTTP error gh writes the error JSON to *stdout* and exits
+            # non-zero — so DON'T `|| echo 0` (that appends 0 to the blob).
+            # `|| true` shields the assignment from the default bash -e (else
+            # pick aborts and check is skipped); then sanitize to a clean int.
+            # (Per Daniel's review.)
             idle=$(gh api 'orgs/Stalagmight/actions/runners?per_page=100' \
               --jq '[.runners[] | select(.name=="i5-nuc-runner" and .status=="online" and .busy==false)] | length' \
-              2>/dev/null || echo 0)
-            if [ "${idle:-0}" -ge 1 ]; then
+              2>/dev/null) || true
+            [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
+            if [ "$idle" -ge 1 ]; then
               runs_on='["self-hosted","ubuntu-latest-local"]'
             fi
           fi
           echo "runs_on=$runs_on" >> "$GITHUB_OUTPUT"
-          echo "Routed to $runs_on (idle i5-nuc-runner count: ${idle:-n/a})"
+          echo "Routed to $runs_on (idle i5-nuc-runner count: $idle)"
 
   check:
     needs: pick
