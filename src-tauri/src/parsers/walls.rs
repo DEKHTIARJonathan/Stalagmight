@@ -31,7 +31,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -69,9 +69,15 @@ pub struct WallsFile {
     /// Surveys whose `.SRV` file was found on disk and parsed.
     pub resolved_survey_count: u32,
     pub shot_count: u32,
+    /// True when the project carries a `.REF` projection reference (UTM/datum).
+    /// This is the coordinate system, NOT a station anchor — see
+    /// `fixed_station_count` for actual GPS anchors.
     pub has_georeference: bool,
     pub datum: Option<String>,
     pub utm_zone: Option<i32>,
+    /// Number of `#Fix` stations with a resolvable geographic position. Each
+    /// connected component containing one gets a GPS zero datum on import.
+    pub fixed_station_count: u32,
     /// Referenced `.SRV` files that could not be found on disk.
     pub missing_file_count: u32,
     /// `.WPJ` entries skipped because they are non-survey attachments.
@@ -142,7 +148,7 @@ impl AngleUnit {
     fn to_degrees(self, value: f64) -> f64 {
         match self {
             AngleUnit::Degrees => value,
-            AngleUnit::Grads => value * 0.9,        // 400 grad == 360°
+            AngleUnit::Grads => value * 0.9, // 400 grad == 360°
             AngleUnit::Mils => value * (360.0 / 6400.0), // 6400 mil == 360°
             AngleUnit::Percent => (value / 100.0).atan().to_degrees(),
         }
@@ -549,18 +555,14 @@ fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                                 }
                             }
                             other => {
-                                let shown = other
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_else(|| {
+                                let shown =
+                                    other.map(|p| p.display().to_string()).unwrap_or_else(|| {
                                         entry.name.clone().unwrap_or_else(|| entry.title.clone())
                                     });
                                 missing_files.push(shown);
                                 surveys.push(ParsedSurvey {
                                     title: entry.title.clone(),
-                                    name: entry
-                                        .name
-                                        .clone()
-                                        .unwrap_or_else(|| entry.title.clone()),
+                                    name: entry.name.clone().unwrap_or_else(|| entry.title.clone()),
                                     segment: ctx.segment.clone(),
                                     date: None,
                                     surveyor: None,
@@ -972,7 +974,10 @@ fn handle_directive(
         "date" => {
             *date = parse_walls_date(rest.trim());
             if date.is_none() && !rest.trim().is_empty() {
-                warnings.push(format!("{name}:{line_no}: unrecognized #Date '{}'", rest.trim()));
+                warnings.push(format!(
+                    "{name}:{line_no}: unrecognized #Date '{}'",
+                    rest.trim()
+                ));
             }
         }
         "segment" | "seg" | "s" => {
@@ -1118,7 +1123,11 @@ fn apply_units_option(
         }
         "decl" => units.decl = value.and_then(parse_signed_angle).unwrap_or(0.0),
         "grid" => units.grid = value.and_then(parse_signed_angle).unwrap_or(0.0),
-        "incd" => units.incd = value.and_then(|v| parse_length(v, units.d_unit)).unwrap_or(0.0),
+        "incd" => {
+            units.incd = value
+                .and_then(|v| parse_length(v, units.d_unit))
+                .unwrap_or(0.0)
+        }
         // Azimuth/inclination corrections carry the current instrument's angle
         // unit (a bare `IncV=2` under `V=Grads` means 2 grads).
         "inca" => {
@@ -1137,10 +1146,26 @@ fn apply_units_option(
             let u = units.vb_unit;
             units.incvb = value.and_then(|v| parse_angle(v, u)).unwrap_or(0.0);
         }
-        "incs" => units.incs = value.and_then(|v| parse_length(v, units.s_unit)).unwrap_or(0.0),
-        "inch" => units.inch = value.and_then(|v| parse_length(v, units.d_unit)).unwrap_or(0.0),
-        "typeab" => apply_type_backsight(value, &mut units.type_ab_corrected, &mut units.type_ab_no_avg),
-        "typevb" => apply_type_backsight(value, &mut units.type_vb_corrected, &mut units.type_vb_no_avg),
+        "incs" => {
+            units.incs = value
+                .and_then(|v| parse_length(v, units.s_unit))
+                .unwrap_or(0.0)
+        }
+        "inch" => {
+            units.inch = value
+                .and_then(|v| parse_length(v, units.d_unit))
+                .unwrap_or(0.0)
+        }
+        "typeab" => apply_type_backsight(
+            value,
+            &mut units.type_ab_corrected,
+            &mut units.type_ab_no_avg,
+        ),
+        "typevb" => apply_type_backsight(
+            value,
+            &mut units.type_vb_corrected,
+            &mut units.type_vb_no_avg,
+        ),
         "case" => {
             units.case = match value.map(|v| v.chars().next().unwrap_or(' ').to_ascii_uppercase()) {
                 Some('U') => Case::Upper,
@@ -1154,7 +1179,9 @@ fn apply_units_option(
         "prefix2" => set_prefix(units, 1, value.unwrap_or("")),
         "prefix3" => set_prefix(units, 2, value.unwrap_or("")),
         "flag" => {
-            units.flag = value.map(|v| unquote(v).to_string()).filter(|s| !s.is_empty());
+            units.flag = value
+                .map(|v| unquote(v).to_string())
+                .filter(|s| !s.is_empty());
         }
         "uvh" | "uvv" | "uv" => {
             // Variance scaling — not modeled (we don't carry per-shot variance).
@@ -1171,7 +1198,12 @@ fn apply_type_backsight(value: Option<&str>, corrected: &mut bool, no_avg: &mut 
     let Some(v) = value else { return };
     let mut parts = v.split(',');
     if let Some(kind) = parts.next() {
-        if kind.chars().next().map(|c| c.eq_ignore_ascii_case(&'c')).unwrap_or(false) {
+        if kind
+            .chars()
+            .next()
+            .map(|c| c.eq_ignore_ascii_case(&'c'))
+            .unwrap_or(false)
+        {
             *corrected = true;
         }
     }
@@ -1709,7 +1741,10 @@ fn split_first_token(line: &str) -> (&str, &str) {
 fn split_unit_suffix<'a>(t: &'a str, suffixes: &[char]) -> (&'a str, Option<char>) {
     if let Some(last) = t.chars().last() {
         if suffixes.contains(&last) {
-            return (&t[..t.len() - last.len_utf8()], Some(last.to_ascii_lowercase()));
+            return (
+                &t[..t.len() - last.len_utf8()],
+                Some(last.to_ascii_lowercase()),
+            );
         }
     }
     (t, None)
@@ -1900,12 +1935,7 @@ fn parse_walls_date(s: &str) -> Option<NaiveDate> {
         return None;
     }
     for fmt in [
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-        "%m-%d-%Y",
-        "%m/%d/%Y",
-        "%m-%d-%y",
-        "%m/%d/%y",
+        "%Y-%m-%d", "%Y/%m/%d", "%m-%d-%Y", "%m/%d/%Y", "%m-%d-%y", "%m/%d/%y",
     ] {
         if let Ok(d) = NaiveDate::parse_from_str(s, fmt) {
             return Some(d);
@@ -1995,7 +2025,8 @@ fn utm_to_wgs84(easting: f64, northing: f64, zone: i32, datum: &str) -> Option<(
         "+proj=utm +zone={zone}{south} +{token} +units=m +no_defs"
     ))
     .ok()?;
-    let (lon, lat, _) = proj4rs::adaptors::transform_xyz(&from, &to, easting, northing, 0.0).ok()?;
+    let (lon, lat, _) =
+        proj4rs::adaptors::transform_xyz(&from, &to, easting, northing, 0.0).ok()?;
     Some((lat.to_degrees(), lon.to_degrees()))
 }
 
@@ -2024,6 +2055,12 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
         .map(|s| s.vectors.len())
         .sum::<usize>() as u32;
     let resolved_survey_count = parsed.surveys.iter().filter(|s| s.resolved).count() as u32;
+    let fixed_station_count = parsed
+        .surveys
+        .iter()
+        .flat_map(|s| s.fixes.iter())
+        .filter(|f| f.lat_long.is_some())
+        .count() as u32;
     let surveys = parsed
         .surveys
         .iter()
@@ -2045,6 +2082,7 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
         has_georeference: parsed.georef.is_some(),
         datum: parsed.georef.as_ref().map(|r| r.datum.clone()),
         utm_zone: parsed.georef.as_ref().map(|r| r.zone),
+        fixed_station_count,
         missing_file_count: parsed.missing_files.len() as u32,
         skipped_attachment_count: parsed.skipped_attachments,
         surveys,
@@ -2069,7 +2107,11 @@ pub fn convert_walls_to_import_configs(
 ) -> Result<(Vec<ImportSectionConfig>, Vec<ImportClosure>, Vec<String>)> {
     let mut warnings = parsed.warnings.clone();
 
-    let anchor = resolve_anchor(parsed, &mut warnings);
+    // Every `#Fix` with a geographic position is a candidate GPS anchor. Each
+    // connected survey component gets at most ONE of them as a zero datum (the
+    // model forbids multiple datums per merge component); extra fixes in the
+    // same component are tied in by the normal merges + loop closures.
+    let anchors = resolve_anchors(parsed, &mut warnings);
 
     // Pass 1: finalize per-survey vectors, collect graph edges + known depths.
     struct KeptSurvey {
@@ -2199,9 +2241,13 @@ pub fn convert_walls_to_import_configs(
         });
     }
 
-    // Resolve absolute station depths.
-    let anchor_seed = anchor.as_ref().map(|a| (a.station.as_str(), a.depth));
-    let depths = build_station_depths(&edges, &known_depth, anchor_seed);
+    // Resolve absolute station depths. Fixed stations seed the depth of their
+    // component only where there is no depth-gauge reading to defer to.
+    let anchor_depths: HashMap<&str, f64> = anchors
+        .iter()
+        .map(|a| (a.station.as_str(), a.depth))
+        .collect();
+    let depths = build_station_depths(&edges, &known_depth, &anchor_depths);
     let depth_of = |s: &str| depths.get(s).copied().unwrap_or(0.0);
 
     // Pass 2a: split each survey into head-to-tail chains -> sections.
@@ -2292,16 +2338,24 @@ pub fn convert_walls_to_import_configs(
         }
     }
 
-    // Pass 2b: spanning-tree placement over chain connectivity.
+    // Pass 2b: spanning-tree placement over chain connectivity. Each component
+    // is rooted at a fixed station (ZeroDatum) when it contains one, else at
+    // Origin; the rest of the component chains to its root via FromImporting.
     let placements = place_chains(
         &chains.iter().map(|c| c.names.clone()).collect::<Vec<_>>(),
-        anchor.as_ref(),
+        &anchors,
         &mut warnings,
         |idx| chains[idx].label.clone(),
     );
 
     // Pass 2c: loop closures for shared stations that aren't tree edges.
-    let closures = build_closures(&chains.iter().map(|c| (c.section_index, c.names.clone())).collect::<Vec<_>>(), &placements);
+    let closures = build_closures(
+        &chains
+            .iter()
+            .map(|c| (c.section_index, c.names.clone()))
+            .collect::<Vec<_>>(),
+        &placements,
+    );
 
     // Emit configs in BFS creation order.
     let mut configs: Vec<ImportSectionConfig> = Vec::with_capacity(chains.len());
@@ -2316,7 +2370,9 @@ pub fn convert_walls_to_import_configs(
             direction: None,
             quality: 1.0,
             shots: chain.shots.clone(),
-            placement: placements.placement[ci].clone().unwrap_or(ImportPlacement::Origin),
+            placement: placements.placement[ci]
+                .clone()
+                .unwrap_or(ImportPlacement::Origin),
             station_comments: chain.station_comments.clone(),
         });
     }
@@ -2360,24 +2416,35 @@ fn survey_label(survey: &ParsedSurvey) -> String {
     }
 }
 
-fn resolve_anchor(parsed: &ParsedWalls, warnings: &mut Vec<String>) -> Option<AnchorGeo> {
+/// Collect every `#Fix` station that resolves to a geographic position, deduped
+/// by station name (first declaration wins).
+fn resolve_anchors(parsed: &ParsedWalls, warnings: &mut Vec<String>) -> Vec<AnchorGeo> {
+    let mut anchors: Vec<AnchorGeo> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     for survey in &parsed.surveys {
         for fix in &survey.fixes {
-            if let Some((lat, lon)) = fix.lat_long {
-                match GpsCoordinates::new(lat, lon, 0.0) {
-                    Ok(coordinates) => {
-                        return Some(AnchorGeo {
-                            station: fix.name.clone(),
-                            coordinates,
-                            depth: fix.up.map(|u| -u).unwrap_or(0.0),
-                        });
-                    }
-                    Err(e) => warnings.push(format!("Ignoring invalid #Fix '{}': {e}", fix.name)),
+            let Some((lat, lon)) = fix.lat_long else {
+                continue;
+            };
+            if seen.contains(&fix.name) {
+                continue;
+            }
+            match GpsCoordinates::new(lat, lon, 0.0) {
+                Ok(coordinates) => {
+                    seen.insert(fix.name.clone());
+                    anchors.push(AnchorGeo {
+                        station: fix.name.clone(),
+                        coordinates,
+                        // A fixed station's `up` (elevation) maps to depth below
+                        // the surface datum; absent it sits at depth 0.
+                        depth: fix.up.map(|u| -u).unwrap_or(0.0),
+                    });
                 }
+                Err(e) => warnings.push(format!("Ignoring invalid #Fix '{}': {e}", fix.name)),
             }
         }
     }
-    None
+    anchors
 }
 
 /// Generic head-to-tail chain splitter.
@@ -2401,17 +2468,25 @@ fn split_into_chains<T>(items: &[T], ends: impl Fn(&T) -> (&str, &str)) -> Vec<V
 }
 
 /// Walk the station graph assigning each station an absolute depth (+down),
-/// seeding each component from a known depth-gauge reading, the anchor, or 0.
+/// seeding each component from a known depth-gauge reading, else a fixed-station
+/// anchor depth, else 0. Gauge readings win because they are the authoritative
+/// vertical for dive data.
 fn build_station_depths(
     edges: &[(String, String, f64)],
     known: &HashMap<String, f64>,
-    anchor: Option<(&str, f64)>,
+    anchors: &HashMap<&str, f64>,
 ) -> HashMap<String, f64> {
     // adjacency carries depth deltas (Δdepth = -Δup).
     let mut adjacency: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
     for (from, to, gain) in edges {
-        adjacency.entry(from).or_default().push((to.as_str(), -gain));
-        adjacency.entry(to).or_default().push((from.as_str(), *gain));
+        adjacency
+            .entry(from)
+            .or_default()
+            .push((to.as_str(), -gain));
+        adjacency
+            .entry(to)
+            .or_default()
+            .push((from.as_str(), *gain));
     }
     let mut nodes: Vec<&str> = adjacency.keys().copied().collect();
     nodes.sort_unstable();
@@ -2436,18 +2511,22 @@ fn build_station_depths(
                 }
             }
         }
-        // Choose seed station + absolute depth.
-        let (seed, seed_depth) = if let Some((aname, adepth)) =
-            anchor.filter(|(a, _)| component.contains(a))
-        {
-            (aname, adepth)
-        } else if let Some(k) = component
+        // Choose seed station + absolute depth: gauge reading first (dive data
+        // is authoritative), then a fixed-station anchor depth, else 0.
+        let (seed, seed_depth) = if let Some(k) = component
             .iter()
             .filter(|n| known.contains_key(**n))
             .min()
             .copied()
         {
             (k, known[k])
+        } else if let Some(a) = component
+            .iter()
+            .filter(|n| anchors.contains_key(**n))
+            .min()
+            .copied()
+        {
+            (a, anchors[a])
         } else {
             (*component.iter().min().unwrap(), 0.0)
         };
@@ -2479,11 +2558,17 @@ struct Placements {
     parent: Vec<Option<usize>>,
 }
 
-/// Spanning-tree placement: anchor chain -> ZeroDatum, reached chains ->
-/// FromImporting, disconnected components -> Origin.
+/// Spanning-tree placement over chain connectivity. Each connected component is
+/// rooted at a fixed station (ZeroDatum) when it contains one, else at Origin;
+/// every other chain in the component merges to its discoverer via
+/// FromImporting, and shared stations that aren't the tree edge become loop
+/// closures (see [`build_closures`]). At most ONE zero datum is emitted per
+/// component — the model forbids multiple datums per merge component — so extra
+/// fixed stations in the same connected survey ride along via merges + closures
+/// rather than becoming separate datums.
 fn place_chains(
     chain_names: &[Vec<String>],
-    anchor: Option<&AnchorGeo>,
+    anchors: &[AnchorGeo],
     warnings: &mut Vec<String>,
     label_of: impl Fn(usize) -> String,
 ) -> Placements {
@@ -2520,38 +2605,106 @@ fn place_chains(
         None
     };
 
-    let anchor_chain = anchor.and_then(|a| {
-        chain_names
-            .iter()
-            .position(|names| names.iter().any(|nm| nm == &a.station))
-    });
+    // Fixed-station name -> anchor index (first declaration wins per name).
+    let anchor_by_name: HashMap<&str, usize> = {
+        let mut m = HashMap::new();
+        for (i, a) in anchors.iter().enumerate() {
+            m.entry(a.station.as_str()).or_insert(i);
+        }
+        m
+    };
+    // A fixed station that no shot references can't be anchored to anything.
+    for a in anchors {
+        if !occurrences.contains_key(a.station.as_str()) {
+            warnings.push(format!(
+                "Fixed station '{}' isn't used by any shot; no zero datum created for it.",
+                a.station
+            ));
+        }
+    }
+    // For each chain, the first station that is a fixed-station anchor.
+    let chain_anchor: Vec<Option<(u32, usize)>> = chain_names
+        .iter()
+        .map(|names| {
+            names
+                .iter()
+                .enumerate()
+                .find_map(|(k, nm)| anchor_by_name.get(nm.as_str()).map(|&ai| (k as u32, ai)))
+        })
+        .collect();
 
     let mut placement: Vec<Option<ImportPlacement>> = vec![None; n];
     let mut merge_station: Vec<Option<u32>> = vec![None; n];
     let mut parent: Vec<Option<usize>> = vec![None; n];
     let mut visited = vec![false; n];
     let mut creation_order: Vec<usize> = Vec::with_capacity(n);
-    let mut queue: VecDeque<usize> = VecDeque::new();
+    let have_any_anchor = !anchors.is_empty();
 
-    if let (Some(ac), Some(a)) = (anchor_chain, anchor) {
-        let aidx = chain_names[ac]
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+        // Discover the whole component first so it can be rooted at an anchor.
+        let mut component: Vec<usize> = Vec::new();
+        {
+            let mut seen: HashSet<usize> = HashSet::new();
+            let mut stack = vec![start];
+            seen.insert(start);
+            while let Some(c) = stack.pop() {
+                component.push(c);
+                for &nb in &adjacency[c] {
+                    if seen.insert(nb) {
+                        stack.push(nb);
+                    }
+                }
+            }
+        }
+        component.sort_unstable();
+
+        // Root at a fixed station if the component has one (smallest chain idx).
+        let anchored_chains: Vec<usize> = component
             .iter()
-            .position(|nm| nm == &a.station)
-            .unwrap_or(0) as u32;
-        placement[ac] = Some(ImportPlacement::ZeroDatum {
-            coordinates: a.coordinates,
-            station_index: aidx,
-        });
-        visited[ac] = true;
-        creation_order.push(ac);
-        queue.push_back(ac);
-    }
+            .copied()
+            .filter(|&ci| chain_anchor[ci].is_some())
+            .collect();
+        let root = anchored_chains.first().copied().unwrap_or(component[0]);
 
-    let mut warn_next_root = anchor_chain.is_some();
-    loop {
+        if let Some((st_idx, ai)) = chain_anchor[root] {
+            placement[root] = Some(ImportPlacement::ZeroDatum {
+                coordinates: anchors[ai].coordinates,
+                station_index: st_idx,
+            });
+            if anchored_chains.len() > 1 {
+                let extras: Vec<&str> = anchored_chains
+                    .iter()
+                    .skip(1)
+                    .filter_map(|&ci| chain_anchor[ci].map(|(_, j)| anchors[j].station.as_str()))
+                    .collect();
+                warnings.push(format!(
+                    "Component anchored at '{}'; {} other fixed station(s) in the same connected \
+                     survey are kept via merges + loop closures, not as separate datums: {}.",
+                    anchors[ai].station,
+                    extras.len(),
+                    extras.join(", "),
+                ));
+            }
+        } else {
+            placement[root] = Some(ImportPlacement::Origin);
+            if have_any_anchor {
+                warnings.push(format!(
+                    "Section '{}' is a separate component with no fixed station; placed at origin.",
+                    label_of(root)
+                ));
+            }
+        }
+        visited[root] = true;
+        creation_order.push(root);
+
+        // BFS the component from its root, merging via FromImporting.
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        queue.push_back(root);
         while let Some(p) = queue.pop_front() {
-            let neighbors = adjacency[p].clone();
-            for nb in neighbors {
+            for nb in adjacency[p].clone() {
                 if visited[nb] {
                     continue;
                 }
@@ -2568,22 +2721,6 @@ fn place_chains(
                 creation_order.push(nb);
                 queue.push_back(nb);
             }
-        }
-        match (0..n).find(|&i| !visited[i]) {
-            Some(seed) => {
-                placement[seed] = Some(ImportPlacement::Origin);
-                if warn_next_root {
-                    warnings.push(format!(
-                        "Section '{}' is a separate component; placed at origin",
-                        label_of(seed)
-                    ));
-                }
-                warn_next_root = true;
-                visited[seed] = true;
-                creation_order.push(seed);
-                queue.push_back(seed);
-            }
-            None => break,
         }
     }
 
@@ -2766,7 +2903,10 @@ mod tests {
         assert_eq!(bc.right, Some(3.0));
         assert_eq!(bc.up, Some(2.0));
         assert_eq!(bc.down, Some(1.0));
-        assert_eq!(survey.date, Some(NaiveDate::from_ymd_opt(2017, 5, 7).unwrap()));
+        assert_eq!(
+            survey.date,
+            Some(NaiveDate::from_ymd_opt(2017, 5, 7).unwrap())
+        );
     }
 
     #[test]
@@ -2985,7 +3125,15 @@ mod tests {
                    A0 B 10 90 0\n";
         let mut warnings = Vec::new();
         let survey = parse_srv_contents(
-            srv, "Fixed", "FIX", "", &WallsUnits::default(), None, true, false, &mut warnings,
+            srv,
+            "Fixed",
+            "FIX",
+            "",
+            &WallsUnits::default(),
+            None,
+            true,
+            false,
+            &mut warnings,
         );
         assert_eq!(survey.fixes.len(), 1);
         assert!(survey.fixes[0].lat_long.is_some());
@@ -2994,7 +3142,6 @@ mod tests {
             .iter()
             .any(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. })));
     }
-
 
     // ----- regression tests for adversarial-review fixes -------------------
 
@@ -3030,7 +3177,15 @@ mod tests {
     fn parse_srv_geo(content: &str, georef: Option<WallsRef>, derive_decl: bool) -> ParsedSurvey {
         let mut w = Vec::new();
         parse_srv_contents(
-            content, "t", "t", "", &WallsUnits::default(), georef, true, derive_decl, &mut w,
+            content,
+            "t",
+            "t",
+            "",
+            &WallsUnits::default(),
+            georef,
+            true,
+            derive_decl,
+            &mut w,
         )
     }
 
@@ -3066,7 +3221,11 @@ mod tests {
                    B C -- 90 5 9\n";
         let (configs, _c, _w) = convert_one(parse_srv(srv));
         let sec = &configs[0];
-        assert_eq!(sec.shots.len(), 2, "the zero-distance dive leg must survive");
+        assert_eq!(
+            sec.shots.len(),
+            2,
+            "the zero-distance dive leg must survive"
+        );
         assert!(approx(sec.shots[1].depth_out, 9.0));
         // Slope length clamped up to the depth change so the model can form it.
         assert!(sec.shots[1].length >= 4.0 - 1e-9);
@@ -3084,7 +3243,10 @@ mod tests {
             &WallsImportOptions::default(),
         )
         .0;
-        assert!(approx(off[0].shots[0].azimuth_in, 90.0), "no flag -> no auto declination");
+        assert!(
+            approx(off[0].shots[0].azimuth_in, 90.0),
+            "no flag -> no auto declination"
+        );
 
         let on = convert_survey_with(
             parse_srv_geo(srv, georef.clone(), true),
@@ -3103,7 +3265,11 @@ mod tests {
         // azimuth = reading(100) + decl(0) - convergence(2) = 98
         let georef = Some(test_ref(2.0, 0.0, 0.0));
         let (configs, _c, _w) = convert_survey_with(
-            parse_srv_geo("#UNITS meters order=DAV\nA B 10 100 0\n", georef.clone(), false),
+            parse_srv_geo(
+                "#UNITS meters order=DAV\nA B 10 100 0\n",
+                georef.clone(),
+                false,
+            ),
             georef.clone(),
             &WallsImportOptions::default(),
         );
@@ -3130,9 +3296,18 @@ mod tests {
     #[test]
     fn feet_inches_token_edges() {
         assert_eq!(parse_length("i", LengthUnit::Meters), None); // bare 'i'
-        assert!(approx(parse_length("i6", LengthUnit::Meters).unwrap(), 0.5 * FEET_TO_METERS));
-        assert!(approx(parse_length("5i", LengthUnit::Meters).unwrap(), 5.0 * FEET_TO_METERS));
-        assert!(approx(parse_length("10i6", LengthUnit::Meters).unwrap(), 10.5 * FEET_TO_METERS));
+        assert!(approx(
+            parse_length("i6", LengthUnit::Meters).unwrap(),
+            0.5 * FEET_TO_METERS
+        ));
+        assert!(approx(
+            parse_length("5i", LengthUnit::Meters).unwrap(),
+            5.0 * FEET_TO_METERS
+        ));
+        assert!(approx(
+            parse_length("10i6", LengthUnit::Meters).unwrap(),
+            10.5 * FEET_TO_METERS
+        ));
     }
 
     #[test]
@@ -3164,13 +3339,173 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ----- multiple-#Fix anchoring (one zero datum per component) ----------
+
+    #[test]
+    fn multiple_fixes_anchor_separate_components() {
+        // Two unconnected sub-surveys, each with its own fixed station.
+        let srv = "#UNITS meters order=DAV\n\
+                   #FIX A0 W90:00:00 N30:00:00 0\n\
+                   A0 A1 10 90 0\n\
+                   #FIX B0 W91:00:00 N31:00:00 0\n\
+                   B0 B1 10 90 0\n";
+        let survey = parse_srv(srv);
+        assert_eq!(
+            survey.fixes.iter().filter(|f| f.lat_long.is_some()).count(),
+            2
+        );
+        let (configs, _c, _w) = convert_one(survey);
+        let datums = configs
+            .iter()
+            .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .count();
+        assert_eq!(
+            datums, 2,
+            "each separate component with a #Fix gets its own datum"
+        );
+    }
+
+    #[test]
+    fn multiple_fixes_in_one_component_yield_single_datum() {
+        // A0 ... J ... B0 — both fixed, but connected through J (one component).
+        // The model forbids 2 datums in one merge component, so only ONE datum
+        // is emitted and the other fixed station is merged + closed in.
+        let srv = "#UNITS meters order=DAV\n\
+                   #FIX A0 W90:00:00 N30:00:00 0\n\
+                   #FIX B0 W91:00:00 N31:00:00 0\n\
+                   A0 A1 10 90 0\n\
+                   A1 J 10 90 0\n\
+                   B0 J 10 270 0\n";
+        let (configs, _closures, warnings) = convert_one(parse_srv(srv));
+        let datums = configs
+            .iter()
+            .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .count();
+        assert_eq!(datums, 1, "one zero datum per connected merge component");
+        // The second fixed station rides in via a merge, not a second datum.
+        assert!(configs
+            .iter()
+            .any(|c| matches!(c.placement, ImportPlacement::FromImporting { .. })));
+        assert!(
+            warnings.iter().any(|w| w.contains("other fixed station")),
+            "should explain the extra fixed station"
+        );
+    }
+
+    #[test]
+    fn cross_section_loop_still_emits_closure() {
+        // A-B-C, D-C, D-A: a loop spanning three legs must be closed.
+        let srv = "#UNITS meters order=DAV\n\
+                   A B 10 0 0\n\
+                   B C 10 90 0\n\
+                   D C 10 180 0\n\
+                   D A 10 270 0\n";
+        let (configs, closures, _w) = convert_one(parse_srv(srv));
+        assert!(configs.len() >= 3);
+        assert!(!closures.is_empty(), "a loop across survey legs must close");
+    }
+
+    #[test]
+    fn unreferenced_fix_is_reported_not_anchored() {
+        // GHOST is fixed but never appears in a shot -> no datum, with a warning.
+        let srv = "#UNITS meters order=DAV\n\
+                   #FIX GHOST W90:00:00 N30:00:00 0\n\
+                   A B 10 90 0\n";
+        let (configs, _c, warnings) = convert_one(parse_srv(srv));
+        assert!(
+            configs
+                .iter()
+                .all(|c| !matches!(c.placement, ImportPlacement::ZeroDatum { .. })),
+            "an unreferenced #Fix anchors nothing"
+        );
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("isn't used by any shot")));
+    }
+
+    #[test]
+    fn preview_reports_fixed_station_count() {
+        let survey = parse_srv(
+            "#UNITS meters order=DAV\n\
+             #FIX A0 W90:00:00 N30:00:00 0\n\
+             A0 A1 10 90 0\n",
+        );
+        let parsed = ParsedWalls {
+            project_name: "T".to_string(),
+            book_count: 0,
+            surveys: vec![survey],
+            georef: None,
+            missing_files: Vec::new(),
+            skipped_attachments: 0,
+            warnings: Vec::new(),
+        };
+        let preview = build_preview(&parsed);
+        assert_eq!(preview.fixed_station_count, 1);
+    }
+
+    #[test]
+    fn end_to_end_import_respects_datum_invariants() {
+        // Runs the REAL import (execute_import_sections enforces
+        // `multiple_datums_per_merge_component`), so a successful result proves
+        // the placement respects the model's one-datum-per-component invariant.
+        use crate::core::state::AppState;
+        use crate::core::Command;
+
+        let run = |srv: &str| -> (bool, Option<String>, usize) {
+            let (sections, closures, _w) = convert_one(parse_srv(srv));
+            let state = AppState::new().unwrap();
+            state.execute(Command::CreateProject {
+                name: "T".to_string(),
+                location: None,
+            });
+            let result =
+                state.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+            let datums = state
+                .get_project_state()
+                .map(|p| p.zero_datums.len())
+                .unwrap_or(0);
+            (result.success, result.error, datums)
+        };
+
+        // Two separate components, each with its own #Fix -> 2 datums, OK.
+        let (ok2, err2, d2) = run("#UNITS meters order=DAV\n\
+             #FIX A0 W90:00:00 N30:00:00 0\n\
+             A0 A1 10 90 0\n\
+             #FIX B0 W91:00:00 N31:00:00 0\n\
+             B0 B1 10 90 0\n");
+        assert!(ok2, "two-datum import should succeed: {err2:?}");
+        assert_eq!(d2, 2);
+
+        // Two #Fix in ONE connected component -> exactly 1 datum, import still
+        // succeeds (no multiple_datums_per_merge_component violation).
+        let (ok1, err1, d1) = run("#UNITS meters order=DAV\n\
+             #FIX A0 W90:00:00 N30:00:00 0\n\
+             #FIX B0 W91:00:00 N31:00:00 0\n\
+             A0 A1 10 90 0\n\
+             A1 J 10 90 0\n\
+             B0 J 10 270 0\n");
+        assert!(
+            ok1,
+            "single-datum component import should succeed: {err1:?}"
+        );
+        assert_eq!(
+            d1, 1,
+            "exactly one datum survives in a single merge component"
+        );
+    }
+
     // ----- ignored real-data validation (no project files committed) -------
 
     #[test]
     #[ignore]
     fn real_qr_project_tree() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let wpj = PathBuf::from(home).join("src/cave/data/qr/Quintana Roo.wpj");
+        let wpj = match std::env::var_os("WALLS_WPJ") {
+            Some(p) => PathBuf::from(p),
+            None => {
+                let home = std::env::var("HOME").unwrap_or_default();
+                PathBuf::from(home).join("src/cave/data/qr/Quintana Roo.wpj")
+            }
+        };
         if !wpj.exists() {
             eprintln!("skip: {} not found", wpj.display());
             return;

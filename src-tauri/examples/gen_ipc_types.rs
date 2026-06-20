@@ -51,7 +51,6 @@ use stalagmight_lib::models::{
     StationMergeWire, StationPair, StationRef, SurveyDirection, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
-use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
 use stalagmight_lib::parsers::gpx::{
     GpxFile, GpxRoute, GpxRoutePoint, GpxSectionPlacement, GpxTrack, GpxTrackPoint,
@@ -60,6 +59,7 @@ use stalagmight_lib::parsers::gpx::{
 use stalagmight_lib::parsers::tml::{
     TmlClosure, TmlFile, TmlGeoCoding, TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
+use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::tile_providers::TileProviderInfo;
 

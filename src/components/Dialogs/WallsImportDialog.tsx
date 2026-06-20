@@ -62,22 +62,38 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         return;
       }
 
+      // `section_ids` is omitted from the IPC payload when empty, so default it.
+      const sectionIds = result.section_ids ?? [];
+
+      // Nothing was imported — most commonly a `.wpj` whose `.srv` files aren't
+      // next to it on disk. Tell the user why instead of silently "succeeding".
+      if (sectionIds.length === 0) {
+        trackDialogComplete('walls-import');
+        closeDialog();
+        openDialog('error', {
+          title: 'Nothing imported',
+          message:
+            wallsFile.missing_file_count > 0
+              ? `No surveys were imported: ${wallsFile.missing_file_count} referenced .SRV file(s) were not found next to the project. Put the survey files in the same folder as the .wpj, or import a .srv file directly.`
+              : 'No survey shots were found to import.',
+        });
+        return;
+      }
+
       // Check for orphan placement opportunities
-      if (result.section_ids.length > 0) {
-        try {
-          const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
-            'suggest_orphan_placements',
-            { newlyImportedSectionIds: result.section_ids },
-            { purpose: 'suggest orphan placements after Walls import' }
-          );
-          if (suggestions.length > 0) {
-            setSource('dialog');
-            openDialog('orphan-placement', { suggestions });
-            return;
-          }
-        } catch {
-          // Non-fatal: proceed without orphan detection
+      try {
+        const suggestions = await invokeIpc<OrphanPlacementSuggestion[]>(
+          'suggest_orphan_placements',
+          { newlyImportedSectionIds: sectionIds },
+          { purpose: 'suggest orphan placements after Walls import' }
+        );
+        if (suggestions.length > 0) {
+          setSource('dialog');
+          openDialog('orphan-placement', { suggestions });
+          return;
         }
+      } catch {
+        // Non-fatal: proceed without orphan detection
       }
 
       trackDialogComplete('walls-import');
@@ -121,30 +137,52 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             <div className="text-sm font-medium">{wallsFile.shot_count}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Datum</div>
-            <div className="text-sm font-medium">{wallsFile.datum ?? '-'}</div>
+            <div className="text-xs text-text-tertiary" title="#Fix stations — each becomes a GPS zero datum on its connected component">
+              Fixed stations
+            </div>
+            <div className="text-sm font-medium">{wallsFile.fixed_station_count}</div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary">Georeference</div>
+            <div className="text-xs text-text-tertiary" title="Projection reference from the .wpj .REF directive — the coordinate system, not a station anchor">
+              Projection
+            </div>
             <div className="text-sm font-medium">
               {wallsFile.has_georeference
-                ? `UTM ${wallsFile.utm_zone ?? ''}`.trim()
-                : 'None'}
+                ? `UTM ${wallsFile.utm_zone ?? ''}${wallsFile.datum ? ` · ${wallsFile.datum}` : ''}`.trim()
+                : '-'}
             </div>
           </div>
         </div>
-
-        {/* Missing-file / attachment notice */}
-        {(wallsFile.missing_file_count > 0 || wallsFile.skipped_attachment_count > 0) && (
+        {wallsFile.has_georeference && wallsFile.fixed_station_count === 0 && (
           <div className="text-xs text-text-secondary">
-            {wallsFile.missing_file_count > 0 && (
-              <span>{wallsFile.missing_file_count} referenced survey file(s) not found on disk. </span>
-            )}
-            {wallsFile.skipped_attachment_count > 0 && (
-              <span>{wallsFile.skipped_attachment_count} non-survey attachment(s) skipped.</span>
-            )}
+            This project has a coordinate reference (.REF) but no <code>#Fix</code> stations in the
+            resolved surveys, so nothing is GPS-anchored. Walls keeps fixed points in separate
+            survey files — include those to georeference the cave.
           </div>
         )}
+
+        {/* Nothing-to-import warning: a .wpj resolves its .srv files by name from
+            the same folder; if none are present there is nothing to import. */}
+        {wallsFile.shot_count === 0 && (
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm">
+            {wallsFile.missing_file_count > 0
+              ? `None of the ${wallsFile.missing_file_count} referenced .SRV survey file(s) were found next to "${fileName}", so there is nothing to import. A .wpj references its survey files by name — put the .SRV files in the same folder as the .wpj, or import a single .srv file directly.`
+              : 'This file contains no survey shots to import.'}
+          </div>
+        )}
+
+        {/* Missing-file / attachment notice (when there is still something to import) */}
+        {wallsFile.shot_count > 0 &&
+          (wallsFile.missing_file_count > 0 || wallsFile.skipped_attachment_count > 0) && (
+            <div className="text-xs text-text-secondary">
+              {wallsFile.missing_file_count > 0 && (
+                <span>{wallsFile.missing_file_count} referenced survey file(s) not found on disk. </span>
+              )}
+              {wallsFile.skipped_attachment_count > 0 && (
+                <span>{wallsFile.skipped_attachment_count} non-survey attachment(s) skipped.</span>
+              )}
+            </div>
+          )}
 
         {/* Survey list */}
         <div className="max-h-64 overflow-y-auto border border-border rounded">
@@ -213,7 +251,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             data-primary-action=""
             data-testid="walls-import-confirm"
             onClick={handleImport}
-            disabled={isImporting || !hashChecked}
+            disabled={isImporting || !hashChecked || wallsFile.shot_count === 0}
           >
             {isImporting ? 'Importing...' : 'Import'}
           </Button>
