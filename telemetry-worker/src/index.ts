@@ -5,13 +5,13 @@
  * them in a D1 database. IP addresses are SHA-256 hashed for abuse
  * detection only — no raw IPs or other PII are stored.
  *
- * Wire format: packed msgpack (`application/msgpack`) only.
+ * Wire format: self-describing JSON (event names sent verbatim), gzip-encoded
+ * (`Content-Type: application/json`, `Content-Encoding: gzip`). Uncompressed
+ * JSON is also accepted, e.g. for manual testing.
  */
 
-import { decode } from '@msgpack/msgpack';
-import { EVENT_NAMES, SOURCE_NAMES } from './registry';
-
-const MAX_BODY_BYTES = 65_536; // 64 KB
+const MAX_BODY_BYTES = 65_536; // 64 KB (compressed body)
+const MAX_DECOMPRESSED_BYTES = 262_144; // 256 KB — gzip-bomb guard
 const RATE_LIMIT_MAX_FLUSHES_PER_MIN = 10;
 
 interface Env {
@@ -28,89 +28,71 @@ interface TelemetryPayload {
   events: Record<string, number>;
 }
 
-interface PackedPayload {
-  v: number;
-  a: string;
-  o: string;
-  s: Uint8Array;
-  d: number;
-  p: number;
-  e: number[];
-  ds?: Record<string, number>;
-}
-
-function isValidPackedPayload(body: unknown): body is PackedPayload {
+function isValidJsonPayload(body: unknown): body is TelemetryPayload {
   if (typeof body !== 'object' || body === null) return false;
   const p = body as Record<string, unknown>;
-  return (
-    typeof p.v === 'number' &&
-    typeof p.a === 'string' &&
-    typeof p.o === 'string' &&
-    p.s instanceof Uint8Array &&
-    typeof p.d === 'number' &&
-    typeof p.p === 'number' &&
-    Array.isArray(p.e)
-  );
-}
-
-/** Convert 16 raw bytes to UUID string format. */
-function sessionIdFromBytes(bytes: Uint8Array): string {
-  const hex = Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-/** Unpack flat event array + display-state into string event map. */
-function unpackEvents(packed: PackedPayload): Record<string, number> {
-  const events: Record<string, number> = {};
-
-  for (let i = 0; i + 2 < packed.e.length; i += 3) {
-    const eventId = packed.e[i];
-    const sourceId = packed.e[i + 1];
-    const count = packed.e[i + 2];
-
-    const eventName = EVENT_NAMES[eventId];
-    if (!eventName) continue;
-
-    const sourceName = SOURCE_NAMES[sourceId] ?? '';
-    const key = sourceName ? `${eventName}:${sourceName}` : eventName;
-    events[key] = (events[key] ?? 0) + count;
+  if (
+    typeof p.app_version !== 'string' ||
+    typeof p.os !== 'string' ||
+    typeof p.session_id !== 'string' ||
+    typeof p.duration_secs !== 'number' ||
+    (p.project_seq !== undefined && typeof p.project_seq !== 'number') ||
+    typeof p.events !== 'object' ||
+    p.events === null
+  ) {
+    return false;
   }
+  // events must be a flat { name: count } map
+  for (const count of Object.values(p.events as Record<string, unknown>)) {
+    if (typeof count !== 'number') return false;
+  }
+  return true;
+}
 
-  // Display-state overrides (e.g. "showGrid:true") → "display-state.showGrid:true"
-  if (packed.ds) {
-    for (const [key, count] of Object.entries(packed.ds)) {
-      events[`display-state.${key}`] = (events[`display-state.${key}`] ?? 0) + count;
+/** Read the request body, decompressing gzip with a hard size cap. */
+async function readBody(request: Request): Promise<Uint8Array> {
+  const compressed = new Uint8Array(await request.arrayBuffer());
+  if (request.headers.get('content-encoding') !== 'gzip') {
+    return compressed;
+  }
+  const stream = new Response(compressed).body!.pipeThrough(new DecompressionStream('gzip'));
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_DECOMPRESSED_BYTES) {
+      await reader.cancel();
+      throw new Error('decompressed payload too large');
     }
+    chunks.push(value);
   }
-
-  return events;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
-/** Convert packed payload to normalized TelemetryPayload. */
-function unpackPayload(packed: PackedPayload): TelemetryPayload {
-  return {
-    v: packed.v,
-    app_version: packed.a,
-    os: packed.o,
-    session_id: sessionIdFromBytes(packed.s),
-    duration_secs: packed.d,
-    project_seq: packed.p,
-    events: unpackEvents(packed),
-  };
-}
-
+/** Parse the self-describing JSON payload (gzip-encoded or raw). */
 async function parseRequest(request: Request): Promise<TelemetryPayload | null> {
-  const buffer = await request.arrayBuffer();
-  const raw = decode(new Uint8Array(buffer));
-
-  if (!isValidPackedPayload(raw)) return null;
-
-  // Flat event array must be divisible by 3
-  if (raw.e.length % 3 !== 0) return null;
-
-  return unpackPayload(raw);
+  let bytes: Uint8Array;
+  try {
+    bytes = await readBody(request);
+  } catch {
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+  return isValidJsonPayload(raw) ? raw : null;
 }
 
 export default {
