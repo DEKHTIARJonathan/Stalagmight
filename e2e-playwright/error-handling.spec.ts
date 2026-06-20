@@ -663,7 +663,7 @@ test.describe('Error Handling', () => {
     test('should display error on file open failure', async ({ page }) => {
       await setupMockedPage(page);
 
-      const openBtn = page.locator('[data-testid="global-open-project-button"], button:has-text("Open"), h3:has-text("Open")').first();
+      const openBtn = page.locator('[data-testid="global-open-import-button"], [data-testid="global-open-project-button"], button:has-text("Open"), h3:has-text("Open")').first();
       const loadingError = page.getByTestId('loading-progress');
       const title = page.locator('h1:has-text("Stalagmight")');
 

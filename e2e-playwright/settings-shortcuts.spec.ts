@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { openSettingsFromMenu } from './helpers/app';
 
 /**
  * E2E tests for keyboard shortcuts configuration in Settings dialog.
@@ -55,11 +56,8 @@ async function openSettingsDialog(page: Page): Promise<void> {
   // Go back to GlobalView if we're in a project
   await goBackToGlobalView(page);
 
-  // Settings button is in GlobalView header
-  const settingsButton = page.locator('[data-testid="settings-button"]');
-  await expect(settingsButton).toBeVisible({ timeout: 5000 });
-  await settingsButton.click();
-  await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+  // Settings now lives behind the hamburger menu in the GlobalView header.
+  await openSettingsFromMenu(page);
 }
 
 /**

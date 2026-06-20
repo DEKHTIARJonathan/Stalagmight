@@ -10,14 +10,11 @@
  * z-order, keyboard navigation, and the various close paths.
  */
 import { test, expect, Page, Locator } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, openSettingsFromMenu } from './helpers/app';
 
-/** Open the Settings dialog from the GlobalView header. */
+/** Open the Settings dialog from the GlobalView header (via hamburger menu). */
 async function openSettingsDialog(page: Page): Promise<void> {
-  const settingsButton = page.getByTestId('settings-button');
-  await expect(settingsButton).toBeVisible({ timeout: 5000 });
-  await settingsButton.click();
-  await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
+  await openSettingsFromMenu(page);
 }
 
 /** Navigate to the General tab (hosts the number-format select). */

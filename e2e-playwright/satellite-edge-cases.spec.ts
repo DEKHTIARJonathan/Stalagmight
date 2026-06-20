@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady, CUSTOM_TILE_URL_RE } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, openSettingsFromMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -394,9 +394,8 @@ test.describe('Satellite Edge Cases', () => {
       // Wait for GlobalView to load
       await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
 
-      // Click Settings button
-      await page.click('[data-testid="settings-button"], button:has-text("Settings")');
-      await page.waitForSelector('[data-testid="settings-dialog"]', { timeout: 5000 });
+      // Open Settings via the hamburger menu (Settings moved into the app menu)
+      await openSettingsFromMenu(page);
     }
 
     test('should open and close settings dialog with cache tab', async ({ page }) => {

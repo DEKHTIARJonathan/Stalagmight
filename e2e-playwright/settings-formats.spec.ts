@@ -1,5 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
+import { openSettingsFromMenu } from './helpers/app';
 
 /**
  * E2E tests for Number Format and Date Format settings.
@@ -34,10 +35,7 @@ async function goBackToGlobalView(page: Page): Promise<void> {
 
 async function openSettingsDialog(page: Page): Promise<void> {
   await goBackToGlobalView(page);
-  const settingsButton = page.locator('[data-testid="settings-button"]');
-  await expect(settingsButton).toBeVisible({ timeout: 5000 });
-  await settingsButton.click();
-  await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible({ timeout: 5000 });
+  await openSettingsFromMenu(page);
 }
 
 async function navigateToGeneralTab(page: Page): Promise<void> {

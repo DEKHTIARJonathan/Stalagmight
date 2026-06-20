@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, switchRecentView } from './helpers/app';
 
 test.describe('GlobalView Map', () => {
   test.beforeEach(async ({ page }) => {
@@ -10,31 +10,31 @@ test.describe('GlobalView Map', () => {
   test.describe('Tab Navigation', () => {
     test('should display Map and List tabs when projects exist', async ({ page }) => {
       // Both tabs should be visible
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
-      const listTab = page.locator('[data-testid="globalview-list-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
+      const listTab = page.locator('[data-testid="globalview-view-toggle-list"]');
 
       await expect(mapTab).toBeVisible({ timeout: 5000 });
       await expect(listTab).toBeVisible({ timeout: 5000 });
     });
 
     test('should show List tab as active by default', async ({ page }) => {
-      const listTab = page.locator('[data-testid="globalview-list-tab"]');
+      const listTab = page.locator('[data-testid="globalview-view-toggle-list"]');
 
-      // List tab should have the active styling (border-accent class)
-      await expect(listTab).toHaveClass(/border-accent/);
+      // List should be the active (selected) segment by default
+      await expect(listTab).toHaveAttribute('aria-selected', 'true');
     });
 
     test('should switch to Map tab when clicked', async ({ page }) => {
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
-      const listTab = page.locator('[data-testid="globalview-list-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
+      const listTab = page.locator('[data-testid="globalview-view-toggle-list"]');
 
       // Click Map tab
       await mapTab.click();
 
       // Map tab should be active
-      await expect(mapTab).toHaveClass(/border-accent/);
+      await expect(mapTab).toHaveAttribute('aria-selected', 'true');
       // List tab should be inactive
-      await expect(listTab).not.toHaveClass(/border-accent/);
+      await expect(listTab).toHaveAttribute('aria-selected', 'false');
 
       // Map container should be visible
       const mapContainer = page.locator('[data-testid="globalview-map"]');
@@ -42,31 +42,31 @@ test.describe('GlobalView Map', () => {
     });
 
     test('should switch back to List tab when clicked', async ({ page }) => {
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
-      const listTab = page.locator('[data-testid="globalview-list-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
+      const listTab = page.locator('[data-testid="globalview-view-toggle-list"]');
 
       // Switch to Map first
       await mapTab.click();
-      await expect(mapTab).toHaveClass(/border-accent/);
+      await expect(mapTab).toHaveAttribute('aria-selected', 'true');
 
       // Switch back to List
       await listTab.click();
-      await expect(listTab).toHaveClass(/border-accent/);
-      await expect(mapTab).not.toHaveClass(/border-accent/);
+      await expect(listTab).toHaveAttribute('aria-selected', 'true');
+      await expect(mapTab).toHaveAttribute('aria-selected', 'false');
 
       // List content should be visible (Recent Projects heading)
       await expect(page.locator('h2:has-text("Recent Projects")')).toBeVisible();
     });
 
     test('should show count of GPS projects on Map tab', async ({ page }) => {
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
 
       // The tab text should include the count (3 GPS projects in mock data)
       await expect(mapTab).toContainText('3');
     });
 
     test('should show total count on List tab', async ({ page }) => {
-      const listTab = page.locator('[data-testid="globalview-list-tab"]');
+      const listTab = page.locator('[data-testid="globalview-view-toggle-list"]');
 
       // The tab text should include the count (4 total projects in mock data)
       await expect(listTab).toContainText('4');
@@ -76,7 +76,7 @@ test.describe('GlobalView Map', () => {
   test.describe('Map Display', () => {
     test.beforeEach(async ({ page }) => {
       // Switch to Map tab for map-specific tests
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
       await mapTab.click();
       await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
     });
@@ -129,7 +129,7 @@ test.describe('GlobalView Map', () => {
 
   test.describe('Map Interactions', () => {
     test.beforeEach(async ({ page }) => {
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
       await mapTab.click();
       await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
 
@@ -221,7 +221,7 @@ test.describe('GlobalView Map', () => {
     }
 
     test.beforeEach(async ({ page }) => {
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
       await mapTab.click();
       await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
 
@@ -380,10 +380,12 @@ test.describe('GlobalView Map', () => {
   });
 
   test.describe('Search Filter', () => {
+    // Search is list-only now (the map view no longer has search), so ensure
+    // the list view is active. List is the default, but switch explicitly in
+    // case prior state changed it.
     test.beforeEach(async ({ page }) => {
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
-      await mapTab.click();
-      await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
+      await switchRecentView(page, 'list');
+      await expect(page.getByTestId('globalview-search-input')).toBeVisible({ timeout: 5000 });
     });
 
     test('should display search input in toolbar', async ({ page }) => {

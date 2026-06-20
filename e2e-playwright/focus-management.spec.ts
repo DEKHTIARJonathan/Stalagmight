@@ -9,6 +9,7 @@ import {
   seedProjectWithSections,
   waitForMapReady,
   waitForNoDialogs,
+  openSettingsFromMenu,
 } from './helpers/app';
 
 /**
@@ -20,12 +21,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Open the Settings dialog from GlobalView via the settings button. */
+/** Open the Settings dialog from GlobalView via the hamburger menu. */
 async function openSettingsDialog(page: Page): Promise<void> {
-  const settingsButton = page.locator('[data-testid="settings-button"]');
-  await expect(settingsButton).toBeVisible({ timeout: 5000 });
-  await settingsButton.click();
-  await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
+  await openSettingsFromMenu(page);
 }
 
 /**

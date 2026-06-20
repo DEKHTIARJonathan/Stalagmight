@@ -19,7 +19,7 @@ test.describe('Project CRUD Operations', () => {
     });
 
     test('should have Open Project option', async ({ page }) => {
-      const openBtn = page.locator('[data-testid="global-open-project-button"], [data-testid="empty-state-open-project"]').first();
+      const openBtn = page.locator('[data-testid="global-open-import-button"], [data-testid="empty-state-open-project"]').first();
       await expect(openBtn).toBeVisible({ timeout: 10000 });
     });
   });

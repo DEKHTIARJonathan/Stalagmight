@@ -87,7 +87,7 @@ test.describe('GlobalView Metadata Panel', () => {
   test.describe('Project Selection from Map', () => {
     test.beforeEach(async ({ page }) => {
       // Switch to Map tab
-      const mapTab = page.locator('[data-testid="globalview-map-tab"]');
+      const mapTab = page.locator('[data-testid="globalview-view-toggle-map"]');
       await mapTab.click();
       await expect(page.getByTestId('globalview-map')).toBeVisible({ timeout: 5000 });
 

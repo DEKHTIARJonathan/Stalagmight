@@ -11,7 +11,7 @@ test.describe('GlobalView Multi-System Workflow', () => {
   });
 
   test('handles multi-select merge flow then opens a project and returns to global view', async ({ page }) => {
-    await page.getByTestId('globalview-list-tab').click();
+    await page.getByTestId('globalview-view-toggle-list').click();
 
     const alphaCard = page.getByTestId(`system-card-${ALPHA}`);
     const betaCard = page.getByTestId(`system-card-${BETA}`);

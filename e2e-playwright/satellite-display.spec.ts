@@ -1,5 +1,5 @@
 import { test, expect, Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, waitForMapReady, CUSTOM_TILE_URL_RE } from './helpers/app';
+import { setupMockedPage, createProject, waitForMapReady, openAppMenu, CUSTOM_TILE_URL_RE } from './helpers/app';
 
 /**
  * Helper to open the Display menu
@@ -285,7 +285,8 @@ test.describe('Satellite Display', () => {
       // Wait for GlobalView to load
       await page.waitForSelector('[data-testid="global-view"], h1:has-text("Stalagmight")', { timeout: 8000 });
 
-      // Click Settings button
+      // Open the hamburger menu, then click Settings
+      await openAppMenu(page);
       await page.click('[data-testid="settings-button"], button:has-text("Settings")');
       await page.waitForSelector('[data-testid="settings-dialog"]', { timeout: 5000 });
     }

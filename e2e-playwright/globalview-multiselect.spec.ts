@@ -21,7 +21,7 @@ const LOCAL = '/projects/local-survey.stalx';
 
 /** Switch to list tab so system cards are visible. */
 async function switchToListTab(page: Page): Promise<void> {
-  const listTab = page.getByTestId('globalview-list-tab');
+  const listTab = page.getByTestId('globalview-view-toggle-list');
   await expect(listTab).toBeVisible();
   await listTab.click();
 }

@@ -17,7 +17,7 @@ const LOCAL = '/projects/local-survey.stalx';
 const GHOST = '/projects/ghost.stalx';
 
 async function switchToListTab(page: Page): Promise<void> {
-  const listTab = page.getByTestId('globalview-list-tab');
+  const listTab = page.getByTestId('globalview-view-toggle-list');
   await expect(listTab).toBeVisible();
   await listTab.click();
   await expect(page.getByTestId(`system-card-${ALPHA}`)).toBeVisible();
@@ -73,8 +73,8 @@ test.describe('GlobalView Recent Projects — search, table view, missing files'
     await expect(page.getByTestId(`system-card-${ALPHA}`)).toHaveCount(0);
 
     await page.reload();
-    await expect(page.getByTestId('globalview-list-tab')).toBeVisible();
-    await page.getByTestId('globalview-list-tab').click();
+    await expect(page.getByTestId('globalview-view-toggle-list')).toBeVisible();
+    await page.getByTestId('globalview-view-toggle-list').click();
     await expect(page.getByTestId('globalview-list-table')).toBeVisible();
   });
 
