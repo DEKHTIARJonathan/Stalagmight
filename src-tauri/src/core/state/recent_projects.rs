@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::core::CommandResult;
+use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::models::{Project, ProjectMetadata};
 use crate::persistence::Database;
 
@@ -89,24 +89,49 @@ impl AppState {
     /// recents). If the deleted project is the one currently open in memory, the
     /// open project is cleared so a later autosave can't recreate the file we
     /// just removed.
+    ///
+    /// The primary `.stalx` is trashed first: if *that* fails the call returns a
+    /// failure with recents untouched (nothing was destroyed). Once it succeeds
+    /// the project is gone, so any later problem — the collab `.tml` sibling
+    /// failing to trash, or the recents persist failing — is reported as a
+    /// non-fatal [`CommandResult::warnings`] entry while the call still returns
+    /// success and drops the recents entry. Returning a failure after the file is
+    /// already trashed would strand a "File not found" zombie row in the UI.
     pub fn delete_project(&self, path: PathBuf, delete_collab_sibling: bool) -> CommandResult {
-        // Hand the project DB to the OS trash. The sibling `.tml` is removed only
-        // when the caller confirms it's this project's collab file — a same-stem
-        // `.tml` next to a non-collab project may be an unrelated/imported Ariane
-        // file the user was never warned about, so we leave it alone.
-        let mut targets = vec![path.clone()];
-        if delete_collab_sibling {
-            let tml = path.with_extension("tml");
-            if tml != path {
-                targets.push(tml);
+        // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
+        // destructive has happened yet, so abort cleanly — recents stay untouched
+        // and the caller can retry. (Tolerant of a file that's already gone.)
+        if path.exists() {
+            if let Err(e) = send_to_trash(&path) {
+                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()));
             }
         }
-        for target in &targets {
-            if !target.exists() {
-                continue;
-            }
-            if let Err(e) = send_to_trash(target) {
-                return CommandResult::failure(format!("Failed to delete {}: {e}", target.display()));
+
+        // From here on the project IS deleted as far as the user is concerned, so
+        // the rest is best-effort and MUST still drop the recents entry — otherwise
+        // a later failure (sibling `.tml`, config persist) would strand a
+        // "File not found" zombie row, because the frontend skips its refresh on
+        // `!success`. Collect non-fatal problems as warnings and still report
+        // overall success so the UI prunes the deleted project from its list.
+        let mut warnings: Vec<ValidationWarning> = Vec::new();
+
+        // The sibling `.tml` is removed only when the caller confirms it's this
+        // project's collab file — a same-stem `.tml` next to a non-collab project
+        // may be an unrelated/imported Ariane file the user was never warned about,
+        // so we leave it alone.
+        if delete_collab_sibling {
+            let tml = path.with_extension("tml");
+            if tml != path && tml.exists() {
+                if let Err(e) = send_to_trash(&tml) {
+                    let msg =
+                        format!("Project deleted, but its collab file {} could not be removed: {e}", tml.display());
+                    tracing::warn!("{}", msg);
+                    warnings.push(ValidationWarning {
+                        code: "delete_project_sibling_failed".to_string(),
+                        message: msg,
+                        severity: WarningSeverity::Warning,
+                    });
+                }
             }
         }
 
@@ -119,8 +144,15 @@ impl AppState {
                 if let Ok(mut config) = self.config.lock() {
                     config.general.recent_projects.clone_from(&recent);
                     if let Err(e) = config.save() {
+                        // The `.stalx` is already trashed and the in-memory recents
+                        // are pruned; a failed persist must NOT report the whole
+                        // delete as a failure (that strands the zombie row). Warn.
                         tracing::warn!("Failed to save config after deleting project: {}", e);
-                        return CommandResult::failure(format!("Failed to save config: {e}"));
+                        warnings.push(ValidationWarning {
+                            code: "delete_project_persist_failed".to_string(),
+                            message: format!("Project deleted, but the recent-projects list could not be saved: {e}"),
+                            severity: WarningSeverity::Warning,
+                        });
                     }
                 }
             }
@@ -135,7 +167,7 @@ impl AppState {
         }
 
         tracing::info!(path = ?path, "Deleted project");
-        CommandResult::success()
+        CommandResult::success().with_warnings(warnings)
     }
 
     /// Rename a project's display name on disk by path, without requiring it to
