@@ -18,6 +18,7 @@ import {
   saveDialog,
   PROJECT_EXTENSION,
 } from '../utils/fileDialogs';
+import { openOrImport } from '../utils/openOrImport';
 import { debugLog } from '../utils/debugLog';
 
 export function useProject() {
@@ -368,6 +369,13 @@ export function useProject() {
     }
   }, [store, openDialog]);
 
+  /**
+   * Unified "Open / Import": opens a picker accepting native projects and every
+   * importable format, then routes the chosen file to the matching flow
+   * (open `.stalx`, or import DMP/Ariane/Compass/GPX) based on its extension.
+   */
+  const handleOpenOrImport = useCallback(() => openOrImport(), []);
+
   const handleExportCsv = useCallback(async () => {
     const selected = await saveDialog({
       filters: exportSaveFilters('CSV', 'csv'),
@@ -409,6 +417,7 @@ export function useProject() {
 
     handleNewProject,
     handleOpenProject,
+    handleOpenOrImport,
     handleSaveProject,
     handleSaveProjectAs,
     handleCloseProject,

@@ -75,6 +75,27 @@ export function importOpenFilters() {
   ];
 }
 
+/**
+ * Filters for the unified "Open / Import" picker: every file the app can open
+ * (native `.stalx` projects) or import (DMP / Ariane / Compass / GPX). The first
+ * entry is the combined "everything" filter so a single selection accepts any
+ * supported file; the rest narrow to one format each.
+ */
+export function openOrImportFilters() {
+  return [
+    {
+      name: 'Stalagmight & Survey Files',
+      extensions: [PROJECT_EXTENSION, DMP_EXTENSION, ...TML_EXTENSIONS, GPX_EXTENSION, ...COMPASS_EXTENSIONS],
+    },
+    { name: 'Stalagmight Project', extensions: [PROJECT_EXTENSION] },
+    { name: 'mNemo DMP', extensions: [DMP_EXTENSION] },
+    { name: 'Ariane Survey', extensions: TML_EXTENSIONS },
+    { name: 'Compass Survey', extensions: COMPASS_EXTENSIONS },
+    { name: 'GPX Files', extensions: [GPX_EXTENSION] },
+    { name: 'All Files', extensions: ['*'] },
+  ];
+}
+
 export function exportSaveFilters(label: string, extension: string) {
   const normalizedExt = extension.startsWith('.') ? extension.slice(1) : extension;
   return [{ name: label, extensions: [normalizedExt] }];
