@@ -85,7 +85,13 @@
         "recentProjects": "Recent Projects",
         "undoHistory": "Undo History",
         "feedback": "Feedback",
-        "startup": "Startup"
+        "startup": "Startup",
+        "privacy": "Privacy"
+      },
+      "telemetry": {
+        "label": "Share anonymous usage statistics",
+        "help": "Help improve Stalagmight by sharing which features you use. No personal data or survey content is collected.",
+        "aria": "Toggle anonymous usage statistics"
       },
       "language": {
         "label": "Language / Locale",
