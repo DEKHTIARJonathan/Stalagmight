@@ -1673,7 +1673,8 @@
       "showInFolder": "Show in folder",
       "mergeProjects": "Merge {{countFormatted}} projects",
       "remove": "Remove from recent",
-      "removeMultiple": "Remove {{countFormatted}} from recent"
+      "removeMultiple": "Remove {{countFormatted}} from recent",
+      "delete": "Delete project…"
     },
     "empty": {
       "title": "No projects yet",
@@ -1764,7 +1765,9 @@
         "showInFolder": "Show in folder",
         "showInFolderAria": "Show {{name}} in folder",
         "removeFromRecent": "Remove from recent",
-        "removeFromRecentAria": "Remove {{name}} from recent"
+        "removeFromRecentAria": "Remove {{name}} from recent",
+        "deleteProject": "Delete project…",
+        "deleteProjectAria": "Permanently delete {{name}}"
       }
     },
     "systemCard": {

@@ -266,6 +266,38 @@ export default function GlobalView() {
     });
   }, [removeFromRecentProjects, selectedProjectId]);
 
+  // Prune selection when a project leaves the recents list (e.g. after a delete,
+  // or any external removal): otherwise selectedProjectId / multiSelectedIds dangle
+  // on a path that's gone, and Enter/Delete would act on it. The valid set is the
+  // loaded recents plus config "missing" paths, so selecting a missing entry sticks.
+  useEffect(() => {
+    const valid = new Set<string>([
+      ...recentProjects.map((p) => p.file_path),
+      ...(config?.general?.recent_projects ?? []),
+    ]);
+    setSelectedProjectId((prev) => (prev && !valid.has(prev) ? null : prev));
+    setMultiSelectedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+    // Also prune the map-selection store. The store→local sync effect above
+    // copies selectedSystemIds back into multiSelectedIds on the next map
+    // ctrl-click, so a deleted path left in the store gets resurrected into the
+    // selection (status-bar count + Enter/Delete then point at a gone file).
+    // Read fresh via getState() (not the render-closure value, which isn't a
+    // dep here) and only write when something was actually removed.
+    const gv = useGlobalViewStore.getState();
+    const prunedSystems = new Set([...gv.selectedSystemIds].filter((id) => valid.has(id)));
+    if (prunedSystems.size !== gv.selectedSystemIds.size) {
+      gv.setSelectedSystems(prunedSystems);
+    }
+  }, [recentProjects, config]);
+
   // Register GlobalView keyboard shortcuts via hook
   useGlobalViewShortcuts({
     selectedProjectId,
@@ -753,7 +785,7 @@ export default function GlobalView() {
           )}
           <div className="border-t border-border my-1" />
           <button
-            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 text-error flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
             onClick={async () => {
               // Handle multi-selection remove with count
               try {
@@ -780,6 +812,23 @@ export default function GlobalView() {
               })
               : t('globalView.contextMenu.remove')}
           </button>
+          {selectedCount <= 1 && contextMenu.projectPath && (
+            <>
+              <div className="border-t border-border my-1" />
+              <button
+                className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 text-error flex items-center gap-2"
+                onClick={() => {
+                  const proj = recentProjects.find((p) => p.file_path === contextMenu.projectPath);
+                  openDialog('delete-project', { path: contextMenu.projectPath, name: proj?.name, collabEnabled: proj?.collab_enabled });
+                  setContextMenu((prev) => ({ ...prev, visible: false }));
+                }}
+                role="menuitem"
+                data-testid="context-menu-delete"
+              >
+                {t('globalView.contextMenu.delete')}
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

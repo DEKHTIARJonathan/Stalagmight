@@ -1069,6 +1069,135 @@ fn test_remove_from_recent_projects_success() {
     });
 }
 
+// In test builds `send_to_trash` is a deterministic `fs::remove_file` (see
+// recent_projects.rs), so these assert the file is actually gone without touching
+// the developer's real Trash or needing a trash dir on a headless CI runner.
+
+#[test]
+fn test_delete_project_removes_file_and_recent() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            assert!(saved_path.exists(), "precondition: .stalx written to disk");
+
+            let result = project::delete_project(state(&app), saved_path.clone(), false);
+            assert_success(&result);
+            assert!(!saved_path.exists(), "project file should be deleted from disk");
+            let recent = project::list_recent_projects(state(&app));
+            assert!(!recent.iter().any(|p| p.file_path == saved_path));
+        });
+    });
+}
+
+#[test]
+fn test_delete_project_removes_tml_sibling() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            let tml = saved_path.with_extension("tml");
+            fs::write(&tml, b"<dummy/>").unwrap();
+            assert!(tml.exists());
+
+            let result = project::delete_project(state(&app), saved_path.clone(), true);
+            assert_success(&result);
+            assert!(!saved_path.exists());
+            assert!(!tml.exists(), "collab sibling .tml should be deleted too");
+        });
+    });
+}
+
+#[test]
+fn test_delete_project_keeps_unconfirmed_tml() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            // A same-stem .tml exists but the caller did NOT confirm it's this
+            // project's collab file (delete_collab_sibling = false): it may be an
+            // unrelated/imported Ariane file, so it must be left on disk.
+            let tml = saved_path.with_extension("tml");
+            fs::write(&tml, b"<dummy/>").unwrap();
+
+            let result = project::delete_project(state(&app), saved_path.clone(), false);
+            assert_success(&result);
+            assert!(!saved_path.exists(), "project .stalx should be deleted");
+            assert!(tml.exists(), "unconfirmed sibling .tml must NOT be deleted");
+        });
+    });
+}
+
+#[test]
+fn test_delete_project_tolerates_missing_file() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            // Nothing was ever written here: deleting a path with no file on disk
+            // should still succeed (there is simply nothing to remove).
+            let dir = TempDir::new().unwrap();
+            let missing = dir.path().join("never-saved.stalx");
+            let result = project::delete_project(state(&app), missing.clone(), false);
+            assert_success(&result);
+            assert!(!missing.exists());
+        });
+    });
+}
+
+#[test]
+fn test_delete_project_partial_failure_still_prunes_recents() {
+    // Regression (#118 review N3): once the primary `.stalx` is trashed, a later
+    // failure (here the collab `.tml` sibling) must NOT report the whole delete as
+    // a failure — that would strand a "File not found" zombie row, because the
+    // frontend skips its recents refresh on `!success`. It should drop the entry
+    // and return a partial success carrying a warning.
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            assert!(
+                project::list_recent_projects(state(&app))
+                    .iter()
+                    .any(|p| p.file_path == saved_path),
+                "precondition: saved project is listed in recents"
+            );
+            // Force the sibling's trash to fail deterministically: a *directory* at
+            // the `.tml` path makes `fs::remove_file` (the test-build send_to_trash)
+            // error, while the primary `.stalx` (a file) still trashes cleanly.
+            let tml = saved_path.with_extension("tml");
+            fs::create_dir(&tml).unwrap();
+
+            let result = project::delete_project(state(&app), saved_path.clone(), true);
+
+            assert!(result.success, "primary delete succeeded → overall success, not failure");
+            assert!(!saved_path.exists(), "project .stalx should be trashed");
+            assert!(tml.exists(), "the un-trashable sibling is left in place");
+            assert!(
+                result
+                    .warnings
+                    .iter()
+                    .any(|w| w.code == "delete_project_sibling_failed"),
+                "leftover sibling is surfaced as a warning, got {:?}",
+                result.warnings
+            );
+            assert!(
+                !project::list_recent_projects(state(&app))
+                    .iter()
+                    .any(|p| p.file_path == saved_path),
+                "recents must be pruned even though the sibling failed"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_save_project_fails_when_directory_missing() {
     with_config_lock(|| {

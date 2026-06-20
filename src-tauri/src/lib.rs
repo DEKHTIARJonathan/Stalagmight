@@ -1129,6 +1129,7 @@ pub fn run() {
             commands::project::get_along_line_distance,
             commands::project::list_recent_projects,
             commands::project::remove_from_recent_projects,
+            commands::project::delete_project,
             commands::project::set_project_name_for_path,
             commands::project::merge_projects,
             commands::project::load_project_full,

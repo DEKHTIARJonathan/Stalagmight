@@ -2775,6 +2775,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] remove_from_recent_projects called with:', args);
             return { success: true };
 
+          case 'delete_project':
+            // Mock destructive delete - acknowledge success. We don't mutate the
+            // hardcoded recents list here (would leak across tests in a worker);
+            // the store + Rust tests cover the recents-removal side effect.
+            console.log('[Mock IPC] delete_project called with:', args);
+            return { success: true };
+
           case 'set_project_name_for_path': {
             const p = String(args?.path ?? '');
             const name = String(args?.name ?? '').trim();

@@ -391,6 +391,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.project-settings",
     "dialog-cancel.project-settings",
     "dwell.dialog.project-settings",
+    // Delete-project command + its confirm dialog (action/cancel/dwell trio) (#118).
+    "command.delete_project",
+    "action.dialog.delete-project",
+    "dialog-cancel.delete-project",
+    "dwell.dialog.delete-project",
 ];
 
 /// Lazy source name → source_id map (excludes empty string at index 0).
@@ -529,7 +534,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 326);
+        assert_eq!(EVENT_NAMES.len(), 330);
     }
 
     #[test]
