@@ -647,3 +647,52 @@ export function BugIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+export function MenuIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <line x1="3" y1="5" x2="17" y2="5" />
+      <line x1="3" y1="10" x2="17" y2="10" />
+      <line x1="3" y1="15" x2="17" y2="15" />
+    </BaseIcon>
+  );
+}
+
+export function SettingsIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <circle cx="10" cy="10" r="3" />
+      <line x1="10" y1="2" x2="10" y2="4.5" />
+      <line x1="10" y1="15.5" x2="10" y2="18" />
+      <line x1="2" y1="10" x2="4.5" y2="10" />
+      <line x1="15.5" y1="10" x2="18" y2="10" />
+      <line x1="4.3" y1="4.3" x2="6.1" y2="6.1" />
+      <line x1="13.9" y1="13.9" x2="15.7" y2="15.7" />
+      <line x1="4.3" y1="15.7" x2="6.1" y2="13.9" />
+      <line x1="13.9" y1="6.1" x2="15.7" y2="4.3" />
+    </BaseIcon>
+  );
+}
+
+export function QuitIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Power glyph: ring with a top gap and a vertical stem */}
+      <path d="M6 5 A6 6 0 1 0 14 5" />
+      <line x1="10" y1="2" x2="10" y2="9" />
+    </BaseIcon>
+  );
+}
+
+export function ListIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <line x1="7" y1="5" x2="17" y2="5" />
+      <line x1="7" y1="10" x2="17" y2="10" />
+      <line x1="7" y1="15" x2="17" y2="15" />
+      <line x1="3" y1="5" x2="3.5" y2="5" />
+      <line x1="3" y1="10" x2="3.5" y2="10" />
+      <line x1="3" y1="15" x2="3.5" y2="15" />
+    </BaseIcon>
+  );
+}
