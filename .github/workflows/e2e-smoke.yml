@@ -32,6 +32,13 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Parallel-safety guard (#126): fail before the (slow) browser install if any
+      # e2e-playwright spec introduces a pattern that breaks `fullyParallel` — own
+      # server/port, fixed-path disk write, foreign host:port, or describe.serial.
+      # This is the only CI job that triggers on `e2e-playwright/**` (`check`
+      # path-ignores it), so the gate must live here. See docs/TESTING.md.
+      - name: Check e2e-playwright parallel-safety
+        run: pnpm lint:e2e-parallel
       # Cache the Chromium browser (~120 MB) so it isn't re-downloaded each run.
       - name: Resolve Playwright version
         id: pw
