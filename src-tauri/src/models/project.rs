@@ -2083,8 +2083,14 @@ impl Project {
         if kind == RangeDeleteKind::Interior {
             let head = StationRef::new(section_id, start_pos as u32);
             let tail = StationRef::new(section_id, end_pos as u32 + 2);
+            // Only a MERGE-based loop blocks: merges are hard coincidence
+            // constraints that survive the delete, so gap-closing two
+            // merge-connected sides is over-constrained. A loop closure is a
+            // soft/redundant constraint that the delete removes (or converts), so
+            // the resulting geometry is still valid — closures must NOT block
+            // (include_closures = false).
             if sim.stations_connected_excluding_range(
-                head, tail, section_id, start_pos, end_pos, &removed_set, true,
+                head, tail, section_id, start_pos, end_pos, &removed_set, false,
             ) {
                 shift_blocked_reasons.push(
                     "This range is part of a loop (the two sides are already connected)."

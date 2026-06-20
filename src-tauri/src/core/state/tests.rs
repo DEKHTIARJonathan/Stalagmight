@@ -9971,6 +9971,75 @@ fn test_delete_range_interior_preview_includes_shift_boundary_merge() {
 }
 
 #[test]
+fn test_delete_range_interior_shift_not_blocked_by_closure_loop() {
+    // User report: a range whose two sides are connected only through a LOOP
+    // CLOSURE must NOT block the gap-close — a closure is a soft/redundant
+    // constraint the delete removes/converts, so the result is still valid. (A
+    // merge-based loop still blocks; see
+    // test_delete_range_interior_shift_blocked_by_loop_via_replacement_merge.)
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject { name: "Closure Loop".to_string(), location: None });
+    let create_a = state.execute(Command::CreateSection {
+        name: Some("A".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![
+            test_shot_data(5.0),
+            test_shot_data(7.0),
+            test_shot_data(3.0),
+            test_shot_data(4.0),
+            test_shot_data(6.0),
+            test_shot_data(8.0),
+        ],
+    });
+    let sec_a = create_a.section_id.unwrap();
+    let create_b = state.execute(Command::CreateSection {
+        name: Some("B".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(4.0)],
+    });
+    let sec_b = create_b.section_id.unwrap();
+    // Head A:2 <-> B via a merge; tail A:5 <-> B via a LOOP CLOSURE. So for the
+    // interior range [2..=3] the only head<->tail path is through the closure.
+    assert!(state
+        .execute(Command::MergeStations {
+            station_a: StationRef::new(sec_a, 2),
+            station_b: StationRef::new(sec_b, 0),
+        })
+        .success);
+    assert!(state
+        .execute(Command::CreateLoopClosure {
+            station_a: StationRef::new(sec_a, 5),
+            station_b: StationRef::new(sec_b, 1),
+            closure_strategy: ClosureStrategy::default(),
+        })
+        .success);
+
+    let (s2, s3) = {
+        let proj = state.get_project_state().unwrap();
+        let sec = proj.get_section(sec_a).unwrap();
+        (sec.shots[2].id, sec.shots[3].id)
+    };
+    {
+        let proj = state.get_project_state().unwrap();
+        let impact = proj.preview_delete_shot_range(sec_a, s2, s3).unwrap();
+        assert!(
+            !impact.shift_blocked,
+            "a closure-only loop must not block the gap-close: {:?}",
+            impact.shift_blocked_reasons
+        );
+    }
+    // And the gap-close executes cleanly (no over-constraint / alignment panic).
+    let result = state.execute_delete_shot_range_shift(sec_a, s2, s3);
+    assert!(result.success, "closure-loop gap-close should succeed: {:?}", result.error);
+}
+
+#[test]
 fn test_delete_range_blocked_interior_impact_describes_split() {
     // Review finding (P2): when the gap-close is blocked, an interior range can
     // only SPLIT (which keeps both boundary stations), so the relationship panel
