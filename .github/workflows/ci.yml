@@ -94,6 +94,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      # Formatting gate: `cargo fmt` is the formatter for src-tauri (rustfmt.toml
+      # pins edition 2021). Fail fast on any drift before the expensive
+      # pnpm/build/test steps — sub-second, needs only the toolchain above.
+      # `check` triggers on src-tauri/** so a Rust format regression always runs it.
+      - name: Rust formatting (cargo fmt --check)
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
       # Hosted: actions/cache-backed rust-cache restores a prebuilt target/.
       # NUC: that's useless on an ephemeral (--rm) runner — it uses the
