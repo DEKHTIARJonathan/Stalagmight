@@ -63,6 +63,7 @@ All must pass before pushing:
 pnpm tsc --noEmit
 pnpm test:ui
 cargo fmt --manifest-path src-tauri/Cargo.toml --check   # exactly what CI's check job runs (run without --check to fix)
+TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lint gate
 TELEMETRY_ENDPOINT=http://localhost/dummy cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
 ```
 
@@ -80,7 +81,13 @@ env var makes `build.rs` delay-load comctl32 for test binaries so the symbol is
 never resolved at startup. The shipping app is unaffected (it gets a
 Common-Controls v6 manifest from `tauri_build`).
 
-### Run `cargo fmt` — formatting is CI-gated
+### Rust lints + formatting are CI-gated
+
+The `check` job enforces **both** `cargo fmt --check` and `cargo clippy`
+(deny-level) on `src-tauri`. The full policy — the strict anti-AI-slop clippy
+config, the per-test-module `#[expect]` idiom (no `#[allow]`, no `clippy.toml`),
+and which lints were deliberately deferred — is in
+[docs/linting.md](docs/linting.md).
 
 `cargo fmt` is the formatter for the **`src-tauri` crate**, enforced in CI: the
 `check` job runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` and
@@ -132,6 +139,7 @@ Implementation plans are stored in `docs/plans/`.
 |----------|----------|
 | [SPEC.md](docs/SPEC.md) | **Full specification** - data model, UI design, workflows, file formats, validation rules |
 | [Testing Guide](docs/TESTING.md) | Test commands, Playwright/WebdriverIO/Rust patterns, UI testability requirements |
+| [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
 | [Architecture](docs/architecture.md) | State flow, command pattern, key files, Rust patterns |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
 | [Configuration](docs/configuration.md) | Config file locations, options, logging |
