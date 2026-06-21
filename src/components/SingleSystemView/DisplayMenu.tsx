@@ -429,7 +429,7 @@ export default function DisplayMenu() {
           data-testid="display-menu"
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-4">
-            {/* Color (single-select) */}
+            {/* Row 1: Color | Overlays */}
             <Category label={t('displayMenu.groups.color')} icon={showIcons ? <SlidersIcon size={14} /> : undefined}>
               <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
               <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
@@ -437,12 +437,6 @@ export default function DisplayMenu() {
               <Pill label={t('displayMenu.items.issueSeverity')} title={t('displayMenu.descriptions.issueSeverity')} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
             </Category>
 
-            {/* Map Elements (multi-toggle) */}
-            <Category label={t('displayMenu.groups.mapElements')} icon={showIcons ? <MapIcon size={14} /> : undefined}>
-              {MAP_ELEMENTS.map(renderTogglePill)}
-            </Category>
-
-            {/* Overlays (multi-toggle) + grid spacing */}
             <Category label={t('displayMenu.groups.overlays')} icon={showIcons ? <LayersIcon size={14} /> : undefined}>
               {OVERLAYS.map(renderTogglePill)}
               {showGrid && (
@@ -464,12 +458,21 @@ export default function DisplayMenu() {
               )}
             </Category>
 
-            {/* Comments & Labels (multi-toggle) */}
-            <Category label={t('displayMenu.groups.commentsLabels')} icon={showIcons ? <MessageIcon size={14} /> : undefined}>
-              {COMMENTS_LABELS.map(renderTogglePill)}
-            </Category>
+            {/* Row 2: Map Elements (full width) */}
+            <div className="col-span-2">
+              <Category label={t('displayMenu.groups.mapElements')} icon={showIcons ? <MapIcon size={14} /> : undefined}>
+                {MAP_ELEMENTS.map(renderTogglePill)}
+              </Category>
+            </div>
 
-            {/* Geometry (single-select), full width */}
+            {/* Row 3: Comments & Labels (full width) */}
+            <div className="col-span-2">
+              <Category label={t('displayMenu.groups.commentsLabels')} icon={showIcons ? <MessageIcon size={14} /> : undefined}>
+                {COMMENTS_LABELS.map(renderTogglePill)}
+              </Category>
+            </div>
+
+            {/* Row 4: Geometry (single-select), full width */}
             <div className="col-span-2 border-t border-border pt-3">
               <Category label={t('displayMenu.geometry.groupLabel')} icon={showIcons ? <RulerIcon size={14} /> : undefined}>
                 <Pill
