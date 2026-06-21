@@ -106,13 +106,6 @@ export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMen
         iconColor: MENU_ICON_COLORS.save,
         onClick: () => { void saveAndClose(); },
       },
-      {
-        id: 'back-button',
-        label: t('singleView.menu.closeProject'),
-        icon: <CloseIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.close,
-        onClick: () => { void handleCloseProject(); },
-      },
       { id: 'project-menu-sep-2', label: '', separator: true },
       {
         id: 'global-import-menu-button',
@@ -172,6 +165,13 @@ export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMen
         onClick: () => openDialog('debug'),
       },
       { id: 'project-menu-sep-5', label: '', separator: true },
+      {
+        id: 'back-button',
+        label: t('singleView.menu.closeProject'),
+        icon: <CloseIcon size={sz} />,
+        iconColor: MENU_ICON_COLORS.close,
+        onClick: () => { void handleCloseProject(); },
+      },
       {
         id: 'global-quit-button',
         label: t('globalView.actions.quit'),
