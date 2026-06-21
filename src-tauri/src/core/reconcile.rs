@@ -977,7 +977,8 @@ fn lcs_pairs(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::float_cmp,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    clippy::never_loop
 )]
 mod tests {
     use super::*;

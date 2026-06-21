@@ -3740,6 +3740,7 @@ mod integrity_capability_tests {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod update_shot_clear_undo_tests {
     use super::*;
 

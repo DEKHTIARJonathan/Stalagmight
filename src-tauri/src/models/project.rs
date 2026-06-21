@@ -9383,5 +9383,12 @@ impl Project {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    clippy::panic,
+    clippy::print_stderr,
+    clippy::print_stdout
+)]
 mod tests;

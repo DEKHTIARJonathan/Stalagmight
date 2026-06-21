@@ -430,7 +430,7 @@ pub fn is_feature_enabled() -> bool {
 // ── Tests (only with feature enabled) ────────────────────────────────
 
 #[cfg(all(test, feature = "telemetry"))]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

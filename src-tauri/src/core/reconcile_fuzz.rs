@@ -12,7 +12,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::float_cmp,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    clippy::print_stderr,
 )]
 
 use std::collections::HashSet;

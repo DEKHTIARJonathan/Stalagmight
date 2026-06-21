@@ -15,7 +15,9 @@ mod warnings;
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::float_cmp
+    clippy::float_cmp,
+    clippy::print_stderr,
+    clippy::print_stdout
 )]
 mod tests;
 #[cfg(test)]
