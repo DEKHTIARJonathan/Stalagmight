@@ -116,10 +116,10 @@ function Pill({
     ? `${base} sh-epill ${active ? 'sh-epill--on' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`
     : `${base} border ${
         disabled
-          ? 'opacity-50 cursor-not-allowed bg-background border-border text-text-secondary'
+          ? 'opacity-50 cursor-not-allowed bg-background text-text-secondary sh-apill'
           : active
             ? 'bg-accent text-accent-on border-accent'
-            : 'bg-background border-border text-text-primary hover:bg-background-50'
+            : 'bg-background text-text-primary hover:bg-background-50 sh-apill'
       }`;
   const style = entity && entityColored
     ? ({ '--o': `var(${syntacticVarName(entity)})`, '--pill-oncolor': onColor ?? '#ffffff' } as CSSProperties)

@@ -1537,8 +1537,11 @@ button.sh-epill {
   color: var(--cc-text-primary);
   transition-property: background-color, border-color, color;
 }
-button.sh-epill:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--o) 12%, transparent);
+/* Hover only the OFF (outline) state — the filled (on) pill gets no hover effect.
+   Mix the wash over --cc-panel (opaque), not transparent: the WebKit webview
+   renders color-mix toward `transparent` as a near-black wash. */
+button.sh-epill:not(.sh-epill--on):hover:not(:disabled) {
+  background: color-mix(in oklab, var(--o) 12%, var(--cc-panel));
   border-color: color-mix(in oklab, var(--o) 65%, var(--cc-border));
 }
 button.sh-epill.sh-epill--on {
@@ -1548,6 +1551,20 @@ button.sh-epill.sh-epill--on {
 }
 button.sh-epill.sh-epill--on .duotone {
   --o: var(--pill-oncolor) !important;
+}
+
+/* Non-element ("accent") Display pill: a clear outline in the theme accent (gold
+   in the default dark theme) when not selected, mirroring the element pills'
+   colored outline. Uses the opaque accent directly — color-mix toward
+   `transparent` rendered invisibly in the app's WebKit webview, and mixing
+   toward the dark border muted the gold to gray; a thin 1px edge keeps full
+   accent from being heavy. Selected accent pills fill via Tailwind's
+   bg-accent/border-accent and get no hover effect. */
+button.sh-apill {
+  /* Full shorthand: the global `button { border: none }` reset zeroes
+     border-style, so a color-only rule renders nothing (Tailwind's `.border`
+     only sets width). The element pills work for the same reason. */
+  border: 1px solid var(--cc-accent);
 }
 /* The fully-qualified id after a divider, at the SAME font/size as the pill text
    (just dimmer). The divider is a SHORT centered vertical bar (pseudo-element),
