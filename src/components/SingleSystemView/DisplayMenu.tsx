@@ -413,7 +413,7 @@ export default function DisplayMenu() {
         aria-expanded={isOpen}
       >
         <span className="flex items-center gap-1">
-          <EyeIcon size={14} />
+          <EyeIcon size={18} />
           <span>{t('displayMenu.button')}</span>
           <span className="text-xs">
             {isOpen ? <ChevronUpIcon size={10} /> : <ChevronDownIcon size={10} />}

@@ -171,7 +171,7 @@ export default function Toolbar({
             disabled={placementModeActive || geometryReadOnly}
             size="sm"
             className="ml-1"
-            icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={16} /></span> : undefined}
+            icon={showToolbarIcons ? <span style={{ color: 'var(--sh-comment)' }}><DownloadIcon size={18} /></span> : undefined}
             data-testid="toolbar-import-button"
           >
             {t('common.actions.import')}
