@@ -3570,4 +3570,122 @@ mod tests {
         assert!(files > 0);
         assert!(total_shots > 0);
     }
+
+    /// Recursively parse EVERY `.wpj` (full project) and `.srv` (standalone)
+    /// under `WALLS_CORPUS`, catching panics, and report a summary. Used to
+    /// sweep the public test corpus.
+    #[test]
+    #[ignore]
+    fn corpus_sweep() {
+        let Some(root) = std::env::var_os("WALLS_CORPUS") else {
+            eprintln!("skip: set WALLS_CORPUS to a directory tree of Walls files");
+            return;
+        };
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        walk(&p, out);
+                    } else if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                        let ext = ext.to_ascii_lowercase();
+                        if ext == "wpj" || ext == "srv" {
+                            out.push(p);
+                        }
+                    }
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&PathBuf::from(root), &mut files);
+        files.sort();
+
+        let (mut wpj_ok, mut srv_ok) = (0usize, 0usize);
+        let (
+            mut total_shots,
+            mut total_sections,
+            mut total_closures,
+            mut total_datums,
+            mut total_warnings,
+        ) = (0usize, 0usize, 0usize, 0usize, 0usize);
+        let mut errored: Vec<String> = Vec::new();
+        let mut panicked: Vec<String> = Vec::new();
+        let mut by_shots: Vec<(usize, String)> = Vec::new();
+
+        for f in &files {
+            let is_wpj = f
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("wpj"))
+                .unwrap_or(false);
+            let outcome = std::panic::catch_unwind(|| {
+                let parsed = parse_walls(f)?;
+                let shots: usize = parsed.surveys.iter().map(|s| s.vectors.len()).sum();
+                let (configs, closures, warnings) =
+                    convert_walls_to_import_configs(&parsed, &WallsImportOptions::default())?;
+                let datums = configs
+                    .iter()
+                    .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+                    .count();
+                Ok::<_, anyhow::Error>((
+                    shots,
+                    configs.len(),
+                    closures.len(),
+                    warnings.len(),
+                    datums,
+                ))
+            });
+            match outcome {
+                Ok(Ok((shots, sections, closures, warnings, datums))) => {
+                    if is_wpj {
+                        wpj_ok += 1;
+                    } else {
+                        srv_ok += 1;
+                    }
+                    total_shots += shots;
+                    total_sections += sections;
+                    total_closures += closures;
+                    total_datums += datums;
+                    total_warnings += warnings;
+                    by_shots.push((shots, f.display().to_string()));
+                }
+                Ok(Err(e)) => errored.push(format!("{}: {e}", f.display())),
+                Err(_) => panicked.push(f.display().to_string()),
+            }
+        }
+
+        println!(
+            "CORPUS SWEEP: {} files parsed ({} wpj, {} srv); errored {}, panicked {}",
+            files.len(),
+            wpj_ok,
+            srv_ok,
+            errored.len(),
+            panicked.len()
+        );
+        println!(
+            "  totals: {total_shots} shots, {total_sections} sections, {total_closures} closures, \
+             {total_datums} zero-datums, {total_warnings} warnings"
+        );
+        by_shots.sort_by(|a, b| b.0.cmp(&a.0));
+        println!("  top files by shot count:");
+        for (shots, name) in by_shots.iter().take(12) {
+            println!("    {shots:>8}  {name}");
+        }
+        for e in &errored {
+            println!("  ERROR  {e}");
+        }
+        for p in &panicked {
+            println!("  PANIC  {p}");
+        }
+        assert!(
+            panicked.is_empty(),
+            "parser panicked on {} file(s)",
+            panicked.len()
+        );
+        assert!(
+            errored.is_empty(),
+            "parser errored on {} file(s)",
+            errored.len()
+        );
+    }
 }
