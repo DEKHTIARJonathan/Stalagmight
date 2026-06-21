@@ -1,0 +1,7 @@
+# Revisions skipped by `git blame` so mechanical, whole-tree reformats don't
+# clobber line authorship. GitHub honors this file automatically in its blame UI.
+# Wire it up locally once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style(rust): cargo fmt --all (no logic changes)
+416ea342a583532aab8260f7af5aa16766db6c01
