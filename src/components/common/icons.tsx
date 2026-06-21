@@ -307,8 +307,8 @@ export function MinusIcon(props: IconProps) {
 export function CloseIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <line x1="5" y1="5" x2="15" y2="15" />
-      <line x1="15" y1="5" x2="5" y2="15" />
+      <path fill="currentColor" stroke="none" d="M4.33 5.67 L5.67 4.33 L15.67 14.33 L14.33 15.67 Z" />
+      <path fill="currentColor" stroke="none" d="M15.67 5.67 L14.33 4.33 L4.33 14.33 L5.67 15.67 Z" />
     </BaseIcon>
   );
 }
@@ -379,9 +379,8 @@ export function AlertCircleIcon(props: IconProps) {
 export function DatabaseIcon(props: IconProps) {
   return (
     <BaseIcon24 {...props}>
-      <ellipse cx="12" cy="5" rx="9" ry="3" />
-      <path d="M3 5v14a9 3 0 0 0 18 0V5" />
-      <path d="M3 12a9 3 0 0 0 18 0" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M3 5 C3 2.8 7.03 1 12 1 C16.97 1 21 2.8 21 5 L21 19 C21 21.2 16.97 23 12 23 C7.03 23 3 21.2 3 19 Z M4.95 5.6 C4.95 4.05 8.21 2.8 12 2.8 C15.79 2.8 19.05 4.05 19.05 5.6 L19.05 18.4 C19.05 19.95 15.79 21.2 12 21.2 C8.21 21.2 4.95 19.95 4.95 18.4 Z" />
+      <path fill="currentColor" stroke="none" d="M3.3 10.4 C5.1 12 8.3 13 12 13 C15.7 13 18.9 12 20.7 10.4 C18.9 13.4 15.7 14.9 12 14.9 C8.3 14.9 5.1 13.4 3.3 10.4 Z" />
     </BaseIcon24>
   );
 }
@@ -437,10 +436,10 @@ export function DownloadIcon(props: IconProps) {
 export function FilePlusIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <path d="M6 2 H12 L16 6 V18 H6 Z" />
-      <polyline points="12 2 12 6 16 6" />
-      <line x1="10" y1="9" x2="10" y2="15" />
-      <line x1="7" y1="12" x2="13" y2="12" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M6 2 H12 L16 6 V18 H6 Z M7.9 3.9 H12 L14.1 6 V16.1 H7.9 Z" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M12 2 L12 6 L16 6 L16 4.4 L14 2.4 Z M14.1 4.4 L14.1 4.9 L12.9 4.9 L12.9 4.4 Z" />
+      <rect x="9.05" y="9" width="1.9" height="6" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="7" y="11.05" width="6" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
@@ -448,8 +447,7 @@ export function FilePlusIcon(props: IconProps) {
 export function FolderOpenIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <path d="M3 6 H8 L10 8 H17 V16 H3 Z" />
-      <path d="M3 6 V4 H9 L11 6 Z" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M3 5 H8 L10 7 H17 V16 H3 Z M4.9 6.9 H7.5 L9.5 8.9 H15.1 V14.1 H4.9 Z" />
     </BaseIcon>
   );
 }
@@ -674,18 +672,17 @@ export function MoveCommentIcon(props: IconProps) {
 export function BugIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      {/* Body */}
-      <ellipse cx="10" cy="12" rx="4" ry="5" />
-      {/* Head */}
-      <circle cx="10" cy="6" r="2" />
-      {/* Antennae */}
-      <line x1="8.5" y1="4.5" x2="6" y2="2" />
-      <line x1="11.5" y1="4.5" x2="14" y2="2" />
-      {/* Legs */}
-      <line x1="6" y1="10" x2="3" y2="8" />
-      <line x1="6" y1="13" x2="3" y2="14" />
-      <line x1="14" y1="10" x2="17" y2="8" />
-      <line x1="14" y1="13" x2="17" y2="14" />
+      {/* Body (band) */}
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M10 7 A4 5 0 1 1 10 17 A4 5 0 1 1 10 7 Z M10 8.9 A2.1 3.1 0 1 0 10 15.1 A2.1 3.1 0 1 0 10 8.9 Z" />
+      {/* Head (band) */}
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M10 4 A2 2 0 1 1 10 8 A2 2 0 1 1 10 4 Z M10 5.5 A0.5 0.5 0 1 0 10 6.5 A0.5 0.5 0 1 0 10 5.5 Z" />
+      {/* Antennae + legs (bars) */}
+      <path fill="currentColor" stroke="none" d="M8.84 4.84 L9.16 4.16 L6.34 1.66 L5.66 2.34 Z" />
+      <path fill="currentColor" stroke="none" d="M11.16 4.84 L10.84 4.16 L13.66 1.66 L14.34 2.34 Z" />
+      <path fill="currentColor" stroke="none" d="M6.4 10.79 L5.6 9.21 L2.6 7.21 L3.4 8.79 Z" />
+      <path fill="currentColor" stroke="none" d="M6.4 12.21 L5.6 13.79 L2.6 14.79 L3.4 13.21 Z" />
+      <path fill="currentColor" stroke="none" d="M13.6 10.79 L14.4 9.21 L17.4 7.21 L16.6 8.79 Z" />
+      <path fill="currentColor" stroke="none" d="M13.6 12.21 L14.4 13.79 L17.4 14.79 L16.6 13.21 Z" />
     </BaseIcon>
   );
 }
@@ -706,15 +703,15 @@ export function MenuIcon(props: IconProps) {
 export function SettingsIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <circle cx="10" cy="10" r="3" />
-      <line x1="10" y1="2" x2="10" y2="4.5" />
-      <line x1="10" y1="15.5" x2="10" y2="18" />
-      <line x1="2" y1="10" x2="4.5" y2="10" />
-      <line x1="15.5" y1="10" x2="18" y2="10" />
-      <line x1="4.3" y1="4.3" x2="6.1" y2="6.1" />
-      <line x1="13.9" y1="13.9" x2="15.7" y2="15.7" />
-      <line x1="4.3" y1="15.7" x2="6.1" y2="13.9" />
-      <line x1="13.9" y1="6.1" x2="15.7" y2="4.3" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M10 6.1 A3.9 3.9 0 1 1 10 13.9 A3.9 3.9 0 1 1 10 6.1 M10 8 A2 2 0 1 0 10 12 A2 2 0 1 0 10 8" />
+      <rect x="9.05" y="2" width="1.9" height="2.5" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="9.05" y="15.5" width="1.9" height="2.5" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="2" y="9.05" width="2.5" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="15.5" y="9.05" width="2.5" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <path fill="currentColor" stroke="none" d="M3.63 4.97 L5.03 3.57 L6.43 4.97 L5.03 6.37 Z" />
+      <path fill="currentColor" stroke="none" d="M13.57 14.97 L14.97 13.57 L16.37 14.97 L14.97 16.37 Z" />
+      <path fill="currentColor" stroke="none" d="M3.63 15.03 L5.03 16.43 L6.43 15.03 L5.03 13.63 Z" />
+      <path fill="currentColor" stroke="none" d="M13.57 5.03 L14.97 6.43 L16.37 5.03 L14.97 3.63 Z" />
     </BaseIcon>
   );
 }
@@ -722,9 +719,9 @@ export function SettingsIcon(props: IconProps) {
 export function QuitIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      {/* Power glyph: ring with a top gap and a vertical stem */}
-      <path d="M6 5 A6 6 0 1 0 14 5" />
-      <line x1="10" y1="2" x2="10" y2="9" />
+      {/* Power glyph: ring (band) with a top gap + a vertical stem */}
+      <path fill="currentColor" stroke="none" d="M6 5 A6 6 0 1 0 14 5 L12.74 6.45 A4.1 4.1 0 1 1 7.26 6.45 Z" />
+      <rect x="9.05" y="2" width="1.9" height="7" rx="0.95" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
@@ -732,12 +729,12 @@ export function QuitIcon(props: IconProps) {
 export function ListIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <line x1="7" y1="5" x2="17" y2="5" />
-      <line x1="7" y1="10" x2="17" y2="10" />
-      <line x1="7" y1="15" x2="17" y2="15" />
-      <line x1="3" y1="5" x2="3.5" y2="5" />
-      <line x1="3" y1="10" x2="3.5" y2="10" />
-      <line x1="3" y1="15" x2="3.5" y2="15" />
+      <rect x="6.95" y="4.05" width="10.1" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="6.95" y="9.05" width="10.1" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <rect x="6.95" y="14.05" width="10.1" height="1.9" rx="0.95" fill="currentColor" stroke="none" />
+      <circle cx="3.25" cy="5" r="0.95" fill="currentColor" stroke="none" />
+      <circle cx="3.25" cy="10" r="0.95" fill="currentColor" stroke="none" />
+      <circle cx="3.25" cy="15" r="0.95" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
@@ -746,9 +743,9 @@ export function SaveIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
       {/* Floppy disk */}
-      <path d="M4 4 H13 L16 7 V16 H4 Z" />
-      <path d="M6 4 H12 V8 H6 Z" />
-      <rect x="6" y="11" width="8" height="5" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M4 4 H13 L16 7 V16 H4 Z M5.45 5.1 H12.33 L14.73 7.4 V14.9 H5.45 Z" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M6 4 H12 V8 H6 Z M7.45 5.1 H10.55 V6.9 H7.45 Z" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M6 11 H14 V16 H6 Z M7.45 12.45 H12.55 V14.55 H7.45 Z" />
     </BaseIcon>
   );
 }
@@ -757,9 +754,9 @@ export function ExportIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
       {/* Box with an arrow leaving upward */}
-      <polyline points="6 8 10 4 14 8" />
-      <line x1="10" y1="4" x2="10" y2="13" />
-      <path d="M4 12 V16 H16 V12" />
+      <path fill="currentColor" stroke="none" d="M9.05 4.5 H10.95 V13 H9.05 Z" />
+      <path fill="currentColor" stroke="none" d="M6 8 L10 4 L14 8 L12.3 9.15 L10 5.9 L7.7 9.15 Z" />
+      <path fill="currentColor" stroke="none" d="M4 12 L4 16 L16 16 L16 12 L14.1 12 L14.1 14.1 L5.9 14.1 L5.9 12 Z" />
     </BaseIcon>
   );
 }
@@ -767,9 +764,9 @@ export function ExportIcon(props: IconProps) {
 export function InfoIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
-      <circle cx="10" cy="10" r="7" />
-      <line x1="10" y1="9" x2="10" y2="14" />
-      <line x1="10" y1="6.5" x2="10" y2="6.6" />
+      <path fillRule="evenodd" fill="currentColor" stroke="none" d="M10 3 A7 7 0 1 1 10 17 A7 7 0 1 1 10 3 M10 4.9 A5.1 5.1 0 1 0 10 15.1 A5.1 5.1 0 1 0 10 4.9" />
+      <rect x="9.05" y="9.05" width="1.9" height="5" rx="0.95" fill="currentColor" stroke="none" />
+      <circle cx="10" cy="6.55" r="0.95" fill="currentColor" stroke="none" />
     </BaseIcon>
   );
 }
