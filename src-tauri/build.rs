@@ -1,4 +1,4 @@
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tauri_build::build();
 
     // Re-run build script when these env vars change.
@@ -8,7 +8,7 @@ fn main() {
     // Embed the exact commit in the version: `x.y.z-<shorthash>` for CI/release
     // builds and `x.y.z-dev-<shorthash>` for local builds (CI env var not set).
     // Falls back to `unknown` when git is unavailable (e.g. a source tarball).
-    let pkg_version = std::env::var("CARGO_PKG_VERSION").unwrap();
+    let pkg_version = std::env::var("CARGO_PKG_VERSION")?;
     let short_hash = git_short_hash();
     let app_version = if std::env::var("CI").is_ok() {
         format!("{pkg_version}-{short_hash}")
@@ -50,9 +50,11 @@ fn main() {
     // This prevents forks from accidentally reporting to our server.
     if std::env::var("CARGO_FEATURE_TELEMETRY").is_ok() {
         let endpoint = std::env::var("TELEMETRY_ENDPOINT")
-            .expect("TELEMETRY_ENDPOINT must be set when building with --features telemetry");
+            .map_err(|_| "TELEMETRY_ENDPOINT must be set when building with --features telemetry")?;
         println!("cargo::rustc-env=TELEMETRY_ENDPOINT={endpoint}");
     }
+
+    Ok(())
 }
 
 /// Short hash of the checked-out commit, or `unknown` when git is unavailable
