@@ -158,7 +158,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.toggle.showDevStats",
     "action.toggle.showGrid",
     "action.toggle.showReferenceShots",
-    "action.toggle.showScaleBar",
     "action.toggle.showSatellite",
     "action.toggle.showSectionNames",
     "action.toggle.showShotComments",
@@ -520,7 +519,7 @@ mod tests {
 
     #[test]
     fn event_count() {
-        assert_eq!(EVENT_NAMES.len(), 395);
+        assert_eq!(EVENT_NAMES.len(), 394);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

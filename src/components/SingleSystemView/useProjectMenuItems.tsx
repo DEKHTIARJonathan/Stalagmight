@@ -25,6 +25,7 @@ import {
   InfoIcon,
   SettingsIcon,
   BugIcon,
+  DatabaseIcon,
   QuitIcon,
 } from '../common/icons';
 
@@ -44,6 +45,8 @@ export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMen
     handleImportGpx,
   } = useProject();
   const openDialog = useUIStore((s) => s.openDialog);
+  const showDevStats = useUIStore((s) => s.showDevStats);
+  const toggleDisplay = useUIStore((s) => s.toggleDisplay);
 
   return useMemo(() => {
     const sz = 18;
@@ -164,6 +167,14 @@ export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMen
         iconColor: MENU_ICON_COLORS.debug,
         onClick: () => openDialog('debug'),
       },
+      {
+        id: 'display-toggle-showDevStats',
+        label: t('singleView.menu.devStats'),
+        icon: <DatabaseIcon size={sz} />,
+        iconColor: MENU_ICON_COLORS.debug,
+        checked: showDevStats,
+        onClick: () => toggleDisplay('showDevStats'),
+      },
       { id: 'project-menu-sep-5', label: '', separator: true },
       {
         id: 'back-button',
@@ -185,5 +196,5 @@ export function useProjectMenuItems({ onSave }: UseProjectMenuItemsArgs): AppMen
         },
       },
     ];
-  }, [t, openDialog, onSave, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, handleImportDmp, handleImportGpx]);
+  }, [t, openDialog, showDevStats, toggleDisplay, onSave, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, handleImportDmp, handleImportGpx]);
 }

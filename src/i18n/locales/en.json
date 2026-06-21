@@ -1573,16 +1573,19 @@
       "label": "Grid spacing"
     },
     "groups": {
+      "color": "Color",
       "mapElements": "Map elements",
       "overlays": "Overlays",
+      "commentsLabels": "Comments & Labels",
       "developer": "Developer"
     },
     "items": {
+      "section": "Section",
       "stations": "Stations",
       "sectionNames": "Section names",
       "stationLabels": "Station labels",
       "shots": "Shots",
-      "referenceShots": "Jump/Reference shots",
+      "referenceShots": "Jump/Reference",
       "stationComments": "Station comments",
       "shotData": "Shot data",
       "shotComments": "Shot comments",
@@ -1590,9 +1593,9 @@
       "grid": "Grid",
       "scaleBar": "Scale bar",
       "satellite": "Satellite",
-      "depthGradient": "Depth Gradient",
-      "distanceGradient": "Distance Gradient",
-      "issueSeverity": "Issue severity",
+      "depthGradient": "Depth",
+      "distanceGradient": "Distance",
+      "issueSeverity": "Survey Issues",
       "devStats": "Dev stats"
     },
     "descriptions": {
@@ -2010,7 +2013,8 @@
       "saveAndClose": "Save and Close",
       "closeProject": "Close Project",
       "projectSettings": "Project Settings",
-      "projectDetails": "Project Details"
+      "projectDetails": "Project Details",
+      "devStats": "Dev Stats"
     },
     "status": {
       "depthRange": "Depth range: {{min}} - {{max}}",

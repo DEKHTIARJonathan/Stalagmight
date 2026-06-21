@@ -1,57 +1,105 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type DisplayToggleKey } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useShallow } from 'zustand/react/shallow';
 import { GRID_SPACING_OPTIONS } from '../Map/GridOverlay';
 import { formatNumber } from '../../i18n/format';
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon, EyeIcon } from '../common/icons';
+import { ChevronDownIcon, ChevronUpIcon, EyeIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
 import { hasEligibleClosures } from '../../utils/closures';
 
-interface DisplayOption {
-  // 'showDistanceGradient' (#34) and 'showIssueSeverity' (#22) are runtime-only
-  // overlays, not persisted DisplayToggleKeys — each is toggled via its own
-  // store action.
-  key: DisplayToggleKey | 'showDistanceGradient' | 'showIssueSeverity';
+/** A multi-toggle display key shown as a pill, optionally gated on another toggle. */
+interface ToggleItem {
+  key: Extract<
+    DisplayToggleKey,
+    | 'showStations'
+    | 'showShots'
+    | 'showReferenceShots'
+    | 'showZeroDatum'
+    | 'showSectionNames'
+    | 'showStationLabels'
+    | 'showStationComments'
+    | 'showShotComments'
+    | 'showShotData'
+    | 'showGrid'
+    | 'showSatellite'
+  >;
   labelKey: string;
   descriptionKey?: string;
-  disabledWhen?: DisplayToggleKey;
+  disabledWhen?: 'showShots';
 }
 
-const displayOptions: { groupKey: string; items: DisplayOption[] }[] = [
-  {
-    groupKey: 'displayMenu.groups.mapElements',
-    items: [
-      { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations' },
-      { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames' },
-      { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels' },
-      { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments' },
-      { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots' },
-      { key: 'showReferenceShots', labelKey: 'displayMenu.items.referenceShots', descriptionKey: 'displayMenu.descriptions.referenceShots', disabledWhen: 'showShots' },
-      { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots' },
-      { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots' },
-      { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum' },
-    ],
-  },
-  {
-    groupKey: 'displayMenu.groups.overlays',
-    items: [
-      { key: 'showGrid', labelKey: 'displayMenu.items.grid', descriptionKey: 'displayMenu.descriptions.grid' },
-      { key: 'showScaleBar', labelKey: 'displayMenu.items.scaleBar', descriptionKey: 'displayMenu.descriptions.scaleBar' },
-      { key: 'showSatellite', labelKey: 'displayMenu.items.satellite', descriptionKey: 'displayMenu.descriptions.satellite' },
-      { key: 'showDepthGradient', labelKey: 'displayMenu.items.depthGradient', descriptionKey: 'displayMenu.descriptions.depthGradient' },
-      { key: 'showDistanceGradient', labelKey: 'displayMenu.items.distanceGradient', descriptionKey: 'displayMenu.descriptions.distanceGradient' },
-      { key: 'showIssueSeverity', labelKey: 'displayMenu.items.issueSeverity', descriptionKey: 'displayMenu.descriptions.issueSeverity' },
-    ],
-  },
-  {
-    groupKey: 'displayMenu.groups.developer',
-    items: [
-      { key: 'showDevStats', labelKey: 'displayMenu.items.devStats', descriptionKey: 'displayMenu.descriptions.devStats' },
-    ],
-  },
+const MAP_ELEMENTS: ToggleItem[] = [
+  { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations' },
+  { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots' },
+  { key: 'showReferenceShots', labelKey: 'displayMenu.items.referenceShots', descriptionKey: 'displayMenu.descriptions.referenceShots', disabledWhen: 'showShots' },
+  { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum' },
 ];
+
+const OVERLAYS: ToggleItem[] = [
+  { key: 'showGrid', labelKey: 'displayMenu.items.grid', descriptionKey: 'displayMenu.descriptions.grid' },
+  { key: 'showSatellite', labelKey: 'displayMenu.items.satellite', descriptionKey: 'displayMenu.descriptions.satellite' },
+];
+
+const COMMENTS_LABELS: ToggleItem[] = [
+  { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames' },
+  { key: 'showStationLabels', labelKey: 'displayMenu.items.stationLabels', descriptionKey: 'displayMenu.descriptions.stationLabels' },
+  { key: 'showStationComments', labelKey: 'displayMenu.items.stationComments', descriptionKey: 'displayMenu.descriptions.stationComments' },
+  { key: 'showShotComments', labelKey: 'displayMenu.items.shotComments', descriptionKey: 'displayMenu.descriptions.shotComments', disabledWhen: 'showShots' },
+  { key: 'showShotData', labelKey: 'displayMenu.items.shotData', descriptionKey: 'displayMenu.descriptions.shotData', disabledWhen: 'showShots' },
+];
+
+type ColorMode = 'section' | 'depth' | 'distance' | 'issues';
+
+/** A pill toggle: filled (accent) when active, outlined when off, dimmed when disabled. */
+function Pill({
+  label,
+  active,
+  disabled,
+  onClick,
+  testId,
+  title,
+}: {
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  testId: string;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => { if (!disabled) onClick(); }}
+      disabled={disabled}
+      aria-pressed={active}
+      title={title}
+      data-testid={testId}
+      className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+        disabled
+          ? 'opacity-50 cursor-not-allowed bg-background border-border text-text-secondary'
+          : active
+            ? 'bg-accent text-accent-on border-accent'
+            : 'bg-background border-border text-text-primary hover:bg-background-50'
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** A labelled category block with its pills wrapping below. */
+function Category({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="px-0.5 pb-1.5 text-xs font-medium text-text-secondary uppercase tracking-wide">
+        {label}
+      </div>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  );
+}
 
 export default function DisplayMenu() {
   const [isOpen, setIsOpen] = useState(false);
@@ -69,19 +117,17 @@ export default function DisplayMenu() {
     showReferenceShots,
     showZeroDatum,
     showGrid,
-    showScaleBar,
     showSatellite,
-    showDepthGradient,
     showStationComments,
     showShotComments,
-    showDevStats,
+    showDepthGradient,
     showDistanceGradient,
     showIssueSeverity,
     gridSpacing,
     geometryMode,
     toggleDisplay,
     toggleDistanceGradient,
-    toggleIssueSeverity,
+    setIssueSeverity,
     setGridSpacing,
     setGeometryMode,
   } = useUIStore(useShallow((s) => ({
@@ -93,19 +139,17 @@ export default function DisplayMenu() {
     showReferenceShots: s.showReferenceShots,
     showZeroDatum: s.showZeroDatum,
     showGrid: s.showGrid,
-    showScaleBar: s.showScaleBar,
     showSatellite: s.showSatellite,
-    showDepthGradient: s.showDepthGradient,
     showStationComments: s.showStationComments,
     showShotComments: s.showShotComments,
-    showDevStats: s.showDevStats,
+    showDepthGradient: s.showDepthGradient,
     showDistanceGradient: s.showDistanceGradient,
     showIssueSeverity: s.showIssueSeverity,
     gridSpacing: s.gridSpacing,
     geometryMode: s.geometryMode,
     toggleDisplay: s.toggleDisplay,
     toggleDistanceGradient: s.toggleDistanceGradient,
-    toggleIssueSeverity: s.toggleIssueSeverity,
+    setIssueSeverity: s.setIssueSeverity,
     setGridSpacing: s.setGridSpacing,
     setGeometryMode: s.setGeometryMode,
   })));
@@ -115,25 +159,61 @@ export default function DisplayMenu() {
   // otherwise the option is disabled (it would render identical geometry).
   const hasClosures = useProjectStore((s) => hasEligibleClosures(s.project?.loop_closures ?? []));
 
-  const toggleValues: Record<DisplayToggleKey, boolean> = {
+  const toggleValues: Record<ToggleItem['key'], boolean> = {
     showStations,
     showShots,
-    showSectionNames,
-    showStationLabels,
-    showShotData,
     showReferenceShots,
     showZeroDatum,
-    showGrid,
-    showScaleBar,
-    showSatellite,
-    showDepthGradient,
+    showSectionNames,
+    showStationLabels,
     showStationComments,
     showShotComments,
-    showDevStats,
+    showShotData,
+    showGrid,
+    showSatellite,
   };
 
-  const isDisabled = (item: DisplayOption) =>
-    item.disabledWhen ? !toggleValues[item.disabledWhen] : false;
+  // Coloring is single-select: exactly one of the (already mutually-exclusive)
+  // overlays, or 'section' = none of them (the default per-section coloring).
+  const colorMode: ColorMode = showIssueSeverity
+    ? 'issues'
+    : showDistanceGradient
+      ? 'distance'
+      : showDepthGradient
+        ? 'depth'
+        : 'section';
+
+  const selectColorMode = (mode: ColorMode) => {
+    if (mode === colorMode) return;
+    setSource('display-menu');
+    if (mode === 'depth') {
+      if (!showDepthGradient) toggleDisplay('showDepthGradient'); // turns off the others
+    } else if (mode === 'distance') {
+      if (!showDistanceGradient) toggleDistanceGradient(); // turns off the others
+    } else if (mode === 'issues') {
+      setIssueSeverity(true); // turns off the others
+    } else {
+      // 'section' — turn off whichever single mode is currently on.
+      if (showDepthGradient) toggleDisplay('showDepthGradient');
+      else if (showDistanceGradient) toggleDistanceGradient();
+      else if (showIssueSeverity) setIssueSeverity(false);
+    }
+  };
+
+  const renderTogglePill = (item: ToggleItem) => {
+    const disabled = item.disabledWhen ? !toggleValues[item.disabledWhen] : false;
+    return (
+      <Pill
+        key={item.key}
+        label={t(item.labelKey)}
+        title={item.descriptionKey ? t(item.descriptionKey) : ''}
+        active={toggleValues[item.key]}
+        disabled={disabled}
+        onClick={() => { setSource('display-menu'); toggleDisplay(item.key); }}
+        testId={`display-toggle-${item.key}`}
+      />
+    );
+  };
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -254,144 +334,76 @@ export default function DisplayMenu() {
       {isOpen && (
         <div
           ref={menuRef}
-          className="absolute right-0 top-full mt-1 w-64 overflow-y-auto overscroll-contain bg-panel border border-border rounded-lg shadow-lg z-50"
+          className="absolute right-0 top-full mt-1 w-[30rem] overflow-y-auto overscroll-contain bg-panel border border-border rounded-lg shadow-lg z-50 p-3"
           style={{ maxHeight: 'calc(100vh - 6rem)' }}
           data-testid="display-menu"
         >
-          {/* Geometry mode: raw measured vs non-destructive closure-adjusted */}
-          <div>
-            <div className="px-3 py-2 text-xs font-medium text-text-secondary uppercase tracking-wide">
-              {t('displayMenu.geometry.groupLabel')}
-            </div>
-            <div className="px-3 pb-2">
-              <div
-                className="flex rounded border border-border overflow-hidden"
-                role="group"
-                aria-label={t('displayMenu.geometry.groupLabel')}
-              >
-                <button
+          <div className="grid grid-cols-2 gap-x-5 gap-y-4">
+            {/* Color (single-select) */}
+            <Category label={t('displayMenu.groups.color')}>
+              <Pill label={t('displayMenu.items.section')} active={colorMode === 'section'} onClick={() => selectColorMode('section')} testId="display-color-section" />
+              <Pill label={t('displayMenu.items.depthGradient')} title={t('displayMenu.descriptions.depthGradient')} active={colorMode === 'depth'} onClick={() => selectColorMode('depth')} testId="display-toggle-showDepthGradient" />
+              <Pill label={t('displayMenu.items.distanceGradient')} title={t('displayMenu.descriptions.distanceGradient')} active={colorMode === 'distance'} onClick={() => selectColorMode('distance')} testId="display-toggle-showDistanceGradient" />
+              <Pill label={t('displayMenu.items.issueSeverity')} title={t('displayMenu.descriptions.issueSeverity')} active={colorMode === 'issues'} onClick={() => selectColorMode('issues')} testId="display-toggle-showIssueSeverity" />
+            </Category>
+
+            {/* Map Elements (multi-toggle) */}
+            <Category label={t('displayMenu.groups.mapElements')}>
+              {MAP_ELEMENTS.map(renderTogglePill)}
+            </Category>
+
+            {/* Overlays (multi-toggle) + grid spacing */}
+            <Category label={t('displayMenu.groups.overlays')}>
+              {OVERLAYS.map(renderTogglePill)}
+              {showGrid && (
+                <div className="basis-full flex items-center gap-2 pt-1">
+                  <span className="text-xs text-text-secondary">{t('displayMenu.spacing.label')}:</span>
+                  <select
+                    value={gridSpacing}
+                    onChange={(e) => setGridSpacing(Number(e.target.value))}
+                    className="px-2 py-1 text-xs bg-background border border-border rounded text-text-primary"
+                    data-testid="grid-spacing-select"
+                  >
+                    {GRID_SPACING_OPTIONS.map((spacing) => (
+                      <option key={spacing} value={spacing}>
+                        {formatNumber(spacing)}{t('common.units.meters')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </Category>
+
+            {/* Comments & Labels (multi-toggle) */}
+            <Category label={t('displayMenu.groups.commentsLabels')}>
+              {COMMENTS_LABELS.map(renderTogglePill)}
+            </Category>
+
+            {/* Geometry (single-select), full width */}
+            <div className="col-span-2 border-t border-border pt-3">
+              <Category label={t('displayMenu.geometry.groupLabel')}>
+                <Pill
+                  label={t('displayMenu.geometry.measured')}
+                  active={geometryMode === 'measured'}
                   onClick={() => setGeometryMode('measured', 'display-menu')}
-                  className={`flex-1 px-2 py-1.5 text-xs transition-colors ${
-                    geometryMode === 'measured'
-                      ? 'bg-accent text-accent-on'
-                      : 'bg-background hover:bg-background-50 text-text-primary'
-                  }`}
-                  data-testid="geometry-mode-measured"
-                  aria-pressed={geometryMode === 'measured'}
-                >
-                  {t('displayMenu.geometry.measured')}
-                </button>
-                <button
-                  onClick={() => {
-                    if (!hasClosures) return;
-                    setGeometryMode('closureAdjusted', 'display-menu');
-                  }}
+                  testId="geometry-mode-measured"
+                />
+                <Pill
+                  label={t('displayMenu.geometry.closureAdjusted')}
+                  active={geometryMode === 'closureAdjusted'}
                   disabled={!hasClosures}
-                  aria-disabled={!hasClosures || undefined}
-                  title={!hasClosures ? t('displayMenu.geometry.noClosures') : undefined}
-                  className={`flex-1 px-2 py-1.5 text-xs border-l border-border transition-colors ${
-                    geometryMode === 'closureAdjusted'
-                      ? 'bg-accent text-accent-on'
-                      : !hasClosures
-                        ? 'bg-background opacity-50 cursor-not-allowed text-text-primary'
-                        : 'bg-background hover:bg-background-50 text-text-primary'
-                  }`}
-                  data-testid="geometry-mode-closureAdjusted"
-                  aria-pressed={geometryMode === 'closureAdjusted'}
-                >
-                  {t('displayMenu.geometry.closureAdjusted')}
-                </button>
-              </div>
-              <p className="mt-1 text-xs text-text-secondary">
+                  title={!hasClosures ? t('displayMenu.geometry.noClosures') : ''}
+                  onClick={() => setGeometryMode('closureAdjusted', 'display-menu')}
+                  testId="geometry-mode-closureAdjusted"
+                />
+              </Category>
+              <p className="mt-1.5 text-xs text-text-secondary">
                 {geometryMode === 'closureAdjusted'
                   ? t('displayMenu.geometry.closureAdjustedDescription')
                   : t('displayMenu.geometry.measuredDescription')}
               </p>
             </div>
           </div>
-          {displayOptions.map((group) => (
-            <div key={group.groupKey}>
-              <div className="border-t border-border" />
-              <div className="px-3 py-2 text-xs font-medium text-text-secondary uppercase tracking-wide">
-                {t(group.groupKey)}
-              </div>
-              <div className="pb-1">
-                {group.items.map((item) => {
-                  const disabled = isDisabled(item);
-                  // 'showDistanceGradient' (#34) and 'showIssueSeverity' (#22)
-                  // are runtime-only — read/toggle each via its dedicated store
-                  // field/action, not the persisted path. Compare item.key
-                  // directly so TS narrows it in each branch.
-                  const checked =
-                    item.key === 'showDistanceGradient'
-                      ? showDistanceGradient
-                      : item.key === 'showIssueSeverity'
-                        ? showIssueSeverity
-                        : toggleValues[item.key];
-                  const onToggle = () => {
-                    if (disabled) return;
-                    setSource('display-menu');
-                    if (item.key === 'showDistanceGradient') toggleDistanceGradient();
-                    else if (item.key === 'showIssueSeverity') toggleIssueSeverity();
-                    else toggleDisplay(item.key);
-                  };
-                  return (
-                  <div key={item.key}>
-                    <button
-                      onClick={onToggle}
-                      disabled={disabled}
-                      aria-disabled={disabled || undefined}
-                      className={`
-                        w-full px-3 py-2 flex items-center justify-between transition-colors
-                        ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-background-50'}
-                      `}
-                      data-testid={`display-toggle-${item.key}`}
-                    >
-                      <div className="flex flex-col items-start">
-                        <span className="text-sm">{t(item.labelKey)}</span>
-                        {item.descriptionKey && (
-                          <span className="text-xs text-text-secondary">{t(item.descriptionKey)}</span>
-                        )}
-                      </div>
-                      <div
-                        className={`
-                          w-5 h-5 rounded flex items-center justify-center text-xs
-                          ${checked
-                            ? 'bg-accent text-accent-on'
-                            : 'bg-background border border-border text-transparent'
-                          }
-                        `}
-                      >
-                        <CheckIcon size={12} />
-                      </div>
-                    </button>
-                    {/* Grid spacing options - shown when grid is enabled */}
-                    {item.key === 'showGrid' && showGrid && (
-                      <div className="px-3 py-2 pl-6 bg-background-30">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-text-secondary">{t('displayMenu.spacing.label')}:</span>
-                          <select
-                            value={gridSpacing}
-                            onChange={(e) => setGridSpacing(Number(e.target.value))}
-                            onClick={(e) => e.stopPropagation()}
-                            className="flex-1 px-2 py-1 text-xs bg-background border border-border rounded text-text-primary"
-                            data-testid="grid-spacing-select"
-                          >
-                            {GRID_SPACING_OPTIONS.map((spacing) => (
-                              <option key={spacing} value={spacing}>
-                                {formatNumber(spacing)}{t('common.units.meters')}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
         </div>
       )}
     </div>

@@ -309,7 +309,6 @@ interface UIStore {
   showReferenceShots: boolean;
   showZeroDatum: boolean;
   showGrid: boolean;
-  showScaleBar: boolean;
   showSatellite: boolean;
   showDepthGradient: boolean;
   showStationComments: boolean;
@@ -459,7 +458,6 @@ export type DisplayToggleKey =
   | 'showReferenceShots'
   | 'showZeroDatum'
   | 'showGrid'
-  | 'showScaleBar'
   | 'showSatellite'
   | 'showDepthGradient'
   | 'showStationComments'
@@ -848,7 +846,6 @@ export const useUIStore = create<UIStore>((set) => ({
   showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
   showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
   showGrid: DISPLAY_DEFAULTS.showGrid,
-  showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
   showSatellite: DISPLAY_DEFAULTS.showSatellite,
   showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
@@ -1011,7 +1008,6 @@ export const useUIStore = create<UIStore>((set) => ({
       showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
       showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
       showGrid: DISPLAY_DEFAULTS.showGrid,
-      showScaleBar: DISPLAY_DEFAULTS.showScaleBar,
       showSatellite: DISPLAY_DEFAULTS.showSatellite,
       showDepthGradient: DISPLAY_DEFAULTS.showDepthGradient,
   showStationComments: DISPLAY_DEFAULTS.showStationComments,
@@ -1034,7 +1030,6 @@ export const useUIStore = create<UIStore>((set) => ({
       showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
       showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,
       showGrid: settings.showGrid ?? state.showGrid,
-      showScaleBar: settings.showScaleBar ?? state.showScaleBar,
       showSatellite: settings.showSatellite ?? state.showSatellite,
       showDepthGradient: settings.showDepthGradient ?? state.showDepthGradient,
       showStationComments: settings.showStationComments ?? state.showStationComments,

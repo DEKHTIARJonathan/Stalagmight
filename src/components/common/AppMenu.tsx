@@ -23,7 +23,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { formatShortcut, isMac } from '../../utils/shortcuts';
 import { IconButton } from './Button';
-import { MenuIcon, ChevronRightIcon } from './icons';
+import { MenuIcon, ChevronRightIcon, CheckIcon } from './icons';
 
 export interface AppMenuItem {
   /** Stable id; doubles as the data-testid suffix for the row. */
@@ -38,6 +38,8 @@ export interface AppMenuItem {
   onClick?: () => void;
   disabled?: boolean;
   separator?: boolean;
+  /** When set, renders an on/off check on the right (a toggle item). */
+  checked?: boolean;
   /** One level of nested items. Mutually exclusive with onClick. */
   submenu?: AppMenuItem[];
 }
@@ -418,6 +420,8 @@ export function AppMenu({
         <span className="flex-1 truncate">{item.label}</span>
         {hasSubmenu ? (
           <ChevronRightIcon size={14} className="text-text-secondary flex-shrink-0" />
+        ) : item.checked !== undefined ? (
+          <CheckIcon size={14} className={`ml-auto flex-shrink-0 ${item.checked ? 'text-accent' : 'text-transparent'}`} />
         ) : (
           binding && (
             <kbd className="ml-auto pl-6 text-xs text-text-secondary whitespace-nowrap">
