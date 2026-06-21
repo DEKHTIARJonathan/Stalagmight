@@ -1008,8 +1008,9 @@ fn test_import_sections_persists_deferred_new_project() {
 }
 
 // #92 / #112: the adversarial twin of the success test above. When the deferred
-// save *fails* (here: the save's parent directory is missing, so the temp `.stalx`
-// can't be created), `finalize_deferred_import` must return a PARTIAL success —
+// save *fails* (here: the save's parent directory is missing, so the temp
+// `.stalx.tmp` can't be created), `finalize_deferred_import` must return a PARTIAL
+// success —
 // keep the import's `success` (so the frontend refreshes + marks dirty, keeping
 // the in-memory import under the close-guard), attach a warning, and never
 // phantom-add the never-written project to Recent Projects. A hard failure (or a
@@ -1020,7 +1021,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         let app = app_with_state();
         let dir = TempDir::new().unwrap();
         // Force the deferred save to fail: point it at a path whose PARENT directory
-        // doesn't exist, so the atomic save can't create the temp `.stalx`
+        // doesn't exist, so the atomic save can't create the temp `.stalx.tmp`
         // (`Database::open` returns "Failed to create save file"). NB a directory
         // squatting the *exact* reserved path does NOT fail — the first implicit save
         // auto-renames around a collision (`next_available_project_path`) and
@@ -1028,7 +1029,8 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         // CI. A missing parent fails the create regardless of uid. (This drives the
         // GENERIC save-failure branch; the permission-denied humanization in
         // `finalize_deferred_import` needs `dir_present && EACCES`, which isn't
-        // root-safe to induce here — that sub-branch is left to a follow-up.)
+        // root-safe to induce here — that sub-branch is covered by the
+        // permission-denied twin test below.)
         let project_path = dir.path().join("missing-subdir").join("new-import.stalx");
 
         let mut project = Project::new("New Import".to_string(), None);
