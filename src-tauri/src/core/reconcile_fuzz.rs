@@ -8,13 +8,7 @@
 //! `COLLAB_FUZZ_ITERS` (default 64; bump for local/nightly soak).
 
 #![cfg(test)]
-#![expect(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::float_cmp,
-    clippy::indexing_slicing,
-    clippy::print_stderr
-)]
+#![expect(clippy::unwrap_used, clippy::indexing_slicing, clippy::print_stderr)]
 
 use std::collections::HashSet;
 use std::path::Path;
