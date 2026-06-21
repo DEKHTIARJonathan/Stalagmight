@@ -51,18 +51,21 @@ async function openDisplayMenu(page: Page): Promise<void> {
  */
 async function isToggleOn(page: Page, toggleKey: string): Promise<boolean> {
   const toggle = page.locator(`[data-testid="display-toggle-${toggleKey}"]`);
-  const checkbox = toggle.locator('div.rounded').last();
-  const classes = await checkbox.getAttribute('class');
-  return classes?.includes('bg-accent') ?? false;
+  return (await toggle.getAttribute('aria-pressed')) === 'true';
 }
 
 /**
  * Helper to toggle a display option and wait for state change
  */
 async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void> {
-  const toggle = page.locator(`[data-testid="display-toggle-${toggleKey}"]`);
+  const colorKeys = ['showDepthGradient', 'showDistanceGradient', 'showIssueSeverity'];
   const currentState = await isToggleOn(page, toggleKey);
-  await toggle.click();
+  // Color modes are single-select: turn one OFF by selecting Section, not by re-clicking the pill.
+  if (currentState && colorKeys.includes(toggleKey)) {
+    await page.locator('[data-testid="display-color-section"]').click();
+  } else {
+    await page.locator(`[data-testid="display-toggle-${toggleKey}"]`).click();
+  }
   await expect.poll(async () => isToggleOn(page, toggleKey), { timeout: 2000 }).not.toBe(currentState);
 }
 
@@ -532,9 +535,9 @@ test.describe('Depth Gradient with Menu Interactions', () => {
   test('depth gradient label shows in Display menu', async ({ page }) => {
     await openDisplayMenu(page);
 
-    // Verify the toggle has proper label
+    // Verify the pill has the proper label + descriptive tooltip
     const toggle = page.locator('[data-testid="display-toggle-showDepthGradient"]');
-    await expect(toggle).toContainText('Depth Gradient');
-    await expect(toggle).toContainText('Color by depth');
+    await expect(toggle).toContainText('Depth');
+    await expect(toggle).toHaveAttribute('title', 'Color by depth');
   });
 });

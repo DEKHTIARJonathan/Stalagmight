@@ -42,14 +42,18 @@ async function openDisplayMenu(page: Page): Promise<void> {
 }
 
 async function isToggleOn(page: Page, toggleKey: string): Promise<boolean> {
-  const checkbox = page.locator(`[data-testid="display-toggle-${toggleKey}"]`).locator('div.rounded').last();
-  const classes = await checkbox.getAttribute('class');
-  return classes?.includes('bg-accent') ?? false;
+  return (await page.locator(`[data-testid="display-toggle-${toggleKey}"]`).getAttribute('aria-pressed')) === 'true';
 }
 
 async function toggleDisplayOption(page: Page, toggleKey: string): Promise<void> {
+  const colorKeys = ['showDepthGradient', 'showDistanceGradient', 'showIssueSeverity'];
   const before = await isToggleOn(page, toggleKey);
-  await page.locator(`[data-testid="display-toggle-${toggleKey}"]`).click();
+  // Color modes are single-select: turn one OFF by selecting Section, not by re-clicking the pill.
+  if (before && colorKeys.includes(toggleKey)) {
+    await page.locator('[data-testid="display-color-section"]').click();
+  } else {
+    await page.locator(`[data-testid="display-toggle-${toggleKey}"]`).click();
+  }
   await expect.poll(async () => isToggleOn(page, toggleKey), { timeout: 2000 }).not.toBe(before);
 }
 

@@ -21,7 +21,7 @@ async function toggleSatellite(page: Page): Promise<void> {
  * Helper to check if satellite is enabled using polling
  */
 async function isSatelliteEnabled(page: Page): Promise<boolean> {
-  const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+  const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
   return checkbox.evaluate((el) => el.classList.contains('bg-accent'));
 }
 
@@ -73,7 +73,7 @@ test.describe('Satellite Edge Cases', () => {
       await toggleSatellite(page);
 
       // Verify toggle succeeded
-      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
       await expect(checkbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
@@ -92,7 +92,7 @@ test.describe('Satellite Edge Cases', () => {
       await toggleSatellite(page);
 
       // Verify toggle succeeded
-      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
       await expect(checkbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
@@ -188,7 +188,7 @@ test.describe('Satellite Edge Cases', () => {
 
     test('should handle multiple satellite toggles in quick succession', async ({ page }) => {
       await openDisplayMenu(page);
-      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]').locator('div.rounded').last();
+      const checkbox = page.locator('[data-testid="display-toggle-showSatellite"]');
 
       // Toggle multiple times very quickly, verifying state after each
       for (let i = 0; i < 20; i++) {
@@ -323,7 +323,7 @@ test.describe('Satellite Edge Cases', () => {
 
       // Both should be enabled
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
-      const gridCheckbox = page.locator('[data-testid="display-toggle-showGrid"]').locator('div.rounded').last();
+      const gridCheckbox = page.locator('[data-testid="display-toggle-showGrid"]');
       await expect(gridCheckbox).toHaveClass(/bg-accent/);
 
       // App should remain functional
@@ -341,8 +341,8 @@ test.describe('Satellite Edge Cases', () => {
 
       // Both should be enabled
       await expect.poll(() => isSatelliteEnabled(page)).toBe(true);
-      const depthCheckbox = page.locator('[data-testid="display-toggle-showDepthGradient"]').locator('div.rounded').last();
-      await expect(depthCheckbox).toHaveClass(/bg-accent/);
+      const depthToggle = page.locator('[data-testid="display-toggle-showDepthGradient"]');
+      await expect(depthToggle).toHaveAttribute('aria-pressed', 'true');
 
       // App should remain functional
       await expect(page.getByTestId('map-canvas')).toBeVisible();

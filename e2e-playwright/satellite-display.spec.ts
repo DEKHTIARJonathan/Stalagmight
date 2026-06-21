@@ -14,7 +14,7 @@ async function openDisplayMenu(page: Page): Promise<void> {
  */
 function getSatelliteToggle(page: Page) {
   const button = page.locator('[data-testid="display-toggle-showSatellite"]');
-  const checkbox = button.locator('div.rounded').last();
+  const checkbox = button;
   return { button, checkbox };
 }
 
