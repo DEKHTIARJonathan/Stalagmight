@@ -34,14 +34,13 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 }
 
 /// Convert horizontal + vertical components into slope length.
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code))] // used only by tests; dead in the lib build
 pub(crate) fn slope_length_from_components(horizontal: f64, dz: f64) -> f64 {
     (horizontal * horizontal + dz * dz).sqrt()
 }
 
 /// Compute pitch (degrees) from horizontal + vertical components.
 /// Positive pitch corresponds to increasing depth (downwards).
-#[allow(dead_code)]
 pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
     dz.atan2(horizontal).to_degrees()
 }
@@ -518,7 +517,7 @@ impl From<Shot> for ShotData {
 }
 
 #[cfg(test)]
-#[expect(clippy::float_cmp)]
+#[expect(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

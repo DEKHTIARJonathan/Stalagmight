@@ -468,7 +468,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
 ];
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
@@ -614,7 +614,7 @@ mod tests {
         let registry_commands: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("command."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed.contains(n))
             .collect();
 
@@ -666,12 +666,12 @@ mod tests {
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.tool."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
         let reg_dwell: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dwell.tool."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         // Tools removed from the UI whose event names are kept in the vocabulary
@@ -763,7 +763,7 @@ mod tests {
         let reg_undo: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("undo-after."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed.contains(n))
             .collect();
 
@@ -811,11 +811,11 @@ mod tests {
             keys.iter().map(|k| format!("action.toggle.{k}")).collect();
 
         // Exclude toggles that are intentionally not DISPLAY_DEFAULTS booleans.
-        let extra: HashSet<String> = EXTRA_TOGGLES.iter().map(|s| s.to_string()).collect();
+        let extra: HashSet<String> = EXTRA_TOGGLES.iter().map(|s| (*s).to_string()).collect();
         let reg_toggles: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.toggle."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !extra.contains(n))
             .collect();
 
@@ -882,19 +882,19 @@ mod tests {
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.dialog."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed_action.contains(n))
             .collect();
         let reg_cancel: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dialog-cancel."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed_cancel.contains(n))
             .collect();
         let reg_dwell: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("dwell.dialog."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .filter(|n| !removed_dwell.contains(n))
             .collect();
 
@@ -934,7 +934,7 @@ mod tests {
         let reg_sources: HashSet<String> = SOURCE_NAMES
             .iter()
             .filter(|s| !excluded.contains(*s))
-            .map(|s| s.to_string())
+            .map(|s| (*s).to_string())
             .collect();
 
         let code_sources: HashSet<String> = sources.into_iter().collect();
@@ -991,7 +991,7 @@ mod tests {
         let reg_action: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.nav."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing: Vec<_> = code_action.difference(&reg_action).collect();
@@ -1022,12 +1022,12 @@ mod tests {
         let reg_open: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.panel-open."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
         let reg_close: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.panel-close."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing_open: Vec<_> = code_open.difference(&reg_open).collect();
@@ -1063,12 +1063,12 @@ mod tests {
         let reg_select: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.select."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
         let reg_add: HashSet<String> = EVENT_NAMES
             .iter()
             .filter(|n| n.starts_with("action.select-add."))
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing_select: Vec<_> = code_select.difference(&reg_select).collect();
@@ -1107,7 +1107,7 @@ mod tests {
                     && !n.starts_with("action.dialog.")
                     && !n.starts_with("action.panel-")
             })
-            .map(|n| n.to_string())
+            .map(|n| (*n).to_string())
             .collect();
 
         let missing: Vec<_> = code_actions.difference(&reg_actions).collect();

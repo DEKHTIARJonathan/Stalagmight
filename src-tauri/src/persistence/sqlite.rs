@@ -3506,6 +3506,7 @@ pub struct ResolvedWarning {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stdout,
-    clippy::float_cmp
+    clippy::float_cmp,
+    clippy::panic
 )]
 mod tests;

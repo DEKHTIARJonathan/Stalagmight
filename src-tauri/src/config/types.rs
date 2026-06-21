@@ -1478,7 +1478,7 @@ fn normalize_shortcut_field(field: &mut Vec<String>, defaults: &[String], field_
     let mut normalized: Vec<String> = Vec::with_capacity(field.len());
     for shortcut in field.iter() {
         if let Some(n) = normalize_shortcut(shortcut) {
-            normalized.push(n)
+            normalized.push(n);
         } else {
             tracing::warn!(
                 "Invalid shortcut '{}' for '{}', falling back to default",

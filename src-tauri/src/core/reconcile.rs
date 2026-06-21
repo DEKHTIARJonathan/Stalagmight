@@ -255,6 +255,10 @@ fn returned_section_shots(section: &TmlSection) -> Vec<ReturnedShot> {
 const F_EPS: f64 = 1e-3;
 
 /// The placeholder date the TML exporter writes when a section has no date.
+#[expect(
+    clippy::expect_used,
+    reason = "2000-01-01 is a valid Gregorian date; from_ymd_opt is infallible here"
+)]
 fn null_date_sentinel() -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid sentinel date")
 }
@@ -591,7 +595,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     cs
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn align_section(
     project: &Project,
     sid: SectionId,
@@ -973,7 +977,8 @@ fn lcs_pairs(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::float_cmp,
-    clippy::indexing_slicing
+    clippy::indexing_slicing,
+    clippy::never_loop
 )]
 mod tests {
     use super::*;

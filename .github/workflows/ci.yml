@@ -95,7 +95,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       # Formatting gate: `cargo fmt` is the formatter for src-tauri (rustfmt.toml
       # pins edition 2021). Fail fast on any drift before the expensive
@@ -137,6 +137,14 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # Clippy deny-level lint gate (issue #147). The crate has a strict
+      # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
+      # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
+      # stay warn-level (advisory) — only the deny-level policy fails the build.
+      - name: Clippy (deny-level lint gate)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
+        env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # sccache health on the NUC path (the cache that replaces rust-cache on the
       # ephemeral runner). Skipped on hosted. !cancelled() (not always()): still

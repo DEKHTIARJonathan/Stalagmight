@@ -79,6 +79,7 @@ fn prefix_lines(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

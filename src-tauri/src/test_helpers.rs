@@ -110,6 +110,10 @@ impl Drop for IsolatedConfig {
 /// guard for the lifetime of any code that reads or writes config (note: recent
 /// projects live in the config too, so they are isolated as well).
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test-support helper; panic on setup failure is acceptable"
+)]
 pub fn isolated_config() -> IsolatedConfig {
     let guard = config_lock_guard();
     let dir = TempDir::new().expect("create temp config dir");

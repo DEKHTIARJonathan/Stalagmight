@@ -1630,6 +1630,12 @@ fn determine_placement(
 // ============================================================================
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr
+)]
 mod tests {
     use super::*;
 
@@ -1814,7 +1820,7 @@ mod tests {
 
         let (shots, meta) = parse_raw_shots(&xml).unwrap_or_else(|_| {
             std::process::abort(); // unreachable in tests
-            #[allow(unreachable_code)]
+            #[expect(unreachable_code)]
             {
                 (Vec::new(), FileMetadata::default())
             }

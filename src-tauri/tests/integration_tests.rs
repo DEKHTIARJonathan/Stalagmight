@@ -748,7 +748,7 @@ fn test_section_colors_unique() {
             name: Some(format!("Section {i}")),
             surveyor: None,
             date: None,
-            color: color.to_string(),
+            color: (*color).to_string(),
             direction: None,
             quality: 1.0,
             shots: vec![],

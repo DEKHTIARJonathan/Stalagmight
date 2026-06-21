@@ -1412,7 +1412,7 @@ fn color_to_ariane(hex: &str) -> String {
 // ============================================================================
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::approx_constant)]
 mod tests {
     use super::*;
     use crate::models::{

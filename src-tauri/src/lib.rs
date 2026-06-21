@@ -814,7 +814,7 @@ where
     let mut current_y = y;
     // Tracks the last error from `fetch_tile_candidate` (always set before loop exits
     // via `break`, since `Tile` outcomes return immediately).
-    #[allow(unused_assignments)]
+    #[expect(unused_assignments)]
     let mut last_error = None;
 
     // Check tilemap for tile availability before entering the fetch loop.

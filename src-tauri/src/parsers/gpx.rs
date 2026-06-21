@@ -171,7 +171,9 @@ pub fn parse_gpx_str(xml: &str) -> Result<GpxFile> {
                         depth -= 1;
                     }
                     b"wpt" => {
-                        let (lat, lon) = lat_lon.unwrap();
+                        let Some((lat, lon)) = lat_lon else {
+                            bail!("<wpt> element missing lat/lon attributes");
+                        };
                         gpx.waypoints
                             .push(parse_waypoint_children(lat, lon, &mut reader)?);
                         depth -= 1;

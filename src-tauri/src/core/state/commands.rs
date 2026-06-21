@@ -799,11 +799,11 @@ impl AppState {
                             modified_indices.push(idx as u32);
                         }
                     }
-                    if modified_indices.is_empty() {
+                    let (Some(&min_shot), Some(&max_shot)) =
+                        (modified_indices.iter().min(), modified_indices.iter().max())
+                    else {
                         continue;
-                    }
-                    let min_shot = *modified_indices.iter().min().unwrap();
-                    let max_shot = *modified_indices.iter().max().unwrap();
+                    };
 
                     // Collect anchor station indices on this section.
                     // An anchor is any station whose absolute position is
@@ -3740,6 +3740,7 @@ mod integrity_capability_tests {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod update_shot_clear_undo_tests {
     use super::*;
 
